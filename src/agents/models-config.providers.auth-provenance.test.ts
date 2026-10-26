@@ -450,22 +450,19 @@ describe("models-config provider auth provenance", () => {
         refresh: "must-not-refresh",
         expires: 1,
       };
-      const resolveProfile = vi.spyOn(
+      using resolveProfile = vi.spyOn(
         await import("./auth-profiles/oauth.js"),
         "resolveApiKeyForProfile",
       );
-      try {
-        await fixture.discover();
-        await fixture.plan(configWithKey(configRef));
-        expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
-        expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
-          "unrelated:oauth",
-        );
-        expect(fixture.errors).toEqual([]);
-        expect(fixture.outcomes).toEqual([]);
-      } finally {
-        resolveProfile.mockRestore();
-      }
+
+      await fixture.discover();
+      await fixture.plan(configWithKey(configRef));
+      expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
+      expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
+        "unrelated:oauth",
+      );
+      expect(fixture.errors).toEqual([]);
+      expect(fixture.outcomes).toEqual([]);
     });
   });
 

@@ -158,7 +158,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const observed: Array<{ cached: SessionEntry; persisted?: SessionEntry }> = [];
       let replacementSnapshot: SessionEntry | undefined;
       const originalPatch = sessionAccessor.patchSessionEntryCore;
-      using _ = vi
+      const patch = vi
         .spyOn(sessionAccessor, "patchSessionEntryCore")
         .mockImplementation((scope, patchEntry, options) =>
           originalPatch(scope, patchEntry, {
@@ -185,38 +185,41 @@ describe("updateSessionStoreAfterAgentRun", () => {
             },
           }),
         );
+      try {
+        let recorded: SessionEntry | undefined;
+        if (operation === "cli-compaction") {
+          recorded = await s.compact({
+            compactionKind: "native-harness",
+            expectedSession: owner,
+            tokensAfter: 42,
+          });
+        } else {
+          await s.update({
+            defaultModel: "gpt-5.6-luna",
+            compactionAccounting: accountingFact(s.storePath, {
+              lifecycleRevision: owner.lifecycleRevision,
+              activeWriterRunId: owner.activeWriterRunId,
+            }),
+            result: { meta: { durationMs: 1 } },
+          });
+        }
 
-      let recorded: SessionEntry | undefined;
-      if (operation === "cli-compaction") {
-        recorded = await s.compact({
-          compactionKind: "native-harness",
-          expectedSession: owner,
-          tokensAfter: 42,
+        expect(observed).toHaveLength(1);
+        expect(observed[0]?.persisted).toMatchObject({
+          activeWriterRunId: "current-writer",
+          totalTokens: 42,
+          cliSessionBindings: { codex: { sessionId: "native-session" } },
+          compactionCount: operation === "cli-compaction" ? 3 : 2,
         });
-      } else {
-        await s.update({
-          defaultModel: "gpt-5.6-luna",
-          compactionAccounting: accountingFact(s.storePath, {
-            lifecycleRevision: owner.lifecycleRevision,
-            activeWriterRunId: owner.activeWriterRunId,
-          }),
-          result: { meta: { durationMs: 1 } },
-        });
-      }
-
-      expect(observed).toHaveLength(1);
-      expect(observed[0]?.persisted).toMatchObject({
-        activeWriterRunId: "current-writer",
-        totalTokens: 42,
-        cliSessionBindings: { codex: { sessionId: "native-session" } },
-        compactionCount: operation === "cli-compaction" ? 3 : 2,
-      });
-      expect(observed[0]?.cached).toEqual(observed[0]?.persisted);
-      expect(replacementSnapshot).toBeDefined();
-      expect(s.sessionStore[sessionKey]).toEqual(replacementSnapshot);
-      expect(s.read()).toEqual(replacementSnapshot);
-      if (operation === "cli-compaction") {
-        expect(recorded).toEqual(observed[0]?.persisted);
+        expect(observed[0]?.cached).toEqual(observed[0]?.persisted);
+        expect(replacementSnapshot).toBeDefined();
+        expect(s.sessionStore[sessionKey]).toEqual(replacementSnapshot);
+        expect(s.read()).toEqual(replacementSnapshot);
+        if (operation === "cli-compaction") {
+          expect(recorded).toEqual(observed[0]?.persisted);
+        }
+      } finally {
+        patch.mockRestore();
       }
     },
   );
