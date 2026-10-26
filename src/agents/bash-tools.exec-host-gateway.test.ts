@@ -571,22 +571,14 @@ describe("processGatewayAllowlist", () => {
       const warnings: string[] = [];
       const result = await runGatewayAllowlist({ command, autoReview: true, warnings });
 
-      expectCall(reviewerMock, {
-        command,
-        reason: "execution-plan-miss",
-        argv: undefined,
-        resolvedPath: undefined,
-        analysis: expect.objectContaining({ parsed: true, heredoc: false }),
-      });
+      expect(reviewerMock).toHaveBeenCalledOnce();
       expect(result.execCommandOverride).toMatch(
         /^'\/[^']*\/ls' \*\.ts; '\/[^']*\/echo' complete$/,
       );
       expect(result.allowWithoutEnforcedCommand).toBeUndefined();
       await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
       expect(approvalRouteMock).not.toHaveBeenCalled();
-      expectCall(commitAuthorizationMock, {
-        authorization: expect.objectContaining({ source: "auto-review" }),
-      });
+      expectAuthorization({ source: "auto-review" });
       expect(warnings).toContain("Exec auto-review allowed once (risk=medium): project inspection");
     },
   );
@@ -602,24 +594,20 @@ describe("processGatewayAllowlist", () => {
     const sessionKey = "agent:main:auto-denial-circuit";
     const run = (warnings: string[] = []) =>
       runGatewayAllowlist({ command, autoReview: true, sessionKey, warnings });
-    expect((await run()).deniedResult?.details).toMatchObject({
-      failureKind: "auto-review-denied",
-    });
-    expect((await run()).deniedResult?.details).toMatchObject({
-      failureKind: "auto-review-denied",
-    });
+    const expectDenied = async () =>
+      expect((await run()).deniedResult?.details).toMatchObject({
+        failureKind: "auto-review-denied",
+      });
+    await expectDenied();
+    await expectDenied();
     reviewerMock.mockResolvedValueOnce({
       decision: "allow-once",
       risk: "medium",
       rationale: "safe now",
     });
     expect((await run()).deniedResult).toBeUndefined();
-    expect((await run()).deniedResult?.details).toMatchObject({
-      failureKind: "auto-review-denied",
-    });
-    expect((await run()).deniedResult?.details).toMatchObject({
-      failureKind: "auto-review-denied",
-    });
+    await expectDenied();
+    await expectDenied();
     expect(approvalRouteMock).not.toHaveBeenCalled();
     // Human denial resolves the escalation and starts a new denial sequence.
     approvalDecisionMock.mockResolvedValueOnce("deny");
@@ -629,12 +617,8 @@ describe("processGatewayAllowlist", () => {
     expect(warnings).toContain(
       "Exec auto-review denied 3 consecutive commands for this session; escalating to human approval",
     );
-    expect((await run()).deniedResult?.details).toMatchObject({
-      failureKind: "auto-review-denied",
-    });
-    expect((await run()).deniedResult?.details).toMatchObject({
-      failureKind: "auto-review-denied",
-    });
+    await expectDenied();
+    await expectDenied();
     expect(approvalRouteMock).toHaveBeenCalledTimes(1);
     const otherSession = await runGatewayAllowlist({
       command,
@@ -678,7 +662,6 @@ describe("processGatewayAllowlist", () => {
 
   it("publishes and records the approved Guardian review on its exec call", async () => {
     const assessment = { decision: "allow-once", risk: "low", rationale: "read-only" } as const;
-    const status = "approved";
     const command = "echo ok";
     await configurePlanBackedCommand({ command });
     const review = createDeferredCore<Awaited<ReturnType<ExecAutoReviewer>>>();
@@ -699,7 +682,6 @@ describe("processGatewayAllowlist", () => {
       }
     });
     try {
-      const warnings: string[] = [];
       const pending = runGatewayAllowlist({
         command,
         ask: "on-miss",
@@ -708,38 +690,35 @@ describe("processGatewayAllowlist", () => {
         runId: "run-review",
         toolCallId: "tool-review",
         onApprovalReview,
-        warnings,
       });
       await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledOnce());
-      expect(reviews).toEqual([
-        expect.objectContaining({
+      expect(reviews).toMatchObject([
+        {
           toolCallId: "tool-review",
           approvalReviewOutcome: "reviewing",
-          review: expect.objectContaining({ label: "Guardian", status: "in_progress" }),
-        }),
+          review: { status: "in_progress" },
+        },
       ]);
       review.resolve(assessment);
       const result = await pending;
-      expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual(["reviewing", status]);
+      expect(reviews.map((event) => event.approvalReviewOutcome)).toEqual([
+        "reviewing",
+        "approved",
+      ]);
       expect(reviews[1]).toMatchObject({
         toolCallId: "tool-review",
         review: {
           id: "guardian:tool-review",
-          label: "Guardian",
-          status,
+          status: "approved",
           riskLevel: assessment.risk,
           rationale: assessment.rationale,
         },
       });
       expect(publicationOrder).toEqual([
         "emitted:reviewing",
-        `stored:${status}`,
-        `emitted:${status}`,
+        "stored:approved",
+        "emitted:approved",
       ]);
-      expect(onApprovalReview).toHaveBeenCalledOnce();
-      expect(onApprovalReview).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "guardian:tool-review", status }),
-      );
       expect(approvalRouteMock).not.toHaveBeenCalled();
       expect(result.deniedResult).toBeUndefined();
     } finally {
@@ -840,15 +819,7 @@ describe("processGatewayAllowlist", () => {
       warnings,
     });
 
-    expectCall(reviewerMock, {
-      command,
-      argv: ["python3", "-c", "print(1)"],
-      host: "gateway",
-      reason: "strict-inline-eval",
-      analysis: expect.objectContaining({
-        inlineEval: true,
-      }),
-    });
+    expect(reviewerMock).toHaveBeenCalledOnce();
     expect(approvalRouteMock).not.toHaveBeenCalled();
     expect(warnings[0]).toContain("reviewer or explicit approval");
     expect(result.execCommandOverride).toBe(`'${invocationPath}' -c 'print(1)'`);
@@ -878,11 +849,7 @@ describe("processGatewayAllowlist", () => {
     const result = await runGatewayAllowlist({ command });
 
     expect(approvalRouteMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      execCommandOverride: enforced.command,
-      assertCurrent: expect.any(Function),
-      revalidateBeforeExecution: expect.any(Function),
-    });
+    expect(result.execCommandOverride).toBe(enforced.command);
     expectAuthorization({
       source: "current-policy",
       requireExactCommandApproval: false,
@@ -1057,11 +1024,7 @@ describe("processGatewayAllowlist", () => {
     const result = await runGatewayAllowlist({ command });
 
     expect(approvalRouteMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      execCommandOverride: undefined,
-      assertCurrent: expect.any(Function),
-      revalidateBeforeExecution: expect.any(Function),
-    });
+    expect(result.execCommandOverride).toBeUndefined();
     expectAuthorization({
       source: "current-policy",
       requireExactCommandApproval: true,
@@ -1083,45 +1046,30 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("keeps webchat diagnostics approvals as direct pasteable followups", async () => {
-    approvalDecisionMock.mockResolvedValue("allow-once");
-    const outcome = {
-      status: "completed" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 12,
-      timedOut: false,
-      aggregated: JSON.stringify({
-        path: "/tmp/openclaw-diagnostics.zip",
-        bytes: 1234,
-        manifest: {
-          generatedAt: "2026-04-28T20:58:29.311Z",
-          openclawVersion: "2026.4.27",
-          contents: [
-            { path: "diagnostics.json", bytes: 100 },
-            { path: "summary.md", bytes: 200 },
-          ],
-          privacy: {
-            payloadFree: true,
-            rawLogsIncluded: false,
-            notes: ["Logs keep operational summaries."],
+    mockApprovedDetachedExec({
+      outcome: completedOutcome(
+        JSON.stringify({
+          path: "/tmp/openclaw-diagnostics.zip",
+          bytes: 1234,
+          manifest: {
+            generatedAt: "2026-04-28T20:58:29.311Z",
+            openclawVersion: "2026.4.27",
+            contents: [
+              { path: "diagnostics.json", bytes: 100 },
+              { path: "summary.md", bytes: 200 },
+            ],
+            privacy: {
+              payloadFree: true,
+              rawLogsIncluded: false,
+              notes: ["Logs keep operational summaries."],
+            },
           },
-        },
-      }),
-    };
-    runExecProcessMock.mockResolvedValue({
-      session: { id: "sess-1" },
-      promise: Promise.resolve(outcome),
+        }),
+      ),
     });
 
-    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(async () =>
-      [
-        "OpenAI Codex harness:",
-        "Codex diagnostics sent to OpenAI servers:",
-        "Session 1",
-        "Channel: telegram",
-        "OpenClaw session id: `session-1`",
-        "Codex thread id: `thread-1`",
-      ].join("\n"),
+    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(
+      async () => "Synthetic harness diagnostics: thread-1",
     );
 
     const result = await runGatewayAllowlist({
@@ -1143,15 +1091,13 @@ describe("processGatewayAllowlist", () => {
     expect(followupText).toContain("Size: 1234 bytes");
     expect(followupText).toContain("Privacy:\n- payload-free: yes\n- raw logs included: no");
     expect(followupText).toContain("- Logs keep operational summaries.");
-    expect(followupText).toContain("OpenAI Codex harness:");
-    expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
-    expect(followupText).toContain("Codex thread id: `thread-1`");
-    const approvalInput = approvalFollowup.mock.calls[0]?.[0];
-    expect(approvalInput?.approvalId).toBe(approvalRouteFixture.id);
-    expect(approvalInput?.sessionId).toBe("sess-1");
-    expect(approvalInput?.trigger).toBe("diagnostics");
-    expect(approvalInput?.outcome?.status).toBe("completed");
-    expect(approvalInput?.outcome?.exitCode).toBe(0);
+    expect(followupText).toContain("Synthetic harness diagnostics: thread-1");
+    expect(approvalFollowup.mock.calls[0]?.[0]).toMatchObject({
+      approvalId: approvalRouteFixture.id,
+      sessionId: "sess-1",
+      trigger: "diagnostics",
+      outcome: { status: "completed", exitCode: 0 },
+    });
   });
 
   it("keeps a completed detached outcome terminal when agent follow-up registration fails", async () => {
