@@ -49,9 +49,9 @@ it("renders outbox attention and stays quiet when empty", () => {
   expect(indicator?.textContent).toContain("3");
   const approval = badge(renderBadges({ hasApproval: true }), "approval");
   expect(
-    indicator?.querySelector(".session-css-icon")?.isEqualNode(
-      approval?.querySelector(".session-css-icon") ?? null,
-    ),
+    indicator
+      ?.querySelector(".session-css-icon")
+      ?.isEqualNode(approval?.querySelector(".session-css-icon") ?? null),
   ).toBe(true);
 
   expect(
