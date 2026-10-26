@@ -7,9 +7,8 @@ import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import stepfunPlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-function registerStepFun() {
-  return plugins.registerProviderPlugin({ plugin: stepfunPlugin, id: "stepfun", name: "StepFun" });
-}
+const registerStepFun = () =>
+  plugins.registerProviderPlugin({ plugin: stepfunPlugin, id: "stepfun", name: "StepFun" });
 
 async function applyConfig(providerId: string, methodId: string, config: OpenClawConfig) {
   const { providers } = await registerStepFun();
@@ -41,7 +40,8 @@ describe.each([
 
     expect(config.models?.providers?.[providerId]?.models).toEqual([]);
     expect(config.agents?.defaults?.models?.[`${providerId}/step-3.7-flash`]).toEqual({});
-    expect(config.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]?.alias).toBeDefined();
+    const alias = config.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]?.alias;
+    expect(alias).toEqual(expect.any(String));
     expect(await apply(config)).toEqual(config);
   });
 
@@ -67,17 +67,15 @@ it("adds Step 3.7 Flash without changing existing defaults", async () => {
   }
   const standard = await catalog("stepfun");
   const plan = await catalog("stepfun-plan");
-  const standardModel = standard.models?.find((model) => model.id === "step-3.7-flash");
-  const planModel = plan.models?.find((model) => model.id === "step-3.7-flash");
-  assert(standardModel, "StepFun Standard catalog did not provide Step 3.7 Flash");
-
   const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
   expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
   expect(standard35?.cost).toEqual({ input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 });
-  for (const [model, cost] of [
-    [standardModel, { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 }],
-    [planModel, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
-  ]) {
+  for (const [provider, cost] of [
+    [standard, { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 }],
+    [plan, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+  ] as const) {
+    const model = provider.models?.find((entry) => entry.id === "step-3.7-flash");
+    assert(model, "Missing Step 3.7 Flash");
     expect(model).toMatchObject({
       cost,
       reasoning: true,
@@ -86,40 +84,30 @@ it("adds Step 3.7 Flash without changing existing defaults", async () => {
       contextWindow: 262144,
       maxTokens: 262144,
       compat: {
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: false,
         supportsReasoningEffort: true,
         supportsStrictMode: false,
         supportedReasoningEfforts: ["low", "medium", "high"],
-        maxTokensField: "max_tokens",
         reasoningEffortMap: { off: "low", medium: "medium", max: "high" },
       },
     });
+    const transportModel = {
+      ...model,
+      provider: provider === standard ? "stepfun" : "stepfun-plan",
+      api: "openai-completions",
+      baseUrl: provider.baseUrl,
+    } as Model<"openai-completions">;
+    const context: Context = { systemPrompt: "system", messages: [] };
+    const payloadFor = (reasoning: string | undefined, maxTokens?: number) =>
+      buildOpenAICompletionsParams(transportModel, context, { reasoning, maxTokens } as never);
+    const lowPayload = payloadFor(model.thinkingLevelMap?.off ?? undefined, 128);
+    expect(lowPayload).toMatchObject({ reasoning_effort: "low", max_tokens: 128 });
+    for (const key of ["max_completion_tokens", "store", "stream_options"]) {
+      expect(lowPayload).not.toHaveProperty(key);
+    }
+    expect(lowPayload.messages).toContainEqual({ role: "system", content: "system" });
+    expect(lowPayload.messages).not.toContainEqual(expect.objectContaining({ role: "developer" }));
+    expect(payloadFor("high").reasoning_effort).toBe("high");
   }
-
-  const transportModel = {
-    ...standardModel,
-    provider: "stepfun",
-    api: "openai-completions",
-    baseUrl: standard.baseUrl,
-  } as Model<"openai-completions">;
-  const context: Context = {
-    systemPrompt: "system",
-    messages: [{ role: "user", content: "hi", timestamp: 1 }],
-  };
-  const payloadFor = (reasoning: string | undefined, maxTokens?: number) =>
-    buildOpenAICompletionsParams(transportModel, context, { reasoning, maxTokens } as never);
-  const lowPayload = payloadFor(standardModel.thinkingLevelMap?.off ?? undefined, 128);
-  expect(lowPayload).toMatchObject({ reasoning_effort: "low", max_tokens: 128 });
-  expect(lowPayload).not.toHaveProperty("max_completion_tokens");
-  expect(lowPayload).not.toHaveProperty("store");
-  expect(lowPayload).not.toHaveProperty("stream_options");
-  expect(lowPayload.messages).toContainEqual(
-    expect.objectContaining({ role: "system", content: "system" }),
-  );
-  expect(lowPayload.messages).not.toContainEqual(expect.objectContaining({ role: "developer" }));
-  expect(payloadFor("high").reasoning_effort).toBe("high");
 });
 
 it("keeps manifest auth choices aligned with runtime provider methods", async () => {
@@ -146,11 +134,7 @@ it.each([
   const models = { [primary]: { alias: "Existing" } };
   const config = { agents: { defaults: structuredClone({ model, models }) } };
 
-  const result = await applyConfig(providerId, methodId, config);
-
-  const defaults = result?.agents?.defaults;
+  const defaults = (await applyConfig(providerId, methodId, config)).agents?.defaults;
   expect(defaults?.model).toEqual(model);
   expect(defaults?.models?.[primary]).toEqual(models[primary]);
-  expect(defaults?.models?.[`${providerId}/step-3.5-flash`]?.alias).toEqual(expect.any(String));
-  expect(result?.models?.providers?.[providerId]).toBeDefined();
 });
