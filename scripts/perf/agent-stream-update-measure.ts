@@ -7,6 +7,9 @@
  * --async-fragments true --events 4 --turns 5000 --warmup 250 replays async tool fragments
  * followed by a text tail; compare allocation and CPU per committed fragment.
  * --event-type text_delta|thinking_delta|toolcall_delta selects snapshot updates.
+ * --transforms 1 (or 3) installs real adjacent stream-event decorators. Compare
+ * against --transforms 0 to separate wrapper cost from the fixture generator.
+ * --mode promises counts Node promise initialization separately from timing.
  * --mode verify replays a fixed multi-turn recording with all update kinds, async
  * fragments and a blocking tool; compare its outputSha256 across revisions.
  * --profile /path/profile.json saves allocation stacks. Use --no-turbo-inlining
@@ -15,6 +18,7 @@
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
@@ -30,6 +34,8 @@ import {
   user,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
+import { wrapStreamObjectEvents } from "../../src/agents/embedded-agent-runner/run/stream-wrapper.js";
+import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
 
 const { values } = parseArgs({
   options: {
@@ -41,15 +47,18 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "1" },
     snapshots: { type: "string", default: "true" },
     "async-fragments": { type: "string", default: "false" },
+    transforms: { type: "string", default: "0" },
   },
 });
 const events = Number(values.events);
 const turns = Number(values.turns);
 const warmup = Number(values.warmup);
+const transforms = Number(values.transforms);
+assert(Number.isSafeInteger(transforms) && transforms >= 0);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
-assert(["timing", "allocation", "verify"].includes(values.mode));
+assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
 assert(values.snapshots === "true" || values.snapshots === "false");
 assert(values["async-fragments"] === "true" || values["async-fragments"] === "false");
 const asyncFragments = values["async-fragments"] === "true";
@@ -96,6 +105,17 @@ const fragmentTail = {
   stopReason: "stop" as const,
 };
 let deliveries = 0;
+let observations = 0;
+function decorate(stream: MutableAssistantMessageEventStream) {
+  for (let index = 0; index < transforms; index++) {
+    wrapStreamObjectEvents(stream, (event) => {
+      if (event.type === eventType) {
+        observations++;
+      }
+    });
+  }
+  return stream;
+}
 async function run() {
   let responseCount = 0;
   await runAgentLoop(
@@ -112,7 +132,7 @@ async function run() {
       const toolResponse = asyncFragments && responseCount === 0;
       const updates = responseCount++ === 0 ? events : 0;
       const result = toolResponse ? fragmentTail : finalMessage;
-      return {
+      return decorate({
         async *[Symbol.asyncIterator]() {
           yield { type: "start", partial: message } as const;
           if (toolResponse) {
@@ -127,7 +147,7 @@ async function run() {
           yield { type: "done", reason: "stop", message: result } as const;
         },
         result: async () => result,
-      };
+      });
     },
   );
 }
@@ -199,12 +219,12 @@ async function verifyRecording() {
       () => {
         const replay = request++ === 0 ? recording : continuation;
         assert(request <= 2);
-        return {
+        return decorate({
           async *[Symbol.asyncIterator]() {
             yield* replay;
           },
           result: async () => (replay === recording ? recordedMessage : terminal),
-        };
+        });
       },
     );
     output.update(JSON.stringify(messages));
@@ -229,6 +249,7 @@ for (let turn = 0; turn < warmup; turn++) {
   await run();
 }
 deliveries = 0;
+observations = 0;
 globalThis.gc?.();
 const allocation = values.mode === "allocation";
 const inspector = new Session();
@@ -241,6 +262,17 @@ if (allocation) {
   });
 }
 const hostLoad = loadavg();
+let promises = 0;
+const hook = createHook({
+  init(_id, type) {
+    if (type === "PROMISE") {
+      promises++;
+    }
+  },
+});
+if (values.mode === "promises") {
+  hook.enable();
+}
 const cpu = process.cpuUsage();
 const start = performance.now();
 for (let turn = 0; turn < turns; turn++) {
@@ -248,6 +280,7 @@ for (let turn = 0; turn < turns; turn++) {
 }
 const elapsedMs = performance.now() - start;
 const used = process.cpuUsage(cpu);
+hook.disable();
 let allocatedBytes: number | undefined;
 if (allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -260,6 +293,9 @@ if (allocation) {
   allocatedBytes = sum(profile.head);
 }
 assert.equal(deliveries, events * turns);
+if (!asyncFragments && snapshots) {
+  assert.equal(observations, transforms * deliveries);
+}
 console.log(
   JSON.stringify({
     mode: values.mode,
@@ -269,6 +305,9 @@ console.log(
     events,
     turns,
     warmup,
+    transforms,
+    observations,
+    promisesPerUpdate: values.mode === "promises" ? promises / deliveries : undefined,
     deliveries,
     hostLoad,
     elapsedMs,
