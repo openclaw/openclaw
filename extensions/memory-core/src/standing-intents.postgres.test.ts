@@ -27,7 +27,6 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
         creatorSender: "creator",
         nowMs: 1_000,
         expiresAt: 1_000_000,
-        maxFires: 3,
         cooldownSeconds: 1,
         ...options,
       }),
@@ -46,10 +45,7 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
     );
 
   beforeAll(async () => {
-    state = await createOpenClawTestState({
-      prefix: "standing-intents-postgres-",
-      layout: "state-only",
-    });
+    state = await createOpenClawTestState({ prefix: "intents-pg-", layout: "state-only" });
     await database.connect();
   });
 
