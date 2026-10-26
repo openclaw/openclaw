@@ -56,10 +56,18 @@ function createProviderConfig(modelCount = 0) {
   const provider: ModelProviderConfig = {
     baseUrl: "https://provider.example/v1",
     apiKey: "synthetic-resolved-value",
-    models: Array.from({ length: modelCount }, (_, index) => modelDefinition(`synthetic-${index}`)),
+    models: Array.from({ length: modelCount }, (_, index) => model(index)),
   };
   const config = { models: { providers: { synthetic: provider } } } satisfies OpenClawConfig;
   return { config, provider };
+}
+
+function model(index: number): ModelProviderConfig["models"][number] {
+  return modelDefinition(`synthetic-${index}`, {
+    name: `Synthetic ${index}`,
+    reasoning: false,
+    maxTokens: 4096,
+  });
 }
 
 function managedAuth(cfg: OpenClawConfig) {
@@ -81,7 +89,7 @@ it("does not traverse a shared runtime model catalog during repeated auth lookup
   const { config, provider } = createProviderConfig();
   let catalogReads = 0;
   provider.models = Array.from({ length: 400 }, (_, index) => ({
-    ...modelDefinition(`synthetic-${index}`),
+    ...model(index),
     get name() {
       catalogReads += 1;
       return `Synthetic ${index}`;

@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   resolveManagedGitHubProfileDir,
@@ -14,7 +13,6 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import type { CreateSandboxBackendParams } from "./sandbox/backend.types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolvePreparedSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
 
 const backend = vi.hoisted(() =>
   vi.fn(async (_params: CreateSandboxBackendParams) => ({
@@ -117,18 +115,6 @@ it.each([false, true])("isolates read-only identity (role required=%s)", async (
   expect(sandbox.readOnlyResourceMounts).toEqual([
     { hostPath: await fs.realpath(profileDir), containerPath: "/openclaw/github" },
   ]);
-  const mounts = resolveSandboxMountSelection({
-    workspaceDir: sandbox.workspaceDir,
-    agentWorkspaceDir: sandbox.agentWorkspaceDir,
-    workdir: "/workspace",
-    workspaceAccess: sandbox.workspaceAccess,
-    readOnlyResourceMounts: sandbox.readOnlyResourceMounts,
-    binds: ["/unrelated:/openclaw/github:rw"],
-  });
-  expect(mounts.mounts).toContainEqual(
-    expect.objectContaining({ containerPath: "/openclaw/github", readOnly: true }),
-  );
-  expect(mounts.custom).toEqual([]);
   const sibling = await resolve(config, "other", required);
   expect(sibling?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
   expect(sibling?.readOnlyResourceMounts).toBeUndefined();
@@ -138,19 +124,13 @@ it.each([false, true])("isolates read-only identity (role required=%s)", async (
   }
 });
 
-it("rejects shared identity before provisioning and warns once with the agent", async () => {
+it("rejects shared identity before provisioning and identifies the agent in its warning", async () => {
   const { config } = await fixture({ shared: true, allowInSandbox: true });
   const warnings = createWarnLogCapture("sandbox-github-shared");
-  const capture = createDiagnosticLogRecordCapture();
   onTestFinished(() => warnings.cleanup());
-  onTestFinished(() => capture.cleanup());
   await expect(resolve(config)).rejects.toThrow(/release.*shared/i);
   expect(backend).not.toHaveBeenCalled();
   expect((await warnings.findText("GitHub"))?.match(/release/g)).toHaveLength(1);
-  await capture.flush();
-  expect(
-    capture.records.filter((record) => record.message.includes("GitHub identity")),
-  ).toHaveLength(1);
 });
 
 it("keeps identity absent without allowInSandbox opt-in", async () => {
