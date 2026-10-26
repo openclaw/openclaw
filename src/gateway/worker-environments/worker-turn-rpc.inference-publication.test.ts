@@ -4,13 +4,13 @@ import { expect, it, vi } from "vitest";
 import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
   validateWorkerInferenceTerminalFrame,
-  type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
+import { createSink } from "./inference.test-support.js";
 import * as support from "./service.test-support.js";
 import {
   bindClaimOwner,
@@ -73,8 +73,7 @@ it.each(["diagnostic", "credential revocation"] as const)(
     const continueProvider = createDeferredCore();
     const committed = createDeferredCore();
     const publish = createDeferredCore();
-    const terminalDelivered = createDeferredCore<WorkerInferenceTerminalFrame>();
-    const frames: unknown[] = [];
+    const { frames, sink, terminal: terminalDelivered } = createSink("inference-publication");
     const executeInference = vi.fn<support.WorkerEnvironmentServiceOptions["executeInference"]>(
       async ({ signal, emit }) => {
         entered.resolve(signal);
@@ -111,14 +110,9 @@ it.each(["diagnostic", "credential revocation"] as const)(
           params: request,
         },
         identity,
-        connectionId: "inference-publication-connection",
+        connectionId: sink.connectionId,
         service: workerService,
-        send: (frame) => {
-          frames.push(frame);
-          if (validateWorkerInferenceTerminalFrame(frame)) {
-            terminalDelivered.resolve(frame);
-          }
-        },
+        send: sink.send,
         respond,
         close: vi.fn(),
         warn: vi.fn(),
@@ -126,7 +120,7 @@ it.each(["diagnostic", "credential revocation"] as const)(
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, { status: "accepted" });
       const providerSignal = await awaitGateBeforeSettlement(
         entered.promise,
-        terminalDelivered.promise,
+        terminalDelivered,
         "Inference terminated before provider execution",
       );
       delivery.command =
@@ -151,7 +145,8 @@ it.each(["diagnostic", "credential revocation"] as const)(
         "Inventory mutation finished before its publication gate",
       );
       continueProvider.resolve();
-      const terminal = await terminalDelivered.promise;
+      const terminal = await terminalDelivered;
+      expect(validateWorkerInferenceTerminalFrame(terminal)).toBe(true);
       expect(providerSignal.aborted).toBe(mutationKind !== "diagnostic");
       if (mutationKind === "diagnostic") {
         const binding = {
