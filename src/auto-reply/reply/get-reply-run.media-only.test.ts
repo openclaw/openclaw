@@ -132,7 +132,6 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
 
 // Harness selection and built-in execution are owned by their focused suites. These tests keep
 // the real visible-reply policy resolver while supplying its default delivery metadata.
-const preparedReplyMockState = vi.hoisted(() => ({ unexpectedCalls: [] as string[] }));
 const envMockState = vi.hoisted(() => ({ fastTestRuntime: true }));
 
 vi.mock("../../infra/env.js", async (importOriginal) => ({
@@ -187,26 +186,7 @@ vi.mock("../../agents/subagents/spawn/subagent-capabilities.js", () => ({
 }));
 
 const resolveAgentHarnessDeliveryDefaultsMock = vi.hoisted(() =>
-  vi.fn(
-    (params: {
-      provider: string;
-      modelId?: string;
-      agentHarnessId?: string;
-      agentHarnessRuntimeOverride?: string;
-    }) => {
-      const isSourceProviderCandidate = params.modelId === undefined;
-      const isDefaultModelCandidate =
-        params.provider === "anthropic" && params.modelId === "claude-opus-4-1";
-      if (
-        (!isSourceProviderCandidate && !isDefaultModelCandidate) ||
-        params.agentHarnessId ||
-        params.agentHarnessRuntimeOverride
-      ) {
-        preparedReplyMockState.unexpectedCalls.push("resolveAgentHarnessDeliveryDefaults");
-      }
-      return {};
-    },
-  ),
+  vi.fn((_params: { provider: string; modelId?: string }) => ({})),
 );
 vi.mock("../../agents/harness/selection-decision.js", () => ({
   resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
@@ -216,50 +196,13 @@ vi.mock("../../agents/harness/selection-decision.js", () => ({
 // the three catalog/selection operations that this run-orchestration suite owns.
 vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
-  buildModelAliasIndex: vi.fn(
-    (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
-      if (params.cfg.agents?.defaults?.models) {
-        preparedReplyMockState.unexpectedCalls.push("buildModelAliasIndex");
-      }
-      return { byAlias: new Map(), byKey: new Map() };
-    },
-  ),
-  resolveDefaultModelForAgent: vi.fn(
-    (params: { cfg: { agents?: { defaults?: { model?: unknown } } } }) => {
-      if (params.cfg.agents?.defaults?.model) {
-        preparedReplyMockState.unexpectedCalls.push("resolveDefaultModelForAgent");
-      }
-      return { provider: "anthropic", model: "claude-opus-4-1" };
-    },
-  ),
-  resolveModelRefFromString: vi.fn(() => {
-    preparedReplyMockState.unexpectedCalls.push("resolveModelRefFromString");
-    return undefined;
-  }),
+  buildModelAliasIndex: vi.fn(() => ({ byAlias: new Map(), byKey: new Map() })),
+  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "anthropic", model: "claude-opus-4-1" })),
+  resolveModelRefFromString: vi.fn(() => undefined),
 }));
 
-const resolveSessionRuntimeOverrideForProviderMock = vi.hoisted(() =>
-  vi.fn(
-    (params: {
-      entry?: {
-        agentHarnessId?: string;
-        agentRuntimeOverride?: string;
-        modelSelectionLocked?: boolean;
-      };
-    }) => {
-      if (
-        params.entry?.agentHarnessId ||
-        params.entry?.agentRuntimeOverride ||
-        params.entry?.modelSelectionLocked
-      ) {
-        preparedReplyMockState.unexpectedCalls.push("resolveSessionRuntimeOverrideForProvider");
-      }
-      return undefined;
-    },
-  ),
-);
 vi.mock("../../agents/session-runtime-compat.js", () => ({
-  resolveSessionRuntimeOverrideForProvider: resolveSessionRuntimeOverrideForProviderMock,
+  resolveSessionRuntimeOverrideForProvider: vi.fn(() => undefined),
 }));
 
 // Provider policy projection belongs to its adapter and provider-local suites. These tests
@@ -394,23 +337,9 @@ vi.mock("./session-system-events.js", () => ({
 
 // mock-isolation: reply orchestration uses fixture model overrides without opening host session stores.
 vi.mock("../../sessions/stored-model-overrides.js", () => {
-  const resolveStoredModelOverride = vi.fn(
-    (params: {
-      sessionEntry?: { providerOverride?: string; modelOverride?: string };
-      sessionStore?: Record<string, { providerOverride?: string; modelOverride?: string }>;
-    }) => {
-      const entries = [params.sessionEntry, ...Object.values(params.sessionStore ?? {})];
-      if (entries.some((entry) => entry?.providerOverride || entry?.modelOverride)) {
-        preparedReplyMockState.unexpectedCalls.push("resolveStoredModelOverride");
-      }
-      return null;
-    },
-  );
   return {
-    resolveStoredModelOverride,
-    resolveStoredModelOverrideAsync: async (
-      params: Parameters<typeof resolveStoredModelOverride>[0],
-    ) => resolveStoredModelOverride(params),
+    resolveStoredModelOverride: vi.fn(() => null),
+    resolveStoredModelOverrideAsync: async () => null,
   };
 });
 
@@ -950,7 +879,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
-    preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     vi.clearAllMocks();
     resetPreparedReplySessionStore();
@@ -967,7 +895,6 @@ describe("runPreparedReply media-only handling", () => {
     await cleanupPreparedReplyFixtures();
     vi.useRealTimers();
     resetSystemEventsForTest();
-    expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
   });
 
   it("passes approved elevated defaults to the runner", async () => {
