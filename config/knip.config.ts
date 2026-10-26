@@ -201,6 +201,7 @@ const repositoryScriptEntries = [
   "scripts/perf/harness-selection-copy-measure.ts!",
   "scripts/perf/session-catalog-pairing-measure.ts!",
   "scripts/perf/session-involvement-measure.ts!",
+  "scripts/perf/sqlite-native-lease-measure.mjs!",
   "scripts/perf/sqlite-owner-dispatch-measure.mjs!",
   "scripts/perf/sqlite-wal-scan-measure.mjs!",
   "scripts/perf/state-engine-schema-bench.ts!",
