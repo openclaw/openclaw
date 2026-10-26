@@ -316,7 +316,9 @@ describe("Gateway GitHub publication", () => {
             }
           : { status: "published", repository: "openclaw/openclaw", url: resultUrl },
       );
-      expect(githubPosts()).toHaveLength(fork ? 0 : 1);
+      expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(
+        fork ? 0 : 1,
+      );
       if (lostResponse) {
         expect(pullLookups).toBe(3);
       } else {
