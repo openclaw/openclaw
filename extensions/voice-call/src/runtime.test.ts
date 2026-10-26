@@ -15,10 +15,8 @@ import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveVoiceCallConfig: vi.fn(),
   resolveVoiceCallStreamExposurePaths: vi.fn(),
   resolveTwilioAuthToken: vi.fn(),
-  validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
   managerStop: vi.fn(),
   managerGetCall: vi.fn(),
@@ -46,10 +44,8 @@ vi.mock("./config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./config.js")>();
   return {
     ...actual,
-    resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
     resolveVoiceCallStreamExposurePaths: mocks.resolveVoiceCallStreamExposurePaths,
     resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
-    validateProviderConfig: mocks.validateProviderConfig,
   };
 });
 
@@ -223,11 +219,9 @@ async function startConsult(
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.resolveVoiceCallConfig.mockImplementation((cfg: VoiceCallConfig) => cfg);
     mocks.resolveTwilioAuthToken.mockImplementation(
       (cfg: VoiceCallConfig) => cfg.twilio?.authToken,
     );
-    mocks.validateProviderConfig.mockReturnValue({ valid: true, errors: [] });
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookGetRealtimeHandler.mockReturnValue({
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
@@ -368,14 +362,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(await stopped).toBe(transportFailure);
   });
 
-  it("passes the complete config to the webhook server for streaming provider resolution", async () => {
-    const coreConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
-
-    await createRuntime({ coreConfig });
-
-    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
-  });
-
   it("builds realtime instructions for the agent frozen on each call", async () => {
     const config = createRealtimeConfig(
       {
@@ -398,6 +384,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     };
     const runtime = await createRuntime({ config, coreConfig });
+    expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
     expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
@@ -444,27 +431,17 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
   });
 
-  it.each(["twilio", "telnyx", "plivo"] as const)(
-    "fails closed when %s falls back to a local-only webhook",
-    async (provider) => {
-      await expect(
-        createRuntime({
-          config: createExternalProviderConfig({ provider }),
-        }),
-      ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
-      expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
+  it.each([
+    ["twilio", undefined],
+    ["telnyx", undefined],
+    ["plivo", undefined],
+    ["twilio", "http://127.0.0.1:3334/voice/webhook"],
+  ] as const)("fails closed for %s with a local-only webhook (%s)", async (provider, publicUrl) => {
     await expect(
       createRuntime({
-        config: createExternalProviderConfig({
-          provider: "twilio",
-          publicUrl: "http://127.0.0.1:3334/voice/webhook",
-        }),
+        config: createExternalProviderConfig({ provider, publicUrl }),
       }),
-    ).rejects.toThrow("twilio requires a publicly reachable webhook URL");
+    ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
 
@@ -494,7 +471,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
-    const config = createRealtimeConfig({ tools: [customTool] }, { inboundPolicy: "allowlist" });
+    const config = createRealtimeConfig(
+      { tools: [customTool], consultThinkingLevel: "ultra", consultFastMode: true },
+      { inboundPolicy: "allowlist" },
+    );
     config.numbers["+15550009999"] = {
       agentId: "inbound-route",
       responseModel: "openai/gpt-5.5",
@@ -513,7 +493,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     const handler = await startConsult(config, agentRuntime, {
-      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
     });
 
     const tools = requireRealtimeTools();
@@ -530,6 +510,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ).resolves.toEqual({
       text: "Use the shipment status.",
     });
+    expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = consultParamsFrom(runEmbeddedAgent);
     expect(consultParams).toMatchObject({
@@ -538,8 +519,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       spawnedBy: "agent:main:discord:channel:general",
       messageProvider: "voice",
       lane: "voice",
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      thinkLevel: "ultra",
+      fastMode: true,
     });
     expect(consultParams.toolsAllow).toEqual([
       "read",
@@ -565,30 +548,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "Caller: Can you check shipment status?",
       "Caller: Also check the ETA.",
     );
-  });
-
-  it("dispatches realtime consults on the configured default model, not the compiled-in default", async () => {
-    const config = createRealtimeConfig();
-    const runEmbeddedAgent = answeringAgent("Checked with the configured model.");
-    setConsultCall({
-      agentId: "support",
-      direction: "outbound",
-      transcript: [{ speaker: "user", text: "What is the status?" }],
-    });
-
-    const handler = await startConsult(config, createDefaultConsultRuntime(runEmbeddedAgent), {
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
-    });
-
-    await expect(
-      handler({ question: "Status?" }, "call-1", { partialUserTranscript: "" }),
-    ).resolves.toEqual({
-      text: "Checked with the configured model.",
-    });
-    expect(consultParamsFrom(runEmbeddedAgent)).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-5-5",
-    });
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
@@ -682,48 +641,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("answers realtime consults from fast memory context before starting the full agent", async () => {
-    const config = createRealtimeConfig({ fastContext: fastContextConfig(800) });
-    const runEmbeddedAgent = answeringAgent("slow answer");
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent);
-    setConsultCall();
-    mocks.resolveRealtimeFastContextConsult.mockResolvedValue({
-      handled: true,
-      result: {
-        text: "Fast OpenClaw memory or session context found.\nThe caller's basement lights are on.",
-      },
-    });
-
-    const handler = await startConsult(config, agentRuntime);
-
-    const fastContextResult = await handler(
-      { question: "Are the basement lights on?" },
-      "call-1",
-      {},
-    );
-    const fastContextRecord = requireRecord(fastContextResult, "fast context result");
-    expect(fastContextRecord.text).toContain("The caller's basement lights are on.");
-    expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "main",
-      args: { question: "Are the basement lights on?" },
-      config: fastContextConfig(800),
-      logger: {
-        info: console.log,
-        warn: console.warn,
-        error: console.error,
-        debug: console.debug,
-      },
-      sessionKey: "agent:main:voice:15550001234",
-      labels: {
-        audienceLabel: "caller",
-        contextName: "OpenClaw memory or session context",
-      },
-      liveness: { signal: undefined, assertCurrent: expect.any(Function) },
-    });
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
-
   describe("fast memory context through the selected memory provider", () => {
     afterEach(() => {
       resetPluginRuntimeStateForTest();
@@ -736,21 +653,38 @@ describe("createVoiceCallRuntime lifecycle", () => {
         expectDefined(mocks.actualRealtimeFastContextConsult, "actual fast context consult"),
       );
       setConsultCall({ state: "active" });
+      const runEmbeddedAgent = vi.fn();
       await createRuntime({
         config,
-        agentRuntime: { session: createMockSessionRuntime({}) } as never,
+        agentRuntime: { session: createMockSessionRuntime({}), runEmbeddedAgent } as never,
       });
-      return { handler: requireRealtimeConsultToolHandler(), open, search };
+      return { handler: requireRealtimeConsultToolHandler(), open, search, runEmbeddedAgent };
     }
 
     it("answers from the provider while the call and consult are live", async () => {
-      const { handler, open, search } = await createFastContextHandler();
+      const { handler, open, search, runEmbeddedAgent } = await createFastContextHandler();
       const result = await handler({ question: "Are the lights on?" }, "call-1", {
         abortSignal: new AbortController().signal,
       });
       expect(requireRecord(result, "fast context result").text).toContain("Lights are on.");
       expect(open).toHaveBeenCalledOnce();
       expect(search).toHaveBeenCalledOnce();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
+        cfg: {},
+        agentId: "main",
+        args: { question: "Are the lights on?" },
+        config: fastContextConfig(1_000),
+        logger: {
+          info: console.log,
+          warn: console.warn,
+          error: console.error,
+          debug: console.debug,
+        },
+        sessionKey: "agent:main:voice:15550001234",
+        labels: { audienceLabel: "caller", contextName: "OpenClaw memory or session context" },
+        liveness: { signal: expect.any(AbortSignal), assertCurrent: expect.any(Function) },
+      });
     });
 
     it("rejects a consult aborted during lookup before provider I/O", async () => {
@@ -775,29 +709,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
         "No relevant OpenClaw memory or session context was found quickly",
       );
       expect(open).not.toHaveBeenCalled();
-    });
-  });
-
-  it("uses the configured realtime consult thinking level when set", async () => {
-    const config = createRealtimeConfig(
-      { consultThinkingLevel: "ultra", consultFastMode: true },
-      { inboundPolicy: "allowlist" },
-    );
-    const runEmbeddedAgent = answeringAgent("Done.");
-    const agentRuntime = createDefaultConsultRuntime(runEmbeddedAgent);
-    setConsultCall({ direction: "outbound" });
-
-    const handler = await startConsult(config, agentRuntime);
-
-    await expect(handler({ question: "Turn on the lights." }, "call-1", {})).resolves.toEqual({
-      text: "Done.",
-    });
-
-    expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(consultParamsFrom(runEmbeddedAgent)).toMatchObject({
-      thinkLevel: "ultra",
-      fastMode: true,
     });
   });
 });

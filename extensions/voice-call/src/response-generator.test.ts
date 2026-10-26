@@ -322,37 +322,27 @@ describe("generateVoiceResponse", () => {
     });
   });
 
-  it("discards pre-tool narration before the completed answer", async () => {
-    const { result, onEarlyText } = await runStreamingScenario(async (args) => {
-      await args.onBlockReply?.(
-        { text: '{"spoken":"I will check."}' },
-        { assistantMessageIndex: 0 },
-      );
-      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      await args.onBlockReply?.(spoken("The result is ready."), { assistantMessageIndex: 1 });
-      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
-    }, "The result is ready.");
-
-    expect(onEarlyText).toHaveBeenCalledWith("The result is ready.");
-    expect(result).toEqual({ text: "The result is ready.", deliveredEarly: true });
-  });
-
-  it("discards deferred pre-tool narration delivered after the tool boundary", async () => {
-    const { result, onEarlyText } = await runStreamingScenario(async (args) => {
-      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      await args.onBlockReply?.(
-        { text: '{"spoken":"I will check."}' },
-        { assistantMessageIndex: 0 },
-      );
-      await args.onBlockReply?.(spoken("The deferred result is ready."), {
-        assistantMessageIndex: 1,
-      });
-      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
-    }, "The deferred result is ready.");
-
-    expect(onEarlyText).toHaveBeenCalledWith("The deferred result is ready.");
-    expect(result).toEqual({ text: "The deferred result is ready.", deliveredEarly: true });
-  });
+  it.each(["before", "after"])(
+    "discards pre-tool narration arriving %s the boundary",
+    async (order) => {
+      const answer = "The result is ready.";
+      const { result, onEarlyText } = await runStreamingScenario(async (args) => {
+        const narrate = () =>
+          args.onBlockReply?.(spoken("I will check."), { assistantMessageIndex: 0 });
+        if (order === "before") {
+          await narrate();
+        }
+        await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+        if (order === "after") {
+          await narrate();
+        }
+        await args.onBlockReply?.(spoken(answer), { assistantMessageIndex: 1 });
+        await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      }, answer);
+      expect(onEarlyText).toHaveBeenCalledWith(answer);
+      expect(result).toEqual({ text: answer, deliveredEarly: true });
+    },
+  );
 
   it("keeps final delivery when a post-tool payload has no boundary metadata", async () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
@@ -410,41 +400,19 @@ describe("generateVoiceResponse", () => {
     expect(result.text).toBe("Sounds good. I can help with the next step whenever you are ready.");
   });
 
-  it("runs the call agent's configured model when responseModel is unset", async () => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
-      { text: '{"spoken":"Configured model answers."}' },
-    ]);
-
+  it.each([
+    { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
+    {
+      entries: { main: { model: "anthropic/claude-opus-5-5" } },
+      defaults: { model: { primary: "openai/gpt-5.4" } },
+    },
+  ])("inherits configured models without responseModel: %j", async (agents) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([spoken("Configured model answers.")]);
     const { result } = await runGenerateVoiceResponse([], {
       runtime,
-      coreConfig: {
-        agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
-      } as OpenClawConfig,
+      coreConfig: { agents },
     });
-
     expect(result.text).toBe("Configured model answers.");
-    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-5-5",
-    });
-  });
-
-  it("runs the agent-specific model over the global default when responseModel is unset", async () => {
-    const { runtime, runEmbeddedAgent } = createAgentRuntime([
-      { text: '{"spoken":"Agent model answers."}' },
-    ]);
-
-    const { result } = await runGenerateVoiceResponse([], {
-      runtime,
-      coreConfig: {
-        agents: {
-          entries: { main: { model: "anthropic/claude-opus-5-5" } },
-          defaults: { model: { primary: "openai/gpt-5.4" } },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(result.text).toBe("Agent model answers.");
     expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
       provider: "anthropic",
       model: "claude-opus-5-5",
@@ -453,7 +421,7 @@ describe("generateVoiceResponse", () => {
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
     const { runtime, runEmbeddedAgent, prepareSessionEntryPatch, sessionStore } =
-      createAgentRuntime([{ text: '{"spoken":"Pinned model works."}' }]);
+      createAgentRuntime([spoken("Pinned model works.")]);
     sessionStore[defaultSessionKey] = sessionEntry({
       model: "old-model",
       modelProvider: "old-provider",
@@ -467,7 +435,7 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Pinned model works.");
-    const pinnedSessionEntry = sessionStore["agent:main:voice:15550001111"];
+    const pinnedSessionEntry = sessionStore[defaultSessionKey];
     expect(pinnedSessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-4.1-nano",
@@ -515,12 +483,12 @@ describe("generateVoiceResponse", () => {
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
-    expect(sessionStore["agent:main:voice:15550001111"]).toMatchObject({
+    expect(sessionStore[defaultSessionKey]).toMatchObject({
       model: "gpt-5.5",
       modelProvider: "openai",
       modelSelectionLocked: true,
     });
-    expect(sessionStore["agent:main:voice:15550001111"]?.modelOverride).toBeUndefined();
+    expect(sessionStore[defaultSessionKey]?.modelOverride).toBeUndefined();
   });
 
   it("propagates the lock for a same-agent supervised Codex session", async () => {
