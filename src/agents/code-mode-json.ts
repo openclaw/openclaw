@@ -463,10 +463,9 @@ export class CodeModeOutputState {
         valueTruncated,
         referenceUsed: saved !== undefined,
         channels: {
-          // Complete sources already contain normalized JSON; decode only delivered channels.
           output: fittedOutput
             ? [fittedOutput.marker()]
-            : (completeOutput ??= JSON.parse(source.json) as unknown[]),
+            : (completeOutput ??= JSON.parse(source.json) as unknown[]), // SAFETY: Complete sources encode normalized arrays.
           ...(value === undefined
             ? {}
             : saved
