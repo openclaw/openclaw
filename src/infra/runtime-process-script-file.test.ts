@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
@@ -16,7 +16,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("runs and removes retained programs without source neighbors", () => {
+it("runs and removes retained programs without source neighbors", async () => {
   const root = directories.make("runtime-script-bootstrap-");
   const scriptParent = path.join(root, "scratch");
   fs.mkdirSync(scriptParent, { mode: 0o700 });
@@ -28,40 +28,35 @@ it("runs and removes retained programs without source neighbors", () => {
   const database = path.join(root, "database.sqlite");
   fs.writeFileSync(database, "database");
   fs.writeFileSync(database + "-wal", "wal");
-  const driver = path.join(root, "driver.mjs");
-  fs.writeFileSync(
-    driver,
-    `
-    import { createRuntimeProcessScriptFile } from "./runtime-process-scripts.generated.mjs";
-    import { execFileSync } from "node:child_process";
-    import fs from "node:fs";
-    import { fileURLToPath } from "node:url";
-    const result = {};
-    for (const name of ["nodeRuntimeProbe", "daemonRuntimeProbe", "updateStateSizes"]) {
-      const script = createRuntimeProcessScriptFile(name);
-      if (process.platform !== "win32" && (fs.statSync(new URL(".", script.url)).mode & 0o777) !== 0o700) throw new Error("Script directory is not private");
-      try {
-        result[name] = execFileSync(process.execPath, [fileURLToPath(script.url), name === "daemonRuntimeProbe" ? "node" : ""], {
-          encoding: "utf8", timeout: 5000, env: {},
-          input: JSON.stringify({files: [${JSON.stringify(database)}]}),
-          stdio: ["pipe", "pipe", "ignore"],
-        });
-      } finally {
-        script.dispose();
-      }
-      if (fs.existsSync(fileURLToPath(new URL(".", script.url)))) throw new Error("Script survived disposal");
-    }
-    process.stdout.write(JSON.stringify(result));
-  `,
+  const bootstrap: typeof import("../../runtime-process-scripts.generated.mjs") = await import(
+    pathToFileURL(copiedBootstrap).href
   );
-  const result = spawnSync(node, [driver], {
-    encoding: "utf8",
-    timeout: 15_000,
-    env: { TMPDIR: scriptParent, TMP: scriptParent, TEMP: scriptParent },
-  });
-  expect(result.status, result.stderr).toBe(0);
-  expect(fs.readdirSync(scriptParent)).toEqual([]);
-  const output = JSON.parse(result.stdout);
+  const output = { nodeRuntimeProbe: "", daemonRuntimeProbe: "", updateStateSizes: "" };
+  for (const name of ["nodeRuntimeProbe", "daemonRuntimeProbe", "updateStateSizes"] as const) {
+    const script = bootstrap.createRuntimeProcessScriptFile(name, {
+      parentDirectory: scriptParent,
+    });
+    const directory = fileURLToPath(new URL(".", script.url));
+    if (process.platform !== "win32") {
+      expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+    }
+    {
+      using _ = { [Symbol.dispose]: script.dispose };
+      const result = spawnSync(
+        node,
+        [fileURLToPath(script.url), name === "daemonRuntimeProbe" ? "node" : ""],
+        {
+          encoding: "utf8",
+          timeout: 5000,
+          env: {},
+          input: JSON.stringify({ files: [database] }),
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      output[name] = result.stdout;
+    }
+    expect(fs.readdirSync(scriptParent)).toEqual([]);
+  }
   expect(output.nodeRuntimeProbe).toBe(node);
   expect(JSON.parse(output.daemonRuntimeProbe)).toMatchObject({
     bunVersion: null,
