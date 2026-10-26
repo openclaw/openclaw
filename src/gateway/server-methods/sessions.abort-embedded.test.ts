@@ -11,14 +11,8 @@ import {
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import {
-  enqueueSwarmRun,
-  releaseSwarmRun,
-  isSwarmRunActive,
-} from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun, isSwarmRunActive } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
@@ -26,7 +20,6 @@ import * as sessionEntryRead from "../../config/sessions/session-entry-read-runt
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   claimSessionControllerTask,
   releaseSessionControllerClaim,
@@ -51,6 +44,7 @@ import {
 import { createEmbeddedSessionFixture } from "./sessions.abort-embedded.test-support.js";
 import {
   abortContext,
+  expectAbortFailure,
   expectCancelledSession,
   stopSession,
 } from "./sessions.abort-lifecycle.test-support.js";
@@ -138,12 +132,7 @@ function trackEmbeddedRun(...args: Parameters<typeof setActiveEmbeddedRun>) {
 }
 
 function seedParent() {
-  return writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: parentKey,
-    defaultSessionId: parentId,
-  });
+  return fixture.writeSession(parentKey, parentId);
 }
 
 function endingEmbeddedRun(runId: string, sessionId: string, sessionKey: string) {
@@ -182,13 +171,11 @@ function enqueueCollector(
   start: () => Promise<void>,
   active = "running",
 ) {
-  enqueueSwarmRun({
+  fixture.queueRun({
     groupId,
     runId,
     start,
     activeRunIds: [active],
-    maxConcurrent: 1,
-    onStartFailure: () => true,
   });
 }
 
@@ -389,14 +376,7 @@ it.each(["forbidden", "allowed"] as const)(
     if (access === "forbidden") {
       expect(abort).not.toHaveBeenCalled();
       expect(after).toEqual(before);
-      expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: `Session "${parentKey}" was not found.`,
-        }),
-      ]);
+      expectAbortFailure(respond, `Session "${parentKey}" was not found.`, "INVALID_REQUEST");
     } else {
       expect(abort).toHaveBeenCalledOnce();
       expectCancelledSession(after, runId);
@@ -445,26 +425,20 @@ it.each(["before signal", "after signal"] as const)(
     }
     const respond = vi.fn();
     const revoked = new Error("embedded Stop authority revoked");
-    const outcome = await Promise.allSettled([
+    await expect(
       requestStop("chat.abort", client, context, respond, {}, () => {
         if (!current) {
           throw revoked;
         }
       }),
-    ]);
+    ).rejects.toMatchObject({
+      message: "Chat cancellation and persistence failed",
+      errors: [revoked, revoked],
+    });
     expect(queued.input.abortSignal.aborted).toBe(true);
     expect(abort).toHaveBeenCalledTimes(timing === "after signal" ? 1 : 0);
     expect(sessions.loadSessionEntry({ ...target, readConsistency: "latest" })).toEqual(before);
     expect(respond).not.toHaveBeenCalled();
-    expect(outcome).toEqual([
-      {
-        status: "rejected",
-        reason: expect.objectContaining({
-          message: "Chat cancellation and persistence failed",
-          errors: [revoked, revoked],
-        }),
-      },
-    ]);
   },
 );
 
@@ -584,27 +558,14 @@ async function stopParent(runId = "parent") {
 }
 
 async function seedChild(id: string, turn: string, queued = true, requester = parentKey) {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: childKey(id),
-    defaultSessionId: id,
-    lifecycleRevision: `${id}-original`,
-  });
-  await registerSubagentRun({
+  await fixture.seedRun({
     runId: id,
+    sessionId: id,
     childSessionKey: childKey(id),
-    childAgentId: "main",
-    sessionEntry: sessions.loadSessionEntry({ agentId: "main", sessionKey: childKey(id) }),
+    lifecycleRevision: `${id}-original`,
     requesterSessionKey: requester,
-    requesterAgentId: "main",
-    requesterDisplayKey: requester,
     requesterTurnRunId: turn,
-    task: id,
-    collect: true,
     queued,
-    cleanup: "keep",
-    expectsCompletionMessage: false,
   });
 }
 
@@ -741,23 +702,16 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
 it.each([true, false])(
   "sessions.abort controller-backed Stop respects parent acceptance (finalizing=%s)",
   async (finalizing) => {
-    const parentStorePath = await seedParent();
+    await seedParent();
     await seedChild("running", "parent", false);
     await seedChild("queued", "parent");
     const dispatch = vi.fn(async () => {});
     enqueueCollector("controller-backed", "queued", dispatch);
     const context = abortContext();
     const registration = registerChatAbortController({
-      target: captureSessionTarget({
-        storeScope: parentStorePath,
-        sessionKey: parentKey,
-        incarnation: parentId,
-        agentId: "main",
-      }),
+      target: parentTarget(),
+      ...parentIdentity,
       runId: "parent",
-      sessionId: parentId,
-      sessionKey: parentKey,
-      agentId: "main",
       ownerConnId: "operator",
       kind: "agent",
       timeoutMs: 30_000,

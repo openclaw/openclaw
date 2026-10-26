@@ -2,10 +2,7 @@ import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -101,6 +98,21 @@ function expectEvents(peer: ReturnType<typeof questionPeer>, events: string[]) {
   expect(peer.send.mock.calls.map(([frame]) => JSON.parse(frame).event)).toEqual(events);
 }
 
+function broadQuestionClient(client: GatewayClient): GatewayClient {
+  return { ...client, connect: { ...client.connect, scopes: ["operator.questions"] } };
+}
+
+function observeAnswerWait() {
+  const entered = createDeferredCore();
+  const wait = manager.waitAnswer.bind(manager);
+  const spy = vi.spyOn(manager, "waitAnswer").mockImplementation((...args) => {
+    const result = wait(...args);
+    entered.resolve();
+    return result;
+  });
+  return { entered: entered.promise, spy };
+}
+
 async function fixture(state: OpenClawTestState) {
   const owner = roleClient("view", "question-owner");
   const viewer = roleClient("write", "question-viewer");
@@ -153,9 +165,6 @@ async function fixture(state: OpenClawTestState) {
       { ...entry, ...delta },
     );
   await write();
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: requestParams.sessionKey })?.createdActor,
-  ).toEqual(entry.createdActor);
   const call = (
     method: string,
     params: Record<string, unknown>,
@@ -185,22 +194,13 @@ it("keeps a trusted narrow question on worker-backed RPCs and fanout through lab
   withQuestionFixture(async (f) => {
     const owner = questionPeer(f.owner, "sql-owner");
     const viewer = questionPeer(f.viewer, "sql-viewer");
-    const broad = questionPeer(
-      { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
-      "sql-broad",
-    );
+    const broad = questionPeer(broadQuestionClient(f.owner), "sql-broad");
     const admin = questionPeer(adminRequestClient, "sql-admin");
     const revoked = questionPeer({ ...f.viewer, invalidated: true }, "sql-revoked");
     const fallback = vi.fn(() => false);
     useBroadcaster([owner, viewer, broad, admin, revoked], fallback);
     let sql = observeHostDataSql();
-    const entered = createDeferredCore();
-    const wait = manager.waitAnswer.bind(manager);
-    const waitSpy = vi.spyOn(manager, "waitAnswer").mockImplementationOnce((...args) => {
-      const result = wait(...args);
-      entered.resolve();
-      return result;
-    });
+    const { entered, spy: waitSpy } = observeAnswerWait();
     let settled: Promise<unknown> | undefined;
     try {
       expect(
@@ -225,20 +225,12 @@ it("keeps a trusted narrow question on worker-backed RPCs and fanout through lab
       expect((await f.call("question.list", {}))[0]).toBe(true);
       const waiting = f.call("question.waitAnswer", { id: "trusted-route" });
       settled = Promise.allSettled([waiting]);
-      await Promise.race([entered.promise, waiting]);
+      await Promise.race([entered, waiting]);
       expect(waitSpy).toHaveBeenCalledOnce();
       waitSpy.mockRestore();
       expect(sql.queries.filter((query) => /session_|transcript_/i.test(query))).toEqual([]);
       sql.restore();
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: requestParams.sessionKey },
-        {
-          ...f.entry,
-          updatedAt: 2,
-          label: "Renamed while answering",
-          markedUnreadAt: 2,
-        },
-      );
+      await f.write({ updatedAt: 2, label: "Renamed while answering", markedUnreadAt: 2 });
       sql = observeHostDataSql();
       const answers = { answers: { destination: ["Home"] } };
       expect(await f.call("question.resolve", { id: "trusted-route", answers })).toEqual([
@@ -275,10 +267,7 @@ it("fans out requester-only questions after draft visibility changes with no glo
   withQuestionFixture(async (f) => {
     const owner = questionPeer(f.owner, "question-owner");
     const viewer = questionPeer(f.viewer, "question-viewer");
-    const broad = questionPeer(
-      { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
-      "broad-questions",
-    );
+    const broad = questionPeer(broadQuestionClient(f.owner), "broad-questions");
     const projection = await createSessionRowProjection({ cfg: f.cfg });
     sourceReleases.add(() => projection.dispose());
     await projection.ensureMaterialized();
@@ -298,10 +287,7 @@ it("fans out requester-only questions after draft visibility changes with no glo
     } finally {
       get.mockRestore();
     }
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: requestParams.sessionKey },
-      { ...f.entry, visibility: "draft" },
-    );
+    await f.write({ visibility: "draft" });
     owner.send.mockClear();
     viewer.send.mockClear();
     broad.send.mockClear();
@@ -348,13 +334,7 @@ it.each(["ordinary", "secret"] as const)(
       const peer = questionPeer(f.owner, "narrow-secret");
       useBroadcaster([peer]);
       const id = "privileged-question";
-      const client =
-        kind === "secret"
-          ? adminRequestClient
-          : {
-              ...f.producer,
-              connect: { ...f.producer.connect, scopes: ["operator.questions"] },
-            };
+      const client = kind === "secret" ? adminRequestClient : broadQuestionClient(f.producer);
       const params = { ...(kind === "secret" ? secretRequestParams : requestParams), id };
       expect((await f.call("question.request", params, client))[0]).toBe(true);
       if (kind === "secret") {
@@ -431,10 +411,7 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
         };
       }
       if (kind === "incognito") {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: requestParams.sessionKey },
-          { ...f.entry, incognito: true },
-        );
+        await f.write({ incognito: true });
       }
       const response = await f.call(
         "question.request",
@@ -456,19 +433,13 @@ it.each(["generation", "session", "profile", "reused id"] as const)(
     withQuestionFixture(async (f) => {
       const id = "ordinary-question";
       expect((await f.request(id))[0]).toBe(true);
-      const entered = createDeferredCore();
-      const wait = manager.waitAnswer.bind(manager);
-      const spy = vi.spyOn(manager, "waitAnswer").mockImplementation((...args) => {
-        const result = wait(...args);
-        entered.resolve();
-        return result;
-      });
+      const { entered, spy } = observeAnswerWait();
       const observer = { ...f.owner };
       const waiting = f.call("question.waitAnswer", { id }, observer);
       const settled = Promise.allSettled([waiting]);
       const answers = { answers: { destination: ["Committed answer"] } };
       try {
-        await Promise.race([entered.promise, waiting]);
+        await Promise.race([entered, waiting]);
         expect(spy).toHaveBeenCalledOnce();
         if (change === "generation") {
           await f.write({ lifecycleRevision: "replacement" });
@@ -665,10 +636,7 @@ it.each([
           ? adminRequestClient
           : kind === "narrow"
             ? f.owner
-            : {
-                ...f.producer,
-                connect: { ...f.producer.connect, scopes: ["operator.questions"] },
-              };
+            : broadQuestionClient(f.producer);
       const call = () =>
         f.call(
           `question.${method}`,
@@ -762,10 +730,7 @@ it.each(["source", "generation"] as const)(
     withQuestionFixture(async (f) => {
       const source = f.sourceController;
       const narrow = questionPeer(f.owner, "retired-narrow");
-      const broad = questionPeer(
-        { ...f.viewer, connect: { ...f.viewer.connect, scopes: ["operator.questions"] } },
-        "retired-broad",
-      );
+      const broad = questionPeer(broadQuestionClient(f.viewer), "retired-broad");
       const admin = questionPeer(adminRequestClient, "retired-admin");
       useBroadcaster([narrow, broad, admin]);
       expect((await f.request())[0]).toBe(true);

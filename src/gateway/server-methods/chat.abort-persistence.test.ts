@@ -211,23 +211,27 @@ function setMockSessionEntry(params: {
   sessionEntryState.cfg = {};
 }
 
-async function createTranscriptFixture(owner = { agentId: "main", sessionKey: "main" }) {
+async function createTranscriptFixture(
+  owner = { agentId: "main", sessionKey: "main" },
+  { sessionId = "sess-main", hasEntry = true } = {},
+) {
   const dir = sessionDirs.make();
-  const sessionId = "sess-main";
   const storePath = path.join(dir, "sessions.json");
   const transcriptPath = formatSqliteSessionFileMarker({
     agentId: owner.agentId,
     sessionId,
     storePath,
   });
-  await replaceSessionEntry(
-    { ...owner, storePath },
-    { sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
-  );
-  setMockSessionEntry({ transcriptPath, storePath, sessionId });
+  const writeEntry = (entry: Partial<Parameters<typeof replaceSessionEntry>[1]>) =>
+    replaceSessionEntry({ ...owner, storePath }, { sessionId, updatedAt: Date.now(), ...entry });
+  if (hasEntry) {
+    await writeEntry({ sessionFile: transcriptPath });
+  }
+  setMockSessionEntry({ transcriptPath, storePath, sessionId, hasEntry });
   return {
     sessionId,
     storePath,
+    writeEntry,
     readTranscript: async () =>
       (await loadTranscriptEvents({ ...owner, sessionId, storePath })) as TranscriptLine[],
   };
@@ -263,19 +267,6 @@ function seedCommittedReply(params: { sessionId: string; storePath: string; runI
   });
 }
 
-async function createMissingEntryFixture() {
-  const dir = sessionDirs.make();
-  const storePath = path.join(dir, "sessions.json");
-  const sessionId = "client-supplied-session";
-  const transcriptPath = formatSqliteSessionFileMarker({
-    agentId: "main",
-    sessionId,
-    storePath,
-  });
-  setMockSessionEntry({ transcriptPath, storePath, sessionId, hasEntry: false });
-  return { sessionId };
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   resetAgentEventsForTest();
@@ -283,16 +274,9 @@ afterEach(() => {
 
 describe("chat abort transcript persistence", () => {
   it("commits an already-cancelled parent partial when revocation fences later worker cancellation", async () => {
-    const { readTranscript, sessionId, storePath } = await createTranscriptFixture();
+    const { readTranscript, sessionId, storePath, writeEntry } = await createTranscriptFixture();
     const revision = "original-generation";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: "main", storePath },
-      {
-        sessionId,
-        lifecycleRevision: revision,
-        updatedAt: 1,
-      },
-    );
+    await writeEntry({ lifecycleRevision: revision, updatedAt: 1 });
     sessionEntryState.lifecycleRevision = revision;
     let current = true;
     const parent = createActiveRun("main", { sessionId });
@@ -386,15 +370,8 @@ describe("chat abort transcript persistence", () => {
   it.each([undefined, "original-revision"])(
     "rejects placement partials when captured revision %s changes without SID rotation",
     async (lifecycleRevision) => {
-      const { readTranscript, sessionId, storePath } = await createTranscriptFixture();
-      await replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey: "main" },
-        {
-          sessionId,
-          updatedAt: Date.now(),
-          lifecycleRevision,
-        },
-      );
+      const { readTranscript, sessionId, writeEntry } = await createTranscriptFixture();
+      await writeEntry({ lifecycleRevision });
       sessionEntryState.lifecycleRevision = lifecycleRevision;
       const snapshot = await partialSnapshot({
         sessionId,
@@ -402,14 +379,7 @@ describe("chat abort transcript persistence", () => {
         text: "obsolete placement partial",
         abortOrigin: "placement-abandon",
       });
-      await replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey: "main" },
-        {
-          sessionId,
-          updatedAt: Date.now(),
-          lifecycleRevision: "next-revision",
-        },
-      );
+      await writeEntry({ lifecycleRevision: "next-revision" });
       const before = await readTranscript();
       await expect(persistPartial(snapshot)).rejects.toThrow("session-rebound");
       expect(await readTranscript()).toEqual(before);
@@ -740,7 +710,10 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("does not match stop targets by client-supplied session id without a stored entry", async () => {
-    const { sessionId } = await createMissingEntryFixture();
+    const { sessionId } = await createTranscriptFixture(undefined, {
+      sessionId: "client-supplied-session",
+      hasEntry: false,
+    });
     const active = createActiveRun("third-session", { sessionId });
     const context = createChatAbortContext({
       sources: [["run-stop-client-session", active]],
