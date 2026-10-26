@@ -289,7 +289,7 @@ export function createSidebarPinnedSessions(
     return read;
   }
   function getRow(key: string): GatewaySessionRow | undefined {
-    return readReference(key)?.observation?.row;
+    return readReference(key)?.observation?.row ?? undefined;
   }
   function get(key: string): SidebarRecentSession | undefined {
     const read = readReference(key);
