@@ -1,16 +1,15 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, expect, it } from "vitest";
-let bundleRoot: string | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let interruptsModuleUrl: string;
 
 beforeAll(async () => {
-  bundleRoot = await mkdtemp(path.join(os.tmpdir(), "mantis-cli-interrupts-"));
+  const bundleRoot = tempDirs.make("mantis-cli-interrupts-");
   const bundlePath = path.join(bundleRoot, "cli-interrupts.mjs");
   // Bundle once so cold tsx loading cannot consume the child's readiness budget.
   await esbuild({
@@ -23,12 +22,6 @@ beforeAll(async () => {
     tsconfig: path.resolve("tsconfig.json"),
   });
   interruptsModuleUrl = pathToFileURL(bundlePath).href;
-});
-
-afterAll(async () => {
-  if (bundleRoot) {
-    await rm(bundleRoot, { recursive: true, force: true });
-  }
 });
 
 it.skipIf(process.platform === "win32").concurrent.for([
