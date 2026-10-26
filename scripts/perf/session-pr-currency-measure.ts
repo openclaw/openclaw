@@ -2,6 +2,8 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
 // --base-owner-suffix compares control-ui-session-pr-{read,source,subscriptions}.<suffix>.ts.
+// --base-projection-suffix compares session-row-projection.<suffix>.ts (redirect its
+// materialize import to the matching baseline snapshot). --captures isolates row capture.
 // --subscribe measures real subscribe handlers plus settled passive watcher work.
 // Its baseline also needs server-methods/control-ui.<suffix>.ts.
 // --subscriptions measures passive watcher polls with a runtime publication per poll;
@@ -40,6 +42,8 @@ const { values } = parseArgs({
     subscriptions: { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
     "base-owner-suffix": { type: "string" },
+    "base-projection-suffix": { type: "string" },
+    captures: { type: "boolean", default: false },
     pairs: { type: "string", default: "5" },
     output: { type: "string" },
   },
@@ -51,29 +55,47 @@ const warmup = integer("warmup");
 const pairs = integer("pairs");
 const watchSubscriptions = values.subscriptions || values.subscribe;
 assert(!(values.subscriptions && values.subscribe), "Choose --subscribe or --subscriptions");
+assert(!(values.captures && watchSubscriptions), "Choose --captures or subscription work");
+assert(!(values["base-owner-suffix"] && values["base-projection-suffix"]));
 assert(global.gc, "Run Node with --expose-gc");
 assert(!values["base-owner-suffix"] || /^[a-z0-9-]+$/.test(values["base-owner-suffix"]));
+assert(!values["base-projection-suffix"] || /^[a-z0-9-]+$/.test(values["base-projection-suffix"]));
+const baseSuffix = values["base-owner-suffix"] ?? values["base-projection-suffix"];
 const sources = [
-  ...(values["base-owner-suffix"]
-    ? [{ name: "base", suffix: `.${values["base-owner-suffix"]}` }]
-    : []),
+  ...(baseSuffix ? [{ name: "base", suffix: `.${baseSuffix}` }] : []),
   { name: "candidate", suffix: "" },
 ].map(({ name, suffix }) => {
-  const url = new URL(`../../src/gateway/control-ui-session-pr-read${suffix}.ts`, import.meta.url);
+  const projectionUrl = new URL(
+    `../../src/gateway/session-row-projection${values["base-projection-suffix"] ? suffix : ""}.ts`,
+    import.meta.url,
+  );
+  const materializeUrl = new URL(
+    `../../src/gateway/session-row-projection-materialize${values["base-projection-suffix"] ? suffix : ""}.ts`,
+    import.meta.url,
+  );
+  const ownerSuffix = values["base-projection-suffix"] ? "" : suffix;
+  const url = new URL(
+    `../../src/gateway/control-ui-session-pr-read${ownerSuffix}.ts`,
+    import.meta.url,
+  );
   const sourceUrl = new URL(
-    `../../src/gateway/control-ui-session-pr-source${suffix}.ts`,
+    `../../src/gateway/control-ui-session-pr-source${ownerSuffix}.ts`,
     import.meta.url,
   );
   const subscriptionsUrl = new URL(
-    `../../src/gateway/control-ui-session-pr-subscriptions${suffix}.ts`,
+    `../../src/gateway/control-ui-session-pr-subscriptions${ownerSuffix}.ts`,
     import.meta.url,
   );
   const handlerUrl = new URL(
-    `../../src/gateway/server-methods/control-ui${suffix}.ts`,
+    `../../src/gateway/server-methods/control-ui${ownerSuffix}.ts`,
     import.meta.url,
   );
   return {
     name,
+    projectionUrl,
+    projectionSha256: createHash("sha256").update(readFileSync(projectionUrl)).digest("hex"),
+    materializeUrl,
+    materializeSha256: createHash("sha256").update(readFileSync(materializeUrl)).digest("hex"),
     url,
     handlerUrl,
     handlerSha256: values.subscribe
@@ -128,7 +150,6 @@ const [
   { writeSessionEntry },
   { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync },
   { closeOpenClawStateDatabaseAsync },
-  { createSessionRowProjection },
   { ensureProfileForEmail },
   { prepareGatewayRecipientProfile },
   { GatewayScheduler },
@@ -138,7 +159,6 @@ const [
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
   import("../../src/state/openclaw-agent-db.js"),
   import("../../src/state/openclaw-state-db.js"),
-  import("../../src/gateway/session-row-projection.js"),
   import("../../src/state/user-profiles.js"),
   import("../../src/gateway/expected-profile.js"),
   import("../../src/infra/gateway-scheduler.js"),
@@ -146,6 +166,11 @@ const [
 ]);
 const owners = await Promise.all(
   sources.map(async (source) => {
+    const {
+      createSessionRowProjection,
+    }: typeof import("../../src/gateway/session-row-projection.js") = await import(
+      source.projectionUrl.href
+    );
     const {
       createControlUiSessionPrRead,
     }: typeof import("../../src/gateway/control-ui-session-pr-read.js") = await import(
@@ -163,6 +188,7 @@ const owners = await Promise.all(
       values.subscribe ? await import(source.handlerUrl.href) : undefined;
     return {
       ...source,
+      createSessionRowProjection,
       createControlUiSessionPrRead,
       withControlUiSessionPrSource,
       subscriptions,
@@ -173,7 +199,8 @@ const owners = await Promise.all(
 const profile = ensureProfileForEmail("currency-reader@example.test");
 setRuntimeConfigSnapshot(cfg);
 const keyFor = (index: number) => `agent:main:currency-${index}`;
-let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+const projections: import("../../src/gateway/session-row-projection.js").SessionRowProjection[] =
+  [];
 const inspector = new Session();
 let inspectorConnected = false;
 const gc: { start: number; ms: number }[] = [];
@@ -204,11 +231,12 @@ try {
     },
     { agentId: "main" },
   );
-  projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-  await projection.prepareSelection();
-  await projection.ensureMaterialized();
   const arms = [];
   for (const owner of owners) {
+    const projection = await owner.createSessionRowProjection({ cfg, modelCatalog: [] });
+    projections.push(projection);
+    await projection.prepareSelection();
+    await projection.ensureMaterialized();
     const access = new AbortController();
     const reads: ControlUiSessionPrRead[] = [];
     const clients: GatewayClient[] = [];
@@ -270,6 +298,20 @@ try {
           target!.assertCurrent!();
         }
       });
+    if (values.captures) {
+      const queries = targets.map((target) => ({
+        agentId: target!.params.agentId,
+        key: target!.params.sessionKey,
+        storePath: target!.readSource.path,
+      }));
+      const rows = queries.map((query) => projection.capture(query));
+      run = async (count) => {
+        for (let index = 0; index < count; index++) {
+          const slot = index % readerCount;
+          assert.equal(projection.capture(queries[slot]!), rows[slot]);
+        }
+      };
+    }
     if (owner.subscriptions) {
       const scheduler = new GatewayScheduler();
       schedulers.push(scheduler);
@@ -338,7 +380,7 @@ try {
         assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
       } else {
         for (let index = 0; index < readerCount; index++) {
-          if (owner.name === "base") {
+          if (owner.name === "base" && values["base-owner-suffix"]) {
             // Historical owner snapshots retain the removed admission callback position.
             const replace = subscriptions.replace as (
               connId: string,
@@ -438,6 +480,14 @@ try {
   }
   for (const source of sources) {
     assert.equal(
+      createHash("sha256").update(readFileSync(source.materializeUrl)).digest("hex"),
+      source.materializeSha256,
+    );
+    assert.equal(
+      createHash("sha256").update(readFileSync(source.projectionUrl)).digest("hex"),
+      source.projectionSha256,
+    );
+    assert.equal(
       createHash("sha256").update(readFileSync(source.url)).digest("hex"),
       source.sha256,
       "Owner source changed during measurement",
@@ -461,12 +511,26 @@ try {
     }
   }
   const result = {
-    scope: values.subscribe
-      ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
-      : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
+    scope: values.captures
+      ? "real resident row captures on Team-shaped state; no transport or whole-Gateway claim"
+      : values.subscribe
+        ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
+        : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
     node: process.version,
     owners: sources.map(
-      ({ name, url, sha256, sourceUrl, sourceSha256, subscriptionsSha256, handlerSha256 }) => ({
+      ({
+        name,
+        url,
+        sha256,
+        sourceUrl,
+        sourceSha256,
+        subscriptionsSha256,
+        handlerSha256,
+        projectionUrl,
+        projectionSha256,
+        materializeUrl,
+        materializeSha256,
+      }) => ({
         name,
         path: url.pathname,
         sha256,
@@ -474,6 +538,10 @@ try {
         sourceSha256,
         subscriptionsSha256,
         handlerSha256,
+        projectionPath: projectionUrl.pathname,
+        projectionSha256,
+        materializePath: materializeUrl.pathname,
+        materializeSha256,
       }),
     ),
     workload: {
@@ -486,6 +554,7 @@ try {
       pairs,
       subscriptions: values.subscriptions,
       subscribe: values.subscribe,
+      captures: values.captures,
     },
     allocationMode: values.allocations,
     samples,
@@ -506,7 +575,9 @@ try {
   if (inspectorConnected) {
     inspector.disconnect();
   }
-  projection?.dispose();
+  for (const projection of projections) {
+    projection.dispose();
+  }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   rmSync(stateDir, { recursive: true, force: true });
