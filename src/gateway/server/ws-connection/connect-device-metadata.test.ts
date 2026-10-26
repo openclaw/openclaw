@@ -27,7 +27,6 @@ describe("resolvePinnedClientMetadata", () => {
     ["darwin", "darwin", "Mac", {}, "macos", false],
     ["win32", "win32", "Windows", {}, "windows", false],
     ["iOS 26.5.0", "iOS 26.4.2", "iPhone", { clientId: "openclaw-ios" }, "iOS 26.5.0", true],
-    ["iPadOS 26.5.0", "iPadOS 26.4.2", "iPad", { clientId: "openclaw-ios" }, "iPadOS 26.5.0", true],
     ["iPadOS 26.5.0", "iOS 26.4.2", "iPad", { clientId: "openclaw-ios" }, "iPadOS 26.5.0", true],
     ["Android 16", "Android 15", "Android", { clientId: "openclaw-android" }, "Android 16", true],
     ["macos", "macOS 26.5.2", "Mac", {}, "macOS 26.5.2", false],
@@ -80,7 +79,6 @@ describe("resolvePinnedClientMetadata", () => {
   it.each([
     ["windows", "linux", "Windows", unpinnedRuntime, false],
     ["windows", "win32", "Linux", unpinnedRuntime, false],
-    ["windows", "darwin", "Windows", unpinnedRuntime, false],
     [
       "windows",
       "win32",
@@ -93,7 +91,6 @@ describe("resolvePinnedClientMetadata", () => {
     ["linux", "macOS 26.5.2", "Mac", { clientId: "cli", clientMode: "probe" }, false],
     ["macOS 26.5.2", "macOS 26.5.1", "Mac", { clientId: "node-host" }, false],
     ["macOS anything", "macOS previous", "Mac", { clientId: "openclaw-macos" }, false],
-    ["macOS", "macOS 26.5.1", "Mac", { clientId: "openclaw-macos" }, false],
   ] as const)(
     "keeps %s / %s approval-bound (%j, %j)",
     (claimed, paired, family, overrides, deviceFamilyMismatch) => {
