@@ -1,8 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
-import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import {
   testWorkerLaunchInput,
   TEST_WORKER_ENDPOINT,
@@ -80,12 +78,7 @@ function fixture(native = true, steps: Step[] = ["ready"]) {
     listeners.forEach((listener) => listener(state));
   };
   const hello = {
-    ...createWorkerHelloForTest(descriptor.admission, {
-      generation: "authority-fixture",
-      presentation: createToolSurfacePresentationForTest(),
-      tools: [],
-      policy: prepareCoreToolPolicy({}),
-    }),
+    ...createWorkerHelloForTest(descriptor.admission),
     policy: { heartbeatIntervalMs: 60000, maxPayload: 1024 * 1024 },
   };
   vi.spyOn(connection, "start").mockImplementation(async () => {
