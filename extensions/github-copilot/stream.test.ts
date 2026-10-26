@@ -140,7 +140,13 @@ describe("wrapCopilotAnthropicStream", () => {
       messages: [
         {
           ...system,
-          content: [{ type: "text", text: system.content, cache_control: { type: "ephemeral" } }],
+          content: [
+            {
+              type: "text",
+              text: "replacement system prompt",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
         },
         ...toolMessages(["functions_read_0"]),
       ],

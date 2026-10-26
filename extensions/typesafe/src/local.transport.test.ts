@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
-  getPreparedPluginSecretInput: vi.fn(() => ({ revision: 1, value: "hosted-secret" })),
+  getPreparedPluginSecretInput: vi.fn(),
 }));
 vi.mock("node:dns/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:dns/promises")>();
@@ -33,8 +33,11 @@ const expectedResult = {
   result: { ...mixedFixture.result.result, model: input.model },
 };
 
+beforeEach(() => {
+  vi.mocked(getPreparedPluginSecretInput).mockReset();
+  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: "hosted-secret" });
+});
 afterEach(() => {
-  vi.mocked(getPreparedPluginSecretInput).mockClear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.mocked(lookup).mockReset();
@@ -126,7 +129,8 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
     }
     expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
     expect(sockets.size).toBeLessThan(received.length);
-    expect(received[0]?.request).toMatchObject({
+    const request = received[0]!.request;
+    expect({ url: request.url, headers: request.headers }).toMatchObject({
       url: "/v1/systemone",
       headers: { authorization: undefined, host: `${hostname}:${address.port}` },
     });
