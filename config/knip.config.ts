@@ -531,6 +531,7 @@ const repositoryScriptEntries = [
   "scripts/perf/state-read-session-list-bench.ts!",
   "scripts/perf/state-read-worker-bench.ts!",
   "scripts/perf/stream-idle-watchdog.ts!",
+  "scripts/perf/tool-call-stream-buffer-measure.ts!",
   "scripts/perf/tool-source-reply-completion-measure.mjs!",
   "scripts/perf/transcript-model-context-measure.ts!",
   "scripts/perf/ws-event-metrics-measure.ts!",
