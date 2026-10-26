@@ -2147,6 +2147,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/restart-recovery-receipt.test.ts",
   "src/config/sessions/session-accessor.conformance.test.ts",
   "src/config/sessions/session-accessor.identity-projection.test.ts",
+  "src/config/sessions/session-accessor.pending-input-retention.test.ts",
   "src/config/sessions/session-accessor.pending-inputs-consumed.test.ts",
   "src/config/sessions/session-accessor.pending-inputs.test.ts",
   "src/config/sessions/session-accessor.readonly.test.ts",
