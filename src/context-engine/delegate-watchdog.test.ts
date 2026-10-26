@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { compactContextEngineWithSafetyTimeout } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { sleep } from "../utils/sleep.js";
@@ -20,6 +20,8 @@ const timeoutMs = 60;
 const stageMs = 40; // Each native stage fits the window; their total exceeds it.
 const session = { sessionId: "s1", sessionKey: "agent:main:s1", force: true };
 let engineSequence = 0;
+
+beforeAll(() => fixtures.captureContextEngineRegistryStateForTests());
 
 beforeEach(async () => {
   await registerLegacyContextEngine();
@@ -50,6 +52,9 @@ async function resolveEngine(
     return delegateCompactionToRuntime(mode === "logical-turn" ? { ...params } : params);
   },
 ) {
+  if (mode === "default") {
+    return registry.resolveContextEngine();
+  }
   const engineId = `delegating-plugin-${++engineSequence}`;
   const raw: ContextEngine = {
     info: { id: engineId, name: "Delegating plugin", ownsCompaction: mode === "quarantined" },
@@ -68,7 +73,7 @@ async function resolveEngine(
   return engine;
 }
 
-const engineModes = ["plugin", "logical-turn", "quarantined"];
+const engineModes = ["default", "plugin", "logical-turn", "quarantined"];
 it.each(engineModes)("refreshes the watchdog per native stage for %s", async (mode) => {
   const engine = await resolveEngine(mode);
   const pending = compactContextEngineWithSafetyTimeout(engine, session, timeoutMs);
