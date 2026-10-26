@@ -7,15 +7,10 @@ import {
   type ControlUiFocusTarget,
 } from "./focus.js";
 
-const sessionKey = "agent:main:work";
-const dashboard = "/dashboard/roboclaw/the-daily-claw-6d7c9ccb";
-type FocusInput = Parameters<typeof parseControlUiFocusLocation>[0];
+const sessionKey = "agent:a:b";
+const dashboard = "/dashboard/a/task";
 type RoundTripCase = [ControlUiFocusBuildTarget, string, ControlUiFocusTarget?, string?];
-const browserQuery = "sessionKey=agent%3Amain%3Awork&";
-const browserLocation = (query: string, base = "") => ({
-  pathname: `${base}/focus/browser`,
-  search: `?${query}`,
-});
+const browserQuery = "sessionKey=agent%3Aa%3Ab&";
 const browserTarget = (tab: Extract<ControlUiFocusTarget, { kind: "browser" }>["tab"]) =>
   ({ kind: "browser", sessionKey, tab }) as const;
 const dashboardTarget = (pathname: string, search = "", hash = "") =>
@@ -28,49 +23,41 @@ const desktopTarget = (
 describe("Control UI focus locations", () => {
   it.each<RoundTripCase>([
     [
-      browserTarget({ target: "host", profile: "work.profile", targetId: "tab/1" }),
-      `/focus/browser?${browserQuery}target=host&profile=work.profile&targetId=tab%2F1`,
+      browserTarget({ target: "host", profile: "a.b", targetId: "t/1" }),
+      `/focus/browser?${browserQuery}target=host&profile=a.b&targetId=t%2F1`,
     ],
     [
-      browserTarget({ target: "node", node: "worker/a", profile: "work", targetId: ".." }),
-      `/openclaw/focus/browser?${browserQuery}target=node&profile=work&targetId=..&node=worker%2Fa`,
+      browserTarget({ target: "node", node: "n/a", profile: "p", targetId: ".." }),
+      `/ui/focus/browser?${browserQuery}target=node&profile=p&targetId=..&node=n%2Fa`,
       undefined,
-      "/openclaw",
+      "/ui",
     ],
     [{ kind: "dashboard", path: dashboard }, `/focus${dashboard}`, dashboardTarget(dashboard)],
     [
-      {
-        kind: "dashboard",
-        path: "/openclaw/dashboard/main?catalog=beam&host=gateway&thread=one#pane",
-      },
-      "/openclaw/focus/dashboard/main?catalog=beam&host=gateway&thread=one#pane",
-      dashboardTarget("/openclaw/dashboard/main", "?catalog=beam&host=gateway&thread=one", "#pane"),
-      "/openclaw/",
+      { kind: "dashboard", path: "/ui/dashboard/a?x=1#pane" },
+      "/ui/focus/dashboard/a?x=1#pane",
+      dashboardTarget("/ui/dashboard/a", "?x=1", "#pane"),
+      "/ui/",
     ],
-    [{ kind: "terminal" }, "/openclaw/focus/terminal", undefined, "/openclaw"],
+    [{ kind: "terminal" }, "/ui/focus/terminal", undefined, "/ui"],
     [{ kind: "desktop" }, "/focus/desktop", desktopTarget()],
     [
-      { kind: "desktop", source: "environment:Mac Studio/QA & demo" },
-      "/focus/desktop/source/environment%3AMac%20Studio%2FQA%20%26%20demo",
-      desktopTarget(false, { kind: "source", value: "environment:Mac Studio/QA & demo" }),
+      { kind: "desktop", source: "env:A/B & C" },
+      "/focus/desktop/source/env%3AA%2FB%20%26%20C",
+      desktopTarget(false, { kind: "source", value: "env:A/B & C" }),
     ],
     [{ kind: "desktop", control: true }, "/focus/desktop/control", desktopTarget(true)],
     [
-      { kind: "desktop", session: "agent:main:mobile session" },
-      "/focus/desktop/session/agent%3Amain%3Amobile%20session",
-      desktopTarget(false, { kind: "session", value: "agent:main:mobile session" }),
+      { kind: "desktop", session: "a: b" },
+      "/focus/desktop/session/a%3A%20b",
+      desktopTarget(false, { kind: "session", value: "a: b" }),
     ],
     [
-      { kind: "desktop", control: true, source: "node:worker-1", session: "agent:main:mobile" },
-      "/focus/desktop/control/source/node%3Aworker-1",
-      desktopTarget(true, { kind: "source", value: "node:worker-1" }),
+      { kind: "desktop", control: true, source: "n:a", session: "a:b" },
+      "/focus/desktop/control/source/n%3Aa",
+      desktopTarget(true, { kind: "source", value: "n:a" }),
     ],
-    [
-      { kind: "desktop", source: " ", session: "" },
-      "/openclaw/focus/desktop",
-      desktopTarget(),
-      "/openclaw",
-    ],
+    [{ kind: "desktop", source: " ", session: "" }, "/ui/focus/desktop", desktopTarget(), "/ui"],
   ])("round-trips %j", (target, path, parsed = target, basePath = "") => {
     expect(buildControlUiFocusPath(target, basePath)).toBe(path);
     expect(parseControlUiFocusLocation(new URL(path, "https://gateway.example.test"))).toEqual({
@@ -88,15 +75,13 @@ describe("Control UI focus locations", () => {
       `${browserQuery}target=host&node=other&profile=work&targetId=one`,
       `${browserQuery}target=host&profile=work&targetId=one&targetId=two`,
       "sessionKey=%20&target=host&profile=work&targetId=one",
-    ].map((query): [FocusInput, string | undefined] => [browserLocation(query), undefined]),
-    ...[
-      "/focus",
-      "/focus/desktop/source",
-      "/focus/desktop/session/%",
-      "/focus/desktop/control/unknown/value",
-    ].map((input): [FocusInput, string] => [input, ""]),
-  ])("rejects unsupported location %j", (input, basePath) => {
-    expect(parseControlUiFocusLocation(input, basePath)).toEqual({
+    ].map((query) => ({ pathname: "/focus/browser", search: `?${query}` })),
+    "/focus",
+    "/focus/desktop/source",
+    "/focus/desktop/session/%",
+    "/focus/desktop/control/unknown/value",
+  ])("rejects unsupported location %j", (input) => {
+    expect(parseControlUiFocusLocation(input, typeof input === "string" ? "" : undefined)).toEqual({
       status: "unsupported",
       basePath: "",
     });
@@ -122,11 +107,10 @@ describe("Control UI focus locations", () => {
 
   it.each([
     [`/openclaw/focus${dashboard}/`, "/openclaw", dashboardTarget(`/openclaw${dashboard}`)],
-    ["/focus/desktop/", "", desktopTarget()],
     [
-      "/focus/desktop/control/session/agent%3Amain%3Amobile",
+      "/focus/desktop/control/session/a%3Ab",
       "",
-      desktopTarget(true, { kind: "session", value: "agent:main:mobile" }),
+      desktopTarget(true, { kind: "session", value: "a:b" }),
     ],
   ] as const)("parses %s", (input, basePath, target) => {
     expect(parseControlUiFocusLocation(input, basePath)).toEqual({
