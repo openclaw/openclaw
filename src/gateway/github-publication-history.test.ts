@@ -111,6 +111,12 @@ async function historyFixture() {
       "-m",
       message,
     );
+  const commitOnRemote = async (message: string) => {
+    const emptyTree = path.join(root, "empty-tree");
+    await fs.writeFile(emptyTree, "");
+    const tree = await git("-C", remote, "hash-object", "-t", "tree", "-w", emptyTree);
+    return git("-C", remote, "commit-tree", tree, "-m", message);
+  };
   const publishMessage = async (message: string) => {
     const parent = await git("rev-parse", "HEAD");
     const head = await commit(message, parent);
@@ -138,6 +144,7 @@ async function historyFixture() {
     remote,
     remoteHead,
     commit,
+    commitOnRemote,
     publishMessage,
     commitFacts: async () => ({
       parent: await git("rev-parse", "HEAD^"),
@@ -333,8 +340,9 @@ describe("GitHub publication branch history", () => {
   it.each(["failed", "wrong-ref", "fetch", "ancestry"] as const)(
     "leaves the workspace untouched when remote %s observation is unknown",
     async (fault) => {
-      const remoteCommit = await f.commit("remote object");
-      await f.git("push", f.remote, `${remoteCommit}:refs/heads/${BRANCH}`);
+      const remoteCommit = await f.commitOnRemote("remote object");
+      await f.git("-C", f.remote, "update-ref", `refs/heads/${BRANCH}`, remoteCommit);
+      let intercepted = false;
       interceptCommand((argv) => {
         const targeted =
           fault === "failed" || fault === "wrong-ref"
@@ -343,6 +351,7 @@ describe("GitHub publication branch history", () => {
               ? argv.includes("fetch") && argv.at(-1) === remoteCommit
               : argv.includes("--is-ancestor") && argv.at(-2) === remoteCommit;
         if (targeted) {
+          intercepted = true;
           return fault === "wrong-ref"
             ? commandResult(`${remoteCommit}\trefs/heads/other\n`)
             : commandResult("", fault === "ancestry" ? 128 : 1);
@@ -350,6 +359,7 @@ describe("GitHub publication branch history", () => {
         return undefined;
       });
       await f.rejected(`unknown-${fault}`, "unavailable", "verify");
+      expect(intercepted).toBe(true);
     },
   );
 });
