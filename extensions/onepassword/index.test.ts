@@ -11,6 +11,8 @@ function register(
   pluginConfig?: Record<string, unknown>,
 ) {
   const hooks = { registerCli: vi.fn(), registerTool: vi.fn(), on: vi.fn() };
+  const openKeyedStore = vi.fn(() => new MemoryKeyedStore());
+  const openKeyedStoreV2 = vi.fn(() => new MemoryKeyedStore());
   plugin.register(
     createTestPluginApi({
       id: "onepassword",
@@ -18,19 +20,28 @@ function register(
       runtime: {
         config: { current },
         state: {
-          openKeyedStore: () => new MemoryKeyedStore(),
-          openKeyedStoreV2: () => new MemoryKeyedStore(),
+          openKeyedStore,
+          openKeyedStoreV2,
           resolveStateDir: () => "/tmp/openclaw-onepassword-test",
         },
       } as never,
       ...hooks,
     }),
   );
-  return hooks;
+  return { ...hooks, openKeyedStore, openKeyedStoreV2 };
 }
 
-it("registers the CLI without exposing an unconfigured tool", () => {
-  const { registerCli, registerTool } = register();
+it("opens bounded stores and registers only the CLI when unconfigured", () => {
+  const { registerCli, registerTool, openKeyedStore, openKeyedStoreV2 } = register();
+  expect(openKeyedStoreV2).toHaveBeenCalledWith({
+    namespace: "grants",
+    maxEntries: 1_024,
+    overflowPolicy: "evict-oldest",
+  });
+  expect(openKeyedStore.mock.calls).toEqual([
+    [{ namespace: "audit", maxEntries: 40_000, overflowPolicy: "evict-oldest" }],
+    [{ namespace: "pending", maxEntries: 512, overflowPolicy: "evict-oldest" }],
+  ]);
   expect(registerCli).toHaveBeenCalledTimes(1);
   expect(registerTool).not.toHaveBeenCalled();
 });

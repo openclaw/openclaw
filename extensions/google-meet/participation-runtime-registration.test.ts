@@ -1,5 +1,6 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -7,6 +8,8 @@ import { MEET_URL, meetLaunchedTab } from "./src/test-support/fixtures.test-help
 import { setupParticipationHarness } from "./src/test-support/participation-harness.js";
 import { getMeetTool } from "./src/test-support/plugin-harness.js";
 import * as chromeTransport from "./src/transports/chrome.js";
+
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 const setupWithSqlite = (stateEnv: NodeJS.ProcessEnv) =>
   setupParticipationHarness(
@@ -49,7 +52,7 @@ it("persists unsupported results and replays them without restoring ended sessio
           requestId: "unsupported-reaction",
           participationAction: { type: "reaction", reaction: "👍" },
         };
-        const firstResult = await harness.execute(request);
+        const firstResult = requireRecord(await harness.execute(request), "participation result");
         expect(firstResult).toMatchObject({ requestId: request.requestId, status: "unsupported" });
 
         const left = await tool.execute("leave-call", { action: "leave", sessionId });

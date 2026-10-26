@@ -9,6 +9,10 @@ import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
 import { createGatewayMethodCapture } from "./src/test/gateway-method-capture.js";
+import {
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
+} from "./src/workspace-access.js";
 
 const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
 const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
@@ -18,7 +22,11 @@ it("discovers tool schemas without creating storage and persists executed tools"
   withStateDirEnv("workboard-discovery-", async ({ stateDir }) => {
     {
       await using discovery = registerGeneration(plugin.register, "tool-discovery");
-      const create = discovery.tools().find((tool) => tool.name === "workboard_create")!;
+      const tools = discovery.tools();
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual(
+        [...WORKBOARD_CARD_TOOL_NAMES, ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES].toSorted(),
+      );
+      const create = tools.find((tool) => tool.name === "workboard_create")!;
       expect(existsSync(path.join(stateDir, "plugins/workboard/workboard.sqlite"))).toBe(false);
       await create.execute("create", { title: "Retained discovery card" });
     }

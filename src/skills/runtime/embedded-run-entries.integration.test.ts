@@ -11,6 +11,7 @@ import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 async function workspaceFixture(
   skills: ["agent" | "execution", string, string, ".agents"?][],

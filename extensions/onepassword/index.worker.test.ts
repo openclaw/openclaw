@@ -123,5 +123,7 @@ it("hands approvals to competing tool executions without main-thread SQL", async
   expect((await entries<AuditRow>("audit", 40_000)).map(({ value }) => value.outcome)).toEqual(
     expect.arrayContaining(["auto", "approved", "grant"]),
   );
-  expect(sql.flatMap((spy) => spy.mock.calls)).toEqual([]);
+  for (const spy of sql) {
+    expect(spy).not.toHaveBeenCalled();
+  }
 });
