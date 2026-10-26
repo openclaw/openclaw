@@ -1,12 +1,18 @@
+import { createServer } from "node:http";
 import { WebClient } from "@slack/web-api";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
-import { sendSlackMessage as sendSlackMessageThroughPublicOwner } from "./actions.js";
+import {
+  readSlackMessages as readSlackMessagesThroughWebApi,
+  sendSlackMessage as sendSlackMessageThroughPublicOwner,
+} from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { createSlackActions } from "./channel-actions.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import type { SlackSendResult } from "./send.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
@@ -131,6 +137,94 @@ it("reads the current requester from the trusted current workspace", async () =>
   );
   expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", scopedOptions());
   expect(result.details).toEqual({ ok: true, info });
+});
+
+it("normalizes fractional millisecond timestamps through the Slack channel action and Web API", async () => {
+  const requests: Array<{ method?: string; url?: string; authorization?: string }> = [];
+  const server = createServer((request, response) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        ok: true,
+        messages: [
+          { ts: "1700000000000.5", text: "fractional milliseconds" },
+          { ts: "1712345678.123456", text: "Slack seconds control" },
+        ],
+        has_more: false,
+      }),
+    );
+  });
+  const address = await new Promise<{ port: number }>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const listeningAddress = server.address();
+      if (!listeningAddress || typeof listeningAddress === "string") {
+        reject(new Error("Slack proof server did not bind a TCP address"));
+        return;
+      }
+      resolve({ port: listeningAddress.port });
+    });
+  });
+
+  try {
+    vi.stubEnv("SLACK_API_URL", `http://127.0.0.1:${address.port}/api/`);
+    slackActionRuntime.readSlackMessages = readSlackMessagesThroughWebApi;
+    const config = slackConfig({ groupPolicy: "open", actions: { messages: true } });
+    const actions = createSlackActions("slack");
+    if (!actions.handleAction) {
+      throw new Error("Slack channel action handler is unavailable");
+    }
+    const context: ChannelMessageActionContext = {
+      channel: "slack",
+      action: "read",
+      cfg: config,
+      params: { channelId: "C123" },
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "C123",
+        requesterAccountId: "default",
+      },
+    };
+
+    const result = await actions.handleAction(context);
+
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        url: "/api/conversations.history",
+        authorization: "Bearer tok",
+      },
+    ]);
+    expect(result.details).toMatchObject({
+      ok: true,
+      channelId: "C123",
+      messages: [
+        {
+          ts: "1700000000000.5",
+          text: "fractional milliseconds",
+          timestampMs: 1700000000001,
+          timestampUtc: "2023-11-14T22:13:20.001Z",
+        },
+        {
+          ts: "1712345678.123456",
+          text: "Slack seconds control",
+          timestampMs: 1712345678123,
+        },
+      ],
+      hasMore: false,
+    });
+  } finally {
+    vi.unstubAllEnvs();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 });
 
 it.each([
