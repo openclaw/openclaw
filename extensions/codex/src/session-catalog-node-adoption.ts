@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -16,6 +17,10 @@ import { CatalogParamsError, MAX_SESSION_ID_LENGTH } from "./session-catalog-par
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
 export const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
+
+const loadTranscriptMirror = createLazyRuntimeModule(
+  () => import("./app-server/transcript-mirror.js"),
+);
 
 type CatalogSessionEntry = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -303,8 +308,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
         const storePath = resolveStorePath(params.config.session?.store, {
           agentId: entry.agentId,
         });
-        const { importCodexThreadHistoryToTranscript } =
-          await import("./app-server/transcript-mirror.js");
+        const { importCodexThreadHistoryToTranscript } = await loadTranscriptMirror();
         await importCodexThreadHistoryToTranscript({
           thread: params.history.thread,
           throughTurnId: params.history.throughTurnId,

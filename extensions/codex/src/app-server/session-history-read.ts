@@ -7,6 +7,7 @@ import {
   type SessionTranscriptContextVersion,
   type SessionTranscriptContextProjectionSource,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SessionTranscriptTargetParams,
   TranscriptTurnAdmission,
@@ -18,6 +19,10 @@ import {
   type CodexHistoryReadResult,
 } from "./history-rejection.js";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
+
+const loadAgentSessions = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/agent-sessions"),
+);
 
 export type ResolvedCodexHistoryTarget =
   | { kind: "empty" }
@@ -86,7 +91,7 @@ export async function readCodexNativeHistory<T>(
     }
     // The legacy file codec is needed only for explicit file imports, never native SQLite reads.
     const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
-      await import("openclaw/plugin-sdk/agent-sessions");
+      await loadAgentSessions();
     const entries = parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8"));
     return consume(
       (function* () {
