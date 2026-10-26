@@ -47,7 +47,7 @@ async function readState(): Promise<Pick<SessionActorHotState, "target" | "entry
         database: {
           kind: "file",
           physicalIdentity: "synthetic-team-shaped-database",
-          birthtime: 1,
+          birthtime: "1",
           nativeLocation: "/synthetic/agent.sqlite",
         },
       },
