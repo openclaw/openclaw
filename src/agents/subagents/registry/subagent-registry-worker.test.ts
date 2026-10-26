@@ -18,6 +18,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.test-support.js";
@@ -384,6 +385,73 @@ function holdFirstAck(onWrite = () => {}) {
   });
   return { reached, release };
 }
+
+it.each(["delivered", "lost"] as const)(
+  "publishes native registry receipts once without repeating their payload in the reply (%s)",
+  async (delivery) => {
+    const original = entry(`native-receipt-${delivery}`);
+    await register(original);
+    const replies: unknown[] = [];
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const reply = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        replies.push(reply);
+        if (delivery === "lost") {
+          throw new SqliteWorkerError("Synthetic lost registry ACK", "outcome-unknown");
+        }
+      }
+      return reply;
+    });
+    const notify = vi
+      .spyOn(sessionStateNotices, "enqueueSessionStateNotice")
+      .mockImplementation(() => {});
+    const published = vi.fn();
+    const stop = subscribeSubagentRunChanges("persistence", published);
+    const onPublished = vi.fn();
+    try {
+      const value = await mutateSubagentRuns(
+        [original.runId],
+        (rows) => ({
+          value: "updated",
+          postimages: new Map([
+            [original.runId, { ...rows.get(original.runId)!, label: "native receipt" }],
+          ]),
+          terminalEvents: [
+            {
+              input: {
+                event: {
+                  sessionKey: original.childSessionKey,
+                  agentId: "main",
+                  kind: "goal_changed",
+                  actorType: "system",
+                  summary: "Synthetic registry receipt notice",
+                  watcherSessionKeys: [original.requesterSessionKey],
+                },
+                now: Date.now(),
+              },
+            },
+          ],
+        }),
+        { onPublished },
+      );
+      expect(value).toBe("updated");
+      expect(subagentRuns.get(original.runId)?.label).toBe("native receipt");
+      expect(stored(original.runId)?.label).toBe("native receipt");
+      expect(published).toHaveBeenCalledOnce();
+      expect(onPublished).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledExactlyOnceWith({
+        watcherSessionKey: original.requesterSessionKey,
+        watcherStorePath: null,
+        targetSessionKey: original.childSessionKey,
+        lastSeenSequence: 0,
+        queueOnly: false,
+      });
+      expect(replies).toEqual([undefined]);
+    } finally {
+      stop();
+    }
+  },
+);
 
 it("publishes overlapping durable and runtime-only mutations in FIFO order", async () => {
   await register({ ...entry("overlap"), cleanupHandled: false });

@@ -229,8 +229,14 @@ export async function runSubagentRegistryWorkerWrite<T>(
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      async (scope) =>
-        write.kind === "registry" ? write.decode(await write.execute(scope)) : write.execute(scope),
+      async (scope) => {
+        if (write.kind !== "registry") {
+          return write.execute(scope);
+        }
+        await write.execute(scope);
+        // The broker drains native receipts before acknowledging the command.
+        return write.decode(admission?.committed?.facts);
+      },
       {
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
@@ -303,11 +309,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
       throw error;
     }
     throw new SubagentRegistryWriteError(
-      write.kind === "registry" && write.acknowledged()
-        ? "committed"
-        : commitGranted || hasSqliteWorkerOutcomeUnknown(error)
-          ? "unknown"
-          : "not-committed",
+      commitGranted || hasSqliteWorkerOutcomeUnknown(error) ? "unknown" : "not-committed",
       error,
     );
   }
@@ -350,10 +352,8 @@ async function commitRows<T>(
     return { value: planned.value, postimages };
   }
   return runSubagentRegistryWorkerWrite(context, () => {
-    let acknowledged = false;
     const decode = (value: unknown): SubagentRunMutationReceipt<T> => {
       const receipt = parseSubagentRegistryWriteReceipt(value, write);
-      acknowledged = true;
       // Runtime reservations are not encoded state; keep the admitted postimage intact.
       return {
         value: planned.value,
@@ -368,7 +368,6 @@ async function commitRows<T>(
       execute: (scope) => scope.execute({ type: "subagents.persistChanges", input: write }),
       decode,
       terminalEvents: planned.terminalEvents,
-      acknowledged: () => acknowledged,
     };
   });
 }
