@@ -124,6 +124,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/doctor-contract-api.native-assignments.test.ts",
   "extensions/codex/index.test.ts",
   "extensions/codex/session-history-worker-runtime.test.ts",
+  "extensions/codex/src/app-server/scheduled-app-authority.configured.test.ts",
   "extensions/codex/src/app-server/session-binding-recovery.test.ts",
   "extensions/codex/src/app-server/session-binding.test.ts",
   "extensions/codex/src/app-server/session-binding.reads.test.ts",
