@@ -2,8 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
@@ -13,6 +15,8 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionPerson } from "./session-ownership-fixtures.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
@@ -112,12 +116,7 @@ suite.define(() => {
     const sessionKey = "agent:main:hovered-menu";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
@@ -249,12 +248,7 @@ suite.define(() => {
                 updatedAt: now - 5 * 60_000,
               },
               {
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 createdAt: now - 89 * 24 * 60 * 60_000,
                 key: sessionKey,
                 kind: "direct",
@@ -399,7 +393,7 @@ suite.define(() => {
 
         const notepad = card.locator(".session-hovercard__notepad");
         expect(await notepad.locator(".session-hovercard__notepad-title").textContent()).toBe(
-          "Agent Notepad",
+          "Task progress",
         );
         const markdown = notepad.locator(".session-progress-card__markdown");
         expect(await markdown.locator(":scope > :first-child").getAttribute("class")).toContain(
@@ -541,12 +535,7 @@ suite.define(() => {
     const secondSessionKey = "agent:main:timing-second";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         // Browser RPC time must not consume the hover-delay assertion windows.
         await page.clock.install();
@@ -682,12 +671,7 @@ suite.define(() => {
     const sessionKey = "agent:main:focusable-progress";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
@@ -825,12 +809,7 @@ suite.define(() => {
     const channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         let avatarAvailable = false;
         let rejectedAvatarRequests = 0;
@@ -856,12 +835,7 @@ suite.define(() => {
             "sessions.list": chatSessionListResponse([
               {
                 channelAvatarUrl,
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 key: sessionKey,
                 kind: "direct",
                 label: "Avatar reconnect",
@@ -918,12 +892,7 @@ suite.define(() => {
       "The final release notes are ready for review, including <strong>plain text</strong>, rollout details, verification notes, compatibility guidance, and a concise operator checklist.";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         await page.route(`**${channelAvatarUrl}`, async (route) => {
           expect(await route.request().headerValue("authorization")).toBe(
@@ -955,12 +924,7 @@ suite.define(() => {
             "sessions.list": chatSessionListResponse([
               {
                 channelAvatarUrl,
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 key: sessionKey,
                 kind: "direct",
                 label: "No progress card",
@@ -970,12 +934,7 @@ suite.define(() => {
               },
               {
                 channelAvatarUrl: successfulChannelAvatarUrl,
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 key: avatarSessionKey,
                 kind: "direct",
                 label: "Channel avatar",

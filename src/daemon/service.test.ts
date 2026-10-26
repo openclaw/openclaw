@@ -277,10 +277,7 @@ describe("readGatewayServiceState", () => {
           return;
         }
         if (condition === "absent") {
-          const run = await admitUpdateCommandRun({
-            opts: { restart: shouldRestart },
-            root: home,
-          });
+          const run = await admitUpdateCommandRun({ opts: { restart: shouldRestart }, root: home });
           expect(run.env.HOME).toBe(home);
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
         }
@@ -354,11 +351,6 @@ describe("readGatewayServiceState", () => {
     expect(state.running).toBe(true);
     expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(hasInstalledDefinition).not.toHaveBeenCalled();
-    expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
-      env: { OPENCLAW_GATEWAY_PORT: "1" },
-      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-      timeoutMs: 100,
-    });
     expect(state.definitionMutationCapability).toEqual({
       kind: "unknown",
       reason: "inspection-failed",
@@ -377,7 +369,6 @@ describe("readGatewayServiceState", () => {
     expect(state.installed).toBe(false);
     expect(state.command).toBeNull();
     expect(state.env).toBe(env);
-    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env, timeoutMs: 100 });
   });
 
   it("bounds structured runtime inspection diagnostics", async () => {

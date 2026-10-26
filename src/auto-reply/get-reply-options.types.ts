@@ -74,13 +74,6 @@ export type BlockReplyContext = {
   deliveryIntentId?: string;
 };
 
-/** Context passed to onModelSelected callback with actual model used. */
-type ModelSelectedContext = {
-  provider: string;
-  model: string;
-  thinkLevel: string | undefined;
-};
-
 /** Typing indicator class for channel-owned UX policy. */
 export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
@@ -169,10 +162,6 @@ export type ReasoningStreamPayload = Pick<
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
-};
-
-type ReasoningProgressPayload = {
-  progressTokens: number;
 };
 
 /** Return false until the channel has accepted operator-visible progress. */
@@ -305,7 +294,7 @@ export type GetReplyOptions = {
   onReasoningStream?: (
     payload: ReasoningStreamPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
+  onReasoningProgress?: (payload: { progressTokens: number }) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -433,7 +422,12 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
-  onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Context passed to onModelSelected callback with actual model used. */
+  onModelSelected?: (ctx: {
+    provider: string;
+    model: string;
+    thinkLevel: string | undefined;
+  }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible

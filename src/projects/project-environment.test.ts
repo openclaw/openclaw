@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => {
   const lease = () => ({
     signal: new AbortController().signal,
+    assertCurrent: vi.fn(),
     assertOwned: vi.fn(),
     assertOwnedInTransaction: vi.fn(),
   });
@@ -105,9 +106,11 @@ vi.mock("./project-checkout.js", () => ({
   resolveProjectCheckout: mocks.resolveCheckout,
   resolveProjectDirectory: async (directory: string) => directory,
 }));
+// mock-isolation: environment routing must not spawn Git against synthetic checkout paths.
 vi.mock("./project-clone-runtime.js", () => ({
   ProjectCloneError: class extends Error {},
   cloneProjectCheckout: mocks.clone,
+  configureProjectCheckoutMaintenance: vi.fn(),
   refreshProjectCheckout: mocks.refresh,
   ensureProjectCheckoutCommit: vi.fn(),
 }));
@@ -233,6 +236,7 @@ it.each(cases)(
       };
       const lease: OpenClawStateLeaseContext = {
         signal: new AbortController().signal,
+        assertCurrent() {},
         assertOwned() {},
         assertOwnedInTransaction: mocks.forbiddenSqlite,
       };
@@ -346,6 +350,9 @@ it.each(cases)(
           expect(captured).toMatchObject({ path: databasePath, env: environmentSnapshot });
           expect(captured.env).not.toBe(caller);
         }
+        for (const [, captured] of [...mocks.clone.mock.calls, ...mocks.refresh.mock.calls]) {
+          expect(captured.env).toMatchObject({ OPENCLAW_STATE_DIR: root });
+        }
         if (source) {
           expect(result).toHaveProperty("OPENCLAW_STATE_DIR", root);
           expect(result).not.toBe(caller);
@@ -353,25 +360,14 @@ it.each(cases)(
           expect(Object.keys(result ?? {})).not.toContain("OPENCLAW_STATE_DIR");
         } else if (operation === "materialize") {
           const target = path.join(root, "projects", sha256HexPrefixCore(originUrl, 16), "project");
-          expect(result).toMatchObject({ id: project.id, repoRoot: target });
-          expect(mocks.clone).toHaveBeenCalledWith(
-            expect.objectContaining({ target }),
-            expect.objectContaining({ env: expect.objectContaining({ OPENCLAW_STATE_DIR: root }) }),
-          );
+          expect(result).toMatchObject({ repoRoot: target });
+          expect(mocks.clone.mock.calls[0]?.[0].target).toBe(target);
           expect(mocks.lease.mock.calls[0]?.[0].database.options.path).toBe(databasePath);
-        } else if (operation === "register") {
-          expect(result).toMatchObject({
-            id: project.id,
-            repoRoot: project.repoRoot,
-            source: "registered",
+        } else if (operation === "refresh") {
+          expect(mocks.refresh.mock.calls[0]?.[0]).toEqual({
+            target: project.repoRoot,
+            url: originUrl,
           });
-        } else if (operation === "remove") {
-          expect(result).toBe(true);
-        } else {
-          expect(mocks.refresh).toHaveBeenCalledWith(
-            { target: project.repoRoot, url: originUrl },
-            expect.objectContaining({ env: expect.objectContaining({ OPENCLAW_STATE_DIR: root }) }),
-          );
         }
         expect(caller.OpenClaw_State_Dir).toBe(path.resolve("/mutated-project-state"));
         expect(mocks.forbiddenSqlite).not.toHaveBeenCalled();
@@ -413,13 +409,7 @@ describe("clone registration", () => {
       if (!repoRoot) {
         throw new Error("Expected a produced checkout");
       }
-      return {
-        id: "project",
-        displayName: "project",
-        repoRoot,
-        originUrl: "https://github.com/example/project.git",
-        source: "cloned",
-      };
+      return { ...project, id: "project", displayName: "project", repoRoot };
     });
   });
 

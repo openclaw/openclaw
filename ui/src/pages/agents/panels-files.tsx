@@ -186,14 +186,18 @@ export function AgentFiles(
         fallback={
           <AgentFileStatus
             request={params.readData().agentFileOutcome}
-            fallback={(message) => <div class="callout danger">{message}</div>}
+            fallback={(message) => (
+              <div class="callout danger" role="alert">
+                {message}
+              </div>
+            )}
           >
             <AgentReadNotice request={params.listRead} />
           </AgentFileStatus>
         }
       >
         {(name) => (
-          <div class="callout danger">
+          <div class="callout danger" role="alert">
             <AgentFileStatus
               request={params.readData().agentFileOutcome}
               fallback={(message) => <span>{message}</span>}

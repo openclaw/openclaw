@@ -275,7 +275,6 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
           authProfileIdSource:
             params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
         },
-  resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
     (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
       provider: run.provider,
@@ -610,12 +609,9 @@ export async function setupAgentRunnerExecutionTestState() {
         imageOrder: params.imageOrder,
       }),
     );
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude", initialModelFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementation((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "anthropic", "claude"),
+    );
   });
 
   afterEach(() => {

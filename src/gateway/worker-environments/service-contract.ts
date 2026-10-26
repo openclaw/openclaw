@@ -181,6 +181,8 @@ export type WorkerEnvironmentServiceContract = {
     runSetupScript?: boolean,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
+  /** Stop session work and return after provider acceptance; physical cleanup remains owned. */
+  reclaim(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   observeDesktop(request: {
     environmentId: string;

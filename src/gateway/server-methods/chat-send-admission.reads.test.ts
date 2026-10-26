@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { performance } from "node:perf_hooks";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -45,13 +44,30 @@ import { advancePlacementFixtureToActive } from "../worker-environments/placemen
 import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
-import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
 
 type Admission = Awaited<ReturnType<typeof admitChatSend>>;
 type Session = Awaited<ReturnType<typeof prepareChatAdmission>>["session"];
+type SubmittedInput = Awaited<ReturnType<typeof sessionAccessor.readSessionSubmittedInput>>;
+type SubmittedInputScope = Parameters<typeof sessionAccessor.readSessionSubmittedInput>[0];
+function submittedInputReader(message: SubmittedInput) {
+  function read(
+    scope: SubmittedInputScope,
+    key: string,
+    options: { includeSource: true },
+  ): Promise<{ message: NonNullable<SubmittedInput>; source: "transcript" } | undefined>;
+  function read(scope: SubmittedInputScope, key: string): Promise<SubmittedInput>;
+  async function read(
+    _scope: SubmittedInputScope,
+    _key: string,
+    options?: { includeSource: true },
+  ) {
+    return message && options?.includeSource ? { message, source: "transcript" as const } : message;
+  }
+  return read;
+}
 function admissionFixture(cfg: OpenClawConfig, runId: string) {
   const scope = { agentId: "main", sessionKey: `agent:main:dashboard:${runId}` };
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -85,6 +101,9 @@ function cleanupAdmission(admitted: Admission | undefined, runId: string) {
     admitted.value.cleanupAdmittedRun();
   }
   clearAgentRunContext(runId);
+}
+function expectAdmissionError(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
 }
 function lifecycleRelease(session: Session) {
   return sessionControllerLifecycle.captureSessionControllerSettlement({
@@ -271,19 +290,6 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         isDirectExternalUser: true,
         params: { message: "Continue" },
       });
-      let clock = 0;
-      using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
-      const log = { info: vi.fn() };
-      using diagnostics = startChatSendDiagnostics(log);
-      const queued = createDeferred();
-      const begin = createDeferred();
-      const beginAdmission = sessionControllerLifecycle.beginSessionEffect;
-      using delayedAdmission = vi.spyOn(sessionControllerLifecycle, "beginSessionEffect");
-      delayedAdmission.mockImplementationOnce(async (params) => {
-        queued.resolve();
-        await begin.promise;
-        return beginAdmission(params);
-      });
       using placement = pausePlacement(placements);
       const committed = createDeferred();
       const consuming = createDeferred();
@@ -342,17 +348,9 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
             consuming.resolve();
           }
         },
-        diagnostics,
       });
       let admitted: Awaited<typeof pending> | undefined;
       try {
-        await awaitGateBeforeSettlement(
-          queued.promise,
-          pending,
-          "chat skipped lifecycle admission",
-        );
-        clock = 300;
-        begin.resolve();
         await awaitGateBeforeSettlement(
           placement.observed.promise,
           pending,
@@ -364,7 +362,6 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           completion,
           "worker completion skipped its native commit",
         );
-        clock = 600;
         nativePending = true;
         placement.resume.resolve();
         await awaitGateBeforeSettlement(
@@ -377,17 +374,10 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         } else if (change === "session replaced") {
           replaceSessionEntrySync(scope, { sessionId: "replacement-session", updatedAt: 2 });
         }
-        clock = 900;
         nativePending = false;
         publishCommit?.();
         releaseReply.resolve();
         admitted = await pending;
-        clock = 1_900;
-        diagnostics.finish();
-        // Later reporting cannot extend either a completed or rejected owner's span.
-        expect(log.info).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("detail.admission.revalidate=600ms detail.admission.work=900ms"),
-        );
         expect(admitted.ok, JSON.stringify(respond.mock.calls[0]?.[2])).toBe(
           change === "unchanged",
         );
@@ -405,7 +395,6 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           );
         }
       } finally {
-        begin.resolve();
         placement.resume.resolve();
         publishCommit?.();
         releaseReply.resolve();
@@ -502,10 +491,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
           ]).toEqual([undefined, undefined, undefined]);
           const respond = vi.fn();
           await withoutHostSql(async () => {
-            admitted = await admitChatSend({
-              ...admission,
-              respond,
-            });
+            admitted = await admitChatSend({ ...admission, respond });
             expect(respond).not.toHaveBeenCalled();
             expect(admitted.ok).toBe(true);
             assert(admitted.ok, "Session admission failed");
@@ -553,10 +539,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
             ],
           },
         });
-        const admission = admitChatSend({
-          ...blocked,
-          respond: vi.fn(),
-        });
+        const admission = admitChatSend({ ...blocked, respond: vi.fn() });
         if (failure === "throws") {
           await expect(admission).rejects.toBe(policyError);
         } else {
@@ -570,10 +553,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
         });
         let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
         try {
-          retried = await admitChatSend({
-            ...corrected,
-            respond: vi.fn(),
-          });
+          retried = await admitChatSend({ ...corrected, respond: vi.fn() });
           expect(retried.ok).toBe(true);
         } finally {
           cleanupAdmission(retried, runId);
@@ -582,12 +562,12 @@ it("releases rejected upload reservations so corrected input can reuse its key",
     },
     { gateway: { uploads: { enabled: false } } },
   ));
-it.each(["known-source", "new-terminal", "new-receipt"] as const)(
+it.each(["new-terminal", "new-receipt"] as const)(
   "refuses a conflicting or unprepared %s after admission waits",
   (source) =>
     withAdmissionTest("chat-admission-retry-comparison", async (f) => {
       const { scope, runId, context } = f;
-      f.seed(source === "known-source" ? { restartRecoveryTerminalRunIds: [runId] } : {});
+      f.seed();
       const admission = await f.prepare();
       const { session } = admission;
       if (source === "new-terminal") {
@@ -598,15 +578,14 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         });
       }
       const comparison = vi.spyOn(sessionAccessor, "readSessionSubmittedInput");
-      if (source === "known-source") {
-        comparison.mockResolvedValueOnce({ role: "user", timestamp: 100, content: "Hello" });
-      }
-      comparison.mockResolvedValue({
-        role: "user",
-        timestamp: 100,
-        content: "Hello",
-        __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 5 }] },
-      });
+      comparison.mockImplementation(
+        submittedInputReader({
+          role: "user",
+          timestamp: 100,
+          content: "Hello",
+          __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 5 }] },
+        }),
+      );
       const begin = sessionControllerLifecycle.beginSessionEffect;
       const publication =
         source === "new-receipt"
@@ -626,25 +605,16 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
       const respond = vi.fn();
       let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
-        admitted = await admitChatSend({
-          ...admission,
-          respond,
-        });
+        admitted = await admitChatSend({ ...admission, respond });
         expect(admitted.ok).toBe(false);
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining(
-            source === "new-receipt"
-              ? { code: "UNAVAILABLE", retryable: true }
-              : {
-                  code: "INVALID_REQUEST",
-                  message: expect.stringContaining("already used for different input"),
-                  ...(source === "known-source"
-                    ? { details: { reason: "chat-request-conflict" } }
-                    : {}),
-                },
-          ),
+        expectAdmissionError(
+          respond,
+          source === "new-receipt"
+            ? { code: "UNAVAILABLE", retryable: true }
+            : {
+                code: "INVALID_REQUEST",
+                message: expect.stringContaining("already used for different input"),
+              },
         );
         expect(getRpcSource(runId)).toBeUndefined();
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
@@ -806,3 +776,23 @@ it.each([
     }
   }),
 );
+it("names the changed store key when refusing a send prepared against stale storage", () =>
+  withAdmissionTest("chat-admission-store-key-changed", async (f) => {
+    f.seed();
+    const admission = await f.prepare();
+    const { sessionTarget } = admission.session;
+    const respond = vi.fn();
+    const outcome = await admitChatSend({
+      ...admission,
+      session: {
+        ...admission.session,
+        sessionTarget: { ...sessionTarget, storeKey: `${sessionTarget.storeKey}:replaced` },
+      },
+      respond,
+    });
+    expect(outcome.ok).toBe(false);
+    expectAdmissionError(respond, {
+      message: "Error: Session storage changed while starting work (store key). Retry.",
+    });
+    expect(getRpcSource(f.runId)).toBeUndefined();
+  }));

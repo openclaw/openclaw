@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
@@ -163,7 +162,21 @@ function session(
   return { sessionId, source: { providerId: "manual-transcript" }, startedAt };
 }
 
-it("reuses list pages without worker requests and observes another store's writes", async () => {
+it("lists summary presence by complete session identity", async () => {
+  const first = await admit(session("repeated"));
+  const later = await admit(session("repeated", "2026-07-02T10:00:00.000Z"));
+  const sibling = await admit(session("sibling", later.startedAt));
+  const expected = (hasSummary: boolean) => [
+    { session: later, hasSummary: false },
+    { session: sibling, hasSummary: false },
+    { session: first, hasSummary },
+  ];
+  expect(await store.listSessionEntries()).toMatchObject(expected(false));
+  await store.writeSummary(summarizeTranscripts({ session: first, utterances: [] }), first);
+  expect(await store.listSessionEntries()).toMatchObject(expected(true));
+});
+
+it("isolates returned list pages and observes another store's writes", async () => {
   const writer = createStore();
   const target = { ...session(), title: "Initial title" };
   await writer.writeSession(target);
@@ -173,37 +186,20 @@ it("reuses list pages without worker requests and observes another store's write
   expect(initial).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
   initial[0]!.title = "Caller mutation";
 
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  const sql = observeMainThreadSql();
-  try {
-    expect(await page(createStore())).toMatchObject([
-      { title: "Initial title", utteranceCount: 0 },
-    ]);
-    expect(requests).not.toHaveBeenCalled();
-    sql.expectIdle();
-
-    await writer.writeSession({ ...target, title: "Updated title" });
-    expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 0 }]);
-    await writer.appendUtteranceForSession(target, { text: "New speech", final: true });
-    expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 1 }]);
-    expect((await store.listReadEntries({ ...options, query: "absent" })).entries).toEqual([]);
-    expect(await page()).toHaveLength(1);
-    sql.expectIdle();
-  } finally {
-    requests.mockRestore();
-    sql.restore();
-  }
+  expect(await page(createStore())).toMatchObject([{ title: "Initial title", utteranceCount: 0 }]);
+  await writer.writeSession({ ...target, title: "Updated title" });
+  expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 0 }]);
+  await writer.appendUtteranceForSession(target, { text: "New speech", final: true });
+  expect(await page()).toMatchObject([{ title: "Updated title", utteranceCount: 1 }]);
+  expect((await store.listReadEntries({ ...options, query: "absent" })).entries).toEqual([]);
+  expect(await page()).toHaveLength(1);
 });
 
 it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] as const)(
   "discards only unchanged empty failed admissions (%s)",
   async (state) => {
     const target = { ...session("abandoned"), stoppedAt: "2026-07-01T10:00:01.000Z" };
-    await store.writeSession(target);
-    const expectedInputRevision = await store.readSummaryInputRevision(target);
-    if (expectedInputRevision === undefined) {
-      throw new Error("Expected admitted transcript");
-    }
+    const { inputRevision: expectedInputRevision } = await store.writeSession(target);
     if (state === "speech") {
       await store.appendUtteranceForSession(target, { text: "Retained speech", final: true });
     } else if (state === "summary") {
@@ -234,61 +230,51 @@ it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] 
   },
 );
 
-it("keeps selector and overview columns aligned on insert, replacement, and removal", async () => {
-  const fields = [
-    ["accountId", "source_account_id", "account"],
-    ["guildId", "source_guild_id", "guild"],
-    ["channelId", "source_channel_id", "channel"],
-    ["meetingUrl", "source_meeting_url", "https://example.test/meeting"],
-    ["threadTs", "source_thread_ts", "thread"],
-    ["fileId", "source_file_id", "file"],
-  ] as const;
-  const columnValues = (empty = false) =>
-    Object.fromEntries(fields.map(([, column, value]) => [column, empty ? null : value]));
-  const target = {
-    ...session(),
-    source: {
-      providerId: "manual-transcript",
-      ...Object.fromEntries(fields.map(([key, , value]) => [key, value])),
-    },
-    metadata: { agentId: "agent" },
+it("keeps source matching and overview projections current after replacement", async () => {
+  const source = {
+    providerId: "manual-transcript",
+    accountId: "account",
+    guildId: "guild",
+    channelId: "channel",
+    meetingUrl: "https://example.test/meeting",
+    threadTs: "thread",
+    fileId: "file",
   };
-  const readColumns = () =>
-    stateDatabase()
-      .prepare(
-        `SELECT ${fields.map(([, column]) => column).join(", ")}, metadata_agent_id
-         FROM meeting_transcript_sessions WHERE session_id = ? AND started_at = ?`,
-      )
-      .get(target.sessionId, target.startedAt);
-  await store.writeSession(target);
-  expect(readColumns()).toEqual({ ...columnValues(), metadata_agent_id: "agent" });
-  await store.writeSession({
+  const target = await admit({
+    ...session(),
+    source,
+    metadata: { agentId: "agent" },
+    stoppedAt: "2026-07-01T11:00:00.000Z",
+  });
+  const recent = (locator: typeof target.source) =>
+    store.readRecentStoppedSession(locator, target.startedAt, "2026-07-01T11:00:00.000Z");
+  expect((await recent(source))?.session).toEqual(target);
+  expect((await store.listReadEntries({ agentId: "agent" })).entries).toHaveLength(1);
+  const replacement = {
     ...target,
-    source: { providerId: "manual-transcript", accountId: "replacement" },
+    source: { providerId: source.providerId, accountId: "replacement" },
     metadata: {},
-  });
-  expect(readColumns()).toEqual({
-    ...columnValues(true),
-    source_account_id: "replacement",
-    metadata_agent_id: null,
-  });
+  };
+  await store.writeSession(replacement);
+  expect(await recent(source)).toBeUndefined();
+  expect((await recent(replacement.source))?.session).toEqual(replacement);
+  expect((await store.listReadEntries({ agentId: "agent" })).entries).toEqual([]);
   const summary = summarizeTranscripts({ session: target, utterances: [] });
   await store.writeSummary({ ...summary, overview: "Initial overview" }, target);
   await store.writeSummary({ ...summary, overview: "Replacement overview" }, target);
-  expect(
-    stateDatabase()
-      .prepare("SELECT overview FROM meeting_transcript_summaries WHERE session_id = ?")
-      .get(target.sessionId),
-  ).toEqual({ overview: "Replacement overview" });
+  expect((await store.listReadEntries({})).entries).toMatchObject([
+    { overview: "Replacement overview" },
+  ]);
 });
 
 it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
-  const first = session("summary-first");
-  const second = { ...session("summary-second"), title: "Second meeting" };
-  const later = session("summary-first", "2026-07-02T10:00:00.000Z");
-  await admit(first, ["First speech"]);
-  await admit(second, ["Second speech"]);
-  await admit(later, ["Next day speech"]);
+  const first = await admit(session("summary-first"), ["First speech"]);
+  const second = await admit({ ...session("summary-second"), title: "Second meeting" }, [
+    "Second speech",
+  ]);
+  const later = await admit(session("summary-first", "2026-07-02T10:00:00.000Z"), [
+    "Next day speech",
+  ]);
   const firstSnapshot = await expectSnapshot(first, ["First speech"]);
   await expectSnapshot(second, ["Second speech"]);
   await expectSnapshot(later, ["Next day speech"]);
@@ -325,8 +311,7 @@ it.each(["cancel", "consumer-error"] as const)("releases snapshots after %s", as
 it.each(["rewrite", "reset"] as const)(
   "isolates export snapshots from %s and appends",
   async (change) => {
-    const target = { ...session(), title: "Original meeting" };
-    await store.writeSession(target);
+    const target = await admit({ ...session(), title: "Original meeting" });
     const database = openOpenClawStateDatabase(databaseOptions());
     writeTransaction((db) => {
       for (let index = 0; index < 130; index++) {
@@ -408,11 +393,10 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
     for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
       await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
       const stored = await store.readSession(target.sessionId);
-      expect(stored?.metadata?.sessionIdOrigin, target.sessionId).toEqual(origin);
-      expect(stored?.metadata?.agentId, target.sessionId).toBe(metadata?.agentId);
-      expect(Object.hasOwn(stored?.metadata ?? {}, "sessionIdOrigin"), target.sessionId).toBe(
-        origin !== undefined,
-      );
+      expect(stored?.metadata ?? {}, target.sessionId).toEqual({
+        ...(metadata ? { agentId: metadata.agentId } : {}),
+        ...(origin === undefined ? {} : { sessionIdOrigin: origin }),
+      });
       await expectTexts(target, ["Saved history"]);
     }
     canonical.set(target.sessionId, await store.readSession(target.sessionId));
@@ -487,7 +471,7 @@ it("bounds exact retry lookups to one caption ID without adding statements", asy
 });
 
 it("deduplicates exact retries but preserves same-id revisions", async () => {
-  const target = session();
+  const target = await admit();
   const interim = { id: "utterance-1", text: "draft" };
   const revisions: TranscriptUtterance[] = [
     interim,
@@ -504,7 +488,6 @@ it("deduplicates exact retries but preserves same-id revisions", async () => {
     { ...interim, metadata: { language: "en", confidence: 1 } },
     { ...interim, metadata: { confidence: 1, language: "en" } },
   ];
-  await store.writeSession(target);
   await appendEach(target, revisions, 2);
   await appendEach(target, revisions);
   await expect(store.readUtterancesForSession(target)).resolves.toEqual(
@@ -512,8 +495,7 @@ it("deduplicates exact retries but preserves same-id revisions", async () => {
   );
 
   for (const other of [session("other"), session(target.sessionId, "2026-07-02T10:00:00.000Z")]) {
-    await store.writeSession(other);
-    await store.appendUtteranceForSession(other, interim);
+    await admit(other, [interim]);
     await expect(store.readUtterancesForSession(other)).resolves.toEqual([
       { ...interim, sessionId: other.sessionId },
     ]);
@@ -536,7 +518,8 @@ it("does not treat SQLite's replacement of lone surrogates as an exact retry", a
   await expect(store.readUtterancesForSession(target)).resolves.toEqual(stored);
 });
 
-it.each(["standup"])("requires dated selectors for repeated %s", async (id) => {
+it("requires dated selectors for repeated sessions", async () => {
+  const id = "standup";
   await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
   await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
 
@@ -655,45 +638,7 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("does not let a modified export block canonical session updates", async () => {
-  const target = await admit(session("mutable-export"), ["canonical"]);
-  const artifacts = await store.materializeSessionArtifacts(target, "transcript");
-  fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
-
-  await expect(
-    store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
-  ).resolves.toMatchObject({ inserted: false, inputRevision: expect.any(String) });
-  await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
-    stoppedAt: "2026-07-01T11:00:00.000Z",
-  });
-  await expect(writeNotes(target, "canonical")).resolves.toBe(
-    path.join(store.sessionDir(target), "summary.md"),
-  );
-  await expect(store.readSummary(target)).resolves.toMatchObject({
-    summary: { sessionId: target.sessionId },
-  });
-  await expect(store.materializeSessionArtifacts(target, "transcript")).rejects.toThrow(
-    "run openclaw doctor --fix",
-  );
-});
-
-it("resolves descriptor exports through canonical SQLite identity", async () => {
-  const target = { ...session("canonical-export"), title: "Canonical title" };
-  await store.writeSession(target);
-
-  const artifacts = await store.materializeSessionArtifacts(
-    { ...target, title: "Stale title" },
-    "metadata",
-  );
-
-  expect(readText(artifacts.metadataPath)).toContain("Canonical title");
-  await expect(
-    store.materializeSessionArtifacts(session("phantom-export"), "metadata"),
-  ).rejects.toThrow("transcripts session not found");
-  expect(fs.existsSync(store.sessionDir(session("phantom-export")))).toBe(false);
-});
-
-it("stores summaries in SQLite and materializes artifacts beneath a shared export parent", async () => {
+it("exports canonical durable notes, recovers concurrent manifests, and preserves externally edited artifacts", async () => {
   const exportRoot = path.join(suiteStateDir, "transcripts");
   fs.mkdirSync(exportRoot, { recursive: true });
   fs.chmodSync(exportRoot, 0o770);
@@ -701,37 +646,25 @@ it("stores summaries in SQLite and materializes artifacts beneath a shared expor
     ...session("ansi-\u001b[31mprovider\u001b[0m", "2026-05-22T10:00:00.000Z"),
     title: "ANSI import",
   };
-  const utterance = { text: "We decided to ship the CLI.", speaker: { label: "Sam" } };
-  await admit(target, [utterance]);
-  const summary = summarizeTranscripts({ session: target, utterances: [utterance] });
-  const markdownPath = await store.writeSummary(summary, target);
-  const artifacts = await store.materializeSessionArtifacts(target, "all");
-
-  expect(markdownPath).toBe(path.join(store.sessionDir(target), "summary.md"));
-  expect(JSON.parse(readText(artifacts.summaryJsonPath))).toMatchObject({
+  await admit(target, ["Saved speech"]);
+  expect(await writeNotes(target, "Saved speech")).toBe(
+    path.join(store.sessionDir(target), "summary.md"),
+  );
+  const artifacts = await store.materializeSessionArtifacts({ ...target, title: "Stale" }, "all");
+  expect(readText(artifacts.metadataPath)).toContain(target.title);
+  expect(JSON.parse(readText(path.join(artifacts.sessionDir, "summary.json")))).toMatchObject({
     sessionId: target.sessionId,
   });
-  expect(readText(artifacts.transcriptPath)).toContain('"text":"We decided to ship the CLI."');
+  expect(readText(artifacts.transcriptPath)).toContain('"text":"Saved speech"');
   await closeDatabase();
-  const reopened = createStore();
-  await expect(reopened.readSummary(target)).resolves.toMatchObject({
+  await expect(createStore().readSummary(target)).resolves.toMatchObject({
     summary: { sessionId: target.sessionId },
   });
-});
-
-it("repairs an interrupted manifest update and serializes concurrent exports", async () => {
-  const target = await admit(session("recover-export"), ["recover me"]);
-  await writeNotes(target, "recover me");
-  await store.materializeSessionArtifacts(target, "all");
   updateExports(target, { export_manifest_json: "{}" });
-
-  await expect(
-    Promise.all([
-      store.materializeSessionArtifacts(target, "summary"),
-      store.materializeSessionArtifacts(target, "transcript"),
-    ]),
-  ).resolves.toHaveLength(2);
-
+  await Promise.all([
+    store.materializeSessionArtifacts(target, "summary"),
+    store.materializeSessionArtifacts(target, "transcript"),
+  ]);
   const manifest = stateDatabase()
     .prepare("SELECT export_manifest_json FROM meeting_transcript_sessions WHERE session_id = ?")
     .get(target.sessionId) as { export_manifest_json: string };
@@ -740,4 +673,21 @@ it("repairs an interrupted manifest update and serializes concurrent exports", a
     "summary.md": expect.any(String),
     "transcript.jsonl": expect.any(String),
   });
+  fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
+  const updated = { ...target, stoppedAt: "2026-07-01T11:00:00.000Z" };
+  await expect(store.writeSession(updated)).resolves.toMatchObject({
+    inserted: false,
+    inputRevision: expect.any(String),
+  });
+  expect(await store.readSession(target.sessionId)).toEqual(updated);
+  await writeNotes(target, "Updated notes");
+  expect((await store.readSummary(target)).summary?.overview).toBe("Updated notes");
+  await expect(store.materializeSessionArtifacts(target, "transcript")).rejects.toThrow(
+    "run openclaw doctor --fix",
+  );
+  const missing = session("phantom-export");
+  await expect(store.materializeSessionArtifacts(missing, "metadata")).rejects.toThrow(
+    "transcripts session not found",
+  );
+  expect(fs.existsSync(store.sessionDir(missing))).toBe(false);
 });

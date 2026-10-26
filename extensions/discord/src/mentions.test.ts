@@ -24,7 +24,7 @@ it("formatMention formats channel mentions from ids", () => {
 });
 
 it("formatMention throws when more than one mention id is provided", () => {
-  expect(() => formatMention({ userId: "1", roleId: "2" })).toThrow(/exactly one/i);
+  expect(() => formatMention({ userId: "1", channelId: "2" })).toThrow(/exactly one/i);
 });
 
 describe("rewriteDiscordKnownMentions", () => {

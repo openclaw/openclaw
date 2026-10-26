@@ -86,6 +86,7 @@ async function fixture() {
       registerAction: unused,
       registerAccessory: unused,
       registerWidget: unused,
+      registerInlineView: unused,
       registerReplacement: unused,
       selectReplacement: unused,
     },
@@ -190,4 +191,81 @@ it("retires reads when hidden or access changes without publishing their late re
   expect(f.container.textContent).toContain("Read access is required");
   expect(f.container.querySelector(".clawrouter-pool__summary")).toBeNull();
   expect(f.button.disabled).toBe(true);
+});
+
+it("matches grant traffic by provider and key suffix and updates totals after refresh", async () => {
+  const f = await fixture();
+  const result: ClawRouterPoolResult = {
+    status: "ok",
+    pool: {
+      version: "clawrouter.pool.v1",
+      models: [],
+      grants: [
+        { key: "subscription/shared", provider: "alpha", windows: [], eligibility: {} },
+        { key: "oauth/shared", provider: "beta", windows: [], eligibility: {} },
+      ],
+      usage: {
+        lanes: [],
+        grants: [
+          {
+            provider: "alpha",
+            grantKey: "shared",
+            requests: 2,
+            inputTokens: 20,
+            outputTokens: 4,
+            cacheReadTokens: 1,
+            cacheWriteTokens: 3,
+            costMicros: 1_000_000,
+          },
+          {
+            provider: "alpha",
+            grantKey: "shared",
+            requests: 3,
+            inputTokens: 30,
+            outputTokens: 6,
+            cacheReadTokens: 2,
+            cacheWriteTokens: 4,
+            costMicros: 2_000_000,
+          },
+          {
+            provider: "beta",
+            grantKey: "shared",
+            requests: 17,
+            inputTokens: 170,
+            outputTokens: 34,
+            cacheReadTokens: 8,
+            cacheWriteTokens: 9,
+            costMicros: 7_000_000,
+          },
+          { provider: "alpha", grantKey: "other", requests: 99, costMicros: 99_000_000 },
+        ],
+      },
+    },
+  };
+  const trafficValues = () =>
+    Array.from(f.container.querySelectorAll(".clawrouter-pool__grant"), (grant) =>
+      Array.from(
+        grant.querySelectorAll(".clawrouter-pool__traffic dd"),
+        (value) => value.textContent,
+      ),
+    );
+  f.first.resolve(result);
+  await vi.waitFor(() =>
+    expect(trafficValues()).toEqual([
+      ["5", "50", "10", "3", "7", "$3.00"],
+      ["17", "170", "34", "8", "9", "$7.00"],
+    ]),
+  );
+
+  const refreshed = structuredClone(result);
+  refreshed.pool.usage.grants[0]!.requests = 8;
+  refreshed.pool.usage.grants[0]!.costMicros = 4_000_000;
+  f.request.mockResolvedValueOnce(refreshed);
+  f.button.click();
+  await vi.waitFor(() =>
+    expect(trafficValues()).toEqual([
+      ["11", "50", "10", "3", "7", "$6.00"],
+      ["17", "170", "34", "8", "9", "$7.00"],
+    ]),
+  );
 });

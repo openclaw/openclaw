@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import {
   withOpenClawTestState,
@@ -10,6 +12,8 @@ import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationMatch,
 } from "./onboarding-recommendations.js";
+import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -168,6 +172,61 @@ test("updates pending matches without changing the inventory identity", async (s
     nowMs: 3_000,
   });
   expect(updated).toEqual({ ...record, matches: [retryMatch], updatedAt: 3_000 });
+});
+
+test("validates writes once and reads independent canonical records", async (store, state) => {
+  const memoizer = z.config().memoizer;
+  if (!memoizer) {
+    throw new Error("Zod memoizer is not installed");
+  }
+  const offeredMatches = [{ ...matches[0]!, ignored: "not persisted" }];
+  let recommendationSchema: Parameters<typeof memoizer.alloc>[0] | undefined;
+  const originalAlloc = memoizer.alloc.bind(memoizer);
+  const allocations = vi
+    .spyOn(memoizer, "alloc")
+    .mockImplementation((schema, payload, empty, context) => {
+      if (payload.value === offeredMatches) {
+        recommendationSchema = schema;
+      }
+      return originalAlloc(schema, payload, empty, context);
+    });
+  try {
+    const original = await writeOffer(store, { matches: offeredMatches });
+    expect(original.matches).toEqual(matches);
+    expect(recommendationSchema).toBeDefined();
+    const validationCount = () =>
+      allocations.mock.calls.filter(([schema]) => schema === recommendationSchema).length;
+    expect(validationCount()).toBe(1);
+    const written = await store.updatePending({
+      expected: original,
+      matches: [{ ...matches[0]!, reason: "Updated recommendation" }],
+    });
+    expect(validationCount()).toBe(2);
+    await closeOpenClawStateDatabaseAsync();
+    allocations.mockClear();
+    const { workspaceKey } = resolveWorkspaceStateIdentity(state.workspaceDir);
+    const read = () =>
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) =>
+          readOnboardingRecommendationsInDatabase(db, `onboarding.recommendations.${workspaceKey}`),
+        { env: state.env },
+      );
+    const first = read();
+    expect(first).toEqual(written);
+    first!.matches[0]!.candidate.displayName = "Caller mutation";
+    expect(read()).toEqual(written);
+    expect(validationCount()).toBe(0);
+
+    const invalid = {
+      ...matches[0]!,
+      candidate: { ...matches[0]!.candidate, downloads: Number.NaN },
+    };
+    expect(() => writeOffer(store, { matches: [invalid] })).toThrow();
+    expect(() => store.updatePending({ expected: original, matches: [invalid] })).toThrow();
+    expect(await store.read()).toEqual(written);
+  } finally {
+    allocations.mockRestore();
+  }
 });
 
 test("does not overwrite a concurrently replaced pending offer", async (store) => {

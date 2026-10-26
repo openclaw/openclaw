@@ -5,10 +5,43 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { RequesterOrigin } from "../requester-origin.js";
 
 type RecoveryScope = { storePath: string; sessionKey: string };
+
+export function observeRecoveryRoots(
+  expectedOrigin: "main-session:startup-recovery" | "main-session:restart-recovery",
+  expectedCount: number,
+) {
+  const requested = createDeferred();
+  const completed = createDeferred();
+  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+  let count = 0;
+  const spy = vi
+    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+    .mockImplementation(
+      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
+        try {
+          const result = admit(run, origin, signal);
+          if (origin === expectedOrigin) {
+            requested.resolve();
+          }
+          return await result;
+        } finally {
+          if (origin === expectedOrigin && ++count === expectedCount) {
+            completed.resolve();
+          }
+        }
+      },
+    );
+  return {
+    requested: requested.promise,
+    completed: completed.promise,
+    restore: () => spy.mockRestore(),
+  };
+}
 
 export function createRecoveryRuntimeFixture(params: {
   callGateway: (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
@@ -67,6 +100,7 @@ export function createRecoveryRuntimeFixture(params: {
     }
   };
   return {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     async expectAdmission(
       expectedGatewayCalls: number,

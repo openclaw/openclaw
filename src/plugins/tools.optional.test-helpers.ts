@@ -90,15 +90,27 @@ export function createToolRegistry(
       Omit<MockRegistryToolEntry, "declaredNames"> & { declaredNames?: ReadonlySet<string> }
     >;
   } = builder.registry;
-  registry.plugins = entries.map((entry) =>
-    createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
-  );
+  registry.plugins = entries.map(({ pluginId: id, source, origin = "bundled" }) => {
+    const artifact = {
+      source,
+      rootDir: path.dirname(source),
+      origin,
+      preferBuiltPluginArtifacts: false,
+    };
+    const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
+    bindPluginRuntimeArtifactSelection(record, {
+      preferBuiltPluginArtifacts: false,
+      runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
+    });
+    return record;
+  });
   registry.tools = entries.map((entry, index) => {
     const record = registry.plugins[index]!;
     const api = builder.createApi(record, { config: {}, registrationMode });
     runPluginRegisterSyncInRegistry(() => {}, api, builder.registry, entry.pluginId);
     const instance = getPluginInstance(record);
     assert(instance, "expected the registry API's plugin instance");
+    instance.admitFactory(entry.factory, "tool");
     const { declaredNames, ...registration } = entry;
     return {
       ...registration,
@@ -107,19 +119,4 @@ export function createToolRegistry(
     };
   });
   return registry;
-}
-
-function createToolRuntimeRecord(
-  id: string,
-  source = `/tmp/${id}.js`,
-  origin: MockRegistryToolEntry["origin"] = "bundled",
-) {
-  const rootDir = path.dirname(source);
-  const artifact = { source, rootDir, origin, preferBuiltPluginArtifacts: false };
-  const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
-  bindPluginRuntimeArtifactSelection(record, {
-    preferBuiltPluginArtifacts: false,
-    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
-  });
-  return record;
 }

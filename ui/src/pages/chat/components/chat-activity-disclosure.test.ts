@@ -13,7 +13,6 @@ import {
   createActivityGroupHarness,
   createMessageGroupHarness,
 } from "./chat-message-native.test-support.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
   createMessageEntry,
@@ -24,6 +23,7 @@ import {
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 type WorkProps = Parameters<typeof WorkGroupSummary>[0];
 let summaryContainer: HTMLDivElement;
@@ -38,6 +38,20 @@ beforeEach(() => {
   onTestFinished(() => summaryContainer.remove());
 });
 const visibleTools = { showToolCalls: true, showReasoning: true };
+
+it("commits a cached activity summary with its transcript row", () => {
+  const group = createToolGroup("cached", [
+    createMessageEntry(
+      "cached-tool",
+      createAssistantMessage([], { activity: [preparedOutcome("failed")] }),
+    ),
+  ]);
+  activityRoot.render([group], visibleTools);
+  const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
+  expect(row).not.toBeNull();
+  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain("1 read");
+  expect(row?.querySelector(".chat-tool-failure")?.textContent).toBe("1 failed");
+});
 
 function read(id: string, overrides: Record<string, unknown> = {}) {
   return createToolCall(id, "read", { path: `/repo/${id}.ts` }, overrides);

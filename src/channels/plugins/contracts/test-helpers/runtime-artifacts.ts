@@ -36,8 +36,6 @@ function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseNam
   const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
   const metadata = listBundledChannelPluginMetadata({
     rootDir: REPO_ROOT,
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
   }).find((entry) => entry.manifest.id === pluginId);
   if (!metadata) {
     throw new Error(`missing bundled channel plugin '${pluginId}'`);

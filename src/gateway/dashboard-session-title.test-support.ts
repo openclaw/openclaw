@@ -1,6 +1,6 @@
 import { text as readText } from "node:stream/consumers";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,7 +16,7 @@ type TitleRequest = {
 };
 
 export async function withTitleProvider(
-  raw: string,
+  raw: string | (() => string),
   run: (fixture: {
     cfg: OpenClawConfig;
     agentDir: string;
@@ -29,7 +29,12 @@ export async function withTitleProvider(
   defaultParams?: Record<string, unknown>,
   api: "openai-completions" | "ollama" = "openai-completions",
 ) {
+  const ollama = api === "ollama";
+  const fixtureProvider = ollama ? "ollama" : provider;
+  const fixtureModel = ollama ? "qwen3.6:35b" : model;
+  const fixtureModelRef = `${fixtureProvider}/${fixtureModel}`;
   await withOpenClawTestState({ label: "title-transport" }, async (state) => {
+    const storePath = state.statePath("sessions.json");
     const requests: TitleRequest[] = [];
     await withServer(
       (request, response) => {
@@ -39,39 +44,30 @@ export async function withTitleProvider(
             url: request.url,
             body: JSON.parse(body),
           });
-          if (api === "ollama") {
-            response.writeHead(200, { "content-type": "application/x-ndjson" });
-            response.end(
-              JSON.stringify({
-                model: "qwen3.6:35b",
-                message: { role: "assistant", content: raw },
-                done: true,
-                done_reason: "stop",
-              }) + "\n",
-            );
-            return;
-          }
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(
-            `data: ${JSON.stringify({
-              id: "chatcmpl-title-proof",
-              object: "chat.completion.chunk",
-              created: 0,
-              model,
-              choices: [
-                { index: 0, delta: { role: "assistant", content: raw }, finish_reason: "stop" },
-              ],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            })}\n\ndata: [DONE]\n\n`,
+          const content = typeof raw === "function" ? raw() : raw;
+          const message = { role: "assistant", content };
+          const data = JSON.stringify(
+            ollama
+              ? { model: fixtureModel, message, done: true, done_reason: "stop" }
+              : {
+                  id: "chatcmpl-title-proof",
+                  object: "chat.completion.chunk",
+                  created: 0,
+                  model,
+                  choices: [{ index: 0, delta: message, finish_reason: "stop" }],
+                  usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+                },
           );
+          response.writeHead(200, {
+            "content-type": ollama ? "application/x-ndjson" : "text/event-stream",
+          });
+          response.end(ollama ? `${data}\n` : `data: ${data}\n\ndata: [DONE]\n\n`);
         });
       },
       async (baseUrl) => {
-        const fixtureProvider = api === "ollama" ? "ollama" : provider;
-        const fixtureModel = api === "ollama" ? "qwen3.6:35b" : model;
-        const fixtureModelRef = fixtureProvider + "/" + fixtureModel;
         const cfg: OpenClawConfig = {
-          plugins: api === "ollama" ? { allow: ["ollama"] } : { enabled: false },
+          session: { store: storePath },
+          plugins: ollama ? { allow: ["ollama"] } : { enabled: false },
           agents: {
             defaults: {
               workspace: state.workspaceDir,
@@ -86,21 +82,14 @@ export async function withTitleProvider(
             mode: "replace",
             providers: {
               [fixtureProvider]: {
-                baseUrl: api === "ollama" ? baseUrl : baseUrl + "/v1",
+                baseUrl: ollama ? baseUrl : baseUrl + "/v1",
                 apiKey: "test-key",
                 api,
                 agentRuntime: { id: "openclaw" },
                 request: { allowPrivateNetwork: true },
-                models: [primaryModel, fixtureModel].map((id): ModelDefinitionConfig => ({
-                  id,
-                  name: id,
-                  api,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 16_000,
-                  maxTokens: 8_192,
-                })),
+                models: [primaryModel, fixtureModel].map((id) =>
+                  modelDefinition(id, { api, reasoning: false, contextWindow: 16_000 }),
+                ),
               },
             },
           },
@@ -109,7 +98,7 @@ export async function withTitleProvider(
         await run({
           cfg,
           agentDir: state.agentDir(),
-          storePath: state.statePath("sessions.json"),
+          storePath,
           workspaceDir: state.workspaceDir,
           requests,
           env: state.envVars,

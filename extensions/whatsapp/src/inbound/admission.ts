@@ -5,31 +5,23 @@ import type {
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
 
-type WhatsAppInboundIngressDecision = Pick<
-  ResolvedChannelMessageIngress["ingress"],
-  "admission" | "decision" | "decisiveGateId" | "reasonCode"
->;
-
-type WhatsAppInboundSenderAccess = Pick<
-  ResolvedChannelMessageIngress["senderAccess"],
-  "allowed" | "decision" | "reasonCode" | "providerMissingFallbackApplied"
->;
-
-type WhatsAppInboundCommandAccess = Pick<
-  ResolvedChannelMessageIngress["commandAccess"],
-  "requested" | "authorized" | "shouldBlockControlCommand" | "reasonCode"
->;
-
-type WhatsAppInboundActivationAccess = Pick<
-  ResolvedChannelMessageIngress["activationAccess"],
-  "ran" | "allowed" | "shouldSkip" | "reasonCode"
->;
-
 type WhatsAppInboundAdmissionAccess = {
-  ingress: WhatsAppInboundIngressDecision;
-  senderAccess: WhatsAppInboundSenderAccess;
-  commandAccess: WhatsAppInboundCommandAccess;
-  activationAccess: WhatsAppInboundActivationAccess;
+  ingress: Pick<
+    ResolvedChannelMessageIngress["ingress"],
+    "admission" | "decision" | "decisiveGateId" | "reasonCode"
+  >;
+  senderAccess: Pick<
+    ResolvedChannelMessageIngress["senderAccess"],
+    "allowed" | "decision" | "reasonCode" | "providerMissingFallbackApplied"
+  >;
+  commandAccess: Pick<
+    ResolvedChannelMessageIngress["commandAccess"],
+    "requested" | "authorized" | "shouldBlockControlCommand" | "reasonCode"
+  >;
+  activationAccess: Pick<
+    ResolvedChannelMessageIngress["activationAccess"],
+    "ran" | "allowed" | "shouldSkip" | "reasonCode"
+  >;
 };
 
 type WhatsAppInboundAdmissionPolicy = {

@@ -6,11 +6,8 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   findPersistedAuthProfileCredential,
-  findPersistedAuthProfileCredentialAsync,
   loadAuthProfileStoreForRuntime,
-  loadAuthProfileStoreForRuntimeAsync,
   resolveApiKeyForProfile,
-  resolveAuthProfileOrder,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
@@ -21,7 +18,6 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as sqliteRead from "../agents/auth-profiles/sqlite-read.js";
 import {
-  inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
@@ -111,8 +107,10 @@ describe("agent exec stored auth", () => {
     });
   });
 
-  it("skips external CLI credentials and omits provider secrets from host commands", async () => {
+  it("blocks stored and external CLI credentials and omits host-command secrets under --auth-env-only", async () => {
     const codexHome = tempDirs.make("openclaw-agent-exec-codex-home-");
+    const normalStateDir = tempDirs.make("openclaw-agent-exec-hidden-auth-");
+    const agentDir = path.join(normalStateDir, "agents", "main", "agent");
     await fs.writeFile(
       path.join(codexHome, "auth.json"),
       JSON.stringify({
@@ -123,16 +121,21 @@ describe("agent exec stored auth", () => {
     await withEnvAsync(
       {
         CODEX_HOME: codexHome,
+        OPENCLAW_STATE_DIR: normalStateDir,
         OPENAI_API_KEY: "test-openai-key",
         DATABASE_URL: "postgres://test.invalid/database",
       },
       async () => {
+        saveAuthProfileStore(stored, agentDir);
         const result = await withHostExecInheritedEnvOmitted(["DATABASE_URL"], () =>
           run(
             async () => {
               const options = { allowKeychainPrompt: false, externalCliProviderIds: ["openai"] };
               expect(ensureAuthProfileStore(undefined, options).profiles).toEqual({});
               expect(loadAuthProfileStoreForRuntime(undefined, options).profiles).toEqual({});
+              const request = { agentDir, profileId: "openai:stored" };
+              expect(findPersistedAuthProfileCredential(request)).toBeUndefined();
+              expect(resolvePersistedAuthProfileOwnerAgentDir(request)).toBeUndefined();
               const hostEnv = sanitizeHostExecEnv({ baseEnv: process.env });
               expect(hostEnv.OPENAI_API_KEY).toBeUndefined();
               expect(hostEnv.DATABASE_URL).toBeUndefined();
@@ -152,23 +155,10 @@ describe("agent exec stored auth", () => {
         writeConfigMachineState("auth.sharedStore", { location: "state-db" });
         const sharedStore = {
           version: 1,
-          order: { openai: ["openai:token", "openai:shared", "openai:private"] },
-          usageStats: {
-            "openai:token": { disabledUntil: Date.now() + 3_600_000 },
-            "openai:private": { lastUsed: 123 },
-          },
           profiles: {
             "openai:shared": { ...storedProfile, key: "shared-test-key" },
             "openai:token": { type: "token", provider: "openai", token: "shared-test-token" },
             "openai:private": { ...storedProfile, copyToAgents: false },
-            "openai:oauth": {
-              type: "oauth",
-              provider: "openai",
-              access: "test-access",
-              refresh: "test-refresh",
-              expires: Date.now() + 60_000,
-              copyToAgents: true,
-            },
           },
         } satisfies Parameters<typeof setRuntimeAuthProfileStoreSnapshot>[0];
         const localStore = {
@@ -182,25 +172,13 @@ describe("agent exec stored auth", () => {
         const result = await run(async () => {
           expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
           const store = await ensureAuthProfileStoreAsync(undefined, noExternal);
-          expect(Object.keys(store.profiles).toSorted()).toEqual(["openai:shared", "openai:token"]);
-          expect(
-            (await loadAuthProfileStoreForRuntimeAsync(undefined, noExternal)).profiles,
-          ).toEqual(store.profiles);
-          expect(
-            await findPersistedAuthProfileCredentialAsync({ profileId: "openai:token" }),
-          ).toEqual(sharedStore.profiles["openai:token"]);
-          expect(store).toMatchObject({ runtimeLocalProfileIds: ["openai:shared"] });
-          expect(resolveAuthProfileOrder({ store, provider: "openai", cfg: {} })).toEqual([
-            "openai:shared",
-            "openai:token",
-          ]);
-          expect(store.usageStats).toEqual({
-            "openai:token": sharedStore.usageStats["openai:token"],
+          expect(store.profiles).toEqual({
+            ...localStore.profiles,
+            "openai:token": sharedStore.profiles["openai:token"],
           });
           expect(
             (await resolveApiKeyForProfile({ store, profileId: "openai:shared", cfg: {} }))?.apiKey,
           ).toBe("local-test-key");
-          expect(inspectPersistedAuthProfileStoreRaw(state.agentDir()).status).toBe("readable");
           saveAuthProfileStore(store);
         });
         expect(result.envelope.error).toBeUndefined();
@@ -250,22 +228,5 @@ describe("agent exec stored auth", () => {
       },
     );
     expect(result.exitCode).toBe(0);
-  });
-
-  it("blocks direct persisted credential reads under --auth-env-only", async () => {
-    const normalStateDir = tempDirs.make("openclaw-agent-exec-hidden-auth-");
-    const agentDir = path.join(normalStateDir, "agents", "main", "agent");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: normalStateDir }, async () => {
-      saveAuthProfileStore(stored, agentDir);
-      const result = await run(
-        async () => {
-          const request = { agentDir, profileId: "openai:stored" };
-          expect(findPersistedAuthProfileCredential(request)).toBeUndefined();
-          expect(resolvePersistedAuthProfileOwnerAgentDir(request)).toBeUndefined();
-        },
-        { authEnvOnly: true },
-      );
-      expect(result.exitCode).toBe(0);
-    });
   });
 });

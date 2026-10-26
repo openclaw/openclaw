@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareSkillLibraryBundle, readSkillBundleTree, readSkillLibraryTree } from "./bundle.js";
+import {
+  prepareSkillBundle,
+  prepareSkillLibraryBundle,
+  readSkillBundleTree,
+  readSkillLibraryTree,
+} from "./bundle.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posix = process.platform !== "win32";
@@ -22,19 +27,35 @@ async function makeTree(files: Record<string, string> = {}) {
   return directory;
 }
 
-it("hashes paths, exact bytes, and executability independently of order", () => {
-  const original = prepareSkillLibraryBundle([markdown, resource]);
-  expect(original.revision).toBe(
-    "c4999fd620e1fbeaf3c097816e7c3d174e5fb9722b165527b92f18f81af350d4",
-  );
-  expect(prepareSkillLibraryBundle([resource, markdown]).revision).toBe(original.revision);
-  for (const changed of [
-    { ...resource, path: "scripts/renamed.sh" },
-    { ...resource, content: `${resource.content}\n` },
-    { ...resource, executable: false },
-  ]) {
-    expect(prepareSkillLibraryBundle([markdown, changed]).revision).not.toBe(original.revision);
+it("avoids expanding retained text without enlarging escaped or binary resources", async () => {
+  const directory = await makeTree();
+  const inputs = new Map([
+    ["plain.txt", Buffer.from('Read the guide.\nRun "check.sh".\n'.repeat(100))],
+    ["unicode.txt", Buffer.from(`${"a".repeat(3000)}🦞`)],
+    ["sparse-nul.dat", Buffer.from(`${"a".repeat(3000)}\0`)],
+    ["escaped.txt", Buffer.from('"\\\t\n\r'.repeat(600))],
+  ]);
+  for (const [name, bytes] of inputs) {
+    await fs.writeFile(path.join(directory, name), bytes);
   }
+  const delivery = await readSkillBundleTree(directory);
+  const serialized = JSON.stringify(delivery);
+  const received = prepareSkillBundle(JSON.parse(serialized));
+  for (const [name, bytes] of inputs) {
+    expect(received.files.find((entry) => entry.path === name)?.bytes).toEqual(bytes);
+    const delivered = delivery.find((entry) => entry.path === name)!;
+    const base64 = { ...delivered, content: bytes.toString("base64"), encoding: "base64" };
+    expect(Buffer.byteLength(JSON.stringify(delivered))).toBeLessThanOrEqual(
+      Buffer.byteLength(JSON.stringify(base64)),
+    );
+  }
+  expect(delivery.find((entry) => entry.path === "plain.txt")?.content.length).toBe(
+    inputs.get("plain.txt")!.length,
+  );
+  // Mixed Unicode must not turn a mostly ASCII payload into a two-byte JS string.
+  expect(delivery.find((entry) => entry.path === "unicode.txt")?.encoding).toBe("base64");
+  // Keep NUL payloads classified as binary even when UTF-8 would be smaller.
+  expect(delivery.find((entry) => entry.path === "sparse-nul.dat")?.encoding).toBe("base64");
 });
 
 it.each([
@@ -49,14 +70,7 @@ it.each([
   expect(() => prepareSkillLibraryBundle(files)).toThrow(message);
 });
 
-it.runIf(posix)("rejects hardlink imports", async () => {
-  const directory = await makeTree();
-  const linked = path.join(directory, "linked");
-  await fs.link(path.join(directory, "SKILL.md"), linked);
-  await expect(readSkillLibraryTree(directory)).rejects.toThrow();
-});
-
-it.runIf(posix)("accepts a symlink root but rejects nested links", async () => {
+it.runIf(posix)("accepts a symlink root but rejects linked resources", async () => {
   const target = await makeTree({ "scripts/run.sh": resource.content });
   const linkedRoot = path.join(target, "..", "managed-skill");
   await fs.symlink(target, linkedRoot, "dir");
@@ -64,11 +78,15 @@ it.runIf(posix)("accepts a symlink root but rejects nested links", async () => {
     { path: "SKILL.md" },
     { path: "scripts/run.sh" },
   ]);
-  await fs.symlink("../SKILL.md", path.join(target, "scripts/linked"));
+  const linked = path.join(target, "scripts/linked");
+  await fs.symlink("../SKILL.md", linked);
   await expect(readSkillBundleTree(linkedRoot)).rejects.toMatchObject({
     code: "INVALID_BUNDLE",
     message: expect.stringContaining("Skill trees cannot contain links or special files"),
   });
+  await fs.unlink(linked);
+  await fs.link(path.join(target, "SKILL.md"), linked);
+  await expect(readSkillLibraryTree(target)).rejects.toThrow();
 });
 
 it.each(["removed", ...(posix ? ["broken"] : [])])(

@@ -26,6 +26,15 @@ type ToolCallOccurrence = {
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
+type ToolResultIdAliases = {
+  toolCallId?: unknown;
+  toolUseId?: unknown;
+  tool_call_id?: unknown;
+  tool_use_id?: unknown;
+  callId?: unknown;
+  call_id?: unknown;
+};
+
 type ToolResultRecord = {
   result: ToolResultMessage;
   sourceResult: ToolResultMessage;
@@ -42,15 +51,13 @@ type ToolUsePairingFrame = {
   failed: boolean;
 };
 
-type ToolCallOccurrenceQueue<T> = {
+/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
+export function createToolCallOccurrenceQueue<T>(): {
   add: (id: string, occurrence: T) => void;
   claim: (id: string) => T | undefined;
   clear: () => void;
   readonly size: number;
-};
-
-/** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
-export function createToolCallOccurrenceQueue<T>(): ToolCallOccurrenceQueue<T> {
+} {
   const pendingById = new Map<string, T[]>();
   let pendingCount = 0;
   return {
@@ -107,14 +114,7 @@ export function extractToolCallsFromAssistant(
 }
 
 export function extractToolResultIds(message: ToolResultMessage): string[] {
-  const record = message as {
-    toolCallId?: unknown;
-    toolUseId?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-    callId?: unknown;
-    call_id?: unknown;
-  };
+  const record: ToolResultIdAliases = message;
   return normalizeUniqueTrimmedStringList([
     record.toolCallId,
     record.toolUseId,
@@ -126,7 +126,16 @@ export function extractToolResultIds(message: ToolResultMessage): string[] {
 }
 
 export function extractToolResultId(message: ToolResultMessage): string | null {
-  return extractToolResultIds(message)[0] ?? null;
+  const record: ToolResultIdAliases = message;
+  return (
+    normalizeOptionalString(record.toolCallId) ??
+    normalizeOptionalString(record.toolUseId) ??
+    normalizeOptionalString(record.tool_call_id) ??
+    normalizeOptionalString(record.tool_use_id) ??
+    normalizeOptionalString(record.callId) ??
+    normalizeOptionalString(record.call_id) ??
+    null
+  );
 }
 
 export function makeMissingToolResult(params: {

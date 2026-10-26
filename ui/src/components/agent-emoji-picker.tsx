@@ -36,12 +36,11 @@ const favorites = [
   "🐱",
 ];
 
-type AgentEmojiPickerProps = {
+export function AgentEmojiPicker(props: {
   value?: string;
   disabled?: boolean;
   onSelect?: (emoji: string) => void;
-};
-export function AgentEmojiPicker(props: AgentEmojiPickerProps) {
+}) {
   const [query, setQuery] = createSignal("");
   const id = `agent-emoji-trigger-${generateUUID()}`;
   let popover: PopoverHandle | undefined;

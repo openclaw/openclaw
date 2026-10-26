@@ -9,6 +9,7 @@ import type {
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -41,8 +42,6 @@ export function summarizeSessionPullRequests(
     ? previous
     : { numbers, state: current.state };
 }
-
-export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
 const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
   "new",

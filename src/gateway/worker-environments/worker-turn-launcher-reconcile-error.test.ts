@@ -1,9 +1,5 @@
 import { expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_RPC_SET_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
@@ -16,6 +12,7 @@ import {
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createProviderReplayDispatch } from "./provider-replay.test-support.js";
@@ -41,10 +38,7 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
   const store = await createWorkerEnvironmentStore({ database });
   let installation = {
     ...BUNDLE_ARTIFACT,
-    protocolFeatures: [
-      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-    ],
+    protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
   };
   const nodeTransport = transport();
   let rejectStop = true;
@@ -177,7 +171,9 @@ it("settles a stale-build turn when a lost shared node rejects its stop acknowle
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
     expect(failure).toBeInstanceOf(Error);
     expect(warn).toHaveBeenCalledWith(
-      `Worker environment reconcile failed (${ENVIRONMENT_ID}, ${provider.id})`,
+      expect.stringContaining(
+        `Worker environment reconcile failed (${ENVIRONMENT_ID}, ${provider.id})`,
+      ),
     );
   } finally {
     rejectStop = false;

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,12 +18,15 @@ import {
   seedSyncingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import {
   advancePlacementFixtureToActive,
   seedAttachedPlacementEnvironment,
 } from "./placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 describe("worker placement dispatch", () => {
   let root: string;
@@ -179,16 +181,9 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "completed-turn-claim",
-      runId: "completed-turn-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "completed-turn-claim", "completed-turn-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
 
     await harness.service.reconcile();
@@ -250,16 +245,9 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "shared-worker-claim",
-      runId: "shared-worker-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "shared-worker-claim", "shared-worker-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
@@ -282,16 +270,9 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "draining-result-claim",
-      runId: "draining-result-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "draining-result-claim", "draining-result-run"),
+    );
     const draining = await placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -323,16 +304,9 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "resume-failure-claim",
-      runId: "resume-failure-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "resume-failure-claim", "resume-failure-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
     await placementStore.handoffWorkspaceResultRecovery(claim);
 
@@ -352,16 +326,9 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "lost-result-claim",
-      runId: "lost-result-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "lost-result-claim", "lost-result-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
     await placementStore.handoffWorkspaceResultRecovery(claim);
     harness.markEnvironmentDestroyed();
@@ -384,16 +351,9 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "accepted-lost-result-claim",
-      runId: "accepted-lost-result-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "accepted-lost-result-claim", "accepted-lost-result-run"),
+    );
     await placementStore.markWorkspaceResultPending(claim);
     await placementStore.updateWorkspaceBaseManifest({
       claim,
@@ -748,23 +708,10 @@ describe("worker placement dispatch", () => {
       return;
     }
     await placementStore.beginWorkspaceReconciliation(
-      {
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        placementGeneration: active.generation,
-      },
-      {
-        version: 1,
+      journalOwner(active),
+      workspaceJournal(active.workspaceBaseManifestRef, harness.reconciledManifestRef, {
         temporaryNonce: "f".repeat(32),
-        baseManifestRef: active.workspaceBaseManifestRef,
-        currentManifestRef: harness.reconciledManifestRef,
-        baseEntries: [],
-        appliedEntries: [],
-        baseTree: "f".repeat(40),
-        basePackSha256: createHash("sha256").update("").digest("hex"),
-        basePack: Buffer.alloc(0),
-      },
+      }),
     );
     harness.markEnvironmentDestroyed();
     harness.log.length = 0;

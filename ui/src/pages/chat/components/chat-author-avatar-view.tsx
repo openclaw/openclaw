@@ -155,14 +155,17 @@ export function UserAvatarSlot(props: {
         ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.label}
       >
         <IdentityAvatarImage
           view={props.view}
           onStateChange={presentation.onStateChange}
           class="chat-avatar user"
           alt={props.label}
+          ariaHidden
         />
-        <UserInitials view={props.view} label={props.label} />
+        <UserInitials view={props.view} />
       </span>
     </Show>
   );
@@ -170,7 +173,7 @@ export function UserAvatarSlot(props: {
 
 function UserInitials(props: {
   view: IdentityAvatarView;
-  label: string;
+  label?: string;
   elementRef?: (element: HTMLElement) => void;
 }) {
   return (
@@ -178,8 +181,9 @@ function UserInitials(props: {
       ref={(element) => props.elementRef?.(element)}
       class="chat-avatar user chat-avatar--sender-initials"
       style={{ background: `hsl(${props.view.fallback.colorSeed % 360} 48% 42%)` }}
-      role="img"
+      role={props.label ? "img" : undefined}
       aria-label={props.label}
+      aria-hidden={props.label ? undefined : "true"}
     >
       {props.view.fallback.initials}
     </div>

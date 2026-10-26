@@ -16,9 +16,8 @@ import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-sup
 import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   withOpenClawAgentDatabaseAsync,
@@ -27,7 +26,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
+import { runAgentExecWithMock as runExec } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -83,7 +82,7 @@ describe("agent exec retained-state ownership", () => {
       let stateDir = "";
       try {
         const result = await cleanupScope.run(() =>
-          runAgentExecWithMock(
+          runExec(
             "inspect",
             fixture ? { stateDir: fixture.stateDir } : {},
             createTestRuntime(),
@@ -128,7 +127,7 @@ describe("agent exec retained-state ownership", () => {
     const runAgent = vi.fn(async () => success());
     const runtime = createTestRuntime();
     try {
-      const result = await runAgentExecWithMock("inspect", { stateDir }, runtime, runAgent);
+      const result = await runExec("inspect", { stateDir }, runtime, runAgent);
       expect(result.exitCode).toBe(1);
       expect(runAgent).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(
@@ -142,15 +141,10 @@ describe("agent exec retained-state ownership", () => {
   it("holds and releases the embedded state lock around the run", async () => {
     const { stateDir, lockPath } = stateFixture();
     await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { stateDir },
-      createTestRuntime(),
-      async () => {
-        await expectLock(lockPath);
-        return success();
-      },
-    );
+    const result = await runExec("inspect", { stateDir }, createTestRuntime(), async () => {
+      await expectLock(lockPath);
+      return success();
+    });
     expect(result.exitCode).toBe(0);
     await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
@@ -172,7 +166,7 @@ describe("agent exec retained-state ownership", () => {
     vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
       signals.create,
     );
-    const run = runAgentExecWithMock(
+    const run = runExec(
       "inspect",
       fixture ? { stateDir: fixture.stateDir } : {},
       runtime,
@@ -217,7 +211,7 @@ it("closes temporary databases before removal and preserves independent handles"
     env: { OPENCLAW_STATE_DIR: independentRoot },
   });
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const runtime = createTestRuntime();
   let runStateDir: string | undefined;
   let agentPath: string | undefined;
   let statePath: string | undefined;
@@ -233,43 +227,38 @@ it("closes temporary databases before removal and preserves independent handles"
     await remove(pathname, options);
   });
   try {
-    const result = await runAgentExecWithMock(
-      "inspect",
-      { authEnvOnly: true },
-      runtime,
-      async () => {
-        runStateDir = process.env.OPENCLAW_STATE_DIR;
-        const shared = openOpenClawStateDatabase();
-        handles.push(shared.db);
-        statePath = shared.path;
-        await withOpenClawAgentDatabaseAsync({ agentId: "main" }, (database) => {
-          handles.push(database.db);
-          agentPath = database.path;
-        });
-        const storePath = path.join(runStateDir!, "agents", "main", "sessions", "sessions.json");
-        const sessionKey = "agent:main:exec-cleanup";
-        await replaceSessionEntry(
-          { sessionKey, storePath },
-          { sessionId: "exec-cleanup", updatedAt: 1 },
-        );
-        const deletion = await deleteSessionEntryLifecycle({
-          agentId: "main",
-          storePath,
-          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
-        expect(deletion.deleted).toBe(true);
-        await registerSqliteAuditRecordAsync(
-          { scope: "agent-exec-cleanup", maxEntries: 1 },
-          { key: "completed", value: "synthetic", createdAt: 1 },
-        );
-        expect(
-          createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
-        ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
-        return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
-      },
-    );
+    const result = await runExec("inspect", { authEnvOnly: true }, runtime, async () => {
+      runStateDir = process.env.OPENCLAW_STATE_DIR;
+      const shared = openOpenClawStateDatabase();
+      handles.push(shared.db);
+      statePath = shared.path;
+      await withOpenClawAgentDatabaseAsync({ agentId: "main" }, (database) => {
+        handles.push(database.db);
+        agentPath = database.path;
+      });
+      const storePath = path.join(runStateDir!, "agents", "main", "sessions", "sessions.json");
+      const sessionKey = "agent:main:exec-cleanup";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "exec-cleanup", updatedAt: 1 },
+      );
+      const deletion = await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      expect(deletion.deleted).toBe(true);
+      await createSqliteAuditRecordWriter({
+        scope: "agent-exec-cleanup",
+        maxEntries: 1,
+      }).register("completed", "synthetic", 1);
+      expect(
+        createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
+      ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
+      return success();
+    });
     expect(result.exitCode).toBe(0);
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);

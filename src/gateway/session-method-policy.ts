@@ -15,6 +15,7 @@ type SessionTargetPolicy = {
 };
 
 const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
+  ["worktrees.recoverFile", { fields: ["sessionKey"], required: true }],
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
@@ -79,6 +80,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
     "talk.client.create",
     { fields: ["sessionKey"], profileIndependent: true, runStart: true, mayCreate: true },
   ],
+  ["talk.client.say", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   ["talk.client.steer", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   [
     "talk.client.toolCall",

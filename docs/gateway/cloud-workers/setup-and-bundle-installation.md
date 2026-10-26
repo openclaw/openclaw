@@ -43,19 +43,27 @@ Use a Crabbox bootstrap or image that supplies a supported Node.js release and n
 
 Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
+New native Windows workers use a short, account- and lease-specific state directory on the profile's drive, leaving more path-length headroom for tools launched from their workspaces. Existing workers keep their original state directory across enrollment retries and recovery; reprovision a worker to use the shorter layout. Linux and macOS paths are unchanged.
+
+Each worker turn's GitHub profile lives in temporary runtime state. OpenClaw creates that profile with a protected Windows ACL for the worker account, SYSTEM, and Administrators before writing credentials, independently of the temporary directory's inherited permissions. Shell launches still reject profiles whose ownership or privacy cannot be verified.
+
 Desktop-enabled Windows workers use Crabbox's interactive desktop service; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 
 ## Bundle installation
 
 Before enrollment, the Gateway prepares a reusable archive from its current built installation, including the node host and trusted plugins required by the selected execution mode. Codex's plugin and managed binary pin travel with it. The archive contains runtime code and package metadata, not Gateway config, authentication profiles, sessions, or process environment.
 
-The worker bundle includes the pinned Windows permission-inspection helper alongside its JavaScript runtime. Its bytes are covered by the same archive manifest and content verification.
+The worker bundle and its standalone GitHub launcher include the pinned Windows permission-inspection helper and the package metadata needed for fallback inspection. These assets are covered by the same archive manifest and content verification.
 
 Archives and successful installs are verified by content digest, rather than version alone, and reused when they match. A snapshot fork tops up an older runtime before enrollment. Native dependencies install for the destination OS and CPU, so registry access is still required; this is not an offline dependency bundle. Enrollment and archive-download credentials are not passed to npm or the node process.
 
+Each prepared runtime archive also gets a best-effort npm project lock, generated once by the Gateway and transferred separately from the lockless runtime tarball. Fresh workers use `npm ci --omit=dev` with that lock, while npm still selects and installs native optional packages for the worker's OS and CPU. A missing lock, failed download, or rejected locked install falls back to the ordinary unlocked install with a warning. Lock-generation failures are cached with the prepared archive, so each worker does not retry generation.
+
+Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
+
 Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
 
-For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy raw edits over the running build. Missing or mismatched build metadata gives a rebuild-and-restart error. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
+For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy arbitrary source files. Missing or mismatched build metadata gives a rebuild-and-restart error. Runtime modules and installation scripts come from the package's published file list; custom distributions must declare their launcher helpers there. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
 
 OpenClaw worker turns install the matching worker bundle, reusing a verified archive retained in a prepared image when available. Codex remote execution starts its managed exec-server directly. Node-command allowlists and invocation approval still apply. See [runtime support](/gateway/cloud-workers/dispatching-a-session#runtime-support) and [the security model](/gateway/cloud-workers/security-model).
 

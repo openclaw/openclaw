@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -12,22 +13,20 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
-  createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
-  createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { setRawCliBackendForPrepareTest } from "./prepare-mcp.test-support.js";
-import { prepareCliRunContext } from "./prepare.js";
 import {
-  resetCliRunnerPrepareTestDeps,
-  setCliRunnerPrepareTestDeps,
-} from "./prepare.test-support.js";
+  mockCliMcpPreparation,
+  createJsonlStdinBackendConfig,
+  setRawCliBackendForPrepareTest,
+} from "./prepare-mcp.test-support.js";
+import { prepareCliRunContext } from "./prepare.js";
+import { resetCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 
-const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 // mock-isolation: preparation here needs an empty runtime config, not the host's.
 vi.mock("../../config/config.js", async () => ({
-  getRuntimeConfig: getRuntimeConfigMock,
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 // mock-isolation: no sandbox may be provisioned for the temp workspace.
@@ -42,26 +41,18 @@ const attestNativeLogin: OpenClawConfig = {
 
 describe("native Claude login history on preparation", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
-  // A real synthetic login on disk, selected through the Claude config dir the child inherits.
-  // Its token names its own account to the stub profile endpoint.
-  const login = (owner: string, options: { expiresAt?: number } = {}) => {
+  // The synthetic token names its account to the stub profile endpoint.
+  const login = (expiresAt = Date.parse("2030-01-01T00:00:00Z")) => {
     const dir = path.join(fixture.session.dir, "claude-config");
+    const writeJson = (name: string, value: unknown) =>
+      fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
     vi.stubEnv("CLAUDE_CONFIG_DIR", dir);
     fs.mkdirSync(dir, { recursive: true });
     fs.rmSync(path.join(dir, ".credentials.json"), { force: true });
-    fs.writeFileSync(
-      path.join(dir, ".claude.json"),
-      JSON.stringify({ oauthAccount: { accountUuid: owner } }),
-    );
-    fs.writeFileSync(
-      path.join(dir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: `synthetic-token-for-${owner}-${options.expiresAt ?? "valid"}`,
-          expiresAt: options.expiresAt ?? Date.parse("2030-01-01T00:00:00Z"),
-        },
-      }),
-    );
+    writeJson(".claude.json", { oauthAccount: { accountUuid: "uuid:account-a" } });
+    writeJson(".credentials.json", {
+      claudeAiOauth: { accessToken: `synthetic-token-for-uuid:account-a-${expiresAt}`, expiresAt },
+    });
   };
   const profile = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
     const bearer = new Headers(init?.headers).get("authorization") ?? "";
@@ -78,40 +69,22 @@ describe("native Claude login history on preparation", () => {
       id: "claude-cli",
       pluginId: "anthropic",
       authEpochMode: "profile-only",
-      // Claude disables automatic profile selection, so a native login has no profile at all.
       autoSelectAuthProfile: false,
       config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
+        ...createJsonlStdinBackendConfig("claude"),
         reseedFromRawTranscriptWhenUncompacted: true,
       },
     });
-    setCliRunnerPrepareTestDeps({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      makeBootstrapWarn: vi.fn(() => () => undefined),
-      resolveBootstrapContextForRun: vi.fn(async () => ({ bootstrapFiles: [], contextFiles: [] })),
+    mockCliMcpPreparation({
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
-      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
-      bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
-      prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
-        args: [],
-        cleanup: vi.fn(async () => undefined),
-      })),
-      getCliLiveSessionGeneration: vi.fn(() => undefined),
-      loadManifestModelCatalog: vi.fn(() => []),
     });
     fixture = createCliRunnerPrepareFixture((params) =>
       prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
     );
+    mockClaudeManagedSettings(path.join(fixture.session.dir, "managed"));
   });
 
   afterEach(async () => {
@@ -124,32 +97,32 @@ describe("native Claude login history on preparation", () => {
     await fixture.cleanup();
   });
 
-  /** Saves one covered turn under `owner`, then prepares the next fresh Claude session. */
-  async function prepareAfterTurnBy(
-    owner: string,
-    next: string,
-    nextOptions: Parameters<typeof login>[1] = {},
+  async function prepareAfterTurn(
     nextConfig: OpenClawConfig = attestNativeLogin,
+    expiresAt?: number,
   ) {
     const { dir, sessionTarget } = fixture.session;
     const runId = "native-history-run";
+    const params = {
+      runId,
+      provider: "claude-cli",
+      model: "sonnet",
+      sessionKey: sessionTarget.sessionKey,
+    };
     await patchSessionEntryCore(sessionTarget, (entry) => ({ ...entry, activeWriterRunId: runId }));
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "native-history");
     try {
-      login(owner);
+      login();
       const writer = await prepareCliHistoryBoundary(
         {
           admittedRunContext: await admission.admit("embedded"),
-          runId,
+          ...params,
           config: attestNativeLogin,
           agentDir: path.join(dir, "agents", "main", "agent"),
-          provider: "claude-cli",
-          model: "sonnet",
           prompt: "seed",
           workspaceDir: dir,
           timeoutMs: 1000,
           sessionId: sessionTarget.sessionId,
-          sessionKey: sessionTarget.sessionKey,
           sessionFile: sessionTarget.sessionKey,
           sessionTarget,
         },
@@ -164,7 +137,7 @@ describe("native Claude login history on preparation", () => {
           message: { role: "user", content: "native canary", timestamp: 1 },
         }),
       );
-      // An interrupted input, replayed to the next turn only while that turn may carry saved history.
+      // Interrupted input must obey the same history-replay boundary.
       const pending = await stageSessionPendingInput(sessionTarget, {
         runId: "interrupted-native-request",
         message: {
@@ -178,15 +151,12 @@ describe("native Claude login history on preparation", () => {
       const receipt = expectDefined(pending, "interrupted input receipt");
       receipt.finish("interrupted");
       await receipt.settled?.();
-      login(next, nextOptions);
+      login(expiresAt);
       profile.mockClear();
       const context = await fixture.prepare({
         config: nextConfig,
-        provider: "claude-cli",
-        model: "sonnet",
-        runId,
+        ...params,
         preparedRunAdmission: admission,
-        sessionKey: sessionTarget.sessionKey,
       });
       // Releases the session sharing read the prepared backend retains.
       await context.preparedBackend.cleanup?.();
@@ -197,7 +167,7 @@ describe("native Claude login history on preparation", () => {
   }
 
   it("seeds saved history for the same native login with no auth profile", async () => {
-    const context = await prepareAfterTurnBy("uuid:account-a", "uuid:account-a");
+    const context = await prepareAfterTurn();
     expect(context.cliHistoryWriter).toBeDefined();
     expect(context.openClawHistoryPrompt).toContain("native canary");
     expect(context.promptForHooks ?? context.params.prompt).toContain("PRIVATE-INTERRUPTED");
@@ -205,21 +175,14 @@ describe("native Claude login history on preparation", () => {
 
   it("never sends the native token to Anthropic unless the operator opted in", async () => {
     // A token this process never attested, so only the missing opt-in keeps it off the network.
-    const context = await prepareAfterTurnBy(
-      "uuid:account-a",
-      "uuid:account-a",
-      { expiresAt: Date.parse("2031-01-01T00:00:00Z") },
-      {},
-    );
+    const context = await prepareAfterTurn({}, Date.parse("2031-01-01T00:00:00Z"));
     expect(context.cliHistoryWriter).toBeUndefined();
     expect(context.openClawHistoryPrompt).toBeUndefined();
     expect(profile).not.toHaveBeenCalled();
   });
 
   it("keeps coverage but sends no saved history while the CLI is about to rotate the token", async () => {
-    const context = await prepareAfterTurnBy("uuid:account-a", "uuid:account-a", {
-      expiresAt: Date.now() + 60_000,
-    });
+    const context = await prepareAfterTurn(attestNativeLogin, Date.now() + 60_000);
     expect(context.cliHistoryWriter?.replaysHistory).toBe(false);
     expect(context.openClawHistoryPrompt).toBeUndefined();
     expect(context.promptForHooks ?? context.params.prompt).not.toContain("PRIVATE-INTERRUPTED");

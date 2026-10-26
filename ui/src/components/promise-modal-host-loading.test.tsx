@@ -4,10 +4,7 @@ import { waitForRenderedModalDialog, installDialogPolyfill } from "../test-helpe
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 const view = vi.hoisted(() => {
-  let resolve!: () => void;
-  const ready = new Promise<void>((done) => {
-    resolve = done;
-  });
+  const { promise: ready, resolve } = Promise.withResolvers<void>();
   return { ready, resolve, started: vi.fn() };
 });
 
@@ -68,5 +65,35 @@ it("rejects initialization failures and releases the empty host", async () => {
     throw new Error("Unable to prepare modal");
   });
   await expect(result).rejects.toThrow("Unable to prepare modal");
+  expect(document.body.childElementCount).toBe(0);
+});
+
+it("retires an aborted preparation before its renderer arrives", async () => {
+  const preparation = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const content = vi.fn(() => <openclaw-modal-dialog label="Retired preparation" />);
+  const result = withPromiseModalHost(
+    { signal: controller.signal, value: false },
+    async (modal) => {
+      await preparation.promise;
+      modal.render(content);
+    },
+  );
+  controller.abort();
+  await expect(result).resolves.toBe(false);
+  expect(document.body.childElementCount).toBe(0);
+  preparation.resolve();
+  await preparation.promise;
+  expect(content).not.toHaveBeenCalled();
+});
+
+it("rejects asynchronous preparation failures and releases the empty host", async () => {
+  const preparation = Promise.withResolvers<void>();
+  const result = withPromiseModalHost(undefined, async () => {
+    await preparation.promise;
+    throw new Error("Renderer could not load");
+  });
+  preparation.resolve();
+  await expect(result).rejects.toThrow("Renderer could not load");
   expect(document.body.childElementCount).toBe(0);
 });

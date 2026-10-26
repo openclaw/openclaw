@@ -98,6 +98,15 @@ it("walker depth cap fires on synthetic deeply-nested AST", () => {
   expect(() => findOcPaths(ast, parseOcPath("oc://X/**"))).toThrow(/MAX_TRAVERSAL_DEPTH/);
 });
 
+it.each(["{{a,,b},c}", "{a,{b,,c}}", "{{{a,,b},c},d}", "{a,{}}"])(
+  "rejects malformed nested union %s before traversal",
+  (pattern) => {
+    expect(() => parseOcPath("oc://X/" + pattern)).toThrow(
+      expect.objectContaining({ code: "OC_PATH_MALFORMED_UNION" }),
+    );
+  },
+);
+
 it("jsonl per-line parser flags malformed deeply-nested values", () => {
   const depth = MAX_TRAVERSAL_DEPTH + 50;
   const nested = '{"a":'.repeat(depth) + '"x"' + "}".repeat(depth);

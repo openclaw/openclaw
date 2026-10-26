@@ -43,8 +43,7 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
   return routeId === "sessions" || routeId === "worktrees";
 }
 
-export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-export type PersistedSidebarRoute = SidebarNavRoute;
+export type PersistedSidebarRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute {
   return SIDEBAR_NAV_ROUTES.includes(value as PersistedSidebarRoute);
@@ -53,7 +52,7 @@ function isPersistedSidebarRoute(value: unknown): value is PersistedSidebarRoute
 export type SidebarZoneEntry =
   | { type: "route"; route: PersistedSidebarRoute }
   | { type: "plugin"; key: string }
-  | { type: "session"; key: string }
+  | { type: "session"; key: string; rail?: true }
   | { type: "person"; profileId: string };
 
 // The rail starts clean; only user-added shortcuts occupy the pins region.
@@ -85,6 +84,10 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     }
     return { type: "person", profileId };
   }
+  if (value.startsWith("session-rail:")) {
+    const key = value.slice("session-rail:".length).trim();
+    return key ? { type: "session", key, rail: true } : null;
+  }
   if (value.startsWith("session:")) {
     const key = value.slice("session:".length).trim();
     return key ? { type: "session", key } : null;
@@ -113,7 +116,21 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   if (entry.type === "person") {
     return `person:${entry.profileId}`;
   }
-  return entry.type === "plugin" ? `plugin:${entry.key}` : `session:${entry.key}`;
+  return entry.type === "plugin"
+    ? `plugin:${entry.key}`
+    : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
+}
+
+/** Personal session pins render in the Sessions list's Pinned section, not the rail. */
+export function personalSessionPinKeys(entries: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const value of entries) {
+    const entry = parseSidebarEntry(value);
+    if (entry?.type === "session" && !entry.rail) {
+      keys.add(entry.key);
+    }
+  }
+  return keys;
 }
 
 /**

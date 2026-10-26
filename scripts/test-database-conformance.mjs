@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import {
   assignPostgresConformanceShards,
   createPostgresConformanceEstimator,
@@ -60,14 +61,20 @@ let targets = explicitTargets
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
       "extensions/team-reports/src/postgres-store.test.ts",
       "src/infra/postgres-sync",
-      ...readdirSync(new URL("../src/infra/database-engine/", import.meta.url), { recursive: true })
+      ...listDirectoryTreeStrictSync(
+        fileURLToPath(new URL("../src/infra/database-engine/", import.meta.url)),
+      )
+        .map((walkEntry) => walkEntry.relativePath)
         .filter((file) => file.endsWith(".test.ts"))
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
+      "src/commands/startup-client-credentials.postgres.test.ts",
+      "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
       "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/infra/client-credential-migration.postgres.test.ts",
+      "src/infra/gateway-lock-recovery.postgres.test.ts",
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",
       "src/infra/update-candidate-state.postgres.test.ts",
@@ -76,6 +83,7 @@ let targets = explicitTargets
       "src/state/openclaw-agent-doctor-media.postgres.test.ts",
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-embedding-cache-rebuild.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",

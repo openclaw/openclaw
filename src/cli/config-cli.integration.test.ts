@@ -36,6 +36,29 @@ const reject = (result: Promise<unknown>) =>
 const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
+async function get(field: string, json = false) {
+  logs.length = 0;
+  errors.length = 0;
+  await run("get", field, ...(json ? ["--json"] : []));
+}
+
+async function getError(field: string, json: boolean): Promise<string> {
+  await reject(get(field, json));
+  if (!json) {
+    expect(logs).toEqual([]);
+    expect(errors).toHaveLength(1);
+    return errors[0] ?? "";
+  }
+  expect(errors).toEqual([]);
+  expect(logs).toHaveLength(1);
+  const failure = JSON.parse(logs[0] ?? "");
+  expect(failure).toEqual({
+    ok: false,
+    error: { type: "cli_error", message: expect.any(String) },
+  });
+  return failure.error.message;
+}
+
 describe("config cli integration", () => {
   it("edits canonical config without consuming pending plugin migrations", async () => {
     const pluginPath = "plugins.entries.sample.config";
@@ -164,10 +187,9 @@ describe("config cli integration", () => {
         if (location === "include") {
           fs.writeFileSync(target, includeRaw);
         }
-        const publication = await import("../config/backup-rotation.js");
-        const prepare = vi.spyOn(publication, "prepareConfigFileWrite");
         const backups = Array.from({ length: 5 }, (_, i) => `${target}.bak${i ? `.${i}` : ""}`);
-        backups.forEach((file, i) => fs.writeFileSync(file, `recovery-${i}`));
+        const recovery = backups.map((_, i) => `recovery-${i}`);
+        backups.forEach((file, i) => fs.writeFileSync(file, recovery[i]!));
         const open = fs.openSync;
         vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
           if (
@@ -183,14 +205,7 @@ describe("config cli integration", () => {
           await reject(set("logging.level", "debug"));
           expect(read(configPath)).toBe(raw);
           expect(read(target)).toBe(location === "include" ? includeRaw : raw);
-          expect(prepare.mock.calls.at(-1)?.[0].configPath).toBe(target);
-          expect(backups.map((file) => read(file))).toEqual([
-            "recovery-0",
-            "recovery-1",
-            "recovery-2",
-            "recovery-3",
-            "recovery-4",
-          ]);
+          expect(backups.map((file) => read(file))).toEqual(recovery);
         }
       });
     },
@@ -381,10 +396,7 @@ describe("config cli integration", () => {
         "meta.migrations.utilityModelSeparation",
       ]) {
         for (const json of [false, true]) {
-          logs.length = 0;
-          errors.length = 0;
-          await reject(run("get", field, ...(json ? ["--json"] : [])));
-          const message = json ? JSON.parse(logs[0] ?? "").error.message : errors[0];
+          const message = await getError(field, json);
           expect(message).toContain(`Config path is valid but unset: ${field}.`);
           expect(message).toContain("managed automatically by OpenClaw");
           expect(message).not.toContain("openclaw config set");
@@ -402,30 +414,15 @@ describe("config cli integration", () => {
 
   it("classifies unset model metadata while preserving authored values", async () => {
     const modelPath = "models.providers.fixture.models[0]";
-    const raw = JSON.stringify({
+    const raw = `{
       agents: { entries: { main: {} } },
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://provider.example.invalid/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "qa-model",
-                name: "QA Model",
-                params: { nil: null, off: false, zero: 0, empty: "" },
-              },
-            ],
-          },
-        },
-      },
-    });
+      models: { providers: { fixture: {
+        baseUrl: "https://provider.example.invalid/v1", api: "openai-completions",
+        models: [{ id: "qa-model", name: "QA Model",
+          params: { nil: null, off: false, zero: 0, empty: "" } }],
+      } } },
+    }`;
     await withConfig(raw, async ({ configPath }) => {
-      const get = (field: string, json: boolean) => {
-        logs.length = 0;
-        errors.length = 0;
-        return run("get", field, ...(json ? ["--json"] : []));
-      };
       await get(modelPath, true);
       expect(errors).toEqual([]);
       expect(logs).toHaveLength(1);
@@ -443,22 +440,7 @@ describe("config cli integration", () => {
       ]) {
         const getterPath = `${modelPath}.${field}`;
         for (const json of [false, true]) {
-          await reject(get(getterPath, json));
-          let message: string;
-          if (json) {
-            expect(errors).toEqual([]);
-            expect(logs).toHaveLength(1);
-            const failure = JSON.parse(logs[0] ?? "");
-            expect(failure).toEqual({
-              ok: false,
-              error: { type: "cli_error", message: expect.any(String) },
-            });
-            message = failure.error.message;
-          } else {
-            expect(logs).toEqual([]);
-            expect(errors).toHaveLength(1);
-            message = errors[0] ?? "";
-          }
+          const message = await getError(getterPath, json);
           expect(message).toContain(`${prefix}: ${getterPath}.`);
           expect(message).toContain(remedy);
         }
@@ -484,52 +466,26 @@ describe("config cli integration", () => {
     const secretRefId = "CONFIG_GET_TEST_TOKEN";
     const schemaOnlySecrets = ["first-private-route", "second-private-route", "core-private-route"];
     await withConfig(
-      `${JSON.stringify(
-        {
-          tools: { web: { fetch: { headers: { "X-Route": schemaOnlySecrets[2] } } } },
-          channels: {
-            discord: {
-              enabled: false,
-              token: { source: "env", provider: "default", id: secretRefId },
-            },
-          },
-          plugins: {
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    headers: {
-                      "X-First": schemaOnlySecrets[0],
-                      "X-Second": schemaOnlySecrets[1],
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
+      `{
+        tools: { web: { fetch: { headers: { "X-Route": "${schemaOnlySecrets[2]}" } } } },
+        channels: { discord: { enabled: false,
+          token: { source: "env", provider: "default", id: "${secretRefId}" },
+        } },
+        plugins: { entries: { codex: { enabled: true, config: { appServer: {
+          headers: { "X-First": "${schemaOnlySecrets[0]}", "X-Second": "${schemaOnlySecrets[1]}" },
+        } } } } },
+      }`,
       async () => {
         const output = createTestRuntime();
-        await runConfigGet({ path: "channels.discord.token", json: true, runtime: output.runtime });
-        await runConfigGet({ path: "channels.discord.token.id", runtime: output.runtime });
-        await runConfigGet({
-          path: "plugins.entries.codex.config.appServer.headers",
-          json: true,
-          runtime: output.runtime,
-        });
-        await runConfigGet({
-          path: "plugins.entries.codex.config.appServer.headers",
-          runtime: output.runtime,
-        });
-        await runConfigGet({
-          path: "tools.web.fetch.headers",
-          json: true,
-          runtime: output.runtime,
-        });
+        for (const [field, json] of [
+          ["channels.discord.token", true],
+          ["channels.discord.token.id", false],
+          ["plugins.entries.codex.config.appServer.headers", true],
+          ["plugins.entries.codex.config.appServer.headers", false],
+          ["tools.web.fetch.headers", true],
+        ] as const) {
+          await runConfigGet({ path: field, json, runtime: output.runtime });
+        }
 
         expect(output.errors).toStrictEqual([]);
         expect(output.logs).toStrictEqual([
@@ -677,60 +633,50 @@ describe("config cli integration", () => {
     });
   });
 
-  it("rejects a conditional set when the authored value changed before CLI load", async () => {
-    await withConfig("{ gateway: { port: 19002 } }\n", async ({ configPath }) => {
-      const before = read(configPath);
-      const output = createTestRuntime();
-
-      await expect(
-        runConfigSet({
-          path: "gateway.port",
-          value: "19001",
-          cliOptions: { strictJson: true, expectCurrentJson: "18789" },
-          runtime: output.runtime,
-        }),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(read(configPath)).toBe(before);
-      expect(output.logs).toStrictEqual([]);
-      expect(output.errors.join("\n")).toContain(
-        "conditional config set expectation did not match the authored config",
-      );
-      expect(output.errors.join("\n")).toContain("No settings were saved");
-      expect(output.errors.join("\n")).toContain(
-        "Review the current config and any conditional expectations before retrying",
-      );
-      expect(output.errors.join("\n")).not.toContain("changed while this command was writing");
-      expect(output.errors.join("\n")).not.toContain("Re-run the same command");
-      expect(output.errors.join("\n")).not.toContain("18789");
-      expect(output.errors.join("\n")).not.toContain("19002");
-    });
-  });
-
-  it("keeps the snapshot hash guard after a matching conditional preflight", async () => {
-    await withConfig("{ gateway: { port: 18789 } }\n", async ({ configPath }) => {
+  it.each(["before CLI load", "after matching preflight"])(
+    "rejects conditional config changes %s without leaking authored values",
+    async (timing) => {
+      const changedBeforeLoad = timing === "before CLI load";
       const concurrentRaw = "{ gateway: { port: 19002 } }\n";
-      const output = createTestRuntime();
-
-      await expect(
-        runConfigSet({
-          path: "gateway.port",
-          value: "19001",
-          cliOptions: { strictJson: true, expectCurrentJson: "18789" },
-          runtime: output.runtime,
-          beforePersistentApply: () => {
-            fs.writeFileSync(configPath, concurrentRaw, "utf8");
-          },
-        }),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(read(configPath)).toBe(concurrentRaw);
-      expect(output.logs).toStrictEqual([]);
-      expect(output.errors.join("\n")).toContain("config changed since last load");
-      expect(output.errors.join("\n")).not.toContain("18789");
-      expect(output.errors.join("\n")).not.toContain("19002");
-    });
-  });
+      await withConfig(
+        changedBeforeLoad ? concurrentRaw : "{ gateway: { port: 18789 } }\n",
+        async ({ configPath }) => {
+          const output = createTestRuntime();
+          await expect(
+            runConfigSet({
+              path: "gateway.port",
+              value: "19001",
+              cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+              runtime: output.runtime,
+              ...(!changedBeforeLoad && {
+                beforePersistentApply: () => {
+                  fs.writeFileSync(configPath, concurrentRaw, "utf8");
+                },
+              }),
+            }),
+          ).rejects.toThrow("__exit__:1");
+          expect(read(configPath)).toBe(concurrentRaw);
+          expect(output.logs).toStrictEqual([]);
+          const error = output.errors.join("\n");
+          expect(error).toContain(
+            changedBeforeLoad
+              ? "conditional config set expectation did not match the authored config"
+              : "config changed since last load",
+          );
+          expect(error).not.toMatch(/18789|19002/u);
+          if (changedBeforeLoad) {
+            expect(error).toContain("No settings were saved");
+            expect(error).toContain(
+              "Review the current config and any conditional expectations before retrying",
+            );
+            expect(error).not.toMatch(
+              /changed while this command was writing|Re-run the same command/u,
+            );
+          }
+        },
+      );
+    },
+  );
 
   it("preserves exact JSON5 bytes while rejecting an absent authored unset", async () => {
     const raw =

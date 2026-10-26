@@ -46,7 +46,7 @@ export type SubagentCompletionRequest = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
-  recoverInterrupted?: true;
+  recoverInterrupted?: true | "failed";
   /** Prepare database currency asynchronously; publication rechecks live host authority. */
   recoveryCurrent?: SubagentRecoveryCurrent;
   /** Child effects may be fenced while the recorded result still owes requester delivery. */
@@ -194,6 +194,13 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
     pluginId: string;
     requesterProfileId: string;
     requestId: string;
+  };
+  /** Exact package instructions used at child creation; not runtime authority. */
+  subagentProfile?: {
+    pluginId: string;
+    id: string;
+    instructionsFile: string;
+    instructionsSha256: string;
   };
   /** Admission evidence only; restart continuation revalidates the live operator grant. */
   operatorRecoverySource?: RestartRecoveryOperatorSource;

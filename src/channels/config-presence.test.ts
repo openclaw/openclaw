@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as channelCatalog from "../plugins/channel-catalog-registry.js";
+import * as externalCatalog from "../plugins/official-external-plugin-catalog.js";
 import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import {
   hasMeaningfulChannelConfig,
@@ -81,6 +83,29 @@ it("detects official external channel env vars", () => {
     { channelId: "mattermost", source: "env" },
   ]);
 });
+
+it.each([false, true])(
+  "suppressed ambient signals skip channel catalog work (persisted auth: %s)",
+  async (includePersistedAuthState) => {
+    const catalog = vi.spyOn(channelCatalog, "listChannelCatalogEntries");
+    const externalEnv = vi.spyOn(externalCatalog, "listOfficialExternalChannelEnvVars");
+    const stateDir = makeTempDir(tempDirs, "persisted-matrix-");
+    const cfg = { channels: { slack: { botToken: "synthetic-token" } } };
+    const env = { OPENCLAW_STATE_DIR: stateDir, MATTERMOST_BOT_TOKEN: "synthetic-token" };
+    const options = { ambientEnvTriggers: "suppress" as const, includePersistedAuthState };
+    const expected = [
+      { channelId: "slack", source: "config" },
+      ...(includePersistedAuthState ? [{ channelId: "matrix", source: "persisted-auth" }] : []),
+    ];
+
+    expect(listPotentialConfiguredChannelPresenceSignals(cfg, env, options)).toEqual(expected);
+    expect(await listPotentialConfiguredChannelPresenceSignalsAsync(cfg, env, options)).toEqual(
+      expected,
+    );
+    expect(catalog).not.toHaveBeenCalled();
+    expect(externalEnv).not.toHaveBeenCalled();
+  },
+);
 
 it.each([{ channelIds: ["matrix"] }, { channelIds: [] }])(
   "scopes persisted credentials without hiding env signals: $channelIds",

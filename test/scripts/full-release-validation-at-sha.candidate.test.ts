@@ -324,7 +324,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
     expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
     expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
-    expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
+    expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(24);
     const before = readFileSync(fixture.requestPath());
     const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
     const reopened = fixture.run(
@@ -396,6 +396,33 @@ describe("candidate-owned full release dispatch entry point", () => {
           `contribution record target [0-9a-f]{40} is not reachable from release tag ${fixture.targetSha}`,
           "u",
         ),
+      );
+      expect(
+        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
+      ).toEqual([]);
+      expect(dispatches(fixture)).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refuses publish qualification when the candidate changelog thanks an internal handle", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      releaseNotes: "- Fixes: keep replies threaded. Thanks @steipete.",
+    });
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.targetSha,
+        "-f",
+        "validation_purpose=publish",
+        "-f",
+        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
+      ]);
+      expectDispatchFailure(
+        result,
+        "Forbidden changelog thanks attribution (pnpm check:changelog-attributions): CHANGELOG.md:3 uses Thanks @steipete. Use verified human GitHub credits",
       );
       expect(
         fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),

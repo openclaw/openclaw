@@ -200,27 +200,6 @@ function readTask(payload: Record<string, unknown>) {
   }
 }
 
-function readOutputUrls(data: Record<string, unknown>): string[] {
-  let result: unknown = data.response;
-  if (typeof data.resultJson === "string") {
-    try {
-      result = JSON.parse(data.resultJson);
-    } catch (cause) {
-      throw new Error("Kie AI video generation returned malformed resultJson.", { cause });
-    }
-  }
-  if (!isRecord(result) || !Array.isArray(result.resultUrls) || !result.resultUrls.length) {
-    throw new Error("Kie AI video generation completed without result URLs.");
-  }
-  return result.resultUrls.map((value: unknown) => {
-    const url = normalizeOptionalString(value);
-    if (!url) {
-      throw new Error("Kie AI video generation returned a malformed result URL.");
-    }
-    return url;
-  });
-}
-
 function remoteImageUrl(value: string): string {
   const url = URL.parse(value);
   if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
@@ -433,7 +412,25 @@ export function buildKieVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMessage: `Kie AI video generation task ${taskId} did not finish in time`,
         isComplete: (payload) => readTask(payload).state === "success",
       });
-      const outputUrls = readOutputUrls(readKieData(completed));
+      const data = readKieData(completed);
+      let result: unknown = data.response;
+      if (typeof data.resultJson === "string") {
+        try {
+          result = JSON.parse(data.resultJson);
+        } catch (cause) {
+          throw new Error("Kie AI video generation returned malformed resultJson.", { cause });
+        }
+      }
+      if (!isRecord(result) || !Array.isArray(result.resultUrls) || !result.resultUrls.length) {
+        throw new Error("Kie AI video generation completed without result URLs.");
+      }
+      const outputUrls = result.resultUrls.map((value: unknown) => {
+        const url = normalizeOptionalString(value);
+        if (!url) {
+          throw new Error("Kie AI video generation returned a malformed result URL.");
+        }
+        return url;
+      });
       const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
       const videos: GeneratedVideoAsset[] = [];
       for (const [index, url] of outputUrls.entries()) {

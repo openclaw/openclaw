@@ -6,8 +6,8 @@ import {
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
-import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { getRecordedSubagentChildAuthority } from "./subagent-registry-memory.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type {
@@ -85,13 +85,16 @@ export function createInterruptedRecoveryCoordinator(params: {
       current !== undefined &&
       isSameSubagentRunOwner(current, entry) &&
       recoveryFacts(current).every((fact, index) => fact === expected[index]) &&
-      isSameSubagentRunOwner(
-        getLatestSubagentRunForChild(
-          params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      // A saved terminal result still owes delivery after its child session is reused.
+      // Only unfinished execution needs the latest generation's session ownership.
+      ((entry.execution.status === "terminal" && entry.terminalOwner === "interrupted-recovery") ||
+        isSameSubagentRunOwner(
+          getLatestSubagentRunForChild(
+            params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+            entry,
+          ),
           entry,
-        ),
-        entry,
-      )
+        ))
     );
   };
 
@@ -110,7 +113,7 @@ export function createInterruptedRecoveryCoordinator(params: {
       warnedRetainedOwners = new WeakSet();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
-      const authority = resolveSubagentChildAuthority(entry);
+      const authority = getRecordedSubagentChildAuthority(entry);
       if (authority.status === "mismatch") {
         const owner = getSubagentRunRuntimeKey(entry);
         if (!warnedRetainedOwners.has(owner)) {
@@ -152,6 +155,7 @@ export function createInterruptedRecoveryCoordinator(params: {
         return true;
       }
       recovering.add(owner);
+      let releaseRecovery: (() => void) | undefined;
       try {
         return await limitRecovery(async () => {
           if (!isCurrent(runId, entry)) {
@@ -184,6 +188,7 @@ export function createInterruptedRecoveryCoordinator(params: {
             isGatewayCurrent,
             warn: params.warn,
           });
+          releaseRecovery = result.status === "terminal" ? result.release : undefined;
           if (!isGatewayCurrent() || !isSameSubagentRunOwner(params.runs.get(runId), entry)) {
             return true;
           }
@@ -243,6 +248,7 @@ export function createInterruptedRecoveryCoordinator(params: {
             },
             sessionEffects: result.sessionEffects,
             error: result.error,
+            terminalStatus: result.terminalStatus,
             endedAt: result.endedAt,
             suppressSessionEffects: result.suppressSessionEffects,
           });
@@ -255,6 +261,7 @@ export function createInterruptedRecoveryCoordinator(params: {
           return true;
         });
       } finally {
+        releaseRecovery?.();
         // Reset retires observations, but accepted recovery keeps its exclusion until settled.
         recovering.delete(owner);
       }

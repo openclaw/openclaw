@@ -1,6 +1,6 @@
 import { normalizeTypeBoxValidationErrors } from "@openclaw/normalization-core/json-schema";
-import type { Static, TSchema } from "typebox";
-import { Compile, type Validator as TypeBoxValidator } from "typebox/schema";
+import type { TSchema } from "typebox";
+import { Errors } from "typebox/schema";
 import type { ValidationError } from "./validation-errors.js";
 
 /** Runtime validator shape shared by gateway clients and server handlers. */
@@ -12,46 +12,37 @@ export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
 
 type ValidationDiagnostics = (data: unknown) => ValidationError[] | undefined;
 
-// Defer TypeBox compilation because the protocol entrypoint is common on startup paths.
-export function lazyCompile<const Schema extends TSchema>(
-  schema: Schema,
-  precheck?: (data: unknown) => ValidationError | undefined,
-  diagnostics?: ValidationDiagnostics,
-): ProtocolValidator<Static<Schema>>;
-// Keep compact hand-authored public types where schema-derived declarations are intentionally avoided.
-export function lazyCompile<T>(
-  schema: TSchema,
-  precheck?: (data: unknown) => ValidationError | undefined,
-  diagnostics?: ValidationDiagnostics,
-): ProtocolValidator<T>;
+// Checks are generated from this schema; only invalid input needs the diagnostic walker.
 /* @__NO_SIDE_EFFECTS__ */
-export function lazyCompile<T = unknown>(
+export function createProtocolValidator<T>(
   schema: TSchema,
+  check: (data: unknown) => data is T,
   precheck?: (data: unknown) => ValidationError | undefined,
   diagnostics?: ValidationDiagnostics,
 ): ProtocolValidator<T> {
-  let compiled: TypeBoxValidator | undefined;
   let errors: ValidationError[] | null = null;
-
-  const validate = ((data: unknown): data is T => {
+  const properties: { errors: ValidationError[] | null; schema: unknown } = {
+    errors: null,
+    schema,
+  };
+  const validate = Object.assign((data: unknown): data is T => {
     const precheckError = precheck?.(data);
     if (precheckError) {
       errors = [precheckError];
       return false;
     }
-    const current = (compiled ??= Compile(schema));
-    const valid = current.Check(data);
+    const valid = check(data);
     if (valid) {
       errors = null;
     } else {
-      const originalErrors = current.Errors(data)[1];
+      const originalErrors = Errors(schema, data)[1];
       // Diagnostic views never admit input or expand the validator's error budget.
       errors = normalizeTypeBoxValidationErrors(
         (diagnostics?.(data) ?? originalErrors).slice(0, originalErrors.length),
       );
     }
     return valid;
-  }) as ProtocolValidator<T>;
+  }, properties);
 
   Object.defineProperties(validate, {
     errors: {

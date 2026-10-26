@@ -359,7 +359,6 @@ export function updateWhatsAppMainLastRoute(params: {
       backgroundTasks: params.backgroundTasks,
       storeAgentId: params.route.agentId,
       sessionKey: params.route.mainSessionKey,
-      channel: "whatsapp",
       to: params.dmRouteTarget,
       accountId: params.route.accountId,
       ctx: params.ctx,

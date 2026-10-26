@@ -26,7 +26,15 @@ type TimeSeriesProps = {
 };
 
 export function deriveTimeSeries(
-  detail: UsageProps["detail"],
+  detail: Pick<
+    UsageProps["detail"],
+    | "timeSeries"
+    | "timeSeriesStatus"
+    | "timeSeriesMode"
+    | "timeSeriesBreakdownMode"
+    | "timeSeriesCursorStart"
+    | "timeSeriesCursorEnd"
+  >,
   range: ReturnType<typeof prepareUsageDateRange>,
   usage: UsageSessionEntry["usage"],
 ) {
@@ -600,7 +608,7 @@ function TimeSeriesChart(props: {
             {model().formatAxisTimestamp(model().rangeStartTs)}–
             {model().formatAxisTimestamp(model().rangeEndTs)}
             {" · "}
-            {formatUsageTokens(model().totalTypeTokens)}
+            {formatUsageTokens(model().filteredTokens.totalTokens)}
             {" · "}
             {formatUsageCost(model().filteredCost)}
           </>
@@ -618,7 +626,7 @@ function TimeSeriesChart(props: {
       {model().breakdownByType ? (
         <div class="timeseries-breakdown">
           <div class="card-title usage-section-title">{t("usage.breakdown.tokensByType")}</div>
-          <div class="cost-breakdown-bar cost-breakdown-bar--compact">
+          <div class="cost-breakdown-bar">
             <For each={USAGE_TOKEN_CATEGORIES}>
               {({ key, className }) => (
                 <div

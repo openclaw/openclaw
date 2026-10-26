@@ -1,4 +1,3 @@
-import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -56,50 +55,60 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then(async (storedSnapshot) => {
-          if (this.routeResolutionPending) {
-            if (this.context.gateway.snapshot.phase !== "connected") {
-              const wait = new AbortController();
-              this.chatState.addCleanup(() => wait.abort());
-              await waitForGatewayClient(this.context.gateway, wait.signal);
+          // Keep cache rendering out of connect preparation. The subscription can
+          // adopt ready rows synchronously after dispatch, before reading their cursor.
+          hydration.adoptReadySnapshot = () => {
+            delete hydration.adoptReadySnapshot;
+            if (!isCurrent()) {
+              return;
             }
-            // Let hello and its subscribers finish before committing cached rows.
+            const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
+            if (requests.acceptedHistory || !snapshot) {
+              return;
+            }
+            // A sibling can fill the shared cache while this pane still needs its
+            // own transcript. Adopt those messages before revalidating their cursor.
+            applyChatCacheSnapshot(state, snapshot);
+            const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+            cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+            this.syncSessionReactions();
+            if (snapshot.progressCard !== undefined) {
+              const progressTarget = this.resolveChatReadTarget();
+              if (progressTarget) {
+                this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+              }
+            }
+          };
+          const gateway = this.context.gateway.snapshot;
+          if (
+            gateway.client &&
+            (gateway.phase === "connecting" || gateway.phase === "reconnecting")
+          ) {
+            await gateway.client.connectSent;
+          }
+          // Let the initial composer commit before the saved rows do their layout work.
+          if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, 0);
             });
           }
+          // Scoped snapshots can paint while the route awaits live revalidation.
+          // The pending route still gates commands and authenticated resources.
           if (!isCurrent()) {
-            return hydration.complete?.();
+            return;
           }
-          const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-          const boardRestored = restoreBoard(snapshot?.board);
-          if (requests.acceptedHistory || !snapshot) {
-            hydration.complete?.();
-            return boardRestored;
-          }
-          // A sibling can fill the shared cache while this pane still needs its
-          // own transcript. Adopt those messages before revalidating their cursor.
-          applyChatCacheSnapshot(state, snapshot);
-          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
-          if (snapshot.progressCard !== undefined) {
-            const progressTarget = this.resolveChatReadTarget();
-            if (progressTarget) {
-              this.progressCards.hydrate(progressTarget, snapshot.progressCard);
-            }
-          }
-          // Release the history response before publishing the cached transcript.
-          hydration.complete?.();
-          return boardRestored;
+          hydration.adoptReadySnapshot?.();
+          return restoreBoard(storedSnapshot?.board);
         })
-        .catch(() => hydration.complete?.())
+        .catch(() => undefined)
         .finally(() => {
           hydration.titlePending = false;
-          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
+          if (requests.initialSnapshotHydration === hydration) {
             delete requests.initialSnapshotHydration;
           }
         }),
     };
-    // Only the title observes cache readiness; history keeps its existing wait contract.
+    // The title observes cache readiness; network history never waits on it.
     requests.initialSnapshotHydration = projectChatFields(hydration, ["titlePending"]);
   }
 }

@@ -4,15 +4,13 @@ import { t } from "../../i18n/index.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
-type WizardSetupDeps = {
+export function createChannelSetup(deps: {
   getContext: () => ApplicationContext;
   clearSelection: () => void;
   presentWizard: (pending: Promise<void>) => Promise<void>;
   retire: () => void;
   startWhatsApp: (force: boolean, accountId: string) => Promise<void>;
-};
-
-export function createChannelSetup(deps: WizardSetupDeps) {
+}) {
   const [fields, setDraft] = createStore<{
     multiselect: unknown[];
     textValue: string;

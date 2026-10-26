@@ -1,3 +1,4 @@
+import { finishGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type {
   RequesterSettleWakeState,
@@ -5,6 +6,8 @@ import type {
 } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
+import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
@@ -12,11 +15,20 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
+    hasSubagentRunEnded(entry)
+  );
+}
+
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
   // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
   return (
     entry.delivery?.status !== "delivered" ||
-    entry.execution.interruptionReason === "gateway-restart"
+    (entry.execution.interruptionReason === "gateway-restart" &&
+      (entry.delivery.deliveredAt ?? 0) < (entry.execution.endedAt ?? Infinity))
   );
 }
 
@@ -67,11 +79,44 @@ type RequesterSettleWakeBatchCallbacks = {
   ) => void | Promise<void>;
 };
 
+/** Finalize the full cohort only after its outcome's durable commit. */
+export function createRequesterSettleBatchCompletion(params: {
+  completeBatch: RequesterSettleWakeBatchCallbacks["completeBatch"];
+  requesterAgentId?: string;
+  requesterSessionKey: string;
+  pause: boolean;
+}) {
+  return async (
+    batch: readonly SubagentRunRecord[],
+    state: RequesterSettleWakeBatchState,
+    delivery?: SubagentAnnounceDeliveryResult,
+    requesterSessionId?: string,
+  ): Promise<void> => {
+    await params.completeBatch(batch, state.rearmGeneration, delivery, async () => {
+      finalizeRequesterFinalAttachment({
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterSessionId,
+        batchRunIds: batch.map((entry) => entry.runId).toSorted(),
+        rearmGeneration: state.rearmGeneration,
+        requesterYieldBatch: state.requesterYieldBatch,
+        pause: params.pause,
+        delivered: delivery?.delivered,
+        finalAssistantVisibleText: delivery?.finalAssistantVisibleText,
+      });
+      if (!params.pause) {
+        await finishGoalContinuationSettlement(batch, delivery?.delivered === true);
+      }
+    });
+  };
+}
+
 export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   isSourceCurrent: () => boolean;
   onDescendantsPending?: (deadline?: number) => void;
 };
@@ -192,8 +237,8 @@ export function resolveRequesterSettlePolicy(
       : {}),
   };
   const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
-  // A yield owes the conversation a visible final unless private findings let the
-  // requester choose silence.
-  const requireVisibleReply = requesterYielded && !hasPrivateRows;
+  // A prior wake may already have consumed every result in this yielded cohort.
+  const requireVisibleReply =
+    requesterYielded && !hasPrivateRows && completionRows.some(needsRequesterSettleFindings);
   return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
 }

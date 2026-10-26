@@ -20,7 +20,7 @@ afterEach(async () => {
 
 const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const at = (...parts: string[]) => path.join(root, ...parts);
-const revision = "c81749b6c5f6b8233fad01698a3bfa483e5b27dbc540f8d1a4d3117bf05e1b75";
+const revision = "03ddfbeb5328d7bb5e6f1563118bf420ace8d09d7a33e241bbb59e95233ccc36";
 const viteOptions = {
   configFile: false as const,
   publicDir: false as const,
@@ -53,6 +53,8 @@ async function fixture() {
     ["chunk-1.js", "export const message = 'Deferred Workboard';"],
     ["index.css", ".workboard { color: green; }"],
     ["index.js", "export default { id: 'workboard', load: () => import('./chunk-1.js') };"],
+    ["large.js", `export const message = "${"Large workboard asset ".repeat(200)}";`],
+    ["small.css", ".workboard { color: green; }\n".repeat(8)],
   ] as const;
   const hash = createHash("sha256");
   for (const [name, body] of files) {
@@ -94,7 +96,7 @@ async function compile(inputs = new Set<string>()) {
   });
 }
 
-it("publishes the complete immutable generation, its local inventory and matching compressed bytes", async () => {
+it("publishes the complete immutable generation with only useful eligible sidecars", async () => {
   const { files, pluginRoot, generation } = await fixture();
   const inputs = new Set<string>();
   await compile(inputs);
@@ -105,8 +107,19 @@ it("publishes the complete immutable generation, its local inventory and matchin
   for (const [name, body] of files) {
     const target = path.join(output, revisions[0]!, name);
     expect(await readText(target)).toBe(body);
-    expect(brotliDecompressSync(await fs.readFile(`${target}.br`)).toString()).toBe(body);
-    expect(gunzipSync(await fs.readFile(`${target}.gz`)).toString()).toBe(body);
+    const compressed = name === "large.js" || name === "small.css";
+    for (const extension of ["br", "gz"]) {
+      const sidecar = `${target}.${extension}`;
+      if (!compressed) {
+        await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
+        continue;
+      }
+      const encoded = await fs.readFile(sidecar);
+      expect(encoded.byteLength).toBeLessThan(Buffer.byteLength(body));
+      expect(
+        (extension === "br" ? brotliDecompressSync(encoded) : gunzipSync(encoded)).toString(),
+      ).toBe(body);
+    }
     expect(inputs.has(path.join(pluginRoot, generation, name))).toBe(true);
   }
   expect(inputs.has(path.join(pluginRoot, "package.json"))).toBe(true);

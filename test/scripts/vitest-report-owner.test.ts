@@ -295,10 +295,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
               "outer (inner)",
             ),
             project(root, "other (alpha)", "vitest.alpha.config.ts", "threads", "other"),
-            {
-              ...project(root, "beta", "vitest.beta.config.ts", "forks"),
-              root: path.join(root, "test/vitest"),
-            },
+            project(root, "beta", "vitest.beta.config.ts", "forks"),
           ]),
         );
         const modules = captures.flatMap((capture) => capture.modules);

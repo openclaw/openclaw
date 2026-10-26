@@ -12,6 +12,7 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -127,11 +128,12 @@ export function MobileTaskProgressContent(props: MobileTaskProgressProps) {
           <Show
             when={props.initialLoading || props.error || props.card === undefined}
             fallback={
-              <div class="task-progress-details__empty">
-                <Icon name="listChecks" />
-                <strong>{t("sessionProgressCard.detailsEmptyTitle")}</strong>
-                <p>{t("sessionProgressCard.detailsEmptyDescription")}</p>
-              </div>
+              <PanelEmptyState
+                presentation="mobile"
+                icon={<Icon name="listChecks" />}
+                heading={t("sessionProgressCard.detailsEmptyTitle")}
+                description={t("sessionProgressCard.detailsEmptyDescription")}
+              />
             }
           >
             <Show

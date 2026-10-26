@@ -42,6 +42,8 @@
 
 ## Recovery and closeout
 
+- A dependency refresh on main does not require replacing an older workflow binding. Run the current trusted wrapper again: it installs the anchor's frozen dependency set outside shared checkouts and reuses the completed entry. Do not delete bindings or alter another operation's tooling root. Missing already-pinned package directories are a separate retained-projection recovery case; follow [the dependency recovery owner](../../../../docs/reference/scripts/pr-tooling.md#recover-a-retained-dependency-projection).
+
 - Accepted/uncertain auto submission: retire retained request before remote-head replacement.
 
 ```bash

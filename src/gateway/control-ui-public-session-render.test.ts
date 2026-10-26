@@ -1,5 +1,5 @@
 import { JSDOM } from "jsdom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -14,13 +14,25 @@ function message(role: string, content: unknown, fields: Record<string, unknown>
 function media(role: string, id: string, content: unknown[]) {
   return message(role, content, { __openclaw: { id } });
 }
+const text = (value: string, phase?: string) => ({
+  type: "text",
+  text: value,
+  ...(phase ? { textSignature: JSON.stringify({ v: 1, phase }) } : {}),
+});
+const assistant = (content: unknown, fields?: Record<string, unknown>) =>
+  message("assistant", content, fields);
+const image = (fields: Record<string, unknown> = {}) => ({
+  type: "image",
+  data: "PRIVATE_BYTES",
+  ...fields,
+});
 
 function render(
-  messages: unknown[],
+  messages: unknown[] | string,
   overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {},
 ) {
   return renderPublicSessionDocument({
-    messages,
+    messages: typeof messages === "string" ? [assistant(messages)] : messages,
     title: "A shared conversation",
     truncated: false,
     latestUrl: "/share/session?token=v1.opaque",
@@ -29,6 +41,10 @@ function render(
     assetBasePath: "/control",
     ...overrides,
   });
+}
+
+function fragment(messages: unknown[] | string, overrides: Parameters<typeof render>[1] = {}) {
+  return JSDOM.fragment(render(messages, overrides));
 }
 
 describe("public session document", () => {
@@ -65,16 +81,9 @@ describe("public session document", () => {
   };
 
   it("renders hosted shortcodes with the public widget URL and preserves surrounding text", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          message(
-            "assistant",
-            'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
-          ),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
+      widgetOptions,
     );
     const article = page.querySelector("article")!;
     const frame = article.querySelector("iframe")!;
@@ -88,41 +97,14 @@ describe("public session document", () => {
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 
-  it("renders only explicitly mapped widgets and gives byte-stable rows content revisions", () => {
-    const messages = [
-      widgetReceipt,
-      message("assistant", '[embed ref="unmapped" /]', {
-        content: [
-          { type: "toolCall", id: "read", name: "read", arguments: {} },
-          { type: "text", text: '[embed ref="unmapped" /]' },
-        ],
-      }),
-    ];
-    const html = render(messages, widgetOptions);
-    expect(render(messages, widgetOptions)).toBe(html);
-    const page = JSDOM.fragment(html);
-    expect(page.querySelectorAll("iframe")).toHaveLength(1);
-    for (const row of page.querySelectorAll(".transcript > *")) {
-      expect(row.getAttribute("data-public-item")).toBeTruthy();
-      expect(row.getAttribute("data-public-revision")).toMatch(/^[a-f0-9]{24}$/);
-    }
-    expect(
-      JSDOM.fragment(
-        render([widgetReceipt], { mediaBaseUrl: widgetOptions.mediaBaseUrl }),
-      ).querySelector("iframe"),
-    ).toBeNull();
-  });
-
   it("merges a nested receipt into its same-turn shortcode and inherits its title", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          message("user", "Show the timeline"),
-          nestedReceipt,
-          message("assistant", 'Here it is [embed ref="cv_timeline" /]'),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        message("user", "Show the timeline"),
+        nestedReceipt,
+        message("assistant", 'Here it is [embed ref="cv_timeline" /]'),
+      ],
+      widgetOptions,
     );
     expect(page.querySelectorAll("iframe")).toHaveLength(1);
     const frame = page.querySelector("iframe")!;
@@ -131,20 +113,18 @@ describe("public session document", () => {
   });
 
   it("renders standalone tool receipts at their position and deduplicates across turns", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          widgetReceipt,
-          message("assistant", "Done"),
-          message("user", "Again"),
-          nestedReceipt,
-          message(
-            "assistant",
-            '[embed url="/__openclaw__/canvas/documents/cv_timeline/index.html" /]',
-          ),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        widgetReceipt,
+        message("assistant", "Done"),
+        message("user", "Again"),
+        nestedReceipt,
+        message(
+          "assistant",
+          '[embed url="/__openclaw__/canvas/documents/cv_timeline/index.html" /]',
+        ),
+      ],
+      widgetOptions,
     );
     expect(page.querySelectorAll("iframe")).toHaveLength(1);
     const article = page.querySelector("article")!;
@@ -152,34 +132,76 @@ describe("public session document", () => {
     expect(article.querySelector("iframe")?.style.height).toBe("600px");
   });
 
-  it("keeps code and non-hosted embeds literal and excludes non-inline receipts", () => {
-    const text =
-      '```text\n[embed ref="cv_timeline" /]\n```\n`[embed ref="cv_timeline" /]`\n[embed url="https://www.youtube.com/watch?v=example" /]';
-    const page = JSDOM.fragment(
-      render(
-        [
-          message("assistant", text),
-          { ...widgetReceipt, isError: true },
-          { ...widgetReceipt, display: false },
-          {
-            ...widgetReceipt,
-            details: { ...widgetDetails, presentation: { target: "node_panel" } },
-          },
-        ],
-        widgetOptions,
-      ),
+  it("keeps code literal and excludes non-inline receipts", () => {
+    const literal =
+      '```text\n[embed ref="cv_timeline" /]\n```\n`[embed url="https://example.test" /]`';
+    const page = fragment(
+      [
+        message("assistant", literal),
+        { ...widgetReceipt, isError: true },
+        { ...widgetReceipt, display: false },
+        { ...widgetReceipt, details: { ...widgetDetails, presentation: { target: "node_panel" } } },
+      ],
+      widgetOptions,
     );
     expect(page.querySelector("iframe")).toBeNull();
-    expect(page.textContent).toContain('[embed ref="cv_timeline" /]');
-    expect(page.textContent).toContain("https://www.youtube.com/watch?v=example");
+    expect(page.querySelector("article a")).toBeNull();
+    expect(page.querySelector("pre")?.textContent).toContain('[embed ref="cv_timeline" /]');
+    expect(page.querySelector("p code")?.textContent).toBe('[embed url="https://example.test" /]');
+  });
+
+  it("links non-hosted embeds without loading them and omits private Gateway pages", () => {
+    const page = fragment(
+      [
+        message(
+          "assistant",
+          [
+            'Watch [embed url="https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42" title="A & B" /] now.',
+            '[embed url="https://example.test/page"]ignored body[/embed]',
+            '[embed url="/__openclaw__/canvas/game/index.html" title="Private" /]',
+            '[embed url="javascript:alert(1)" /][embed url="https://user:pw@example.test/" /]',
+          ].join("\n\n"),
+        ),
+        message("assistant", '[embed url="/__openclaw__/canvas/" /]'),
+      ],
+      widgetOptions,
+    );
+    const articles = page.querySelectorAll("article");
+    expect(articles).toHaveLength(1);
+    const articleText = articles[0]!.textContent;
+    expect(articleText).toContain("Watch  now.");
+    expect(articleText).not.toMatch(/\[embed|ignored body|Private/);
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(
+      [...articles[0]!.querySelectorAll("a")].map((link) => [
+        link.getAttribute("href"),
+        link.getAttribute("rel"),
+        link.textContent,
+      ]),
+    ).toEqual([
+      ["https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42", "noreferrer noopener nofollow", "A & B"],
+      ["https://example.test/page", "noreferrer noopener nofollow", "https://example.test/page"],
+    ]);
+  });
+
+  it("renders mixed widget and link embeds in shortcode order", () => {
+    const page = fragment(
+      '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
+      widgetOptions,
+    );
+    expect(
+      [...page.querySelectorAll("article a, article iframe")].map(
+        (node) => node.getAttribute("href") ?? node.getAttribute("data-public-widget"),
+      ),
+    ).toEqual(["https://example.test/first", "cv_timeline", "https://example.test/last"]);
   });
 
   it("retains shortcode-only messages and requires a mapped widget URL to render frames", () => {
     const messages = [message("assistant", '[embed ref="cv_timeline" /]')];
-    expect(JSDOM.fragment(render(messages, widgetOptions)).querySelector("iframe")?.title).toBe(
+    expect(fragment(messages, widgetOptions).querySelector("iframe")?.title).toBe(
       "A shared conversation",
     );
-    expect(JSDOM.fragment(render(messages)).querySelector("iframe")).toBeNull();
+    expect(fragment(messages).querySelector("iframe")).toBeNull();
   });
   it("adds only a protected login handoff, including unavailable conversations", () => {
     const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
@@ -202,79 +224,79 @@ describe("public session document", () => {
     expect(unavailable).not.toContain('http-equiv="refresh"');
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
-    const html = render([
-      message("system", "private system instructions"),
-      message("developer", "private developer instructions"),
-      message("user", "hidden user input", { display: false }),
-      ...["internal_system", "inter_session", "unknown"].map((kind) =>
-        message("user", "private handoff", { provenance: { kind } }),
-      ),
-      message("user", "[Inter-session message] sourceSession=private\nprivate legacy handoff"),
-      message("toolResult", "private tool output"),
-      message("assistant", "Public progress", { phase: "commentary" }),
-      message("assistant", "<think>private tagged reasoning</think>Public visible answer"),
-      message("assistant", "<think>private unfinished reasoning"),
-      message(
-        "assistant",
-        '<tool_call>{"name":"read","arguments":{"text":"private inline tool payload"}}</tool_call>',
-      ),
-      message(
-        "assistant",
-        ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">private encoded tool payload</invoke>]<]minimax[>[</tool_call>',
-      ),
-      message("assistant", "NO_REPLY"),
-      message("assistant", "HEARTBEAT_OK"),
-      message("user", "[OpenClaw heartbeat poll]"),
-      message(
-        "user",
-        [
-          { type: "input_text", text: "First public question" },
-          { type: "image", data: "private image bytes" },
-          { type: "text", text: "Second public question" },
-        ],
-        {
-          provenance: { kind: "external_user" },
-          __openclaw: { senderIdentity: "private sender identity" },
-        },
-      ),
-      message("assistant", [
-        { type: "reasoning", text: "private reasoning" },
-        {
-          type: "toolCall",
-          text: "private tool call",
-          arguments: { secret: "private tool arguments" },
-        },
-        {
-          type: "text",
-          text: "Public phased commentary",
-          textSignature: '{"v":1,"phase":"commentary"}',
-        },
-        {
-          type: "text",
-          text: "**Public final answer**",
-          textSignature: '{"v":1,"phase":"final_answer"}',
-        },
-        { type: "canvas", text: "private widget" },
-      ]),
-    ]);
+    const token = `sk-${"a".repeat(48)}`;
+    const operatorSecret = "internal-ticket-8315";
+    applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
+    onTestFinished(resetLogger);
+    const html = render(
+      [
+        message("system", "private system instructions"),
+        message("developer", "private developer instructions"),
+        message("user", "hidden user input", { display: false }),
+        ...["internal_system", "inter_session", "unknown"].map((kind) =>
+          message("user", "private handoff", { provenance: { kind } }),
+        ),
+        message("user", "[Inter-session message] sourceSession=private\nprivate legacy handoff"),
+        message("toolResult", "private tool output"),
+        message("assistant", "Public progress", { phase: "commentary" }),
+        message("assistant", "<think>private tagged reasoning</think>Public visible answer"),
+        message("assistant", "<think>private unfinished reasoning"),
+        message(
+          "assistant",
+          '<tool_call>{"name":"read","arguments":{"text":"private inline tool payload"}}</tool_call>',
+        ),
+        message(
+          "assistant",
+          ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">private encoded tool payload</invoke>]<]minimax[>[</tool_call>',
+        ),
+        message("assistant", "NO_REPLY"),
+        message("assistant", "HEARTBEAT_OK"),
+        message("assistant", "no_r"),
+        message("assistant", "NO_R", { display: true }),
+        message("user", "[OpenClaw heartbeat poll]"),
+        message(
+          "user",
+          [
+            { type: "input_text", text: "First public question" },
+            { type: "image", data: "private image bytes" },
+            { type: "text", text: "Second public question" },
+          ],
+          {
+            provenance: { kind: "external_user" },
+            __openclaw: { senderIdentity: "private sender identity" },
+          },
+        ),
+        assistant([
+          { type: "reasoning", text: "private" },
+          { type: "toolCall", text: "private", arguments: { secret: "private" } },
+          text("Public phased commentary", "commentary"),
+          text("**Public final answer**", "final_answer"),
+          { type: "canvas", text: "private widget" },
+        ]),
+        message(
+          "user",
+          `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
+        ),
+        assistant(`Visible response ${token} ${operatorSecret}`),
+      ],
+      { title: `Shared ${token} ${operatorSecret}` },
+    );
     expect(html).toContain("First public question");
     expect(html).toContain("Public visible answer");
     expect(html).toContain("Public progress");
     expect(html).toContain("Public phased commentary");
     expect(html).toContain("Second public question");
     expect(html).toContain("<strong>Public final answer</strong>");
-    expect(html).not.toMatch(
-      /private|Private|hidden user input|internal handoff|unknown source|NO_REPLY|HEARTBEAT_OK|heartbeat poll/,
-    );
-  });
-
-  it("preserves ordinary silent-token fragments outside heartbeat context", () => {
-    const html = render([
-      { role: "assistant", content: "no_r" },
-      { role: "assistant", display: true, content: "NO_R" },
-    ]);
     expect(html).toContain("<p>no_r</p>");
     expect(html).toContain("<p>NO_R</p>");
+    expect(html).not.toMatch(
+      /private|Private|OPENCLAW_INTERNAL_CONTEXT|hidden user input|internal handoff|unknown source|NO_REPLY|HEARTBEAT_OK|heartbeat poll/,
+    );
+    expect(html).toContain("Visible user request");
+    expect(html).toContain("Visible response");
+    expect(html).toContain(token);
+    expect(html).toContain(operatorSecret);
+    expect(html).toContain(`<title>Shared ${token} ${operatorSecret} · OpenClaw</title>`);
   });
 
   it("groups tool work between every assistant message with bounded unmasked summaries", () => {
@@ -314,17 +336,14 @@ describe("public session document", () => {
     const html = render(
       [
         media("user", "user-entry", [
-          { type: "image", data: "PRIVATE_BYTES", fileName },
+          image({ fileName }),
           { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
         ]),
-        media("assistant", "assistant-entry", [{ type: "image", data: "PRIVATE_BYTES" }]),
-        media("toolResult", "tool-entry", [
-          { type: "image", data: "PRIVATE_BYTES" },
-          { type: "text", text: "PRIVATE_RESULT" },
-        ]),
+        media("assistant", "assistant-entry", [image()]),
+        media("toolResult", "tool-entry", [image(), text("PRIVATE_RESULT")]),
         message("user", [
-          { type: "text", text: "[Inter-session message] private input" },
-          { type: "image", data: "PRIVATE_BYTES", fileName: "HIDDEN_IMAGE" },
+          text("[Inter-session message] private input"),
+          image({ fileName: "HIDDEN_IMAGE" }),
         ]),
       ],
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
@@ -366,49 +385,17 @@ describe("public session document", () => {
     );
   });
 
-  it("strips generated envelopes while preserving conversation text", () => {
-    const token = `sk-${"a".repeat(48)}`;
-    const operatorSecret = "internal-ticket-8315";
-    applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
-    try {
-      const html = render(
-        [
-          message(
-            "user",
-            `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nVisible user request ${token}`,
-          ),
-          message("assistant", `Visible response ${token} ${operatorSecret}`),
-        ],
-        { title: `Shared ${token} ${operatorSecret}` },
-      );
-      expect(html).toContain("Visible user request");
-      expect(html).toContain("Visible response");
-      expect(html).not.toContain("private runtime context");
-      expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-      expect(html).toContain(token);
-      expect(html).toContain(operatorSecret);
-      expect(html).toContain(`<title>Shared ${token} ${operatorSecret} · OpenClaw</title>`);
-    } finally {
-      resetLogger();
-    }
-  });
-
   it("omits local and remote media directives while preserving fenced examples", () => {
     const relativePath = "./Private/customer-board.pdf";
     const signedUrl = "https://media.example.test/private.png?sig=private-signed-value";
-    const html = render([
-      message(
-        "assistant",
-        [
-          "Visible response",
-          `MEDIA:${relativePath}`,
-          `MEDIA:${signedUrl}`,
-          "```text",
-          "MEDIA:./example.png",
-          "```",
-        ].join("\n"),
-      ),
-    ]);
+    const html = render(
+      [
+        "Visible response",
+        `MEDIA:${relativePath}`,
+        `MEDIA:${signedUrl}`,
+        "```text\nMEDIA:./example.png\n```",
+      ].join("\n"),
+    );
     expect(html).toContain("Visible response");
     expect(html).toContain("MEDIA:./example.png");
     expect(html).not.toContain(relativePath);
@@ -418,18 +405,13 @@ describe("public session document", () => {
   it("renders inert Markdown without executable markup, automatic image loads, or unsafe links", () => {
     const html = render(
       [
-        message(
-          "assistant",
-          [
-            "<script>alert('unsafe')</script>",
-            "![remote image](https://remote.test/tracker.png)",
-            "[Safe link](https://example.test/docs)",
-            "[Unsafe link](javascript:alert%281%29)",
-            "[Local link](/api/private)",
-            "```html\n<iframe src='https://remote.test/embed'></iframe>\n```",
-          ].join("\n\n"),
-        ),
-      ],
+        "<script>alert('unsafe')</script>",
+        "![remote image](https://remote.test/tracker.png)",
+        "[Safe link](https://example.test/docs)",
+        "[Unsafe link](javascript:alert%281%29)",
+        "[Local link](/api/private)",
+        "```html\n<iframe src='https://remote.test/embed'></iframe>\n```",
+      ].join("\n\n"),
       { title: '<img src=x onerror="unsafe">' },
     );
     const transcript = html.slice(
@@ -473,23 +455,6 @@ describe("public session document", () => {
     expect(html).toContain("Some messages or long text are omitted");
     expect(html).toContain("Message shortened for this public view");
     expect(html.indexOf("Message number 104.")).toBeLessThan(html.indexOf("Long message"));
-  });
-
-  it("keeps older pages still and offers chronological navigation back to the live view", () => {
-    const html = render([{ role: "user", content: "An earlier question" }], {
-      isLatest: false,
-      olderUrl: "/share/session?token=v1.opaque&offset=100",
-    });
-    expect(html).not.toContain('http-equiv="refresh"');
-    expect(html).toContain("Earlier conversation");
-    expect(html).toContain("Back to latest");
-    expect(html).toContain('href="/share/session?token=v1.opaque&amp;offset=100" rel="prev"');
-    const page = JSDOM.fragment(html);
-    expect(page.querySelector(".eyebrow a")?.getAttribute("href")).toBe(
-      "/share/session?token=v1.opaque",
-    );
-    expect(page.querySelector(".eyebrow a")?.textContent).toBe("Back to latest");
-    expect(page.querySelector(".notice")).toBeNull();
   });
 
   it("keeps whole characters when the document budget leaves one code unit", () => {

@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import type { SystemAgentChatHistoryResult } from "@openclaw/gateway-protocol";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { AssistantDock } from "../app/assistant-dock.ts";
@@ -23,11 +22,12 @@ import {
   createPluginHelpRequest,
 } from "../pages/custodian/plugin-help.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { sessionListResult } from "../test-helpers/chat-model.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./assistant-panel-solid.tsx";
-import "./assistant-panel-content.ts";
+import "./assistant-panel-content-solid.tsx";
 
 type HomeProps = Parameters<typeof import("./home-session-solid.tsx").HomeSession>[0];
 type TestHome = HTMLElement & HomeProps;
@@ -413,20 +413,14 @@ describe("assistant panel", () => {
     const { context, panel, provider, request, setGatewaySnapshot } = await mountPanel({
       global: true,
     });
-    context.sessions.state.result = {
-      ts: 0,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        session("global", "main", { label: "Personal Home" }),
-        session("global", "research", {
-          label: "Parser work",
-          sessionId: "research-incarnation",
-          spawnedWorkspaceDir: "/worktrees/parser",
-        }),
-      ],
-    };
+    context.sessions.state.result = sessionListResult(0, [
+      session("global", "main", { label: "Personal Home" }),
+      session("global", "research", {
+        label: "Parser work",
+        sessionId: "research-incarnation",
+        spawnedWorkspaceDir: "/worktrees/parser",
+      }),
+    ]);
     panel.pageSessionKey = "global";
     panel.pageAgentId = "research";
     panel.homeAvailable = true;

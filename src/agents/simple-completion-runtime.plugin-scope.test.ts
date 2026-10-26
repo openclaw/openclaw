@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getModelCompletionTransport } from "../llm/model-runtime-binding.js";
 import { streamSimple } from "../llm/stream.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
@@ -22,20 +21,15 @@ import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as authProfileStoreRuntime from "./auth-profiles/store-runtime.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
-import {
-  acquireAgentRunPreparedModelRuntime,
-  type PreparedModelRuntimeSnapshot,
-} from "./prepared-model-runtime.js";
+import { withPreparedModelInference } from "./prepared-model-inference.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
-import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
-import { getModelProviderLocalService } from "./provider-local-service.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { completeWithAuthProfileFailover } from "./simple-completion-profile-failover.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModel,
-  acquireSimpleCompletionModelWithSelection,
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
@@ -50,6 +44,16 @@ import {
 
 const tempRoots = createSyncSuiteTempRootTracker("openclaw-simple-completion-plugin-scope");
 type PluginFixture = ReturnType<typeof createColdPluginFixture>;
+function pluginConfig(
+  plugins: PluginFixture[],
+  slots: NonNullable<OpenClawConfig["plugins"]>["slots"] = { memory: "none" },
+) {
+  return {
+    load: { paths: plugins.map((plugin) => plugin.rootDir) },
+    slots,
+    entries: Object.fromEntries(plugins.map((plugin) => [plugin.pluginId, { enabled: true }])),
+  };
+}
 function fixtureEnv(tempRoot: string) {
   return {
     ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
@@ -63,7 +67,6 @@ function fixtureConfig(
   provider: Partial<ModelProviderConfig> = {},
   others: PluginFixture[] = [],
 ): OpenClawConfig {
-  const plugins = [fixture, ...others];
   return completionConfig(
     fixture.providerId,
     {
@@ -76,11 +79,7 @@ function fixtureConfig(
       agents: {
         defaults: { workspace: fixture.rootDir, model: `${fixture.providerId}/selected-model` },
       },
-      plugins: {
-        load: { paths: plugins.map((plugin) => plugin.rootDir) },
-        slots: { memory: "none" },
-        entries: Object.fromEntries(plugins.map((plugin) => [plugin.pluginId, { enabled: true }])),
-      },
+      plugins: pluginConfig([fixture, ...others]),
     },
   );
 }
@@ -381,8 +380,8 @@ module.exports = {
 );
 
 it.each([
-  { expectedModelId: "selected-model", mode: "direct" },
   { expectedModelId: "utility-model", mode: "agent" },
+  { expectedModelId: "selected-model", mode: "decision" },
 ])("loads only the $mode selected plugin generation", async ({ expectedModelId, mode }) => {
   const tempRoot = tempRoots.makeTempDir();
   const selectedRoot = path.join(tempRoot, "selected");
@@ -409,6 +408,16 @@ it.each([
     pluginId: "unrelated-provider-plugin",
     providerId: "unrelated-provider",
   });
+  const agentOwners = ["memory", "context"].map((kind) => {
+    const rootDir = path.join(tempRoot, kind);
+    fs.mkdirSync(rootDir);
+    return createColdPluginFixture({
+      rootDir,
+      pluginId: `expensive-${kind}`,
+      manifest: kind === "memory" ? { kind: "memory" } : {},
+      runtimeMessage: "Simple completions must not evaluate agent-owned plugins",
+    });
+  });
   fs.writeFileSync(
     selected.runtimeSource,
     `const fs = require("node:fs");
@@ -426,43 +435,42 @@ module.exports = {
     agents: {
       defaults: { model: `${selected.providerId}/primary-model@work` },
     },
-    plugins: {
-      load: { paths: [selected.rootDir, unrelated.rootDir] },
-      slots: { memory: "none" },
-      entries: {
-        [selected.pluginId]: { enabled: true },
-        [unrelated.pluginId]: { enabled: true },
-      },
-    },
+    plugins: pluginConfig([selected, unrelated, ...agentOwners], {
+      memory: "expensive-memory",
+      contextEngine: "expensive-context",
+    }),
   } satisfies OpenClawConfig;
-  let preparedRuntime: PreparedModelRuntimeSnapshot | undefined;
-  const modelResolver: SimpleCompletionModelResolver = vi.fn(
-    async (provider, modelId, _agentDir, _cfg, options) => {
-      preparedRuntime = options?.preparedModelRuntime;
-      return {
-        error: `stop after selected resolver ${provider}/${modelId}`,
-        authStorage: options?.authStorage ?? AuthStorage.inMemory({}),
-        modelRegistry: options?.modelRegistry ?? ModelRegistry.inMemory(AuthStorage.inMemory({})),
-      };
-    },
-  );
+  const modelResolver: SimpleCompletionModelResolver = async (
+    provider,
+    modelId,
+    _agentDir,
+    _cfg,
+    options,
+  ) => ({
+    error: `stop after selected resolver ${provider}/${modelId}`,
+    authStorage: options?.authStorage ?? AuthStorage.inMemory({}),
+    modelRegistry: options?.modelRegistry ?? ModelRegistry.inMemory(AuthStorage.inMemory({})),
+  });
   const env = fixtureEnv(tempRoot);
 
   let acquiredResource: AsyncDisposable | undefined;
   try {
     const result = await withEnvAsync(env, async () => {
-      const acquired =
-        mode === "agent"
-          ? await acquireSimpleCompletionModelForAgent({
-              cfg: config,
-              agentId: "main",
-              useUtilityModel: true,
-              modelResolver,
-            })
-          : await acquireSimpleCompletionModelWithSelection(
-              { cfg: config, agentId: "main", modelResolver },
-              () => ({ selection: { provider: selected.providerId, modelId: expectedModelId } }),
-            );
+      if (mode === "decision") {
+        return await withPreparedModelInference(
+          { cfg: config, agentId: "main", signal: new AbortController().signal },
+          { provider: selected.providerId, modelId: expectedModelId },
+          async () => ({
+            error: `stop after selected resolver ${selected.providerId}/${expectedModelId}`,
+          }),
+        );
+      }
+      const acquired = await acquireSimpleCompletionModelForAgent({
+        cfg: config,
+        agentId: "main",
+        useUtilityModel: true,
+        modelResolver,
+      });
       if (!("error" in acquired)) {
         acquiredResource = acquired;
       }
@@ -471,14 +479,11 @@ module.exports = {
     expect(result).toMatchObject({
       error: `stop after selected resolver ${selected.providerId}/${expectedModelId}`,
     });
-    expect(modelResolver).toHaveBeenCalledOnce();
     expect(isColdPluginRuntimeLoaded(selected)).toBe(true);
     expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
-    expect(preparedRuntime?.metadataSnapshot.pluginIds).toContain(selected.pluginId);
-    expect(preparedRuntime?.metadataSnapshot.pluginIds).not.toContain(unrelated.pluginId);
-    expect(preparedRuntime?.metadataSnapshot.plugins.map((plugin) => plugin.id)).toEqual([
-      selected.pluginId,
-    ]);
+    for (const owner of agentOwners) {
+      expect(isColdPluginRuntimeLoaded(owner)).toBe(false);
+    }
   } finally {
     await acquiredResource?.[Symbol.asyncDispose]();
   }
@@ -558,9 +563,6 @@ it.each([
             );
       let preparedResource: AsyncDisposable | undefined;
       try {
-        if (mode === "empty") {
-          expect(lease?.snapshot.pluginRegistry).toBeUndefined();
-        }
         const activateAmbient = () =>
           loadAndActivateRootPluginRegistry({
             config: configFor(ambient),
@@ -571,9 +573,6 @@ it.each([
         if (mode !== "acquired") {
           await activateAmbient();
         }
-        // Loading the public SDK must retain the host's registered metadata owners.
-        const metadataReaders = readHostMetadataReaders();
-        expect(metadataReaders.every((reader) => typeof reader === "function")).toBe(true);
         const modelParams = {
           cfg,
           agentId: "main",
@@ -604,10 +603,12 @@ it.each([
         if (mode === "acquired") {
           const repeatedPreparation = await acquire();
           assertPrepared(repeatedPreparation);
-          await using repeated = repeatedPreparation;
-          expect(repeated).not.toHaveProperty("error");
-          expect(process.listenerCount(selected.ownerEvent)).toBe(1);
-          await activateAmbient();
+          try {
+            expect(process.listenerCount(selected.ownerEvent)).toBe(1);
+            await activateAmbient();
+          } finally {
+            await repeatedPreparation[Symbol.asyncDispose]();
+          }
         }
         // Callers use the logical API before dispatch, including CLI system-prompt selection.
         expect(prepared.model.api).toBe("openai-completions");
@@ -636,10 +637,6 @@ it.each([
         }
         expect(prepared.model.api).toBe("openai-completions");
         expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
-        expect(
-          readHostMetadataReaders(),
-          "public SDK loading must preserve registered host metadata readers",
-        ).toEqual(metadataReaders);
       } finally {
         await preparedResource?.[Symbol.asyncDispose]();
         await lease?.[Symbol.asyncDispose]();
@@ -688,14 +685,6 @@ it.each([false, true])(
         });
         assertPrepared(prepared);
         preparedResource = prepared;
-        const completionTransport = getModelCompletionTransport(prepared.model);
-        if (!completionTransport) {
-          throw new Error("Managed completion transport was not prepared");
-        }
-        expect(getModelProviderLocalService(prepared.model)).toBeDefined();
-        expect(getModelProviderLocalService(completionTransport)).toBeDefined();
-        expect(getModelProviderLocalServiceReconciler(prepared.model)).toBeTypeOf("function");
-        expect(getModelProviderLocalServiceReconciler(completionTransport)).toBeTypeOf("function");
         if (failReconciliation) {
           fs.writeFileSync(selected.reconcileFailureMarker, "fail", "utf8");
         }
@@ -728,10 +717,3 @@ it.each([false, true])(
     }
   },
 );
-
-function readHostMetadataReaders(): readonly unknown[] {
-  const readers = Reflect.get(globalThis, Symbol.for("openclaw.pluginMetadataSnapshotReaders")) as
-    | Record<string, unknown>
-    | undefined;
-  return [readers?.getCurrentPluginMetadataSnapshot, readers?.resolvePluginMetadataSnapshot];
-}

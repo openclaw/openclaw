@@ -11,7 +11,7 @@ import {
 } from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
-const DEFAULT_THROTTLE_MS = 1000;
+const THROTTLE_MS = 1200;
 
 type MattermostDraftPublishedPart = {
   messageId: string;
@@ -33,17 +33,10 @@ export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
-  maxChars?: number;
-  throttleMs?: number;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
-  const maxChars = Math.min(
-    params.maxChars ?? MATTERMOST_STREAM_MAX_CHARS,
-    MATTERMOST_STREAM_MAX_CHARS,
-  );
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
   const retainAcceptedDeliveryFailure = (err: unknown) => {
@@ -83,7 +76,11 @@ export function createMattermostDraftStream(params: {
     const target = currentGeneration;
     const trimmed = text.trim();
     const normalized = trimmed
-      ? truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true })
+      ? truncateWithMarker(trimmed, MATTERMOST_STREAM_MAX_CHARS, {
+          marker: "...",
+          reserve: 3,
+          trimEnd: true,
+        })
       : "";
     if (!normalized) {
       return false;
@@ -134,7 +131,7 @@ export function createMattermostDraftStream(params: {
     clearWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
-    throttleMs,
+    throttleMs: THROTTLE_MS,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -190,7 +187,7 @@ export function createMattermostDraftStream(params: {
         const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
-          chunkMarkdownTextWithMode(finalizedText, maxChars, "length");
+          chunkMarkdownTextWithMode(finalizedText, MATTERMOST_STREAM_MAX_CHARS, "length");
         const firstChunk = chunks[0];
         if (!firstChunk) {
           return;
@@ -337,7 +334,9 @@ export function createMattermostDraftStream(params: {
       : { kind: "already-delivered", publishedParts };
   };
 
-  params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${THROTTLE_MS})`,
+  );
 
   return {
     update,

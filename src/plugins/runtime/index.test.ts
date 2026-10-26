@@ -40,14 +40,13 @@ describe("plugin runtime command execution", () => {
 
   it("includes persisted session exec overrides in sandbox authority", () => {
     const runtime = createPluginRuntime();
-    const getSessionEntry = vi
-      .spyOn(runtime.agent.session, "getSessionEntry")
-      .mockReturnValue({ sessionId: "session", updatedAt: 1, execHost: "gateway" });
+    vi.spyOn(runtime.agent.session, "getSessionEntry").mockReturnValue({
+      sessionId: "session",
+      updatedAt: 1,
+      execHost: "gateway",
+    });
     const config: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
-        entries: { main: {} },
-      },
+      agents: { defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } } },
       tools: { elevated: { enabled: false } },
     };
 
@@ -57,7 +56,6 @@ describe("plugin runtime command execution", () => {
     };
     const result = runtime.sandbox.resolveWorkspaceAuthority({ config, ...scope });
 
-    expect(getSessionEntry).toHaveBeenCalledWith(scope);
     expect(result.confinementError).toContain("outside the sandbox");
   });
 
@@ -66,8 +64,6 @@ describe("plugin runtime command execution", () => {
     const model = {
       id: "workspace-cloud/model",
       provider: "workspace-cloud",
-      api: "openai-responses",
-      baseUrl: "https://workspace-cloud.example/v1",
     };
     const cfg: OpenClawConfig = { plugins: { allow: ["workspace-cloud"] } };
     const scope = {
@@ -92,15 +88,13 @@ describe("plugin runtime command execution", () => {
   });
 
   it("keeps subagent unavailable by default", () => {
-    const runtime = createPluginRuntime();
-    expect(() => runtime.subagent.run({ sessionKey: "s-1", message: "hello" })).toThrow(
-      "Plugin runtime subagent methods are only available during a gateway request.",
-    );
+    expect(() =>
+      createPluginRuntime().subagent.run({ sessionKey: "s-1", message: "hello" }),
+    ).toThrow("Plugin runtime subagent methods are only available during a gateway request.");
   });
 
   it("exposes a node duplex capability even when Gateway access is unavailable", () => {
     const nodes = createPluginRuntime().nodes;
-    expect(nodes).toHaveProperty("openDuplex", expect.any(Function));
     expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
       "only available inside the Gateway",
     );

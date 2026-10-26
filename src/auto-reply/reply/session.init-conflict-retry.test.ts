@@ -150,20 +150,17 @@ describe("runWithSessionInitConflictRetry", () => {
   it("applies capped exponential backoff between attempts", async () => {
     const delays: number[] = [];
     const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
-    try {
-      await expect(
-        runWithSessionInitConflictRetry(attempt, {
-          sleep: async (ms) => {
-            delays.push(ms);
-          },
-        }),
-      ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-      expect(state.calls).toBe(5);
-      expect(delays).toEqual([250, 500, 1_000, 2_000]);
-    } finally {
-      randomSpy.mockRestore();
-    }
+    using _ = vi.spyOn(Math, "random").mockReturnValue(0);
+
+    await expect(
+      runWithSessionInitConflictRetry(attempt, {
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      }),
+    ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
+    expect(state.calls).toBe(5);
+    expect(delays).toEqual([250, 500, 1_000, 2_000]);
   });
 });
 

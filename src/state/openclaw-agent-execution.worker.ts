@@ -1,4 +1,4 @@
-import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
+import { MessageChannel, receiveMessageOnPort, type Transferable } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
@@ -27,13 +27,13 @@ import {
 import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
 import { withAgentDeletionWorkerCleanup } from "./agent-deletion-cleanup.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseRegistrationCommit,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -346,8 +346,9 @@ function openAgentDatabaseBackend(
         )
       : openClaimedWriter(refreshSchema);
   const admit = (
-    stage: "transaction" | "commit",
+    stage: "prepare" | "transaction" | "commit",
     publication?: unknown,
+    transferList?: Transferable[],
     requestAdmission?: AgentDatabaseAdmissionRestriction,
   ) => {
     const request: SqliteWorkerAdmissionRequest = {
@@ -358,7 +359,7 @@ function openAgentDatabaseBackend(
         ...(publication ? { publication } : {}),
       },
     };
-    requestRestrictedAgentDatabaseAdmission(request, requestAdmission);
+    requestRestrictedAgentDatabaseAdmission(request, requestAdmission, transferList);
   };
   const writeTransaction = <T>(
     operationLabel: string,
@@ -433,7 +434,8 @@ function openAgentDatabaseBackend(
         throw new Error("Agent cleanup lost its retained native database");
       }
     },
-    admit: (stage, requestAdmission) => admit(stage, undefined, requestAdmission),
+    admit: (stage, requestAdmission, transferList) =>
+      admit(stage, undefined, transferList, requestAdmission),
   });
   let actor:
     | ReturnType<

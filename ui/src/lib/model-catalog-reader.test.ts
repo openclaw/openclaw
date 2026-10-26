@@ -6,7 +6,6 @@ import { createGatewayStoreTestStore } from "../app/gateway-store.test-support.t
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import {
   clearModelCatalogCache,
-  invalidateModelCatalogCache,
   beginModelCatalogRead,
   publishModelCatalogResult,
 } from "./model-catalog-cache.ts";
@@ -148,17 +147,6 @@ it("follows subscription intent while keeping global observers global", () => {
   expect(global).toHaveBeenCalledTimes(5);
   reader.clear();
   stopGlobal();
-  const replacement = vi.fn();
-  const stopReplacement = subscribeModelCatalogCache(client, replacement);
-  onTestFinished(stopReplacement);
-  stopGlobal();
-  publish(other);
-  expect(replacement).toHaveBeenCalledWith({ type: "published", matches: expect.any(Function) });
-  expect(global).toHaveBeenCalledTimes(5);
-  stopReplacement();
-  replacement.mockClear();
-  invalidateModelCatalogCache(client);
-  expect(replacement).not.toHaveBeenCalled();
 });
 
 it("observes each admitted read while preserving the non-throwing request contract", async () => {

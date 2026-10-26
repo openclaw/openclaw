@@ -161,6 +161,48 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("rasterizes an ordinary transform and a long valid transform list", async ({
+    onTestFinished,
+  }) => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    fetch.mockImplementation(
+      async () =>
+        new Response(svg('<path d="M4 4h16v16H4Z" transform="translate(1 2) scale(1.5)"/>'), {
+          headers: { "content-type": "image/svg+xml" },
+        }),
+    );
+    const ordinary = await loadActivity(activityParams("ordinary-transform"));
+    expect(ordinary).not.toBeNull();
+    onTestFinished(() => URL.revokeObjectURL(ordinary!));
+    const ordinaryBlob = await (await nativeFetch(ordinary!)).blob();
+    expect(ordinaryBlob.type).toBe("image/png");
+
+    fetch.mockImplementation(
+      async () =>
+        new Response(svg(`<path d="M4 4h16v16H4Z" transform="${"scale(1) ".repeat(40)}"/>`), {
+          headers: { "content-type": "image/svg+xml" },
+        }),
+    );
+    const longList = await loadActivity(activityParams("long-transform"));
+    expect(longList).not.toBeNull();
+    onTestFinished(() => URL.revokeObjectURL(longList!));
+    const longBlob = await (await nativeFetch(longList!)).blob();
+    expect(longBlob.type).toBe("image/png");
+  });
+
+  it("rejects an unclosed transform through the activity loader without stalling", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          svg(`<path d="M4 4h16v16H4Z" transform="scale(${"\t\t)scale(".repeat(24)}"/>`),
+          { headers: { "content-type": "image/svg+xml" } },
+        ),
+    );
+    const started = performance.now();
+    await expect(loadActivity(activityParams("stalling-transform"))).resolves.toBeNull();
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
   it.each<[string, string, string]>([
     ["package PNG", "image/png", "png"],
     ["active SVG", "image/svg+xml", svg("<script>alert(1)</script>")],

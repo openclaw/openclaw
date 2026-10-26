@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { afterEach, expect } from "vitest";
+import { expect } from "vitest";
 import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   type SkillLibrarySelection,
@@ -8,13 +8,10 @@ import {
   type SkillsLibraryMutateParams,
   type SkillsLibrarySaveParams,
   type SkillsLibraryActivateParams,
+  type SkillsLibraryUploadParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import type { SkillLibraryErrorCode } from "../skill-library-error.js";
 import { uploadSkillLibrary } from "./import.js";
 import { changeSkillLibrarySelection, seedSkillLibrarySelection } from "./selection.js";
@@ -63,13 +60,7 @@ export function expectSingleWinner(
 }
 
 export function useSkillLibraryFixture() {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const tempDirs = useStateDatabaseTempDirs();
   const fixture = () => {
     const stateDir = tempDirs.make("skill-library-");
     const options = {
@@ -84,6 +75,12 @@ export function useSkillLibraryFixture() {
       assertCurrent: () => {},
     });
     const owner = actor(alice.id);
+    const save = (params: SkillsLibrarySaveParams = draft(), who = owner) =>
+      saveSkillLibrary(who, params, options);
+    const mutate = (params: SkillsLibraryMutateParams, who = owner) =>
+      mutateSkillLibrary(who, params, options);
+    const upload = (params: SkillsLibraryUploadParams, who = owner) =>
+      uploadSkillLibrary(who, params, options);
     return {
       options,
       alice: owner,
@@ -91,25 +88,19 @@ export function useSkillLibraryFixture() {
       actor,
       stateDir,
       lib: {
-        save: (params: SkillsLibrarySaveParams = draft(), who = owner) =>
-          saveSkillLibrary(who, params, options),
+        save,
         revise: ({ skillId, revision }: { skillId: string; revision: string }, body: string) =>
-          saveSkillLibrary(
-            owner,
-            { ...draft(), skillId, expectedRevision: revision, content: body },
-            options,
-          ),
+          save({ ...draft(), skillId, expectedRevision: revision, content: body }),
         read: (id: string, who = owner, revision?: string) =>
           readSkillLibrary(who, id, revision, options),
         list: (who = owner, params: SkillsLibraryListParams = {}) =>
           listSkillLibrary(who, params, options),
-        mutate: (params: SkillsLibraryMutateParams, who = owner) =>
-          mutateSkillLibrary(who, params, options),
+        mutate,
         change: (
           { skillId, revision }: { skillId: string; revision: string },
           action: SkillsLibraryMutateParams["action"],
           who = owner,
-        ) => mutateSkillLibrary(who, { skillId, expectedRevision: revision, action }, options),
+        ) => mutate({ skillId, expectedRevision: revision, action }, who),
         seed: (who = owner) => seedSkillLibrarySelection(who, options),
         select: (
           pins: Parameters<typeof changeSkillLibrarySelection>[1],
@@ -117,42 +108,28 @@ export function useSkillLibraryFixture() {
           who = owner,
         ) => changeSkillLibrarySelection(who, pins, params, options),
         chunk: (uploadId: string, bytes: Buffer, who = owner) =>
-          uploadSkillLibrary(
+          upload({ action: "chunk", uploadId, offset: 0, data: bytes.toString("base64") }, who),
+        commit: (uploadId: string, who = owner) => upload({ action: "commit", uploadId }, who),
+        begin: async (bytes: Buffer, slug: string, who = owner) => {
+          const begun = await upload(
+            {
+              action: "begin",
+              slug,
+              sizeBytes: bytes.length,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            },
             who,
-            { action: "chunk", uploadId, offset: 0, data: bytes.toString("base64") },
-            options,
-          ),
-        commit: (uploadId: string, who = owner) =>
-          uploadSkillLibrary(who, { action: "commit", uploadId }, options),
-        begin: (bytes: Buffer, slug: string, who = owner) =>
-          beginZipUpload(who, bytes, slug, options),
+          );
+          if (!("uploadId" in begun)) {
+            throw new Error("Expected upload ID");
+          }
+          expect(begun.offset).toBe(0);
+          return begun;
+        },
       },
     };
   };
   return { fixture, tempDirs };
-}
-
-export async function beginZipUpload(
-  authority: SkillLibraryAuthority,
-  bytes: Buffer,
-  slug: string,
-  options: NonNullable<Parameters<typeof uploadSkillLibrary>[2]>,
-) {
-  const begun = await uploadSkillLibrary(
-    authority,
-    {
-      action: "begin",
-      slug,
-      sizeBytes: bytes.length,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-    },
-    options,
-  );
-  if (!("uploadId" in begun)) {
-    throw new Error("Expected upload ID");
-  }
-  expect(begun.offset).toBe(0);
-  return begun;
 }
 
 export async function zipBytes(oversized = false) {

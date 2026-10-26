@@ -32,58 +32,34 @@ function spawnRouteOwnerFixture(waitForReady: boolean, abortSignal: AbortSignal)
   worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
   const ready = waitForReady
     ? (async () => {
-        const observers = new AbortController();
-        const signal = AbortSignal.any([abortSignal, observers.signal]);
-        const incoming = on(worker, "message", { signal });
-        try {
-          await Promise.race([
-            (async () => {
-              for await (const args of incoming) {
-                const message: TailscaleRouteOwnerMessage = args[0];
-                if (message.type === "ready") {
-                  return;
-                }
-                if (message.type === "failed") {
-                  throw new Error(`route owner failed: ${JSON.stringify(message)}`);
-                }
-              }
-            })(),
-            once(worker, "exit", { signal }).then((exit) => {
-              throw new Error(`route owner exited before readiness: ${JSON.stringify(exit)}`);
-            }),
-          ]);
-        } finally {
-          observers.abort();
+        for await (const [message] of on(worker, "message", {
+          signal: abortSignal,
+          close: ["exit"],
+        })) {
+          const report: TailscaleRouteOwnerMessage = message;
+          if (report.type === "ready") {
+            return;
+          }
+          if (report.type === "failed") {
+            throw new Error(`route owner failed: ${JSON.stringify(report)}`);
+          }
         }
+        throw new Error("route owner exited before readiness");
       })()
     : undefined;
   return { messages, ready, worker };
 }
 
-type ClaimCase = { name: string; script: string; stopping: boolean };
-it.each`
-  name                                                      | script                                                                             | stopping
-  ${"reports readiness and stops the foreground claim"}     | ${'process.stdout.write("Press Ctrl+C to exit.\\n"); setInterval(() => {}, 1000)'} | ${true}
-  ${"reports output when the claim exits before readiness"} | ${'process.stderr.write("route denied\\n"); process.exit(7)'}                      | ${false}
-`("$name", async ({ script, stopping }: ClaimCase) => {
+it("reports output when the claim exits before readiness", async () => {
   const messages: TailscaleRouteOwnerMessage[] = [];
-  const owner = runTailscaleRouteOwner({ argv: [process.execPath, "-e", script] }, (message) =>
-    messages.push(message),
+  const owner = runTailscaleRouteOwner(
+    { argv: [process.execPath, "-e", 'process.stderr.write("route denied\\n"); process.exit(7)'] },
+    (message) => messages.push(message),
   );
-  if (stopping) {
-    await vi.waitFor(() => expect(messages).toContainEqual({ type: "ready" }));
-    owner.stop();
-  }
-  await expect(owner.exited).resolves.toMatchObject(
-    stopping ? { stopping: true } : { code: 7, stopping: false },
+  await expect(owner.exited).resolves.toMatchObject({ code: 7, stopping: false });
+  expect(messages).toContainEqual(
+    expect.objectContaining({ type: "failed", code: 7, stderr: "route denied\n" }),
   );
-  if (stopping) {
-    expect(messages.some((message) => message.type === "failed")).toBe(false);
-  } else {
-    expect(messages).toContainEqual(
-      expect.objectContaining({ type: "failed", code: 7, stderr: "route denied\n" }),
-    );
-  }
 });
 
 it.runIf(process.platform !== "win32").for([
@@ -113,6 +89,9 @@ it.runIf(process.platform !== "win32").for([
         worker.disconnect();
       }
       await expect(exit).resolves.toEqual([0, null]);
+      if (waitForReady) {
+        expect(messages.some((message) => message.type === "failed")).toBe(false);
+      }
       if (routePid) {
         const pid = routePid;
         await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());

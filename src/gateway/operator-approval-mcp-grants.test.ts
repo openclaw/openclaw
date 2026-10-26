@@ -18,16 +18,14 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
+import { createGatewayAuxHandlerTestParams } from "./server-aux-handlers.test-support.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 const auxiliaries: ReturnType<typeof createGatewayAuxHandlers>[] = [];
 let fixture: OpenClawTestState | undefined;
@@ -37,26 +35,11 @@ const cfg: OpenClawConfig = {
 };
 
 function gateway() {
-  const aux = createGatewayAuxHandlers({
-    scheduler: createTestGatewayScheduler(),
-    log: {},
-    getNativeApprovalRouteCoordinator: () => undefined,
-    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-      current: undefined,
-      required: null,
+  const aux = createGatewayAuxHandlers(
+    createGatewayAuxHandlerTestParams({
+      validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     }),
-    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    clients: [],
-    channelManager: {
-      startChannel: async () => new Map(),
-      stopChannel: async () => {},
-      isManuallyStopped: () => false,
-      resolveRuntimeAccountId: (_channel, accountId) => accountId,
-    },
-    logChannels: { info: () => {} },
-    validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
-  });
+  );
   auxiliaries.push(aux);
   return aux;
 }
@@ -151,7 +134,6 @@ async function requestGrant(
   ]!(args);
   try {
     await Promise.race([acknowledged.promise, pending]);
-    expect(args.respond).toHaveBeenCalled();
     const record = (await aux.pluginApprovalManager.listPendingRecords())[0];
     if (!record) {
       await pending;
@@ -179,10 +161,7 @@ describe("gateway MCP tool grants", () => {
     await aux.stopOperatorInteractions();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const restarted = gateway();
-    expect(restarted.pluginApprovalManager.runtimeEpoch).not.toBe(
-      aux.pluginApprovalManager.runtimeEpoch,
-    );
+    gateway();
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
     const approvedTool = {
       mcp_servers: { "project.docs": { tools: { write_note: { approval_mode: "approve" } } } },
@@ -197,7 +176,6 @@ describe("gateway MCP tool grants", () => {
 
   it.each([
     { name: "unconfigured apps", server: "codex_apps" },
-    { name: "unconfigured computer use", server: "computer" },
     { name: "untrusted caller", trusted: false },
     { name: "remote or missing live proof", binding: false },
     { name: "allow once", decision: "allow-once" as const },

@@ -94,6 +94,7 @@ of this skill; initial generation must never overwrite them.
    node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --release-branch <canonical-release-branch> \
      --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \

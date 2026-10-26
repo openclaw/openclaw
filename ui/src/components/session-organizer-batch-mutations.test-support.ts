@@ -8,7 +8,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
-import { requestSessionPatchMany } from "../lib/sessions/session-requests.ts";
+import { requestSessionPatchMany } from "../lib/sessions/session-mutation-operations.runtime.ts";
+import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import type {
   SidebarRecentSession,
@@ -108,6 +109,7 @@ export function createHarness(
   const scope = {
     epoch: 1,
     context: {
+      navigation: createNavigationPreferencesFixture(),
       agents: { state: { agentsList: null } },
       theme: { refresh: mocks.refreshTheme },
       placementStartup: { pause: vi.fn() },

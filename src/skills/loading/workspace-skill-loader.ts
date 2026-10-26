@@ -125,7 +125,6 @@ function loadLocalSkillTiers(
     agentCacheKey,
     executionWorkspaceDir,
     opts?.executionWorkspaceFileHost,
-    getSkillsSourceVersion(workspaceDir, opts),
   ]);
   const cachedEntries = skillEntryCache.get(cacheKey);
   if (cachedEntries) {

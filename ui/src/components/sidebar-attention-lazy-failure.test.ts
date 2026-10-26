@@ -86,6 +86,7 @@ it("reports a rejected Inbox import and lets the same trigger retry", async () =
   expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   loadFailure.mockReset();
   trigger.click();
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
 });

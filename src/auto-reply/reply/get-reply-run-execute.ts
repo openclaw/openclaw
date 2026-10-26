@@ -118,6 +118,7 @@ export async function executePreparedReplyRun(
     useFastReplyRuntime,
     fullAccessState,
     extraSystemPromptParts,
+    extraSystemPromptTurnContext,
     sourceConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
@@ -245,10 +246,9 @@ export async function executePreparedReplyRun(
       ctx.SenderIsSelf !== true);
   const ctxMediaForPersistence = ctx.media ?? [];
   const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
-  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
-    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
-  );
-  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  // Keep failed pre-reads retryable in the transcript. Only this run skips them:
+  // plugin, CLI, and worker runners can reject unreadable image input.
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const promptMediaForRun = suppressUnresolvedPromptMedia({
     promptMedia: promptMedia ?? [],
     inboundMediaIndexes,
@@ -319,6 +319,8 @@ export async function executePreparedReplyRun(
       }),
       sessionKey,
       operatorProfileId: opts?.operatorAuthority?.profileId,
+      // Linked channel identity establishes the initiator even without operator authority.
+      delegatedCreatorProfileId: getRequesterProfile(ctx)?.id,
     });
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
@@ -389,6 +391,7 @@ export async function executePreparedReplyRun(
   const groupTurn = getGroupThreadTurn();
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
+    SessionKey: sessionKey,
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
     InputProvenance: inputProvenance,
   });
@@ -562,6 +565,7 @@ export async function executePreparedReplyRun(
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,
@@ -581,6 +585,7 @@ export async function executePreparedReplyRun(
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
       thinkingExplicit: params.thinkingExplicit,
+      cyberAccessProgram: preparedSessionState.sessionEntry?.cyberAccessProgram,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -634,6 +639,7 @@ export async function executePreparedReplyRun(
         ? { suppressNextUserMessagePersistence: true }
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptTurnContext,
       sourceReplyDeliveryMode,
       bootstrapContextMode: opts?.bootstrapContextMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,

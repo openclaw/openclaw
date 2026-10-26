@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listChatOutboxAttention } from "../../lib/chat/outbox-attention.ts";
 import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { chatOutboxOwner, listChatOutboxAttention } from "./chat-outbox-owner.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
 import {
   admitStoredChatComposerQueueItemResult,
@@ -32,6 +33,15 @@ function item(id: string, sendState: ChatQueueItem["sendState"]): ChatQueueItem 
     sendState,
   };
 }
+function admit(host: ReturnType<typeof hostFor>, row: ChatQueueItem) {
+  expect(
+    admitStoredChatComposerQueueItemResult(
+      host,
+      captureChatOutboxAdmission(host, host.sessionKey),
+      row,
+    ),
+  ).toBe("admitted");
+}
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {
   vi.restoreAllMocks();
@@ -47,22 +57,15 @@ it("projects only actionable submissions, without message or diagnostic content"
     "sending",
     "submitting",
     "failed",
-    "unconfirmed",
     "held",
   ] as const) {
     const row = { ...item(String(state), state), sendError: "private diagnostic" };
-    expect(
-      admitStoredChatComposerQueueItemResult(
-        host,
-        captureChatOutboxAdmission(host, host.sessionKey),
-        row,
-      ),
-    ).toBe("admitted");
+    admit(host, row);
   }
   const attention = listChatOutboxAttention(host);
-  expect(attention.map((row) => row.id)).toEqual(["failed", "unconfirmed", "held"]);
+  expect(attention.map((row) => row.id)).toEqual(["failed", "held"]);
   expect(JSON.stringify(attention)).not.toMatch(/Private message|private diagnostic/);
-  expect(attention[1]).toMatchObject({ unconfirmed: true, command: false, ...scope });
+  expect(attention[1]).toMatchObject({ held: true, command: false, ...scope });
   expect(listChatOutboxAttention({ ...host, settings: { gatewayUrl: "ws://other.test" } })).toEqual(
     [],
   );
@@ -82,6 +85,15 @@ it.each(["selected", "background"])(
     const other = { ...host, chatQueue: [] as ChatQueueItem[] };
     const stopOther = owner.subscribe(other);
     const sender = pane === "selected" ? host : other;
+    const expectAttention = (ids: string[]) => {
+      expect(listChatOutboxAttention(host).map((entry) => entry.id)).toEqual(ids);
+      expect(summary.attentionCountForSession(scope.sessionKey)).toBe(ids.length);
+      expect(summary.sessions).toEqual(
+        ids.length ? [{ ...scope, hasComposerDraft: false, outboxAttentionCount: ids.length }] : [],
+      );
+    };
+    const setDelivery = (id: string, sendState: ChatQueueItem["sendState"]) =>
+      owner.update(sender, [{ id, update: (current) => ({ ...current, sendState }) }]);
     try {
       const row = item("settings", "waiting-model");
       expect(owner.admit(sender, captureChatOutboxAdmission(sender, scope.sessionKey), row)).toBe(
@@ -91,23 +103,11 @@ it.each(["selected", "background"])(
         sender.sessionKey = "agent:writer:other";
         owner.syncHost(sender);
       }
-      expect(listChatOutboxAttention(host)).toEqual([]);
-      expect(summary.attentionCountForSession(scope.sessionKey)).toBe(0);
-      expect(summary.sessions).toEqual([]);
-      owner.update(sender, [
-        { id: row.id, update: (current) => ({ ...current, sendState: "failed" }) },
-      ]);
-      expect(listChatOutboxAttention(host).map((entry) => entry.id)).toEqual([row.id]);
-      expect(summary.attentionCountForSession(scope.sessionKey)).toBe(1);
-      expect(summary.sessions).toEqual([
-        { ...scope, hasComposerDraft: false, outboxAttentionCount: 1 },
-      ]);
-      owner.update(sender, [
-        { id: row.id, update: (current) => ({ ...current, sendState: "executing-command" }) },
-      ]);
-      expect(listChatOutboxAttention(host)).toEqual([]);
-      expect(summary.attentionCountForSession(scope.sessionKey)).toBe(0);
-      expect(summary.sessions).toEqual([]);
+      expectAttention([]);
+      setDelivery(row.id, "failed");
+      expectAttention([row.id]);
+      setDelivery(row.id, "executing-command");
+      expectAttention([]);
       expect(createStoredChatOutboxReader().read(hostFor("owner-b")).sessions).toEqual([]);
       expect(owner.remove(sender, row.id)).not.toBeNull();
       expect(summary.total).toBe(0);
@@ -121,14 +121,7 @@ it.each(["selected", "background"])(
 
 it("retains incidents through failed removal and clears them only after canonical retirement", () => {
   const host = hostFor();
-  const input = item("review", "unconfirmed");
-  expect(
-    admitStoredChatComposerQueueItemResult(
-      host,
-      captureChatOutboxAdmission(host, host.sessionKey),
-      input,
-    ),
-  ).toBe("admitted");
+  admit(host, item("review", "failed"));
   const row = loadChatComposerState(host, host.sessionKey).snapshot!.queue[0]!;
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
@@ -137,30 +130,24 @@ it("retains incidents through failed removal and clears them only after canonica
   const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {
     throw new Error("storage unavailable");
   });
-  expect(
-    updateStoredChatComposerQueueItems(host, scope.sessionKey, [{ expected: row, next: null }]),
-  ).toBe(false);
+  const retire = () =>
+    updateStoredChatComposerQueueItems(host, scope.sessionKey, [{ expected: row, next: null }]);
+  expect(retire()).toBe(false);
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   write.mockRestore();
   remove.mockRestore();
-  expect(
-    updateStoredChatComposerQueueItems(host, scope.sessionKey, [{ expected: row, next: null }]),
-  ).toBe(true);
+  expect(retire()).toBe(true);
   expect(listChatOutboxAttention(host)).toEqual([]);
 });
 
 it("preserves existing attachment ownership and remembered offline access without claiming text isolation", () => {
   const host = hostFor();
   const attachment = {
-    ...item("attachment", "unconfirmed"),
+    ...item("attachment", "failed"),
     attachmentPayload: { key: "payload-a", tabId: "tab-a", recoveryScope: "owner-a" },
     attachments: [{ id: "file", mimeType: "text/plain", fileName: "private.txt" }],
   };
-  admitStoredChatComposerQueueItemResult(
-    host,
-    captureChatOutboxAdmission(host, host.sessionKey),
-    attachment,
-  );
+  admit(host, attachment);
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   host.connected = false;
   host.client.recoveryScopeReady = false;

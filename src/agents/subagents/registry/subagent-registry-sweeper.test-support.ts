@@ -45,8 +45,9 @@ export function createArchivedSubagentSweeperRun(
 export function createSubagentSweeperHarness(
   runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
+  runs = new Map<string, SubagentRunRecord>(),
 ) {
-  const runs = new Map([[entry.runId, entry]]);
+  runs.set(entry.runId, entry);
   const execute = stateWorker.runOpenClawStateWorkerOperation;
   const worker = vi
     .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -63,32 +64,27 @@ export function createSubagentSweeperHarness(
         },
       });
     });
-  const completeCleanupBookkeeping = vi.fn<SweeperOptions["completeCleanupBookkeeping"]>(
-    async (params) => {
-      if (params.isCurrent && !params.isCurrent()) {
-        return;
-      }
-      await mutateSubagentRuns(
-        [params.runId],
-        (rows) => {
-          const current = rows.get(params.runId);
-          if (
-            !current ||
-            !isSameSubagentRunOwner(current, params.entry) ||
-            params.isCurrent?.() === false
-          ) {
-            return { value: undefined };
-          }
-          const draft = structuredClone(current);
-          params.finalizeDelivery?.(draft);
-          return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
-        },
-        { runs },
-      );
-    },
-  );
   const callbacks = {
-    completeCleanupBookkeeping,
+    completeCleanupBookkeeping: vi.fn<SweeperOptions["completeCleanupBookkeeping"]>(
+      async ({ runId, entry: expectedEntry, isCurrent = () => true, finalizeDelivery }) => {
+        if (!isCurrent()) {
+          return;
+        }
+        await mutateSubagentRuns(
+          [runId],
+          (rows) => {
+            const current = rows.get(runId);
+            if (!current || !isSameSubagentRunOwner(current, expectedEntry) || !isCurrent()) {
+              return { value: undefined };
+            }
+            const draft = structuredClone(current);
+            finalizeDelivery?.(draft);
+            return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+          },
+          { runs },
+        );
+      },
+    ),
     finalizeInterruptedSubagentRun: vi.fn<SweeperOptions["finalizeInterruptedSubagentRun"]>(
       async () => 0,
     ),
@@ -103,16 +99,16 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake: vi.fn(),
   };
   const childLookup = mockSubagentSweeperChildLookup(runs);
-  const collectorLookup = vi
-    .spyOn(subagentMemory, "getSubagentRunsForCollectorGroup")
-    .mockImplementation((requesterSessionKey, groupId) =>
-      [...runs].filter(
-        ([, candidate]) =>
-          candidate.collect &&
-          candidate.groupId === groupId &&
-          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-            requesterSessionKey,
-      ),
+  const collectorLookup: SweeperOptions["getRunsForCollectorGroup"] = (
+    requesterSessionKey,
+    groupId,
+  ) =>
+    [...runs].filter(
+      ([, candidate]) =>
+        candidate.collect &&
+        candidate.groupId === groupId &&
+        (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
+          requesterSessionKey,
     );
   const sweeper = createSubagentRegistrySweeper({
     ...callbacks,
@@ -139,7 +135,6 @@ export function createSubagentSweeperHarness(
   onTestFinished(async () => {
     await sweeper.reset();
     childLookup.mockRestore();
-    collectorLookup.mockRestore();
     worker.mockRestore();
   });
   return { ...callbacks, entry, runs, sweeper };

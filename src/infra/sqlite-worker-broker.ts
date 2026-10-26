@@ -194,10 +194,13 @@ export class SqliteWorkerBroker {
     const stateAccess = captureStateDatabaseAccess(
       options.stateDatabasePath ?? identity.canonicalPath,
     );
-    stateAccess.assertAccessAllowed({
+    const assertStateAccess = await stateAccess.prepareAccess({
       maintenanceScope: options.maintenanceScope,
       schemaLease: options.cleanupAccess,
     });
+    options.signal?.throwIfAborted();
+    options.assertCurrent?.();
+    assertStateAccess();
     const input = options.input;
     const admittedPaths = captureSqliteWorkerAdmissionPaths(
       databasePath,

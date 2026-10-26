@@ -21,6 +21,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "../pages/agents/avatar-image.ts";
 import {
   AvatarPicker,
+  requireAvatarImage,
   type AvatarPickerActions,
   type AvatarPickerFooterState,
   type GeneratedAvatar,
@@ -29,12 +30,10 @@ import "../styles/agent-create-dialog.css";
 
 registerAgentCreationEnglish();
 
-export type AgentCreateIdentity = { name: string; avatar: string | null };
-
 export function AgentCreateDialog(props: {
   context: ApplicationContext;
   onCancel: () => void;
-  onCreate: (identity: AgentCreateIdentity) => void;
+  onCreate: (identity: { name: string; avatar: string | null }) => void;
 }) {
   const [name, setName] = createSignal("");
   const [avatar, setAvatar] = createSignal<string | null>(null);
@@ -95,16 +94,7 @@ export function AgentCreateDialog(props: {
   ): Generator<Promise<AvatarDataUrlResult>, void, AvatarDataUrlResult> {
     setUploadBusy(true);
     const result = yield fileToAvatarDataUrl(file, props.context.config);
-    if (!result.ok) {
-      throw new Error(
-        t(
-          result.reason === "too-detailed"
-            ? "agents.identity.imageTooDetailed"
-            : "agents.identity.imageUnusable",
-        ),
-      );
-    }
-    setAvatar(result.dataUrl);
+    setAvatar(requireAvatarImage(result));
   });
 
   let submitted = false;
@@ -124,7 +114,11 @@ export function AgentCreateDialog(props: {
   }
 
   return (
-    <openclaw-modal-dialog label={dialogTitle()} onModal-cancel={() => props.onCancel()}>
+    <openclaw-modal-dialog
+      class="agent-create-modal"
+      label={dialogTitle()}
+      onModal-cancel={() => props.onCancel()}
+    >
       <form
         class="agent-create-dialog"
         onSubmit={(event) => {

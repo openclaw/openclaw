@@ -84,11 +84,9 @@ export function ShellSettingsSidebar(props: {
         nativeDeviceSettings: context.nativeDeviceSettings,
       },
       onRetryConnect: callbacks.retryGateway,
-      onNavigate: host.navigate,
-      onPreload: callbacks.preloadRoute,
+      onNavigate: host.shellNavigation.navigate,
       onSearchQueryChange: (nextQuery: string) =>
         void host.handleSettingsSearchQueryChange(nextQuery),
-      preloadTimers: host.settingsPreloadTimers,
       saveIndicator: {
         status: runtimeConfig.configRecoveryError ? "recovery" : runtimeConfig.configAutoSaveStatus,
         lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,

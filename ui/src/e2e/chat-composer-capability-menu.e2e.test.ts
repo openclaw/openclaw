@@ -223,7 +223,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const attachTrigger = page.getByRole("button", { name: "Add attachment" });
       await expect
         .poll(() => attachTrigger.getAttribute("class"))
@@ -507,6 +507,82 @@ suite.define(() => {
     });
   });
 
+  it("lists discovered connector tools when Tool access is reopened after a run", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+        methodResponses: {
+          "config.get": configResponse({
+            github: { url: "https://mcp.example.test", enabled: true },
+          }),
+          "sessions.list": sessionsList(),
+          "tools.effective": undiscoveredMcpToolsResponse(),
+        },
+      });
+      const notice = "MCP tools will appear here after an agent run discovers them.";
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator(".agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await expect.poll(() => menu.getByText(notice).isVisible()).toBe(true);
+
+      // A run discovers the connector's tools without changing the catalog cache key.
+      await gateway.setMethodResponse("tools.effective", effectiveToolsResponse());
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await expect
+        .poll(() =>
+          menu
+            .locator('.oc-menu-item[data-value^="mcp-tool:"]')
+            .locator(".agent-chat__capability-menu-label > span:first-child")
+            .allTextContents(),
+        )
+        .toEqual(["list-issues", "search-items", "search_items"]);
+      await expect.poll(() => menu.getByText(notice).count()).toBe(0);
+    });
+  });
+
+  it("refreshes the open Tool access view when the session run settles", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const idleSessions = sessionsList();
+      const runningSessions = {
+        ...idleSessions,
+        sessions: idleSessions.sessions.map((session) => ({ ...session, status: "running" })),
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+        methodResponses: {
+          "config.get": configResponse({
+            github: { url: "https://mcp.example.test", enabled: true },
+          }),
+          "sessions.list": runningSessions,
+          "tools.effective": undiscoveredMcpToolsResponse(),
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator(".agent-chat__capability-menu");
+      const notice = menu.getByText(
+        "MCP tools will appear here after an agent run discovers them.",
+      );
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await expect.poll(() => notice.isVisible()).toBe(true);
+
+      await gateway.setMethodResponse("tools.effective", effectiveToolsResponse());
+      await gateway.setSessionsListResponse(idleSessions);
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "agent:main:main" });
+
+      await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
+      await expect.poll(() => notice.count()).toBe(0);
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      expect(await gateway.getRequests("tools.effective")).toHaveLength(2);
+    });
+  });
+
   it("blocks tool mutations until the session, runtime config, and catalog are ready", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -577,7 +653,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         if (!operatorScopes.includes("operator.write")) {
           const composer = page.locator(".agent-chat__input");
           const input = composer.locator("textarea");

@@ -6,6 +6,7 @@ import { withEnv } from "../test-utils/env.js";
 import { getCompactionProvider } from "./compaction-provider.js";
 // Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { channelFixtureSource } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
@@ -515,22 +516,11 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "channel-demo",
         body: `module.exports = { id: "channel-demo", register(api) {
     api.registerChannel({
-      plugin: {
-        id: "demo",
-        meta: {
-          id: "demo",
-          label: "Demo",
-          selectionLabel: "Demo",
-          docsPath: "/channels/demo",
-          blurb: "demo channel"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
+      plugin: ${channelFixtureSource("demo", {
+        label: "Demo",
+        docsPath: "/channels/demo",
+        blurb: "demo channel",
+      })}
     });
   } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -543,40 +533,18 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "channel-dup",
         body: `module.exports = { id: "channel-dup", register(api) {
     api.registerChannel({
-      plugin: {
-        id: "demo",
-        meta: {
-          id: "demo",
-          label: "Demo Override",
-          selectionLabel: "Demo Override",
-          docsPath: "/channels/demo-override",
-          blurb: "override"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
+      plugin: ${channelFixtureSource("demo", {
+        label: "Demo Override",
+        docsPath: "/channels/demo-override",
+        blurb: "override",
+      })}
     });
     api.registerChannel({
-      plugin: {
-        id: "demo",
-        meta: {
-          id: "demo",
-          label: "Demo Duplicate",
-          selectionLabel: "Demo Duplicate",
-          docsPath: "/channels/demo-duplicate",
-          blurb: "duplicate"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
+      plugin: ${channelFixtureSource("demo", {
+        label: "Demo Duplicate",
+        docsPath: "/channels/demo-duplicate",
+        blurb: "duplicate",
+      })}
     });
   } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1110,33 +1078,17 @@ describe("loadOpenClawPlugins", () => {
     const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/nested-default-channel",
-          openclaw: {
-            extensions: ["./index.cjs"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "nested-default-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["nested-default-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(pluginDir, "package.json", {
+      name: "@openclaw/nested-default-channel",
+      openclaw: {
+        extensions: ["./index.cjs"],
+      },
+    });
+    writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+      id: "nested-default-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["nested-default-channel"],
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {
@@ -1149,22 +1101,12 @@ describe("loadOpenClawPlugins", () => {
         register(api) {
           require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
           api.registerChannel({
-            plugin: {
-              id: "nested-default-channel",
-              meta: {
-                id: "nested-default-channel",
-                label: "Nested Default Channel",
-                selectionLabel: "Nested Default Channel",
-                docsPath: "/channels/nested-default-channel",
-                blurb: "interop-wrapped bundled channel entry",
-              },
-              capabilities: { chatTypes: ["direct"] },
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({ accountId: "default", token: "configured" }),
-              },
-              outbound: { deliveryMode: "direct" },
-            },
+            plugin: ${channelFixtureSource("nested-default-channel", {
+              label: "Nested Default Channel",
+              docsPath: "/channels/nested-default-channel",
+              blurb: "interop-wrapped bundled channel entry",
+              configured: true,
+            })},
           });
         },
       },

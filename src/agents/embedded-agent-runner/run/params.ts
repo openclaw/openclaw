@@ -35,7 +35,7 @@ import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.typ
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
-import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
+import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
@@ -49,6 +49,7 @@ export type RunEmbeddedAgentParams = Pick<
   | "memberRoleIds"
   | "permissionMode"
   | "sessionRoot"
+  | "blindPrompt"
   | "modelSelectionLocked"
   | "authProfileIdSource"
   | "verboseLevel"
@@ -198,17 +199,7 @@ export type RunEmbeddedAgentParams = Pick<
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
-  onExecutionPhase?: (info: {
-    phase: EmbeddedAgentExecutionPhase;
-    provider?: string;
-    model?: string;
-    backend?: string;
-    source?: string;
-    tool?: string;
-    toolCallId?: string;
-    itemId?: string;
-    firstModelCallStarted?: boolean;
-  }) => void;
+  onExecutionPhase?: (info: EmbeddedAgentExecutionPhaseInfo) => void;
   onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {
     reason: string;
@@ -303,6 +294,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceMessageTool"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
   | "gitCoauthorPrompt"
   | "silentReplyPromptMode"
   | "ownerNumbers"

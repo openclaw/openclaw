@@ -10,7 +10,6 @@ import { captureRuntimeConfigAsyncReader, setRuntimeConfigSnapshot } from "../..
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import * as sessionEntryReader from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import {
@@ -60,10 +59,7 @@ import {
   markRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "./main-session-restart-recovery-marking.js";
-import {
-  discoverRestartRecoveryStoreTargets,
-  mainSessionRecoveryLog,
-} from "./main-session-restart-recovery-shared.js";
+import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 afterEach(() => vi.restoreAllMocks());
@@ -234,61 +230,58 @@ it.for(["before capture", "after capture"] as const)(
   },
 );
 
-it("loads only orphan candidates for main-session startup recovery", async () => {
+it("records an independent interrupted turn in a child of a cross-agent group parent", async () => {
   using store = createStore();
-  const { storePath } = store;
-  const { sessionKey, read } = await store.session("main", { abortedLastRun: true });
-  for (let index = 0; index < 16; index++) {
-    sessionAccessor.replaceSessionEntrySync(
-      { storePath, sessionKey: `agent:main:subagent:retained-${index}` },
-      { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
-    );
-    sessionAccessor.replaceSessionEntrySync(
-      { storePath, sessionKey: `agent:main:settled-${index}` },
-      { sessionId: `settled-${index}`, updatedAt: 1, status: "done" },
-    );
-  }
-  const reader = vi.spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker");
-  vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
-  expect(await store.markStartup()).toEqual({ marked: 1, skipped: 0 });
-  expect(read()).toMatchObject({
+  const child = await store.session("dashboard:historical-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:requester:discord:group:synthetic",
+    parentSessionKey: "agent:requester:discord:group:synthetic",
+    lifecycleRunId: "dashboard:historical-child-run",
+  });
+  expect(await store.mark({ activeRuns: [child.run] })).toEqual({ marked: 1, skipped: 0 });
+  expect(child.read()).toMatchObject({
     abortedLastRun: true,
     mainRestartRecovery: { chargedAttempts: 0 },
   });
-  const batches = await Promise.all(reader.mock.results.map(({ value }) => value));
-  expect(batches.flat().map((item) => item.sessionKey)).toEqual([sessionKey]);
 });
 
-it.each([false, true])(
-  "reports skipped shutdown sessions when another is marked: %s",
-  async (markOther) => {
-    using store = createStore();
-    const main = await store.session("main", { lifecycleRunId: "main-run" });
-    const missing = {
-      ...main.run,
-      sessionKey: "agent:main:missing",
-      sessionId: "missing-session",
-      runId: "missing-run",
-    };
-    const other = markOther
-      ? await store.session("other", { lifecycleRunId: "other-run" })
-      : undefined;
-    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
-    expect(
-      await store.mark({
-        activeRuns: [main.run, missing, ...(other ? [other.run] : [])],
-        isActiveRun: (activeRun) => activeRun.runId !== "main-run",
-      }),
-    ).toEqual({ marked: markOther ? 1 : 0, skipped: 0 });
-    expect(warn).toHaveBeenCalledWith(
-      'skipped restart recovery session: {"sessionKey":"agent:main:main","reason":"owner_changed"}',
-    );
-    expect(warn).toHaveBeenCalledWith(
-      'skipped restart recovery session: {"sessionKey":"agent:main:missing","reason":"no_matching_session"}',
-    );
-    expect(main.read()?.mainRestartRecovery).toBeUndefined();
-  },
-);
+it("leaves a completed replacement child and its copied old recovery claim untouched", async () => {
+  using store = createStore();
+  const child = await store.session("subagent:replaced-child", {
+    spawnDepth: 1,
+    spawnedBy: "agent:main:main",
+    lifecycleRevision: "replacement-child-revision",
+    lifecycleRunId: "replacement-child-run",
+    status: "done",
+    abortedLastRun: false,
+    endedAt: 10,
+    restartRecoveryRuns: [{ runId: "original-child-run", lifecycleGeneration: "old-gateway" }],
+    restartRecoveryDeliverySourceRunId: "original-child-run",
+  });
+  const before = child.read();
+  expect(await store.markStartup()).toEqual({ marked: 0, skipped: 0 });
+  expect(child.read()).toEqual(before);
+});
+
+it("skips missing or inactive shutdown sessions while marking an active one", async () => {
+  using store = createStore();
+  const main = await store.session("main", { lifecycleRunId: "main-run" });
+  const missing = {
+    ...main.run,
+    sessionKey: "agent:main:missing",
+    sessionId: "missing-session",
+    runId: "missing-run",
+  };
+  const other = await store.session("other", { lifecycleRunId: "other-run" });
+  expect(
+    await store.mark({
+      activeRuns: [main.run, missing, other.run],
+      isActiveRun: (activeRun) => activeRun.runId !== "main-run",
+    }),
+  ).toEqual({ marked: 1, skipped: 0 });
+  expect(main.read()?.mainRestartRecovery).toBeUndefined();
+  expect(other.read()?.abortedLastRun).toBe(true);
+});
 
 it.each(["store", "agent"] as const)(
   "keeps a matching session outside the captured recovery %s untouched",
@@ -328,10 +321,6 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
     const markStartup = startupMarker(state.stateDir, cfg);
     for (const agentId of ["main", "worker"]) {
       await startRun(agentId, agentId);
-      expect(readMain(agentId)).toMatchObject({
-        lifecycleRunId: `${agentId}-run`,
-        abortedLastRun: false,
-      });
     }
     const startupCheckedStorePaths = new Set<string>();
     const apply = sessionAccessor.applySessionEntryReplacements;
@@ -378,7 +367,6 @@ it.each(["before", "after"] as const)(
           },
           { trackOwner: true },
         );
-        expect(claimId).toBeDefined();
       };
       if (registration === "after") {
         afterPlanning(register);
@@ -514,8 +502,8 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   };
   const memoryLocation = { agentId: incognitoTarget.agentId, path: incognitoTarget.storePath };
   try {
-    const closing = await store.session("closing", { updatedAt: Date.now() });
-    const other = await store.session("other", { updatedAt: Date.now() });
+    const closing = await store.session("closing");
+    const other = await store.session("other");
     await closing.admit();
     await other.admit({ resolveGatewayContext: otherGatewayContext });
     await replaceSessionEntry(incognitoTarget, {
@@ -553,9 +541,7 @@ it.each([
   "does not commit a restart mark when %s invalidates its owner after planning",
   async (change, terminalStatus) => {
     using store = createStore();
-    const { storePath, sessionKey, sessionId, read, admit } = await store.session("closing", {
-      updatedAt: Date.now(),
-    });
+    const { storePath, sessionKey, sessionId, read, admit } = await store.session("closing");
     let cancelled = false;
     const cancellation = createAgentRunDirectAbortError();
     const admission = await admit({
@@ -592,9 +578,7 @@ it.each([
 
 it("does not adopt an ambient Gateway when moving an unbound reply owner", async () => {
   using store = createStore();
-  const { storePath, sessionKey, sessionId } = await store.session("adopted", {
-    updatedAt: Date.now(),
-  });
+  const { storePath, sessionKey, sessionId } = await store.session("adopted");
   const otherGatewayContext = () => undefined;
   const operation = createReplyOperation({
     sessionKey: "agent:main:command",

@@ -60,7 +60,6 @@ type SystemAgentGreetingConfigAuditStore = Pick<
 
 const greetingFlights = new WeakMap<object, Map<string, Promise<string>>>();
 const greetingFailures = new WeakMap<object, { factsHash: string; retryAfter: number }>();
-const defaultGreetingCacheKey = {};
 
 export function createSystemAgentGreetingCache(
   opts: { env?: NodeJS.ProcessEnv; assertCurrent?: () => void } = {},
@@ -130,7 +129,7 @@ function accountLooksDegraded(account: Record<string, unknown>): boolean {
 }
 
 /** Extract only degraded channel labels from the gateway's existing cached health aggregate. */
-export function systemAgentGreetingChannelHealth(
+function systemAgentGreetingChannelHealth(
   health: HealthSummary | null,
 ): SystemAgentGreetingFacts["channelHealth"] {
   if (!health) {
@@ -147,27 +146,18 @@ export function systemAgentGreetingChannelHealth(
 }
 
 /** Read free facts from process/SQLite snapshots; this function never starts a probe. */
-export async function loadSystemAgentGreetingFacts(
-  opts: {
-    env?: NodeJS.ProcessEnv;
-    cacheStore?: SystemAgentGreetingCacheStore;
-    openCache?: () => SystemAgentGreetingCacheStore;
-    configAuditStore?: SystemAgentGreetingConfigAuditStore;
-    getUpdateAvailable?: () => UpdateAvailable | null;
-    getHealthCache?: () => HealthSummary | null;
-  } = {},
-): Promise<SystemAgentGreetingFacts> {
+export async function loadSystemAgentGreetingFacts(opts: {
+  env?: NodeJS.ProcessEnv;
+  cacheStore: SystemAgentGreetingCacheStore;
+  configAuditStore?: SystemAgentGreetingConfigAuditStore;
+  getUpdateAvailable?: () => UpdateAvailable | null;
+  getHealthCache?: () => HealthSummary | null;
+}): Promise<SystemAgentGreetingFacts> {
   // Facts stay best-effort: a broken snapshot source degrades that fact
   // instead of blocking the welcome.
   // Capture both sources before either read yields; pagination keeps the same owner.
-  let cacheStore: SystemAgentGreetingCacheStore | undefined;
+  const cacheStore = opts.cacheStore;
   let auditStore: SystemAgentGreetingConfigAuditStore | undefined;
-  try {
-    cacheStore =
-      opts.cacheStore ?? opts.openCache?.() ?? createSystemAgentGreetingCache({ env: opts.env });
-  } catch {
-    // Unavailable cache state leaves the audit cursor unacknowledged.
-  }
   try {
     auditStore =
       opts.configAuditStore ??
@@ -179,7 +169,7 @@ export async function loadSystemAgentGreetingFacts(
     // Unavailable audit state cannot advance delivery's cursor.
   }
   const cache = await tryOr<SystemAgentGreetingCacheRecord | null>(null, () =>
-    cacheStore ? readGreetingCache(cacheStore) : null,
+    readGreetingCache(cacheStore),
   );
   const auditFacts = await tryOr({ auditSequence: 0, recentExternalEdit: false }, () =>
     auditStore
@@ -192,7 +182,7 @@ export async function loadSystemAgentGreetingFacts(
   const health = await tryOr<HealthSummary | null>(null, () =>
     (opts.getHealthCache ?? getHealthCache)(),
   );
-  cacheStore?.assertCurrent();
+  cacheStore.assertCurrent();
   auditStore?.assertCurrent();
   return {
     updateAvailable: update?.latestVersion ?? null,
@@ -334,9 +324,8 @@ async function resolveUncachedSystemAgentGreeting(params: {
   factsHash: string;
   cacheKey: object;
   at: number;
-  timeoutMs?: number;
 }): Promise<string> {
-  const timeoutMs = params.timeoutMs ?? SYSTEM_AGENT_GREETING_TIMEOUT_MS;
+  const timeoutMs = SYSTEM_AGENT_GREETING_TIMEOUT_MS;
   let plan: SystemAgentGreetingPlan | null;
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
@@ -390,19 +379,16 @@ type ResolveSystemAgentGreetingParams = {
   planner: SystemAgentGreetingPlanner;
   /** False for internal session seeding: cache reads stay free and a miss uses the template. */
   allowInference?: boolean;
-  cacheStore?: SystemAgentGreetingCacheStore;
+  cacheStore: SystemAgentGreetingCacheStore;
   /** The Gateway session owner retains flight/backoff identity across captured reads. */
   cacheOwner?: object;
-  openCache?: () => SystemAgentGreetingCacheStore;
-  now?: () => number;
-  timeoutMs?: number;
 };
 
 export async function resolveSystemAgentGreeting(
   params: ResolveSystemAgentGreetingParams,
 ): Promise<string> {
   const text = await resolveSystemAgentGreetingText(params);
-  params.cacheStore?.assertCurrent();
+  params.cacheStore.assertCurrent();
   // Host-owned alerts append at delivery, never into the cache: the cached
   // model text must stay valid for deliveries where the fact is absent.
   return withHostOwnedAlerts(text, params.facts);
@@ -416,12 +402,7 @@ async function resolveSystemAgentGreetingText(
     // must neither depend on nor spend inference, and model text is never cached.
     return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
-  let cacheStore: SystemAgentGreetingCacheStore;
-  try {
-    cacheStore = params.cacheStore ?? params.openCache?.() ?? createSystemAgentGreetingCache();
-  } catch {
-    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
-  }
+  const cacheStore = params.cacheStore;
   const factsHash = systemAgentGreetingFactsHash(params.overview, params.facts);
   let cached: SystemAgentGreetingCacheRecord | null;
   try {
@@ -443,10 +424,8 @@ async function resolveSystemAgentGreetingText(
   }
 
   cacheStore.assertCurrent();
-  const cacheKey =
-    params.cacheOwner ??
-    (params.cacheStore || params.openCache ? cacheStore : defaultGreetingCacheKey);
-  const at = (params.now ?? Date.now)();
+  const cacheKey = params.cacheOwner ?? cacheStore;
+  const at = Date.now();
   // Audit acknowledgement uses the captured monotonic sequence, not this cache timestamp.
   const failure = greetingFailures.get(cacheKey);
   if (failure?.factsHash === factsHash && failure.retryAfter > at) {
@@ -484,33 +463,25 @@ async function resolveSystemAgentGreetingText(
 /** Persist the config-audit cursor only after the host has delivered the greeting. */
 export async function acknowledgeSystemAgentGreetingDelivery(params: {
   auditSequence: number;
-  cacheStore?: SystemAgentGreetingCacheStore;
-  openCache?: () => SystemAgentGreetingCacheStore;
-  now?: () => number;
+  cacheStore: SystemAgentGreetingCacheStore;
 }): Promise<void> {
   if (!Number.isSafeInteger(params.auditSequence) || params.auditSequence < 0) {
     return;
   }
   try {
-    const cacheStore =
-      params.cacheStore ?? params.openCache?.() ?? createSystemAgentGreetingCache();
-    await mutateGreetingState(
-      cacheStore,
-      (current) => {
-        const lastSeenAuditSequence = Math.max(
-          current?.lastSeenAuditSequence ?? 0,
-          params.auditSequence,
-        );
-        if (current?.lastSeenAuditSequence === lastSeenAuditSequence) {
-          return current;
-        }
-        return {
-          ...current,
-          lastSeenAuditSequence,
-        };
-      },
-      (params.now ?? Date.now)(),
-    );
+    await mutateGreetingState(params.cacheStore, (current) => {
+      const lastSeenAuditSequence = Math.max(
+        current?.lastSeenAuditSequence ?? 0,
+        params.auditSequence,
+      );
+      if (current?.lastSeenAuditSequence === lastSeenAuditSequence) {
+        return current;
+      }
+      return {
+        ...current,
+        lastSeenAuditSequence,
+      };
+    });
   } catch {
     // Delivery wins even when diagnostic acknowledgement cannot be persisted.
   }

@@ -25,12 +25,9 @@ function withFixturePlugin(config: OpenClawConfig): OpenClawConfig {
   plugins.allow = [...new Set([...(plugins.allow ?? []), PLUGIN_ID])];
   const load = (plugins.load ??= {});
   load.paths = [...new Set([...(load.paths ?? []), PLUGIN_DIR])];
-  plugins.entries = {
-    ...plugins.entries,
-    [PLUGIN_ID]: {
-      enabled: true,
-      hooks: { allowConversationAccess: true, allowPromptInjection: true },
-    },
+  (plugins.entries ??= {})[PLUGIN_ID] = {
+    enabled: true,
+    hooks: { allowConversationAccess: true, allowPromptInjection: true },
   };
   return config;
 }
@@ -41,10 +38,7 @@ const authenticatedContext = {
   chatId: CONVERSATION.id,
   channel: "qa-channel",
   sessionKey: "agent:qa:main",
-  channelContext: {
-    sender: { id: "ahmad" },
-    chat: { id: CONVERSATION.id },
-  },
+  channelContext: { sender: { id: "ahmad" }, chat: { id: CONVERSATION.id } },
 };
 
 const cleanups: Array<() => Promise<void>> = [];

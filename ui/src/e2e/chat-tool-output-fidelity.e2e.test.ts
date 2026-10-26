@@ -164,15 +164,16 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         await expandOutput();
         await capture(page, artifacts, "01-output-preview");
-        const historyRequests = (await gateway.getRequests()).filter(
-          (request) => request.method === "chat.history" || request.method === "chat.startup",
-        );
-        expect(historyRequests.length).toBeGreaterThan(0);
-        expect(
-          historyRequests.every(
-            (request) => asOptionalRecord(request.params)?.toolResultMaxChars === 2_000,
-          ),
-        ).toBe(true);
+        const historyParams = (await gateway.getRequests()).flatMap((request) => {
+          const params = asOptionalRecord(request.params);
+          return request.method === "chat.history" || request.method === "chat.startup"
+            ? [params]
+            : request.method === "sessions.messages.subscribe" && params?.initialHistory
+              ? [asOptionalRecord(params.initialHistory)]
+              : [];
+        });
+        expect(historyParams.length).toBeGreaterThan(0);
+        expect(historyParams.every((params) => params?.toolResultMaxChars === 2_000)).toBe(true);
         expect(await page.locator(".chat-tool-msg-body").textContent()).not.toContain("TAIL:");
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         const request = await gateway.waitForRequest("chat.message.get");

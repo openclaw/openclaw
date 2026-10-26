@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
-import type { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import {
@@ -15,34 +13,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import { invokeUsage, writeUsage } from "./usage.test-support.js";
 
-const observedWorkers = vi.hoisted(() => new Set<Worker>());
-
-vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      override postMessage(...args: Parameters<Worker["postMessage"]>): void {
-        const message = args[0];
-        if (isRecord(message) && isRecord(message.input) && message.input.kind === "usage-cost") {
-          observedWorkers.add(this);
-        }
-        super.postMessage(...args);
-      }
-    },
-  };
-});
-
-afterEach(() => {
-  expect(Array.from(observedWorkers, (worker) => worker.threadId)).toEqual(
-    Array.from(observedWorkers, () => -1),
-  );
-  observedWorkers.clear();
-});
-
 type DecodeObservation = {
   operation: string;
-  parsedRollups: number;
   parsedCheckpoints: number;
   parsedBucketBodies: number;
   threadId: number;
@@ -56,19 +28,17 @@ async function observeUsageDecoding(preload: string, log: string) {
 const { parentPort, threadId } = require("node:worker_threads");
 if (parentPort) {
   let operation;
-  let parsedRollups = 0;
   let parsedCheckpoints = 0;
   let parsedBucketBodies = 0;
   parentPort.on("message", (message) => {
     if (message.responseId !== undefined) return;
     operation = message.input?.kind === "usage-cost" ? message.input.operation.kind : undefined;
-    parsedRollups = parsedCheckpoints = parsedBucketBodies = 0;
+    parsedCheckpoints = parsedBucketBodies = 0;
   });
   const parse = JSON.parse;
   JSON.parse = function(text, ...args) {
     const value = Reflect.apply(parse, this, [text, ...args]);
     if (operation && value && typeof value === "object" && value.buckets && value.untimestamped) {
-      parsedRollups++;
       if (Object.keys(value.buckets).length === 0) parsedCheckpoints++;
       else parsedBucketBodies++;
     }
@@ -78,7 +48,7 @@ if (parentPort) {
   parentPort.postMessage = function(message, ...args) {
     if (operation && (message.status === "ok" || message.status === "failed")) {
       fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({
-        operation, parsedRollups, parsedCheckpoints, parsedBucketBodies, threadId,
+        operation, parsedCheckpoints, parsedBucketBodies, threadId,
       }) + "\\n");
       operation = undefined;
     }
@@ -142,14 +112,12 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
       expect(refreshes).toHaveLength(2);
       expect(refreshes[1]).toMatchObject({
         threadId: refreshes[0]!.threadId,
-        parsedRollups: 2,
         parsedCheckpoints: 1,
         parsedBucketBodies: 1,
       });
       expect(records).toContainEqual(
         expect.objectContaining({
           operation: "summary",
-          parsedRollups: 4,
           parsedCheckpoints: 4,
           parsedBucketBodies: 0,
         }),

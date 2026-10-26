@@ -15,12 +15,20 @@ const workRequest = { method: "chat.send" };
 const subscribeRequest = { method: "sessions.messages.subscribe", params: { key: "session" } };
 const independentReads = [
   "chat.history",
+  "board.get",
+  "sessions.resolve",
   "sessions.list",
   "cron.list",
   "push.web.vapidPublicKey",
   "sessions.github.options",
   "workboard.cards.list",
   "github.preview",
+  "sessions.describe",
+  "users.list",
+  "agents.list",
+  "agent.identity.get",
+  "plugins.controlUi.list",
+  "workboard.boards.list",
 ];
 function requestStart(
   bytes = 1,
@@ -37,7 +45,9 @@ function requestStart(
   return permission;
 }
 
-function holdPreparations(request = { method: "models.list" }) {
+function holdPreparations(
+  request: Parameters<typeof scheduleGatewayRequestStart>[1] = { method: "models.list" },
+) {
   const held = Array.from({ length: 4 }, heldCompletion);
   return {
     held,
@@ -48,6 +58,15 @@ function holdPreparations(request = { method: "models.list" }) {
         ),
       ),
   };
+}
+
+function recordStarts(label = (method: string, _connId: string) => method) {
+  const starts: string[] = [];
+  const start = (method: string, connId = "viewer", params: unknown = {}) =>
+    requestStart(100, { method, params }, connId).then(() => {
+      starts.push(label(method, connId));
+    });
+  return { starts, start };
 }
 
 afterEach(async () => {
@@ -62,9 +81,10 @@ afterEach(async () => {
 describe("Gateway request start fairness", () => {
   it("bounds concurrent reconnect preparations through settlement and yields before each start", async () => {
     const methods = [
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       { method: "models.list" },
       { method: "sessions.messages.subscribe", params: { includeApprovals: true } },
+      { method: "sessions.messages.subscribe", params: { initialHistory: {} } },
     ];
     const completions = Array.from({ length: 8 }, heldCompletion);
     const full = createDeferredCore();
@@ -101,15 +121,7 @@ describe("Gateway request start fairness", () => {
 
   it("parks preparations without blocking reads or reordering connection mutations", async () => {
     const { held, start: startHeld } = holdPreparations();
-    const starts: string[] = [];
-    const start = (method: string, connId: string, params = {}) => {
-      const permission = requestStart(100, { method, params }, connId);
-      const started = permission.then(() => {
-        starts.push(method);
-      });
-      permissions.push(started);
-      return started;
-    };
+    const { starts, start } = recordStarts();
     await startHeld();
     const subscription = start("sessions.messages.subscribe", "viewer", {
       key: "main",
@@ -125,22 +137,59 @@ describe("Gateway request start fairness", () => {
     expect(starts).toEqual([...independentReads, "sessions.create"]);
     held[0]!.resolve();
     await Promise.all([subscription, unsubscribe, mutation]);
-    expect(starts.slice(8)).toEqual([
+    expect(starts.slice(independentReads.length + 1)).toEqual([
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "chat.send",
     ]);
   });
 
+  it("starts event-only roster subscriptions while snapshot preparation is saturated", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const { starts, start: record } = recordStarts((_method, connId) => connId);
+    const eventOnly = record("sessions.subscribe", "events");
+    const messageBodies = record("sessions.subscribe", "bodies", { includeMessageBodies: true });
+    const snapshot = record("sessions.subscribe", "snapshot", { limit: 100 });
+    await nextTurn();
+    expect(starts).toEqual(["events", "bodies"]);
+    held[0]!.resolve();
+    await Promise.all([eventOnly, messageBodies, snapshot]);
+    expect(starts.at(-1)).toBe("snapshot");
+  });
+
+  it("keeps a parked catalog read from blocking later connection work", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const { starts, start: record } = recordStarts();
+    const requests = [
+      { method: "models.list" },
+      { method: "sessions.subscribe", params: {} },
+      subscribeRequest,
+      { method: "sessions.messages.unsubscribe", params: { key: "session" } },
+      workRequest,
+    ].map((request) => record(request.method, "viewer", "params" in request ? request.params : {}));
+    await nextTurn();
+    expect(starts).toEqual([
+      "sessions.subscribe",
+      "sessions.messages.subscribe",
+      "sessions.messages.unsubscribe",
+      "chat.send",
+    ]);
+    held[0]!.resolve();
+    await Promise.all(requests);
+    expect(starts.at(-1)).toBe("models.list");
+  });
+
   it("prioritizes lifecycle starts while preserving same-connection mutation order", async () => {
     const { held, start: startHeld } = holdPreparations();
     const events: string[] = [];
-    const start = (method: string, connId: string) =>
-      requestStart(100, { method }, connId).then(() => events.push(`${connId}:${method}`));
+    const start = (method: string, connId: string, params = {}) =>
+      requestStart(100, { method, params }, connId).then(() => events.push(`${connId}:${method}`));
     await startHeld();
     // The parked preparation wakes the queue, but unrelated lifecycle starts
     // must reach their handlers before the ordinary backlog resumes.
-    const parked = start("models.list", "blocked");
+    const parked = start("sessions.subscribe", "blocked", { limit: 100 });
     const mutation = start("chat.send", "blocked");
     const resume = start("gateway.suspend.resume", "blocked");
     const ordinary = start("chat.send", "ordinary");
@@ -157,19 +206,22 @@ describe("Gateway request start fairness", () => {
     held[0]!.resolve();
     await Promise.all([parked, mutation, resume, status, update, handoff, ordinary]);
     expect(events.slice(4)).toEqual([
-      "blocked:models.list",
+      "blocked:sessions.subscribe",
       "blocked:chat.send",
       "blocked:gateway.suspend.resume",
     ]);
   });
 
   it("releases a cancelled preparation waiter while earlier requests still own capacity", async () => {
-    const { held, start } = holdPreparations({ method: "sessions.subscribe" });
+    const { held, start } = holdPreparations({
+      method: "sessions.subscribe",
+      params: { limit: 100 },
+    });
     const started = start();
     const controller = new AbortController();
     const cancelled = scheduleGatewayRequestStart(
       100,
-      { method: "sessions.subscribe" },
+      { method: "sessions.subscribe", params: { limit: 100 } },
       "cancelled",
       Promise.resolve(),
       controller.signal,

@@ -1,22 +1,17 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import {
-  createFollowupTurnTestTurn,
-  createFollowupTurnTestTypingController,
-  executeFollowupTurnForTest,
-  getFollowupTurnTestState,
-  resetFollowupTurnTestState,
-} from "./followup-turn-execution.test-support.js";
+import * as turns from "./followup-turn-execution.test-support.js";
 import { createQueueTestRun, createQueueSettings } from "./queue.test-helpers.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
+import { createMockTypingController } from "./test-helpers.js";
 
-const state = getFollowupTurnTestState();
-beforeEach(resetFollowupTurnTestState);
+const state = turns.getFollowupTurnTestState();
+beforeEach(turns.resetFollowupTurnTestState);
 
 // Real queue and followup adapter; only the final agent backend is stubbed.
 it.each([
@@ -37,7 +32,7 @@ it.each([
     const firstAttempt = createDeferred();
     const releaseFirstAttempt = createDeferred();
     const completed = createDeferred();
-    const executions: Array<{ prompt: string; profile: string | undefined }> = [];
+    const executions = () => state.execute.mock.calls.map<AgentTurnParams>(([params]) => params);
     const sources: FollowupRun[] = [];
     let summaryAttempts = 0;
     let currentOwner = "owner-at-enqueue";
@@ -59,14 +54,6 @@ it.each([
       expect(enqueueFollowupRun(key, source, settings)).toBe(true);
       return source;
     };
-    const execute = state.execute.getMockImplementation()!;
-    state.execute.mockImplementation((params: AgentTurnParams) => {
-      executions.push({
-        prompt: params.commandBody,
-        profile: params.followupRun.run.bootstrapUserProfileId,
-      });
-      return execute(params);
-    });
     const runFollowup = async (queued: FollowupRun) => {
       const summary = queued.prompt.startsWith("[Queue overflow]");
       if (summary) {
@@ -79,8 +66,8 @@ it.each([
       try {
         await admitFollowupRunLifecycle(queued);
         try {
-          const result = await executeFollowupTurnForTest({
-            turn: createFollowupTurnTestTurn({
+          const result = await turns.executeFollowupTurnForTest({
+            turn: turns.createFollowupTurnTestTurn({
               queued,
               session: {
                 kind: "session",
@@ -95,7 +82,7 @@ it.each([
               },
             }),
             defaults: {
-              typing: createFollowupTurnTestTypingController(),
+              typing: createMockTypingController(),
               typingMode: "never",
               defaultModel: "claude",
             },
@@ -117,7 +104,7 @@ it.each([
     };
 
     try {
-      const first = enqueue("first summarized request", eligible);
+      enqueue("first summarized request", eligible);
       enqueue("second summarized request", true);
       if (ordinary) {
         enqueue("pending predecessor", true);
@@ -131,37 +118,30 @@ it.each([
       if (deferred) {
         await Promise.race([firstAttempt.promise, completed.promise]);
         expect(summaryAttempts).toBe(1);
-        expect(executions).toEqual([]);
+        expect(executions()).toEqual([]);
         // Compaction during deferral must preserve the original source eligibility.
         enqueue(tailPrompt, true);
         currentOwner = "owner-after-deferral";
-      }
-      const queue = getExistingFollowupQueue(key);
-      expect(queue?.droppedCount).toBe(2);
-      if (ordinary) {
-        expect(queue?.summaryElisions).toHaveLength(0);
-      } else {
-        expect(queue?.summaryElisions).toHaveLength(1);
-        expect(queue?.summaryElisions[0]?.sources).toHaveLength(1);
-        expect(queue?.summaryElisions[0]?.sources[0]).not.toBe(first);
       }
       releaseFirstAttempt.resolve();
       await completed.promise;
 
       expect(summaryAttempts).toBe(deferred ? 2 : 1);
-      expect(executions.map(({ profile }) => profile)).toEqual([
-        eligible ? currentOwner : undefined,
-        ...(path === "compacted sources" ? [currentOwner] : [currentOwner, currentOwner]),
-      ]);
-      expect(executions[0]?.prompt).toContain(
+      expect(executions().map(({ followupRun }) => followupRun.run.bootstrapUserProfileId)).toEqual(
+        [
+          eligible ? currentOwner : undefined,
+          ...(path === "compacted sources" ? [currentOwner] : [currentOwner, currentOwner]),
+        ],
+      );
+      expect(executions()[0]?.commandBody).toContain(
         deferred
           ? "[Queue overflow] Dropped 1 message due to cap."
           : "[Queue overflow] Dropped 2 messages due to cap.",
       );
       if (deferred) {
         // New overflow cannot join an already selected source claim.
-        expect(executions[1]?.prompt).toContain("second summarized request");
-        expect(executions[0]?.prompt).not.toContain("second summarized request");
+        expect(executions()[1]?.commandBody).toContain("second summarized request");
+        expect(executions()[0]?.commandBody).not.toContain("second summarized request");
       }
       for (const source of sources) {
         expect(source.turnAdoptionLifecycle?.onAdopted).toHaveBeenCalledOnce();

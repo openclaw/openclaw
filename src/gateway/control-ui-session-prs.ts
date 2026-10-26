@@ -10,6 +10,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   finishPullRequest,
   loadBoundSessionPullRequest,
@@ -353,6 +354,7 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<ControlUiSessionPullRequests> {
+  recordSessionPrDiagnostic("load-entered", deps.read.target);
   if (deps.read.target.ownGitHubProfileId && deps.read.target.taskReceiptsOnly) {
     return {
       ...(deps.read.branchSnapshot ?? { pullRequests: [], rateLimited: false }),
@@ -367,6 +369,7 @@ export async function loadControlUiSessionPullRequests(
   ) {
     return loadControlUiSessionBranchPullRequests(params, deps);
   }
+  recordSessionPrDiagnostic("branch-started", deps.read.target);
   const branch: ControlUiSessionPullRequests = deps.read.target.taskReceiptsOnly
     ? (deps.read.branchSnapshot ?? { pullRequests: [], rateLimited: false })
     : await loadControlUiSessionBranchPullRequests(params, deps).catch(() => ({
@@ -374,9 +377,11 @@ export async function loadControlUiSessionPullRequests(
         rateLimited: false,
         status: "unavailable" as const,
       }));
+  recordSessionPrDiagnostic("branch-returned", deps.read.target);
   if (!deps.read.target.taskReceiptsOnly) {
     deps.read.onBranchRead?.(branch);
   }
+  recordSessionPrDiagnostic("receipts-started", deps.read.target);
   const task = await readTaskPullRequestReceipts(
     {
       ...deps.read.target.taskReceipts,
@@ -387,7 +392,11 @@ export async function loadControlUiSessionPullRequests(
     deps.read.assertCurrent,
     deps.cacheSignal,
   );
+  recordSessionPrDiagnostic("receipts-returned", deps.read.target, {
+    count: task.taskPullRequests.length,
+  });
   if (deps.read.target.taskReceiptsOnly) {
+    recordSessionPrDiagnostic("load-returned", deps.read.target);
     return {
       ...branch,
       taskPullRequests: task.taskPullRequests,
@@ -409,6 +418,9 @@ export async function loadControlUiSessionPullRequests(
     try {
       const read = prepareSessionPullRequestGitHubRead(url.hostname, deps.read.assertCurrent, {
         signal: deps.cacheSignal,
+      });
+      recordSessionPrDiagnostic("metadata-started", deps.read.target, {
+        count: taskPullRequests.length,
       });
       pullRequest = await readSessionPullRequestMetadata(
         known,
@@ -445,9 +457,14 @@ export async function loadControlUiSessionPullRequests(
       taskMetadataUnavailable = true;
       deps.read.assertCurrent();
     }
+    recordSessionPrDiagnostic("metadata-returned", deps.read.target, {
+      count: taskPullRequests.length,
+      current: Boolean(pullRequest),
+    });
     taskPullRequests.push({ ...known, ...(pullRequest ? { pullRequest } : {}) });
   }
   deps.read.assertCurrent();
+  recordSessionPrDiagnostic("load-returned", deps.read.target);
   return {
     ...branch,
     taskPullRequests,
@@ -537,6 +554,7 @@ async function loadControlUiSessionBranchPullRequests(
       }
     }
     const source = target.source;
+    recordSessionPrDiagnostic("context-started", target);
     const context =
       typeof source === "string"
         ? await runGitReadOperation(
@@ -547,6 +565,7 @@ async function loadControlUiSessionBranchPullRequests(
             { refresh: request.refresh },
           )
         : source;
+    recordSessionPrDiagnostic("context-returned", target);
     assertCurrent();
     if (!context) {
       branchCache.release(deps.cacheSignal);
@@ -562,12 +581,14 @@ async function loadControlUiSessionBranchPullRequests(
         rateLimited: false,
       };
     }
+    recordSessionPrDiagnostic("branch-cache-started", target);
     const result = await cachedBranchPullRequests(
       context,
       deps,
       request.refresh === true,
       JSON.stringify([target.branchIdentity ?? target.identity, deps.read.sourceIdentity]),
     ).catch(() => null);
+    recordSessionPrDiagnostic("branch-cache-returned", target);
     assertCurrent();
     if (!result) {
       // Local repository identity survives a cold PR lookup failure, but an
@@ -581,6 +602,7 @@ async function loadControlUiSessionBranchPullRequests(
     }
     const { publicationCandidates, mergedHeads, workingBranchHasLivePullRequest, ...snapshot } =
       result;
+    recordSessionPrDiagnostic("branch-facts-started", target);
     const branch =
       projection === "publication" || workingBranchHasLivePullRequest
         ? undefined
@@ -590,6 +612,7 @@ async function loadControlUiSessionBranchPullRequests(
             request.refresh === true,
             target.refreshIndex === true,
           );
+    recordSessionPrDiagnostic("branch-facts-returned", target);
     assertCurrent();
     return {
       ...snapshot,

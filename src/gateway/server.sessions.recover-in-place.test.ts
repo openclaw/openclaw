@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { settleFailedWorkerRestartRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-failure.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -23,6 +24,7 @@ import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, writeSessionStore } from "./test-helpers.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -204,14 +206,22 @@ async function recover(
 test.for([
   "interrupted",
   "settled",
+  "placement-failed",
+  "ordinary-failed",
+  "failed-replacement",
   "cancelled",
   "replacement",
   "cli-full",
   "cli-restricted",
 ] as const)(
-  "sessions.recover resumes only the original restart-interrupted native child (%s)",
+  "sessions.recover resumes only the original native child owned by restart recovery (%s)",
   async (scenario, { signal }) => {
     const cli = scenario === "cli-full" || scenario === "cli-restricted";
+    const failed =
+      scenario === "placement-failed" ||
+      scenario === "ordinary-failed" ||
+      scenario === "failed-replacement";
+    const terminal = scenario === "settled" || failed;
     const current = await fixture(`child-recovery-${scenario}`, cli ? "claude-cli" : undefined);
     if (cli) {
       const previousRegistry = { ...getTestPluginRegistry() };
@@ -236,8 +246,8 @@ test.for([
     const lifecycleRevision = `child-revision-${scenario}`;
     await patchSessionEntryCore(current.scope, () => ({
       mainRestartRecovery: undefined,
-      status: scenario === "cancelled" ? "killed" : "interrupted",
-      abortedLastRun: true,
+      status: scenario === "cancelled" ? "killed" : failed ? "failed" : "interrupted",
+      abortedLastRun: failed ? undefined : true,
       lastRunId: runId,
       lifecycleRevision,
       spawnedBy: "agent:main:main",
@@ -256,19 +266,22 @@ test.for([
       childSessionKey: current.key,
       childAgentId: "main",
       childSessionIdentity: {
-        sessionId: scenario === "replacement" ? "retired-child-session" : current.sessionId,
+        sessionId:
+          scenario === "replacement" || scenario === "failed-replacement"
+            ? "retired-child-session"
+            : current.sessionId,
         lifecycleRevision,
       },
       requesterAgentId: "main",
       execution: {
-        status: scenario === "settled" ? "terminal" : "interrupted",
+        status: terminal ? "terminal" : "interrupted",
         startedAt: 1,
-        interruptionReason: "gateway-restart",
-        ...(scenario === "settled"
+        interruptionReason: failed ? undefined : "gateway-restart",
+        ...(terminal
           ? { endedAt: 2, outcome: { status: "error", error: "Interrupted by Gateway restart" } }
           : {}),
       },
-      ...(scenario === "settled"
+      ...(terminal && scenario !== "ordinary-failed"
         ? { endedReason: "subagent-error", terminalOwner: "interrupted-recovery" }
         : {}),
     });
@@ -279,7 +292,12 @@ test.for([
     const before = await current.transcript();
     const entryBefore = current.entry();
     const response = await recover(current, { automaticIdentity: true });
-    if (scenario === "cancelled" || scenario === "replacement") {
+    if (
+      scenario === "cancelled" ||
+      scenario === "replacement" ||
+      scenario === "failed-replacement" ||
+      scenario === "ordinary-failed"
+    ) {
       expect(response).toMatchObject({ ok: false });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(await current.transcript()).toEqual(before);
@@ -321,13 +339,89 @@ function expectContinuation(
   });
 }
 
-test.for(["builtin", "native", "pending"] as const)(
+test.for(["none", "ownerless", "intent", "deliveries"] as const)(
+  "operator resume after failed worker settlement preserves delivery custody (%s)",
+  async (savedFinal, { signal }) => {
+    const current = await fixture(`failed-worker-${savedFinal}`);
+    const pending =
+      savedFinal === "none"
+        ? undefined
+        : {
+            kind: "replayable" as const,
+            text: "Retained answer before worker setup failed.",
+            createdAt: 100,
+            ...(savedFinal === "intent" ? { intentId: "owned-delivery" } : {}),
+            ...(savedFinal === "deliveries"
+              ? { deliveries: [{ id: "owned-delivery", state: "prepared" as const }] }
+              : {}),
+          };
+    await patchSessionEntryCore(current.scope, () => ({
+      status: "interrupted",
+      abortedLastRun: true,
+      pendingFinalDelivery: pending,
+      mainRestartRecovery: {
+        cycleId: current.recoveryCycleId,
+        revision: 4,
+        chargedAttempts: 0,
+      },
+    }));
+    const entry = expectDefined(current.entry(), "failed worker recovery source");
+    const reason = "Worker setup failed. Repair it before resuming.";
+    expect(
+      await settleFailedWorkerRestartRecovery({
+        ...current.scope,
+        placementSessionKey: current.key,
+        entry,
+        observation: {
+          sessionId: current.sessionId,
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+        },
+        gatewayRuntime: createMockGatewayRecoveryRuntime({
+          prepareFailedWorkerPlacement: async () => ({
+            reason,
+            isCurrent: () => true,
+            release: () => {},
+          }),
+        }),
+      }),
+    ).toBe("settled");
+    const response = await recover(current);
+    if (savedFinal === "intent" || savedFinal === "deliveries") {
+      expect(response).toMatchObject({
+        ok: false,
+        error: { message: "Finish the pending reply delivery before resuming this session." },
+      });
+      expect(current.entry()?.pendingFinalDelivery).toEqual(pending);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      return;
+    }
+    expectContinuation(current, response, { status: "started" });
+    await withinTest(current.drain(), signal);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    expect(current.entry()?.pendingFinalDelivery).toBeUndefined();
+    if (pending) {
+      const transcript = JSON.stringify(await current.transcript());
+      expect(transcript).toContain("Saved reply (delivery unconfirmed)");
+      expect(transcript).toContain(pending.text);
+    }
+  },
+);
+
+test.for(["builtin", "native", "pending", "pending-child"] as const)(
   "operator resume keeps session identity and admits one durable continuation (%s)",
   async (scenario, { signal }) => {
     const native = scenario === "native";
     const current = await fixture(`${scenario}-resume`, native ? "codex" : undefined, true);
-    if (scenario === "pending") {
+    if (scenario === "pending" || scenario === "pending-child") {
       await patchSessionEntryCore(current.scope, () => ({
+        ...(scenario === "pending-child"
+          ? {
+              spawnDepth: 1,
+              spawnedBy: "agent:requester:discord:group:synthetic",
+              parentSessionKey: "agent:requester:discord:group:synthetic",
+            }
+          : {}),
         status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: {

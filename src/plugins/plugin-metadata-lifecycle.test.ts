@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler as createScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -35,19 +36,6 @@ import { createPluginMetadataSnapshotFixture as createSnapshot } from "./plugin-
 const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
-function gate() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
-
 it("retains running metadata readers through Gateway close after package replacement", async () => {
   const readers = { ...snapshotReaderSlot };
   const manifests = [{ pluginDir: "/fixture", manifest: { id: "fixture" }, origin: "bundled" }];
@@ -70,6 +58,7 @@ it("retains running metadata readers through Gateway close after package replace
     listKnownProviderAuthEnvVarNamesCore: replacementReader,
   };
   const expectRetainedPolicyReaders = () => {
+    expect(currentSnapshot({})).toBe(snapshot);
     expect(listOpenClawPluginManifestMetadataRuntime()).toBe(manifests);
     expect(listKnownProviderAuthEnvVarNamesRuntime()).toBe(envNames);
   };
@@ -84,7 +73,6 @@ it("retains running metadata readers through Gateway close after package replace
     // Released modules register by assigning the shared slot directly.
     Object.assign(snapshotReaderSlot, replacementReaders);
     await drainGlobalSingletonLifecycleState("close");
-    expect(currentSnapshot({})).toBe(snapshot);
     expectRetainedPolicyReaders();
     expect(withSnapshot(scoped, () => currentSnapshot({}))).toBe(scoped);
     expect(snapshotState().snapshot).toBe(snapshot);
@@ -93,7 +81,6 @@ it("retains running metadata readers through Gateway close after package replace
     finalClose = owner.close(closing.wait);
     await closing.entered;
     Object.assign(snapshotReaderSlot, replacementReaders);
-    expect(currentSnapshot({})).toBe(snapshot);
     expectRetainedPolicyReaders();
     closing.release();
     await finalClose;

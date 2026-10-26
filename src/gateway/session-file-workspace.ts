@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxSession } from "../agents/sandbox/session-selection.js";
@@ -7,7 +6,7 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { sessionMutationForbiddenError } from "./session-mutation-authorization-error.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
 
 /** File readers consume sandbox selection without preparing or provisioning its workspace. */
@@ -60,11 +59,8 @@ export async function prepareSessionFileWorkspace(
     const anchor = anchors[0];
     // Rewrites re-append messages under new ids; a reloaded conversation links the current ids.
     if (!anchor) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "This message is no longer in the conversation; reload the conversation to open its files.",
-        ),
+      throw sessionMutationForbiddenError(
+        "This message is no longer in the conversation; reload the conversation to open its files.",
       );
     }
     // Transcript writers keep the boundary current; a stale one means it could not be kept.
@@ -73,11 +69,8 @@ export async function prepareSessionFileWorkspace(
       prior.through.maxSeq !== null &&
       anchor.generation !== prior.through.generation
     ) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "This message's file links are no longer available; open the file from this conversation's file list.",
-        ),
+      throw sessionMutationForbiddenError(
+        "This message's file links are no longer available; open the file from this conversation's file list.",
       );
     }
     historical =
@@ -96,10 +89,10 @@ export async function prepareSessionFileWorkspace(
           spawnedWorkspaceDir: prior.workspaceDir,
         }
       : current;
-  const expectedCurrent = structuredClone(selection(policy(cfg, entry)));
   const selectedEntry = sourceEntry(entry);
   const selected = policy(cfg, selectedEntry);
   const expected = structuredClone(selection(selected));
+  const expectedCurrent = historical ? structuredClone(selection(policy(cfg, entry))) : expected;
   let roots = selected.roots;
   // Managed projects retain their established checkpoint/publication owner.
   // Explicit ro/rw already admits the selected agent workspace to the sandbox.
@@ -136,11 +129,8 @@ export async function prepareSessionFileWorkspace(
     roots = { ...roots, root, spawnedCwd: undefined, diffCwd: undefined, readScope: "root" };
   }
   if (historical && roots.root !== prior?.fileRoot) {
-    throw new SessionMutationAuthorizationChangedError(
-      errorShape(
-        ErrorCodes.FORBIDDEN,
-        "The original file source is no longer admitted by this conversation's policy.",
-      ),
+    throw sessionMutationForbiddenError(
+      "The original file source is no longer admitted by this conversation's policy.",
     );
   }
   return {
@@ -156,11 +146,10 @@ export async function prepareSessionFileWorkspace(
       if (
         !isDeepStrictEqual(expectedCurrent, selection(policy(config, current))) ||
         !isDeepStrictEqual(entry.priorWorkspace, current.priorWorkspace) ||
-        !isDeepStrictEqual(expected, selection(policy(config, sourceEntry(current))))
+        (historical &&
+          !isDeepStrictEqual(expected, selection(policy(config, sourceEntry(current)))))
       ) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
-        );
+        throw sessionMutationForbiddenError("Session workspace changed during file access");
       }
     },
   };

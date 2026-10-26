@@ -8,6 +8,7 @@ import {
   initializeCodexClientForkSettings,
   forgetCodexClientForkSettings,
 } from "./client-fork-settings.js";
+import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
   isThreadBackgroundOnly,
@@ -144,6 +145,7 @@ export function ensureCodexAppServerClientRuntime(
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
+  threadClosure.ensureCodexAppServerThreadClosureTracking(client);
   initializeCodexClientForkSettings(client);
   client.addCloseHandler(() => {
     // Pending releases may settle after close; their continuations must never
@@ -394,6 +396,7 @@ export async function retainCodexAppServerLiveThread(
     return false;
   }
   const previousOwner = runtime.retainedThreads.get(threadId)?.ownerToken;
+  threadClosure.clearCodexAppServerThreadClosed(client, threadId);
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     ownerToken,

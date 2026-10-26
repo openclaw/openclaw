@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
@@ -11,6 +10,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as recovery from "../database-port-recovery.js";
+import { listDirectoryTreeStrict } from "../directory-walk.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 import { workboardPortProvider } from "./workboard-port.js";
@@ -86,12 +86,13 @@ export async function dropPortSchemas(client: Client, manifests: string[], extra
     ),
   ]);
   for (const namespace of namespaces) {
-    assert.match(namespace, /^(port|restore)_[a-f0-9]+$/);
+    assert.match(namespace, /^(?:(port|restore)_[a-f0-9]+|[a-z_][a-z0-9_]*_[a-f0-9]{16})$/);
     await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
   }
 }
 export async function files(directory: string): Promise<string[]> {
-  return (await fsp.readdir(directory, { recursive: true, withFileTypes: true }))
+  return (await listDirectoryTreeStrict(directory))
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => !entry.isDirectory())
     .map((entry) => path.join(entry.parentPath, entry.name))
     .toSorted();
@@ -99,7 +100,7 @@ export async function files(directory: string): Promise<string[]> {
 export async function fixture(
   run: (input: { state: OpenClawTestState; source: string; client?: Client }) => Promise<void>,
   postgres = false,
-  rows = 1,
+  { rows = 1, store = "workboard" }: { rows?: number; store?: "workboard" | "state" } = {},
 ) {
   await withOpenClawTestState(
     {
@@ -111,13 +112,16 @@ export async function fixture(
       },
     },
     async (state) => {
-      const source = state.statePath("plugins", "workboard", "workboard.sqlite");
+      const source =
+        store === "state"
+          ? state.statePath("state", "openclaw.sqlite")
+          : state.statePath("plugins", "workboard", "workboard.sqlite");
       await state.writeText("plugins.json", '{"entries":{"workboard":{"enabled":false}}}');
       await state.writeConfig(portConfig);
-      const { admit } = await workboardPortProvider.loadDescriptor();
-      assert(admit);
-      await admit(source);
-      {
+      if (store === "workboard") {
+        const { admit } = await workboardPortProvider.loadDescriptor();
+        assert(admit);
+        await admit(source);
         using db = openNodeSqliteDatabase(source);
         db.exec(`UPDATE workboard_schema_migrations SET applied_at = 17;
           INSERT INTO workboard_boards (id, name, created_at, updated_at)

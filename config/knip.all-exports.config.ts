@@ -62,6 +62,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/control-ui-locale-provider.fixture.mjs!",
   // The state-reader build test launches this native dependency fixture by path.
   "test/scripts/state-read-worker-dependency.test-support.mts!",
+  // The relay artifact test launches this emitted-source fixture by path.
+  "test/scripts/service-relay-artifact.test-support.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
@@ -109,6 +111,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
   // The PostgreSQL namespace isolation test resolves this worker through resolveRuntimeWorkerUrl.
   "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
+  // The state-read admission test launches this Worker from computed source and dist paths.
+  "src/infra/database-engine/state-read-admission.worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
@@ -161,8 +165,13 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // The presentation proof HTML loads this browser entry.
-        ...(workspace === "ui" ? ["src/test-helpers/presentation-primitives-solid.tsx!"] : []),
+        // The presentation HTML and projection benchmark builder load these browser entries.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+              "src/test-helpers/control-ui-projection-fixture.tsx!",
+            ]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
@@ -182,12 +191,26 @@ const workspaces = Object.fromEntries(
           ? [
               ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
               ...ROOT_TEST_ENTRY_GLOBS,
+              // Tests spawn these fixtures through computed source and emitted paths.
+              "src/infra/database-engine/state-read-admission-publication.worker.test-support.ts!",
+              "test/scripts/state-read-worker-stream.test-support.ts!",
             ]
           : [
               TEST_ENTRY_GLOB,
+              // Realtime codec tests spawn these fixtures by basename.
+              ...(workspace === "extensions/openai"
+                ? [
+                    "test-support/realtime-dtls-codecs.mjs!",
+                    "test-support/realtime-numeric-codecs.mjs!",
+                  ]
+                : []),
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
-                ? ["src/report-run.benchmark.test-support.ts!"]
+                ? [
+                    "src/report-run.benchmark.test-support.ts!",
+                    // Collection tests load this transport fixture through a module specifier.
+                    "src/run-worker.collection-fixtures.test-support.ts!",
+                  ]
                 : []),
               // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
               ...(workspace === "extensions/diagnostics-prometheus"
@@ -205,7 +228,13 @@ const workspaces = Object.fromEntries(
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next
               // time a scenario needs its own fixture plugin.
-              ...(workspace === "extensions/qa-lab" ? ["test-fixtures/*/index.js!"] : []),
+              ...(workspace === "extensions/qa-lab"
+                ? [
+                    "test-fixtures/*/index.js!",
+                    // The lifecycle test spawns this suite fixture as a separate Node process.
+                    "src/suite-process-lifecycle.test-support.ts!",
+                  ]
+                : []),
             ]),
       ],
       project:

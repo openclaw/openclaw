@@ -1,11 +1,11 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  composeSessionSourceAssertion,
   runWithSessionSourceScope,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { isOpenClawSystemUpdateMessage } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
@@ -16,7 +16,6 @@ import {
 } from "../../sessions/compaction/request-budget.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
-import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import {
   declarePromptHistoryRewrite,
   recordAggregateTruncation,
@@ -27,12 +26,12 @@ import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
-import type { UserTranscriptContext } from "./attempt-history.js";
 import {
   installModelPromptProjection,
   installRuntimeContextMessageForPrompt,
   resolveModelPromptText,
 } from "./attempt-llm-boundary.js";
+import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   isSessionsYieldAbortError,
   stripSessionsYieldArtifacts,
@@ -63,12 +62,6 @@ type PromptActiveSession = (
   options?: Parameters<AgentSession["prompt"]>[1],
 ) => Promise<void>;
 
-type SteeringLease = {
-  leaseId: string;
-  runIds: readonly string[];
-  isCurrent: () => boolean;
-};
-
 type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
@@ -88,7 +81,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   compactionRequestBudget?: CompactionRequestBudget;
   compactBeforeRequest?: ReturnType<typeof createChatGPTV2CompactionBoundary>;
   images: ImageContent[];
-  leasedSteering?: SteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
   assertHostActive?: SessionSourceAssertion;
@@ -99,7 +91,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
     context: Parameters<StreamFn>[1],
     signal?: AbortSignal,
   ) => MeasuredRequestContext | undefined | Promise<MeasuredRequestContext | undefined>;
-  onSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
@@ -115,15 +106,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
-  let pendingSteering = input.leasedSteering;
-  const assertSteeringCurrent = () => {
-    if (pendingSteering && !pendingSteering.isCurrent()) {
-      throw new Error(
-        "The queued child results lost authority before requester prompt submission.",
-      );
-    }
-  };
-  assertSteeringCurrent();
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const projectionRecorder =
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
@@ -183,7 +165,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
         async () => {
           const assertRequestCurrent = () => {
             options?.signal?.throwIfAborted();
-            assertSteeringCurrent();
             (input.assertHostActive?.assertScopeCurrent ?? input.assertHostActive)?.();
           };
           // Runtime admission queues behind the user append; join it outside that write lane.
@@ -233,10 +214,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
             projectionRecorder?.markSentToProvider?.();
           }
           const stream = await baseStreamFn(model, requestContext, options);
-          // Pre-prompt compaction has not consumed the deferred answer.
-          if (foregroundRequest) {
-            pendingSteering = undefined;
-          }
           return stream;
         },
         { checkAfter: false },
@@ -305,10 +282,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
         recorder: projectionRecorder,
         withTranscriptWrite: input.withTranscriptWrite,
         getUserTranscriptContexts: input.getUserTranscriptContexts,
-        assertCurrent: composeSessionSourceAssertion([input.assertHostActive], (assertSource) => {
-          assertSteeringCurrent();
-          assertSource();
-        }),
+        assertCurrent: input.assertHostActive,
       });
   const armModelPromptTransform = (submitted: boolean) => {
     captureCurrentPromptForModel ||= submitted;
@@ -330,7 +304,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     // Persist after the user (or synthetic runtime prompt), retiring unconsumed
     // context when preflight handles or rejects the prompt before the loop starts.
     const cleanupRuntimeContextMessage =
-      input.appendOnlyRuntimeContext && input.runtimeContextMessage
+      input.runtimeContextMessage &&
+      (input.appendOnlyRuntimeContext || isOpenClawSystemUpdateMessage(input.runtimeContextMessage))
         ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
         : installRuntimeContextMessageForPrompt({
             session: activeSession,
@@ -341,10 +316,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
       await input.promptActiveSession(submittedPrompt, promptOptions);
     } finally {
       cleanupRuntimeContextMessage();
-    }
-    if (input.leasedSteering) {
-      await ackPendingAgentSteeringItems(input.leasedSteering);
-      input.onSteeringAcknowledged();
     }
   } finally {
     if (modelOnlyPrompt) {
@@ -414,7 +385,6 @@ export async function handleEmbeddedAttemptPromptError(input: {
   error: unknown;
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void | Promise<void>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
@@ -425,7 +395,6 @@ export async function handleEmbeddedAttemptPromptError(input: {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.
     input.markYieldAborted();
   }
-  await input.releaseLeasedSteering(input.error);
   if (yieldAborted) {
     await waitForEmbeddedAbortSettle({
       promise: input.yieldAbortSettled,

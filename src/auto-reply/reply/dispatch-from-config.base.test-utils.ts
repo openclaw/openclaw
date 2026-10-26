@@ -2,7 +2,11 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
@@ -32,6 +36,7 @@ import {
   hookMocks,
   messageAuditMocks,
   mocks,
+  mockSessionStorePath,
   runtimePluginMocks,
   sessionStoreMocks,
   transcriptMocks,
@@ -56,6 +61,16 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function createSlackChannelCtx(fields: Partial<MsgContext>) {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    OriginatingChannel: "slack",
+    OriginatingTo: "channel:C123",
+    ...fields,
+  });
+}
 
 beforeAll(dispatchHarness.globalBeforeAll0);
 
@@ -116,7 +131,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
       routeThreadId: "500.000",
@@ -403,11 +418,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
     const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
+    const ctx = createSlackChannelCtx({
       ChatType: "group",
       SessionKey: "agent:main:slack:channel:C123",
       MessageSid: "slack-message-1",
@@ -436,7 +447,7 @@ describe("dispatchReplyFromConfig", () => {
         kind: "channel-final",
         sourceMessageId: "slack-message-1",
       },
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -598,13 +609,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => payload(),
@@ -758,11 +763,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
+      ctx: createSlackChannelCtx({
         SessionKey: "agent:main:slack:channel:C123",
         MessageSid: "slack-message-2",
       }),
@@ -791,13 +792,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => ({ text: "Hidden Slack reply" }),
@@ -840,11 +835,11 @@ describe("dispatchReplyFromConfig", () => {
     let inBandMutationRan = false;
     const rotatedSessionId = "rotated-session";
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(
-        isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-      ).toBe(true);
+      expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+        true,
+      );
       await runSessionMutation({
-        scope: "/tmp/mock-sessions.json",
+        scope: mockSessionStorePath,
         identities: [sessionKey, sessionId],
         run: async () => {
           inBandMutationRan = true;
@@ -865,7 +860,7 @@ describe("dispatchReplyFromConfig", () => {
           )?.onSessionPrepared?.({
             sessionKey,
             sessionId: rotatedSessionId,
-            storePath: "/tmp/mock-sessions.json",
+            storePath: mockSessionStorePath,
           });
         },
       });
@@ -907,14 +902,8 @@ describe("dispatchReplyFromConfig", () => {
   it("holds a Slack bypass lease until an abort-insensitive resolver settles", async () => {
     const { activeOperation, createCtx, sessionId, sessionKey } =
       await createActiveSlackThread("U3");
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
+    const { promise: resolverGate, resolve: releaseResolver } = createDeferred();
+    const { promise: resolverEntered, resolve: signalResolverEntered } = createDeferred();
     let signalResolverAborted: () => void = () => {};
     const resolverAborted = new Promise<void>((resolve) => {
       signalResolverAborted = resolve;
@@ -949,7 +938,7 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           kind: "reset",
           policy: "preempt",
@@ -960,9 +949,7 @@ describe("dispatchReplyFromConfig", () => {
         }),
     );
     expect(mutationRan).toBe(false);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     await resolverAborted;
     releaseResolver();
@@ -971,7 +958,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(false);
     expect(mutationRan).toBe(true);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
       false,
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1030,9 +1017,9 @@ describe("dispatchReplyFromConfig", () => {
       activeOperation.complete();
       await vi.waitFor(
         () => {
-          expect(
-            isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-          ).toBe(false);
+          expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+            false,
+          );
         },
         { timeout: 500 },
       );
@@ -1151,7 +1138,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     const dispatcher = createDispatcher();
@@ -1214,7 +1201,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "before_dispatch");
@@ -1265,14 +1252,8 @@ describe("dispatchReplyFromConfig", () => {
       status: "failed",
     };
 
-    let releaseFirstTurn: () => void = () => {};
-    const firstResolverGate = new Promise<void>((release) => {
-      releaseFirstTurn = release;
-    });
-    let signalFirstResolverEntered: () => void = () => {};
-    const firstTurnEntered = new Promise<void>((resolve) => {
-      signalFirstResolverEntered = resolve;
-    });
+    const { promise: firstResolverGate, resolve: releaseFirstTurn } = createDeferred();
+    const { promise: firstTurnEntered, resolve: signalFirstResolverEntered } = createDeferred();
     const firstReplyResolver = vi.fn(async () => {
       signalFirstResolverEntered();
       await firstResolverGate;

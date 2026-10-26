@@ -23,10 +23,12 @@ import {
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { GatewayInputRecovery } from "./agent-input-recovery.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { publishHooksTokenEnvKey } from "./hooks.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
@@ -265,6 +267,7 @@ export async function prepareGatewayKernelState(params: {
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
+      workerPlacementRuntime.dispatchService.waitForInitialPlacement,
     );
   }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
@@ -427,6 +430,10 @@ export async function prepareGatewayKernelState(params: {
     pendingReason: "startup-sidecars",
     dispatchReady: false,
   };
+  const unavailableGatewayMethods = new Set<string>(
+    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  );
+  const inputRecovery = new GatewayInputRecovery(minimalTestGateway);
   const lifecycle = { closePreludeStarted: false };
   const startupAccountStarts = createDeferredCore();
   const gatewayInstanceRuntimeRef: { current: GatewayInstanceRuntime | undefined } = {
@@ -480,6 +487,10 @@ export async function prepareGatewayKernelState(params: {
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,
+    // Recovery releases this same admission gate before readiness can admit fresh chat.
+    isChatSendAvailable: () => !unavailableGatewayMethods.has("chat.send"),
+    getPendingAgentInputRecovery: () => inputRecovery.pendingAgentIds(),
+    isRequiredAgent: (agentId) => !canIsolateAgentDatabase(getRuntimeConfig(), agentId),
     shouldSkipChannelReadiness: isChannelStartupSuppressedByEnvironment,
   });
   const watchNodeRequestHandler: {
@@ -600,6 +611,9 @@ export async function prepareGatewayKernelState(params: {
     gatewayTls,
     readinessEventLoopHealth,
     startupState,
+    unavailableGatewayMethods,
+    inputRecovery,
+    getReadiness,
     lifecycle,
     releaseStartupAccountStarts: startupAccountStarts.resolve,
     gatewayInstanceRuntimeRef,

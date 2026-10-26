@@ -27,7 +27,7 @@ import {
 } from "./gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
-import { resolveDatabasePathKey } from "./sqlite-worker-identity.js";
+import { resolveDatabasePathKeyAsync } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
@@ -41,7 +41,10 @@ const runtime = resolveGlobalSingleton(
   (): {
     pool?: CredentialPool;
     closing?: Promise<void>;
-    resources: Map<string, () => void>;
+    resources: Map<
+      string,
+      { access: ReturnType<typeof captureStateDatabaseAccess>; unregister: () => void }
+    >;
   } => ({ resources: new Map() }),
   () => closeClientCredentialWorker(),
 );
@@ -51,8 +54,8 @@ function closeClientCredentialWorker(): Promise<void> {
     await Promise.all(queues.values());
     await runtime.pool?.close();
     runtime.pool = undefined;
-    for (const unregister of runtime.resources.values()) {
-      unregister();
+    for (const resource of runtime.resources.values()) {
+      resource.unregister();
     }
     runtime.resources.clear();
   })().finally(() => {
@@ -92,7 +95,16 @@ async function runClientCredentialTaskAsync(
   operation: ClientCredentialWorkerOperation,
   options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ): Promise<ClientCredentialResult | ClientCredentialPreparation> {
-  const root = resolveDatabasePathKey(path.resolve(resolveStateDir(env)));
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  // Resolve aliases in invocation order before reserving their shared canonical writer queue.
+  const root = await enqueueKeyedTask({
+    tails: queues,
+    key: "\0credential-root-resolution",
+    task: () => resolveDatabasePathKeyAsync(path.resolve(resolveStateDir(env))),
+  });
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
   const capturedEnv = {
     HOME: env.HOME,
     USERPROFILE: env.USERPROFILE,
@@ -114,25 +126,29 @@ async function runClientCredentialTaskAsync(
         if (runtime.closing) {
           throw new Error("Client credential worker is closing.");
         }
-        if (!runtime.resources.has(databasePath)) {
-          runtime.resources.set(
-            databasePath,
-            registerOpenClawAgentDatabaseReadCandidateResource({
+        let resource = runtime.resources.get(databasePath);
+        if (!resource) {
+          resource = {
+            access: captureStateDatabaseAccess(databasePath),
+            unregister: registerOpenClawAgentDatabaseReadCandidateResource({
               path: databasePath,
               revoke() {
                 void closeClientCredentialWorker().catch(() => {});
               },
               close: closeClientCredentialWorker,
             }),
-          );
+          };
+          runtime.resources.set(databasePath, resource);
         }
         const maintenance = getOpenClawDatabaseMaintenanceScope();
-        const access = captureStateDatabaseAccess(databasePath);
+        const access = resource.access;
+        const assertStateAccess = await access.prepareAccess({ maintenanceScope: maintenance });
+        assertCurrent();
         let schemaLease: StateDatabaseSchemaLease | undefined;
         const assertAccess = () => {
           assertCurrent();
           maintenance?.assertAdmission();
-          access.assertReadAllowed({ maintenanceScope: maintenance, schemaLease });
+          assertStateAccess({ maintenanceScope: maintenance, schemaLease });
         };
         const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
           assertAccess();
@@ -150,13 +166,7 @@ async function runClientCredentialTaskAsync(
             const lease = maintenance ? maintenance.run(acquire) : acquire();
             schemaLease = lease;
             maintenance?.own(lease, "shared-resources", () => lease.release());
-            return {
-              assertCurrent() {
-                assertAccess();
-                lease.assertCurrent();
-              },
-              release: () => lease.release(),
-            };
+            return lease;
           },
         });
         const releaseService = retainSqliteWriteAdmissionService([databasePath], () =>

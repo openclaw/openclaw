@@ -9,9 +9,7 @@ export type ClawsCatalogViewProps = {
   readEntries: () => ClawCatalogEntry[];
   catalogRequest: Promise<ClawCatalogEntry[]> | undefined;
   basePath: string;
-  query: string;
   selected: ClawCatalogEntry | null;
-  pageMode: boolean;
   detail: ClawCatalogDetail | null;
   /** Read only inside the detail contents Loading/Errored slot. */
   readDetail: () => ClawCatalogDetail | null;
@@ -24,10 +22,7 @@ export type ClawsCatalogViewProps = {
   addedAgentId: string | null;
   canAdd: boolean;
   onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
-  onSearch: (query: string) => void;
-  onSelect: (entry: ClawCatalogEntry) => void;
   onBack: () => void;
-  onClose: () => void;
   onRetryCatalog: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;

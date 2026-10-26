@@ -1,6 +1,4 @@
 import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts";
-import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
-import { codexHistoryWorkerEntrypoint } from "../../extensions/codex/session-history-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
@@ -94,6 +92,9 @@ import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
+  agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+  cronOwnerInspectionPostgresRuntimeEntrypoint,
+  stateLeasePostgresRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
@@ -284,6 +285,8 @@ export const preservedModuleBuildAssets = [
 
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
+  // Standalone skill discovery loads this sibling only when prepared contributions are absent.
+  "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
   "legacy-config-binding-repair.runtime":
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
@@ -314,8 +317,6 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(discordAudioTestEntrypoints),
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
-    codexCatalogPageWorkerEntrypoint,
-    codexHistoryWorkerEntrypoint,
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
@@ -390,6 +391,9 @@ export const vitestWorkerBuildEntries = {
     updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
+    agentDeletionRecoveryHoldPostgresRuntimeEntrypoint,
+    cronOwnerInspectionPostgresRuntimeEntrypoint,
+    stateLeasePostgresRuntimeEntrypoint,
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,

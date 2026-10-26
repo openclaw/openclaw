@@ -448,11 +448,12 @@ describe("sendGatewayHello update detail scope", () => {
     async (withdrawal) => {
       const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
-      tailscaleClaim.mockResolvedValue({
+      tailscaleClaim.mockResolvedValueOnce({
         exited: exited.promise,
         isActive: () => true,
         stop: vi.fn(),
       });
+      tailscaleClaim.mockRejectedValue(new Error("Tailscale daemon unavailable"));
       const cleanup = await startGatewayTailscaleExposure({
         tailscaleMode: "serve",
         port: 18789,

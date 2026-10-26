@@ -12,6 +12,7 @@ import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { observeSqliteNativeClose } from "./sqlite-native-observer.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 
 export type UpdateDoctorMigrationCapture = {
   expected(pathname: string): string | null | undefined;
@@ -231,10 +232,21 @@ export function runUpdateSqliteMigration<T>(
             throw new Error("Created SQLite migration family is no longer empty.");
           }
         }
-        const before = expected === null ? null : readSqliteGeneration(pathname);
+        // Before native exclusion, a cold read-only open may add an empty WAL
+        // index to the captured family. Exclusive handles keep the isolated read:
+        // closing a raw source descriptor here would release their process locks.
+        const before =
+          expected === null
+            ? null
+            : mode === "exclusive"
+              ? readSqliteGeneration(pathname)
+              : readMatchingUpdateDatabaseGeneration(pathname, expected);
         assertCurrent();
+        if (before === undefined || (mode === "exclusive" && before !== expected)) {
+          throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
+        }
         if (before !== expected) {
-          throw new Error("SQLite migration source changed after update capture.");
+          capture.accept(pathname, expected, before);
         }
         if (mode !== "exclusive") {
           // Start WAL in normal mode: a cold exclusive WAL cannot later return
@@ -264,7 +276,9 @@ export function runUpdateSqliteMigration<T>(
           return result;
         });
       } catch (error) {
-        capture.refuse("SQLite migration publication could not be verified.");
+        capture.refuse(
+          `SQLite migration publication could not be verified: ${formatErrorMessage(error)}`,
+        );
         throw error;
       }
     },

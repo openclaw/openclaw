@@ -3,6 +3,7 @@ import { expect, vi } from "vitest";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredWorkTracker } from "../shared/async-work-scope.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { activeSessions } from "../transcripts/capture-startup.js";
 import type {
@@ -42,7 +43,14 @@ export async function startTranscriptReloadFixtureSidecars(
       startupModuleRestorers.toReversed().forEach((restore) => restore());
     }
   });
-  await installGatewaySubagentModuleLoad(idle, idle, startupModuleRestorers);
+  await installGatewaySubagentModuleLoad(
+    idle,
+    () => {
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
+    },
+    startupModuleRestorers,
+  );
   const config = getConfig();
   const unusedRecovery = async (): Promise<never> => {
     throw new Error("unexpected main-session recovery");
@@ -83,7 +91,9 @@ export async function startTranscriptReloadFixtureSidecars(
     deps: {},
     startChannels: idle,
     mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
+    isRestartRecoverySuppressed: () => false,
     recoveryRuntime: {
+      prepareFailedWorkerPlacement: unusedRecovery,
       prepareRestartRecovery: unusedRecovery,
       dispatchSessionMethod: unusedRecovery,
       dispatchAgent: unusedRecovery,
@@ -103,10 +113,7 @@ export async function startTranscriptReloadFixtureSidecars(
     onPostReadySidecars: runtime.runtimeState.postReadySidecars.publish,
     onGatewayLifetimeSidecars: sidecars.publish,
     unregisterConnectionDependentSidecar: vi.fn(),
-    trackStartupWork: (run) => {
-      const operation = Promise.resolve().then(() => run(startupWork.signal));
-      return startupWork.track(() => operation);
-    },
+    trackStartupWork: createDeferredWorkTracker(startupWork),
   });
   cleanups.push(() => startup.stopGatewayUpdateCheck());
   return sidecars;

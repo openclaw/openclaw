@@ -6,167 +6,161 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import * as mainThreadStall from "./main-thread-stall.js";
+import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
 import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  isSqliteWorkerError,
+  retainSqliteWorkerErrorCode,
+  SqliteWorkerError,
+} from "./sqlite-worker-error.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
-it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
-  "publishes worker receipts before settling its %s reply",
-  async (kind) => {
-    const key = "openclaw.sqliteNativeRuntimeAdmission";
-    const previous = getEnvironmentData(key);
-    try {
-      setEnvironmentData(key, undefined);
-      vi.resetModules();
-      const sqlite = await import("./node-sqlite.js");
-      sqlite.requireNodeSqlite();
-      const receipt: unknown = getEnvironmentData(key);
-      assert(isRecord(receipt) && isRecord(receipt.runtime));
-      const forwarded =
-        kind === "mismatched"
-          ? { ...receipt, runtime: { ...receipt.runtime, pid: process.pid + 1 } }
-          : kind === "unsafe"
-            ? { ...receipt, version: "3.51.2" }
-            : kind === "malformed"
-              ? { ...receipt, extensionLoadingSupported: "yes" }
-              : receipt;
-      setEnvironmentData(key, undefined);
-      const nativeQueries = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const unexpected = () => {
-        throw new Error("Runtime admission must not add a request or fail the operation");
-      };
-      const actor: Pick<Actor, "id" | "closeReceipt" | "openDispatch"> = {
-        id: 1,
-        openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
-      };
-      const closeReceipt: SqliteWorkerCloseReceipt = {
-        identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
-        incarnation: "closed-incarnation",
-        checkpoint: {
-          observedAtNs: 42n,
-          health: {
-            state: "complete",
-            observedAtMs: 1,
-            walBytes: 0,
-            databaseBytes: 4096,
-            logFrames: 0,
-            checkpointedFrames: 0,
-            lastCompletedAtMs: 1,
-            consecutiveBlocked: 0,
-            warning: false,
-          },
-        },
-      };
-      const job: Job = {
-        custody: new SqliteWorkerSlotCustody().createRequest(),
-        observation: { started() {}, completed() {} },
-        request:
-          kind === "close"
-            ? { type: "close", id: 1, actor: 1 }
-            : { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
-        bytes: 0,
-        result: createDeferredCore().promise,
-        resolve: unexpected,
-        reject: unexpected,
-        detach: unexpected,
-      };
-      const finish = vi.fn(() => {
-        expect(getEnvironmentData(key)).toEqual(
-          kind === "valid" || kind === "framed" || kind === "close" ? receipt : undefined,
-        );
-        if (kind === "close") {
-          expect(actor.closeReceipt).toMatchObject({
-            incarnation: "closed-incarnation",
-            checkpoint: { observedAtNs: 42n },
-          });
-        }
-      });
-      const postMessage = vi.fn();
-      const slot = { actors: new Set([actor]), current: job, worker: { postMessage } };
-      const owner = { fail: unexpected, finish, dispatch() {} };
-      if (kind === "framed") {
-        const producer = createSqliteWorkerTransferOwner();
-        const handle = producer.start([{ kind: "result", value: "committed" }].values(), {
-          kinds: ["result"],
-        });
-        receiveSqliteWorkerReply(
-          slot,
-          {
-            id: 1,
-            ok: true,
-            value: serialize(handle),
-            transfer: "start",
-            nativeRuntimeAdmission: forwarded,
-          },
-          owner,
-        );
-        expect(getEnvironmentData(key)).toBeUndefined();
-        let frame;
-        do {
-          frame = producer.next(handle.id);
-          receiveSqliteWorkerReply(
-            slot,
-            {
-              id: 1,
-              ok: true,
-              value: serialize(frame),
-              transfer: "frame",
-              nativeRuntimeAdmission: forwarded,
-            },
-            owner,
-          );
-          if (!frame.done) {
-            expect(getEnvironmentData(key)).toBeUndefined();
-            expect(finish).not.toHaveBeenCalled();
-          }
-        } while (!frame.done);
-        producer.end(handle.id);
-        expect(postMessage).toHaveBeenCalledTimes(2);
-      } else {
-        receiveSqliteWorkerReply(
-          slot,
-          {
-            id: 1,
-            ok: true,
-            value: serialize("committed"),
-            nativeRuntimeAdmission: forwarded,
-            ...(kind === "close" ? { closeReceipt } : {}),
-          },
-          owner,
-        );
-        expect(postMessage).not.toHaveBeenCalled();
-      }
-      expect(finish).toHaveBeenCalledWith(job, undefined, "committed");
-      expect(nativeQueries).not.toHaveBeenCalled();
-    } finally {
-      vi.restoreAllMocks();
-      setEnvironmentData(key, previous);
-    }
-  },
-);
+function unexpected() {
+  throw new Error("Unexpected worker operation");
+}
 
-it("hydrates cached-context execute-frame errors without an explicit request context", () => {
-  const original = Object.assign(
-    new Error("Synthetic preparation failure", { cause: new Error("Synthetic read failure") }),
-    { code: "EIO", errno: -5 },
-  );
-  const sharedState = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
-  assert(sharedState);
-  const unexpected = () => {
-    throw new Error("Failed continuation must not dispatch or finish successfully");
-  };
-  const job: Job = {
+function createJob(request: Job["request"]): Job {
+  return {
     custody: new SqliteWorkerSlotCustody().createRequest(),
     observation: { started() {}, completed() {} },
-    request: { type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() },
+    request,
     bytes: 0,
     result: createDeferredCore().promise,
     resolve: unexpected,
     reject: unexpected,
     detach: unexpected,
   };
+}
+
+it("settles ordinary replies without an additional wrapper crossing the decode boundary", () => {
+  const decode = vi.spyOn(mainThreadStall, "runWithMainThreadTask");
+  try {
+    for (const value of [undefined, null, 42, { bytes: Buffer.from([0, 127, 255]), count: 42n }]) {
+      const job = createJob({ type: "execute", id: 1, actor: 1, input: new Uint8Array() });
+      const finish = vi.fn();
+      receiveSqliteWorkerReply(
+        { actors: new Set(), current: job, worker: { postMessage: unexpected } },
+        { id: 1, ok: true, value: serialize(value) },
+        { fail: unexpected, finish, dispatch() {} },
+      );
+      expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, value);
+      // Completion may return nothing or the decoded value itself, without an additional wrapper.
+      const observed = decode.mock.results.at(-1)?.value;
+      const delivered = finish.mock.calls[0]?.[2];
+      expect(observed === undefined || Object.is(observed, delivered)).toBe(true);
+    }
+  } finally {
+    decode.mockRestore();
+  }
+});
+
+it.each(["framed", "close"])("publishes receipts before settling: %s", async (kind) => {
+  const key = "openclaw.sqliteNativeRuntimeAdmission";
+  const previous = getEnvironmentData(key);
+  try {
+    setEnvironmentData(key, undefined);
+    vi.resetModules();
+    const sqlite = await import("./node-sqlite.js");
+    sqlite.requireNodeSqlite();
+    const receipt: unknown = getEnvironmentData(key);
+    assert(isRecord(receipt) && isRecord(receipt.runtime));
+    setEnvironmentData(key, undefined);
+    const nativeQueries = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const actor: Pick<Actor, "id" | "closeReceipt" | "openDispatch"> = {
+      id: 1,
+      openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
+    };
+    const closeReceipt: SqliteWorkerCloseReceipt = {
+      identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
+      incarnation: "closed-incarnation",
+      checkpoint: {
+        observedAtNs: 42n,
+        health: {
+          state: "complete",
+          observedAtMs: 1,
+          walBytes: 0,
+          databaseBytes: 4096,
+          logFrames: 0,
+          checkpointedFrames: 0,
+          lastCompletedAtMs: 1,
+          consecutiveBlocked: 0,
+          warning: false,
+        },
+      },
+    };
+    const job = createJob(
+      kind === "close"
+        ? { type: "close", id: 1, actor: 1 }
+        : { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
+    );
+    const finish = vi.fn(() => {
+      expect(getEnvironmentData(key)).toEqual(receipt);
+      if (kind === "close") {
+        expect(actor.closeReceipt).toBe(closeReceipt);
+      }
+    });
+    const postMessage = vi.fn();
+    const slot = { actors: new Set([actor]), current: job, worker: { postMessage } };
+    const owner = { fail: unexpected, finish, dispatch() {} };
+    const receive = (value: unknown, transfer?: "start" | "frame") =>
+      receiveSqliteWorkerReply(
+        slot,
+        {
+          id: 1,
+          ok: true,
+          value: serialize(value),
+          nativeRuntimeAdmission: receipt,
+          ...(transfer ? { transfer } : {}),
+          ...(kind === "close" ? { closeReceipt } : {}),
+        },
+        owner,
+      );
+    if (kind === "framed") {
+      const producer = createSqliteWorkerTransferOwner();
+      const handle = producer.start([{ kind: "result", value: "committed" }].values(), {
+        kinds: ["result"],
+      });
+      receive(handle, "start");
+      expect(getEnvironmentData(key)).toBeUndefined();
+      let frame;
+      do {
+        frame = producer.next(handle.id);
+        receive(frame, "frame");
+        if (!frame.done) {
+          expect(getEnvironmentData(key)).toBeUndefined();
+          expect(finish).not.toHaveBeenCalled();
+        }
+      } while (!frame.done);
+      producer.end(handle.id);
+    } else {
+      receive("committed");
+      expect(postMessage).not.toHaveBeenCalled();
+    }
+    expect(finish).toHaveBeenCalledWith(job, undefined, "committed");
+    expect(nativeQueries).not.toHaveBeenCalled();
+  } finally {
+    vi.restoreAllMocks();
+    setEnvironmentData(key, previous);
+  }
+});
+
+it("hydrates cached-context execute-frame failures and their uncertain ordinary causes", () => {
+  const primary = Object.assign(
+    new Error("Synthetic preparation failure", { cause: new Error("Synthetic read failure") }),
+    { code: "EIO", errno: -5 },
+  );
+  const original = retainSqliteWorkerErrorCode(
+    new AggregateError([primary], "Synthetic cleanup failure", { cause: primary }),
+    new SqliteWorkerError("Synthetic unknown write", "outcome-unknown"),
+  );
+  const sharedState = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
+  assert(sharedState);
+  const job = createJob({ type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() });
   let failure: unknown;
 
   receiveSqliteWorkerReply(
@@ -175,9 +169,9 @@ it("hydrates cached-context execute-frame errors without an explicit request con
       id: 1,
       ok: false,
       error: {
-        name: "Error",
-        message: "Synthetic preparation failure",
-        code: "EIO",
+        name: original.name,
+        message: original.message,
+        code: "outcome-unknown",
         sharedState: structuredClone(sharedState),
       },
     },
@@ -190,11 +184,16 @@ it("hydrates cached-context execute-frame errors without an explicit request con
     },
   );
 
-  expect(failure).toBeInstanceOf(Error);
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+  expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
+  expect(isSqliteWorkerError(failure, "outcome-unknown")).toBe(false);
   expect(failure).toMatchObject({
-    message: "Synthetic preparation failure",
-    code: "EIO",
-    errno: -5,
-    cause: { message: "Synthetic read failure" },
+    cause: {
+      message: "Synthetic preparation failure",
+      code: "EIO",
+      errno: -5,
+      cause: { message: "Synthetic read failure" },
+    },
   });
 });

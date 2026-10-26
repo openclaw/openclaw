@@ -20,14 +20,13 @@ import {
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
-import {
-  createLocalWorkspaceManifestTree,
-  localWorkspaceManifestRootReference,
-} from "./local-workspace-manifest-tree.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
+import {
+  captureWorkspaceManifestDocument,
+  workspaceManifestPaths,
+} from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -125,20 +124,10 @@ export function projectionOperations(
     ref: string,
     patch: Parameters<typeof store.update>[1] = {},
   ) => {
-    const manifest = parseWorkerWorkspaceManifest(raw, ref, await buildCacheInputs());
-    const records = createLocalWorkspaceManifestTree([
-      ...manifest.entries,
-      ...(manifest.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
     await update(patch, {
-      previousRoot: current().baseline_ref,
-      resultingRoot: localWorkspaceManifestRootReference(records, manifest.baseCommit),
-      records: [...records.values()],
-      removed: [],
-      replace: true,
+      rawManifest: raw,
+      manifestRef: ref,
+      buildCacheInputs: await buildCacheInputs(),
     });
   };
   const migrateBaseline = async () => {
@@ -201,8 +190,8 @@ export function projectionOperations(
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
-      baseline: document
-        ? parseWorkerWorkspaceManifest(document.rawManifest, document.manifestRef, retained)
+      baselinePaths: document
+        ? await workspaceManifestPaths(document, retained, signal)
         : undefined,
     });
   };
@@ -239,31 +228,13 @@ export function projectionOperations(
     if (snapshot.kind !== "scan") {
       throw new Error("Local workspace checkpoint scan is missing");
     }
-    // Carry the scan's fresh host admission into the receipt and future custody.
-    if (snapshot.buildCacheInputs.length) {
-      const admitted = parseLocalWorkspaceSourcePaths(current().source_paths_json);
-      const known = new Set(admitted);
-      const added = snapshot.buildCacheInputs.filter((entryPath) => !known.has(entryPath));
-      if (added.length) {
-        await update({ source_paths_json: JSON.stringify([...admitted, ...added]) });
-      }
+    const { observation, ...checkpoint } = snapshot;
+    if (observation) {
+      // Admit host paths and unchanged-file identities without materializing the tree here.
+      row = await store.accept(observation, owner.workerAuthority);
     }
     inputPaths = Promise.resolve(snapshot.buildCacheInputs);
     preparedInputPaths = undefined;
-    const { observedRecords, ...checkpoint } = snapshot;
-    if (observedRecords.length) {
-      // These are only fresh identities for unchanged nodes. Persisting them
-      // before reservation cannot advance content or consume pending edits.
-      await update(
-        {},
-        {
-          previousRoot: snapshot.previousRoot,
-          resultingRoot: snapshot.previousRoot!,
-          records: observedRecords,
-          removed: [],
-        },
-      );
-    }
     return checkpoint;
   };
   const recover = async () => {

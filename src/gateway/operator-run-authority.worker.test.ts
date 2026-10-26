@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
@@ -24,11 +23,15 @@ import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.work
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
+import {
+  isOperatorRoleSourcePolicyCurrent,
+  sourceRolePolicy,
+} from "./operator-role-source-policy.js";
 import {
   captureChannelOperatorRunAuthority,
   captureGatewayOperatorRunAuthority,
@@ -46,6 +49,39 @@ import {
 function modelRef(model: string) {
   return { provider: "fixture", model };
 }
+
+it("checks canonical role scopes without reading unused grants and observes the next revocation", () => {
+  const grants: GatewayOperatorRoleDefinition["scopes"] = [
+    "operator.read",
+    "operator.talk",
+    "operator.talk.secrets",
+    "operator.pairing",
+    "operator.approvals",
+    "operator.questions",
+  ];
+  let reads = 0;
+  const role: GatewayOperatorRoleDefinition = {
+    sessions: { others: "none" },
+    agents: "*",
+    scopes: new Proxy(grants, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) {
+          reads++;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    }),
+  };
+  const captured = sourceRolePolicy({ ...role, scopes: [...grants] });
+  const current = sourceRolePolicy(role);
+  expect(isOperatorRoleSourcePolicyCurrent(captured, current, [" operator.read ", " "])).toBe(true);
+  expect(reads).toBe(1);
+  const other = sourceRolePolicy({ ...role, scopes: ["operator.write"] });
+  expect(isOperatorRoleSourcePolicyCurrent(other, other, ["operator.sessions.write"])).toBe(true);
+  grants[0] = "operator.sessions.read";
+  expect(isOperatorRoleSourcePolicyCurrent(captured, current, ["operator.read"])).toBe(false);
+  expect(isOperatorRoleSourcePolicyCurrent(other, other, ["operator.sessions.write"])).toBe(true);
+});
 function expectModels(
   authority: Awaited<ReturnType<typeof capture>>["authority"],
   expected: boolean[],
@@ -99,16 +135,9 @@ function registerProof(
   scope: "operator.read" | "operator.write",
   handler: (options: GatewayRequestHandlerOptions) => void,
 ) {
-  context.getGatewayMethodRegistry = () =>
-    createGatewayMethodRegistry([
-      {
-        name,
-        scope,
-        profileAccess: "independent",
-        owner: { kind: "core", area: "proof" },
-        handler,
-      },
-    ]);
+  context.getGatewayMethodRegistry = createContext([
+    [name, scope, "proof", handler],
+  ]).getGatewayMethodRegistry;
 }
 function scoped<T>({ client, context }: OperatorFixture, run: () => T) {
   return withPluginRuntimeGatewayRequestScope(
@@ -191,55 +220,71 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
     ["operator.write"],
   ));
 
-it("preserves the live operator source through principal capture without trusting copied labels", () =>
+it("keeps gateway and channel role facts immutable and bound to their live source", () =>
   withOperator(async ({ profile, client, context }) => {
     const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
     const source = new AbortController();
     const sourceAuthority = abortAuthority(source);
-    const captures = await Promise.all(
-      [principal, client, { ...client }].map((input) =>
-        capture({ client: input, context, sourceAuthority }),
-      ),
+    const captured = await capture({ client: principal, context, sourceAuthority });
+    using _ = { [Symbol.dispose]: captured.release };
+    const channel = captureChannelOperatorRunAuthority({
+      profileId: profile.id,
+      assignedRole: null,
+      scopes: ["operator.read"],
+      gatewayAccessGrant: null,
+      getRuntimeConfig: context.getRuntimeConfig,
+      ...sourceAuthority,
+    });
+    const authorities = [captured.authority, channel];
+    const readers = authorities.map((authority) =>
+      expectDefined(authority.readCurrentRoleFacts, "role reader"),
     );
-    try {
-      const principalSource = expectDefined(captures[0], "principal authority").authority.source;
-      const originalSource = expectDefined(captures[1], "socket authority").authority.source;
-      const copiedSource = expectDefined(captures[2], "copied authority").authority.source;
-      expect(originalSource).toBeDefined();
-      expect(principalSource).toBe(originalSource);
-      expect(copiedSource).not.toBe(originalSource);
-      const channel = captureChannelOperatorRunAuthority({
-        profileId: profile.id,
-        assignedRole: null,
-        scopes: ["operator.read"],
-        gatewayAccessGrant: null,
-        getRuntimeConfig: context.getRuntimeConfig,
-        ...sourceAuthority,
-      });
-      const readers = [...captures.map(({ authority }) => authority), channel].flatMap(
-        (authority) => [
-          expectDefined(authority.readCurrentRoleAssignment, "role reader"),
-          expectDefined(authority.readCurrentGithubLogin, "GitHub reader"),
-        ],
-      );
-      for (const read of readers) {
-        expect(read()).toBeNull();
-      }
-      for (const retained of captures) {
-        expect(retained.authority.assertCurrent).not.toThrow();
-      }
-      source.abort(new Error("source revoked"));
-      for (const read of readers) {
-        expect(read).toThrow();
-      }
-      for (const retained of captures) {
-        expect(retained.authority.assertCurrent).toThrow();
-      }
-    } finally {
-      for (const retained of captures) {
-        retained.release();
-      }
+    for (const read of readers) {
+      const facts = read();
+      expect(facts.assignedRole).toBeNull();
+      expect(facts.githubLogin ?? null).toBeNull();
+      Object.assign(facts, { assignedRole: "owner", githubLogin: "changed" });
+      expect(read()).toMatchObject({ assignedRole: null, githubLogin: null });
     }
+    for (const authority of authorities) {
+      expect(authority.assertCurrent).not.toThrow();
+    }
+    source.abort(new Error("source revoked"));
+    for (const read of readers) {
+      expect(read).toThrow();
+    }
+    for (const authority of authorities) {
+      expect(authority.assertCurrent).toThrow();
+    }
+  }));
+
+it("checks a live access source once for each role-policy evaluation", () =>
+  withOperator(async ({ profile, client, context }) => {
+    setUserProfileRole(profile.id, "reader");
+    const config = readerConfig(["operator.read"]);
+    context.getRuntimeConfig = () => config;
+    let permitted = true;
+    const assertAccess = vi.fn(() => {
+      if (!permitted) {
+        throw new Error("access grant ended");
+      }
+    });
+    const captured = await capture({
+      client,
+      context,
+      sourceAuthority: { assertCurrent: assertAccess },
+    });
+    using _ = { [Symbol.dispose]: captured.release };
+    client.internal = { ...client.internal, operatorRunAuthority: captured.authority };
+    assertAccess.mockClear();
+
+    expect(resolveOperatorRolePolicy(client, config)).toBe(config.gateway.roles.definitions.reader);
+    expect(assertAccess).toHaveBeenCalledOnce();
+    permitted = false;
+    expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
+    expect(assertAccess).toHaveBeenCalledTimes(2);
+    permitted = true;
+    expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
   }));
 
 it.each(["capture", "operator tool"])(
@@ -267,20 +312,6 @@ it.each(["capture", "operator tool"])(
       );
       const sql = observeHostDataSql();
       try {
-        {
-          using calibration = new DatabaseSync(":memory:");
-          calibration.exec("CREATE TABLE calibration (value INTEGER)");
-          calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-          const read = calibration.prepare("SELECT value FROM calibration");
-          read.get();
-          read.all();
-          expect([...read.iterate()]).toHaveLength(1);
-          for (const call of sql.calls) {
-            expect(call).toHaveBeenCalled();
-            call.mockClear();
-          }
-        }
-
         if (entry === "capture") {
           const retained = await capture({ client, context });
           const { authority } = retained;
@@ -325,9 +356,7 @@ it.each(["capture", "operator tool"])(
             }),
           );
         }
-        for (const call of sql.calls) {
-          expect(call).not.toHaveBeenCalled();
-        }
+        expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
       }

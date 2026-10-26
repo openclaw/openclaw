@@ -1,4 +1,3 @@
-import type { Selectable } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -20,10 +19,9 @@ import {
   runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";
-
-export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
 
 type SessionColdFact = {
   cold: boolean;

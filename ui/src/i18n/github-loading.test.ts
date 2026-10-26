@@ -7,7 +7,7 @@ it.each([
   ["publication", false, () => import("../pages/chat/components/chat-github-publication.tsx")],
   ["PR content", false, () => import("../pages/chat/components/chat-pull-requests-content.tsx")],
   ["connections", true, () => import("../features/github-connections/github-connections.tsx")],
-  ["CI details", false, () => import("../pages/chat/components/chat-ci-details.ts")],
+  ["CI details", false, () => import("../pages/chat/components/chat-ci-details.tsx")],
   ["session hovercard", false, () => import("../components/session-hovercard-solid.tsx")],
   ["identity", true, () => import("../features/github-connections/github-identity-view.tsx")],
   ["identity controller", true, () => import("../features/github-connections/github-identity.ts")],
@@ -80,7 +80,7 @@ it.each([
     expect(en.sessionHovercard).toBe(hovercard);
     expect(hovercard.states).toBe(states);
     expect(hovercard.checks).toBe(checks);
-    expect(t("sessionHovercard.agentNotepad")).toBe("Agent Notepad");
+    expect(t("sessionHovercard.agentNotepad")).toBe("Task progress");
     expect(t("sessionHovercard.chatKinds.group")).toBe("Group chat");
     expect(t("sessionHovercard.viaAccount", { account: "work" })).toBe("Via work");
     expect(t("sessionHovercard.topicNumber", { id: "7" })).toBe("Topic 7");
@@ -94,6 +94,10 @@ it.each([
     expect(t("chat.pullRequests.rateLimited")).toContain("GitHub API rate limit reached");
     expect(t("chat.pullRequests.checksPassing")).toBe("CI checks passing");
     expect(t("chat.pullRequests.checksPassed")).toBe("Passed");
+    expect(t("chat.pullRequests.automationNoChecks")).toBe("No CI checks reported.");
+    if (_surface === "PR content") {
+      expect(t("chat.pullRequests.automationLabel")).toBe("chat.pullRequests.automationLabel");
+    }
     expect(t("githubPublication.sharedUnavailable.changed")).toBe(
       "The Gateway GitHub account changed. Reload and retry publication.",
     );

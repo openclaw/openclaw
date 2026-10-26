@@ -192,7 +192,6 @@ async function loadGatewayRunShellEnvFallback(
   const { loadShellEnvFallback } = await import("../../infra/shell-env.js");
   const valuesBeforeLoad = new Map(plan.expectedKeys.map((key) => [key, process.env[key]]));
   loadShellEnvFallback({
-    enabled: true,
     env: process.env,
     expectedKeys: plan.expectedKeys,
     logger: gatewayLog,

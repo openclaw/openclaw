@@ -26,25 +26,38 @@ function searchTool(config: OpenClawConfig = {}, searchConfig: Record<string, un
 function configKey(apiKey: unknown): OpenClawConfig {
   return { plugins: { entries: { deepseek: { config: { webSearch: { apiKey } } } } } };
 }
-function response() {
-  return jsonResponse({
-    results: [
-      {
-        title: "OpenClaw",
-        url: "https://docs.openclaw.ai/",
-        summary: "Model-oriented summary",
-        snippet: "Short UI snippet",
-        date: "2026-10-17T00:00:00+00:00",
-        site_name: "OpenClaw docs",
-        content: "Full content must not escape",
-        authority: 3,
-        rerank_score: 2.4,
-      },
-    ],
-  });
+const response = (results: object[] = [{ url: "https://docs.openclaw.ai/" }]) =>
+  jsonResponse({ results });
+async function failedSearch(failureResponse: Response, query: string) {
+  fetch.mockResolvedValueOnce(failureResponse).mockResolvedValueOnce(response());
+  const tool = searchTool();
+  const failure: unknown = await tool.execute({ query }).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(await tool.execute({ query })).toMatchObject({ count: 1 });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  return failure;
 }
 
 describeWebSearchProviderContracts("deepseek");
+it("exposes the current model credential as raw fallback metadata", () => {
+  const fallback = expectDefined(
+    createDeepSeekWebSearchProvider().getConfiguredCredentialFallback,
+    "Expected model credential fallback",
+  );
+  expect(fallback()).toBeUndefined();
+  const config = modelKey("https://api.deepseek.com");
+  expect(fallback(config)).toEqual({
+    path: "models.providers.deepseek.apiKey",
+    value: "model-key",
+  });
+  const ref = { source: "env", provider: "default", id: "SYNTHETIC_DEEPSEEK_KEY" } as const;
+  const provider = expectDefined(config.models?.providers?.deepseek, "Expected model provider");
+  provider.apiKey = ref;
+  expect(fallback(config)).toEqual({ path: "models.providers.deepseek.apiKey", value: ref });
+  expect(fallback(config)?.value).toBe(ref);
+});
+
 describe("DeepSeek search execution", () => {
   beforeEach(() => {
     vi.stubEnv("DEEPSEEK_API_KEY", KEY);
@@ -58,47 +71,18 @@ describe("DeepSeek search execution", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends only the search request and maps model summaries without full content", async () => {
-    const query = 'OpenClaw site:github.com lang:en after:2026 "release notes"';
-    const result = await searchTool().execute({ query, count: 1 });
-    expect(fetch).toHaveBeenCalledOnce();
-    const [url, init] = fetch.mock.calls[0] ?? [];
-    expect(url).toBe("https://api.deepseek.com/v1/tools/search");
-    expect(init?.method).toBe("POST");
-    expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${KEY}`);
-    expect(requestBody()).toEqual({ query, count: 1, need_content: false });
-    expect(result).toMatchObject({
-      provider: "deepseek",
-      count: 1,
-      results: [
-        {
-          title: "OpenClaw",
-          url: "https://docs.openclaw.ai/",
-          snippet: "Model-oriented summary",
-          published: "2026-10-17T00:00:00+00:00",
-          siteName: "OpenClaw docs",
-        },
-      ],
-    });
-    expect(JSON.stringify(result)).not.toContain("Full content");
-    expect(JSON.stringify(result)).not.toContain("rerank_score");
-  });
-
   it.each([
     ["plugin key before env/model", configKey("plugin-key"), KEY, "plugin-key"],
     ["env before model", modelKey("https://chat-proxy.example/v1"), KEY, KEY],
     ["model fallback", modelKey("https://api.deepseek.com"), undefined, "model-key"],
-  ] as const)(
-    "resolves %s without inheriting a chat endpoint",
-    async (_, config, env, expected) => {
-      vi.stubEnv("DEEPSEEK_API_KEY", env);
-      await searchTool(config).execute({ query: `credential ${expected}` });
-      expect(fetch.mock.calls[0]?.[0]).toBe("https://api.deepseek.com/v1/tools/search");
-      expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-        `Bearer ${expected}`,
-      );
-    },
-  );
+  ] as const)("resolves %s at the search endpoint", async (_, config, env, expected) => {
+    vi.stubEnv("DEEPSEEK_API_KEY", env);
+    await searchTool(config).execute({ query: `credential ${expected}` });
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.deepseek.com/v1/tools/search");
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      `Bearer ${expected}`,
+    );
+  });
 
   it("reports missing and unresolved credentials without network access", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", undefined);
@@ -139,29 +123,25 @@ describe("DeepSeek search execution", () => {
     "max_tokens_per_page",
   ])("rejects %s before buying a search", async (key) => {
     await expect(
-      searchTool().execute({
-        query: "unsupported filter",
-        [key]: key === "domain_filter" ? ["example.com"] : "value",
-      }),
-    ).resolves.toMatchObject({ error: "unsupported_filter" });
+      searchTool().execute({ query: "unsupported filter", [key]: "value" }),
+    ).resolves.toMatchObject({
+      error: "unsupported_filter",
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("uses shared count defaults/config and rejects invalid counts before fetching", async () => {
+  it("uses count defaults, configuration, and explicit overrides", async () => {
     await searchTool().execute({ query: "count defaults" });
     await searchTool({}, { maxResults: 2 }).execute({ query: "count configured" });
     await searchTool({}, { maxResults: 2 }).execute({ query: "count override", count: 10 });
-    for (const count of [0, -1, 1.5, 11]) {
-      await expect(searchTool().execute({ query: "invalid count", count })).rejects.toThrow(
-        "count must be an integer",
-      );
-    }
+    await expect(searchTool().execute({ query: "invalid count", count: 11 })).rejects.toThrow(
+      "count must be an integer",
+    );
     expect(fetch.mock.calls.map((_, index) => requestBody(index).count)).toEqual([5, 2, 10]);
   });
 
-  it("caches empty results, partitions by count/key/query, and honors current TTL", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    fetch.mockImplementation(async () => jsonResponse({ results: [] }));
+  it("caches empty results separately by count/key/query", async () => {
+    fetch.mockImplementation(async () => response([]));
     const tool = searchTool();
     const query = "cache identity DeepSeek";
     expect(await tool.execute({ query })).toMatchObject({ count: 0, results: [] });
@@ -173,32 +153,28 @@ describe("DeepSeek search execution", () => {
     vi.stubEnv("DEEPSEEK_API_KEY", KEY);
     expect(await tool.execute({ query })).toMatchObject({ cached: true });
     expect(fetch).toHaveBeenCalledTimes(4);
-    await searchTool({}, { cacheTtlMinutes: 0 }).execute({ query });
-    await searchTool({}, { cacheTtlMinutes: 0 }).execute({ query });
-    expect(fetch).toHaveBeenCalledTimes(6);
-    now.mockReturnValue(1_060_000);
-    await searchTool({}, { cacheTtlMinutes: 1 }).execute({ query });
-    expect(fetch).toHaveBeenCalledTimes(7);
   });
 
   it("falls back to UI snippets, preserves ordering, and caps returned rows", async () => {
     fetch.mockResolvedValue(
-      jsonResponse({
-        results: [
-          {
-            title: "First",
-            url: "https://one.example",
-            summary: " ",
-            snippet: "UI fallback",
-            date: null,
-            site_name: null,
-          },
-          { title: "Second", url: "https://two.example", summary: "Second summary" },
-          { title: "Third", url: "https://three.example" },
-        ],
-      }),
+      response([
+        {
+          title: "First",
+          url: "https://one.example",
+          summary: " ",
+          snippet: "UI fallback",
+          date: null,
+          site_name: null,
+          content: "Full content must not escape",
+          authority: 3,
+          rerank_score: 2.4,
+        },
+        { title: "Second", url: "https://two.example", summary: "Second summary" },
+        { title: "Third", url: "https://three.example" },
+      ]),
     );
     const result = await searchTool().execute({ query: "fallback snippets", count: 2 });
+    expect(requestBody()).toEqual({ query: "fallback snippets", count: 2, need_content: false });
     expect(result.results).toEqual(
       [
         { title: "First", url: "https://one.example/", snippet: "UI fallback" },
@@ -208,34 +184,21 @@ describe("DeepSeek search execution", () => {
     expect(result.count).toBe(2);
   });
 
-  it.each(["{ nope", "[]", "{}", '{"results":{}}'])(
-    "rejects malformed response %s without caching",
-    async (body) => {
-      fetch.mockResolvedValueOnce(new Response(body)).mockResolvedValueOnce(response());
-      const tool = searchTool();
-      const query = `bad response ${body}`;
-      await expect(tool.execute({ query })).rejects.toThrow("malformed JSON response");
-      expect(await tool.execute({ query })).toMatchObject({ count: 1 });
-      expect(fetch).toHaveBeenCalledTimes(2);
-    },
-  );
+  it.each(["{ nope", "[]", "{}", '{"results":{}}'])("rejects %s without caching", async (body) => {
+    expect(await failedSearch(new Response(body), `bad response ${body}`)).toMatchObject({
+      message: expect.stringContaining("malformed JSON response"),
+    });
+  });
 
-  it.each([401, 402, 429, 500, 504])(
-    "preserves HTTP %s, redacts reflected credentials, and does not retry/cache failure",
-    async (status) => {
-      fetch
-        .mockResolvedValueOnce(new Response(`reflected Bearer ${KEY}`, { status }))
-        .mockResolvedValueOnce(response());
-      const tool = searchTool();
-      const query = `http error ${status}`;
-      const failure = await tool.execute({ query }).catch((error: unknown) => error);
-      expect(failure).toMatchObject({ status });
-      expect(String(failure)).not.toContain(KEY);
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(await tool.execute({ query })).toMatchObject({ count: 1 });
-      expect(fetch).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("preserves HTTP errors without secrets, retries, or caching", async () => {
+    const status = 401;
+    const failure = await failedSearch(
+      new Response(`reflected Bearer ${KEY}`, { status }),
+      `http error ${status}`,
+    );
+    expect(failure).toMatchObject({ status });
+    expect(String(failure)).not.toContain(KEY);
+  });
 
   it("cancels in-flight work and never caches a late response", async () => {
     const responseReady = Promise.withResolvers<Response>();

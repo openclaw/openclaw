@@ -14,6 +14,7 @@ import {
   model,
   reply,
   TEST_USAGE,
+  toolResultMessages,
   user,
 } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
@@ -178,58 +179,78 @@ describe("Agent lifecycle and continuation", () => {
 });
 
 describe("agentLoop streaming updates", () => {
-  it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
-    const firstDeltaConsumed = createDeferred();
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      const startMessage = makeAssistantMessage([]);
-      const finalMessage = makeAssistantMessage([{ type: "text", text: "Hello world" }]);
-      stream.push({ type: "start", partial: startMessage });
-      stream.push({
-        type: "text_start",
-        contentIndex: 0,
-        partial: { ...startMessage, content: [] },
-      });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
-      void firstDeltaConsumed.promise.then(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: " world" });
+  it.each([false, true])(
+    "rebuilds text-delta snapshots (explicit undefined partial: %s)",
+    async (explicitPartial) => {
+      const firstDeltaConsumed = createDeferred();
+      const streamFn: StreamFn = () => {
+        const stream = createAssistantMessageEventStream();
+        const startMessage = makeAssistantMessage([]);
+        const finalMessage = makeAssistantMessage([{ type: "text", text: "Hello world" }]);
+        stream.push({ type: "start", partial: startMessage });
         stream.push({
-          type: "text_end",
+          type: "text_start",
           contentIndex: 0,
-          content: "Hello world",
-          partial: finalMessage,
+          partial: { ...startMessage, content: [] },
         });
-        stream.push({ type: "done", reason: "stop", message: finalMessage });
-      });
-      return stream;
-    };
-    const events: AgentEvent[] = [];
-    await runAgentLoop(
-      [user("hello")],
-      { systemPrompt: "", messages: [] },
-      config,
-      (event) => {
-        events.push(event);
-        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          firstDeltaConsumed.resolve();
+        stream.push({
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "Hello",
+          ...(explicitPartial ? { partial: undefined } : {}),
+        });
+        void firstDeltaConsumed.promise.then(() => {
+          stream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta: " world",
+            ...(explicitPartial ? { partial: undefined } : {}),
+          });
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: "Hello world",
+            partial: finalMessage,
+          });
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+        });
+        return stream;
+      };
+      const events: AgentEvent[] = [];
+      await runAgentLoop(
+        [user("hello")],
+        { systemPrompt: "", messages: [] },
+        config,
+        (event) => {
+          events.push(event);
+          if (
+            event.type === "message_update" &&
+            event.assistantMessageEvent.type === "text_delta"
+          ) {
+            firstDeltaConsumed.resolve();
+          }
+        },
+        undefined,
+        streamFn,
+      );
+      const deltas = events.filter(
+        (event): event is Extract<AgentEvent, { type: "message_update" }> =>
+          event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
+      );
+      expect(deltas).toHaveLength(2);
+      expect(deltas.map((event) => event.message)).toMatchObject([
+        { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+        { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
+      ]);
+      for (const event of deltas) {
+        if (explicitPartial) {
+          expect(event.assistantMessageEvent).toHaveProperty("partial", event.message);
+        } else {
+          expect(event.assistantMessageEvent).not.toHaveProperty("partial");
         }
-      },
-      undefined,
-      streamFn,
-    );
-    const deltas = events.filter(
-      (event): event is Extract<AgentEvent, { type: "message_update" }> =>
-        event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
-    );
-    expect(deltas).toHaveLength(2);
-    expect(deltas.map((event) => event.message)).toMatchObject([
-      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
-      { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
-    ]);
-    for (const event of deltas) {
-      expect(event.assistantMessageEvent).not.toHaveProperty("partial");
-    }
-  });
+      }
+    },
+  );
 
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
     const execute = vi.fn(async () => ({ content: [], details: {} }));
@@ -434,15 +455,7 @@ describe("agentLoop tool termination", () => {
           { id: "commit-third", started: false },
         ]),
       );
-      const toolResults = events
-        .filter(
-          (
-            event,
-          ): event is Extract<AgentEvent, { type: "message_end" }> & {
-            message: { role: "toolResult" };
-          } => event.type === "message_end" && event.message.role === "toolResult",
-        )
-        .map((event) => event.message);
+      const toolResults = toolResultMessages(events);
       expect(toolResults.map((message) => message.toolCallId)).toEqual([
         "commit-first",
         "commit-second",
@@ -659,19 +672,6 @@ describe("agentLoop tool termination", () => {
         }
       },
     );
-    const deferredTool = (name: string): AgentTool => ({
-      name,
-      label: name,
-      description: name,
-      parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        executed.push(name);
-        return {
-          content: [{ type: "text", text: `${name} result` }],
-          details: { name },
-        };
-      },
-    });
     const events = await collectEvents(
       captureTools(
         [],
@@ -684,7 +684,7 @@ describe("agentLoop tool termination", () => {
               // flight; later resolvers must never be awaited.
               controller.abort(new Error("user aborted"));
             }
-            return deferredTool(toolCall.name);
+            return makeTool(toolCall.name, executed);
           },
           beforeToolBatch: async () => undefined,
         },
@@ -695,15 +695,7 @@ describe("agentLoop tool termination", () => {
     expect(streamCalls).toBe(1);
     expect(resolverCalls).toEqual(["d_first_tool"]);
     expect(executed).toEqual([]);
-    const toolResults = events
-      .filter(
-        (
-          event,
-        ): event is Extract<AgentEvent, { type: "message_end" }> & {
-          message: { role: "toolResult" };
-        } => event.type === "message_end" && event.message.role === "toolResult",
-      )
-      .map((event) => event.message);
+    const toolResults = toolResultMessages(events);
     expect(toolResults).toHaveLength(3);
     for (const toolResult of toolResults) {
       expect(toolResult).toMatchObject({
@@ -1654,43 +1646,24 @@ describe("agentLoop argument-validation admission", () => {
     const executed: string[] = [];
     const admittedCalls: InternalToolBatchCall[][] = [];
     const events = await collectEvents(
-      captureAgentLoop(
-        [{ role: "user", content: "run", timestamp: 1 }],
-        {
-          systemPrompt: "",
-          messages: [],
-          tools: [
-            {
-              ...makeTool("edit", executed),
-              parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
-            },
-          ],
-        },
-        {
-          ...config,
-          beforeToolBatch: async ({ calls }) => {
-            admittedCalls.push(calls);
-            const first = calls[0];
-            return first
-              ? {
-                  intervention: {
-                    kind: "critical-tool-loop",
-                    toolCallId: first.toolCall.id,
-                    toolName: first.toolCall.name,
-                    actionKey: "edit:same-action",
-                    detector: "generic_repeat",
-                    count: 20,
-                    reason: "CRITICAL: edit is looping",
-                  },
-                }
-              : undefined;
+      captureTools(
+        [
+          {
+            ...makeTool("edit", executed),
+            parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
           },
-        },
-        undefined,
+        ],
         createTurnSequenceStream([
           [{ type: "toolCall", id: "invalid-1", name: "edit", arguments: {} }],
           [{ type: "text", text: "recovered" }],
         ]),
+        {
+          beforeToolBatch: async ({ calls }) => {
+            admittedCalls.push(calls);
+            const first = calls[0];
+            return first ? { intervention: criticalLoopFor(first.toolCall) } : undefined;
+          },
+        },
       ),
     );
 
@@ -1707,11 +1680,7 @@ describe("agentLoop argument-validation admission", () => {
       ],
     ]);
     expect(executed).toEqual([]);
-    expect(
-      events.flatMap((event) =>
-        event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
-      ),
-    ).toMatchObject([
+    expect(toolResultMessages(events)).toMatchObject([
       {
         toolCallId: "invalid-1",
         isError: true,

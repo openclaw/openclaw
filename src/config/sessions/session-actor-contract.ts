@@ -18,6 +18,7 @@ import type {
   SessionActorStorageReads,
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
+import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import type {
   SessionEntryBookkeepingReducer,
   SessionEntryPatchOperation,
@@ -270,9 +271,9 @@ export type SessionActorReceipt = {
     projectionNeedsReconcile: boolean;
   };
   conversationPublication?: readonly ConversationPublication[];
+  entryMetadata?: readonly SessionEntryMetadataReceipt[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
-  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   reducers: SessionActorReducerOutcome[];
   /** Complete detached postimage, installed on MAIN before acknowledgement. */
   postimage: SessionActorHotState;
@@ -321,6 +322,8 @@ export type SessionActorOperations = {
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & {
         target: SessionActorTarget;
+        /** Command-local immutable preimage retained by the host; never grants authority. */
+        entryReference?: string;
       };
     /** Native settlement owns committed data; the reply only acknowledges it. */
     output:

@@ -9,6 +9,7 @@ import {
   readMainDatabasePosixLocks,
   readSqliteShmPosixLocks,
 } from "../infra/sqlite-posix-locks.test-support.js";
+import * as execRunner from "../process/exec-runner.js";
 import { collectCheckoutDiff, collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,6 +29,11 @@ function repository(): string {
   git(root, "config", "user.email", "test@openclaw.test");
   git(root, "config", "commit.gpgsign", "false");
   return root;
+}
+
+function commit(root: string, message: string) {
+  git(root, "add", ".");
+  git(root, "commit", "-qm", message);
 }
 
 // Version-one stored fingerprints prefix raw bytes with these NUL-separated fields.
@@ -54,15 +60,12 @@ it
     const state = path.join(root, "state");
     await fs.mkdir(state);
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
-    const pathname =
-      kind === "hardlink"
-        ? path.join(tempDirs.make("session-diff-live-db-"), "agent.sqlite")
-        : path.join(
-            root,
-            kind === "memory-reindex"
-              ? "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555"
-              : "agent.sqlite",
-          );
+    const directory = kind === "hardlink" ? tempDirs.make("session-diff-live-db-") : root;
+    const databaseName =
+      kind === "memory-reindex"
+        ? "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555"
+        : "agent.sqlite";
+    const pathname = path.join(directory, databaseName);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = new DatabaseSync(pathname);
     try {
@@ -85,8 +88,7 @@ it
 
       // Query locks before any new SQLite connection can truncate the unlocked SHM.
       expect(locks()).toEqual(held);
-      expect(baseline?.files).toEqual([]);
-      expect(baseline?.truncated).toBe(true);
+      expect(baseline).toMatchObject({ files: [], truncated: true });
       const files = (await fs.readdir(root)).filter((name) => name !== ".git" && name !== "state");
       // A baseline captured by an older release must not reopen the same files either.
       const diff = await collectCheckoutDiff({
@@ -148,8 +150,7 @@ it.skipIf(process.platform === "win32")(
     const root = repository();
     await fs.writeFile(path.join(root, "old.txt"), "tracked bytes\n");
     await fs.writeFile(path.join(root, "deleted.txt"), "deleted bytes\n");
-    git(root, "add", ".");
-    git(root, "commit", "-qm", "base");
+    commit(root, "base");
     git(root, "mv", "old.txt", "renamed.txt");
     await fs.unlink(path.join(root, "deleted.txt"));
     await fs.mkdir(path.join(root, "~"));
@@ -201,26 +202,46 @@ it("keeps the per-file and aggregate byte caps while rejecting hardlinks", async
   await expect(fs.readFile(outside, "utf8")).resolves.toBe("outside bytes\n");
 });
 
-it("ignores pre-session edits to branch-added files in the uncommitted view", async () => {
-  const root = repository();
-  await fs.writeFile(path.join(root, "base.txt"), "base\n");
-  git(root, "add", ".");
-  git(root, "commit", "-qm", "base");
-  git(root, "checkout", "-qb", "feature");
-  await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
-  git(root, "add", ".");
-  git(root, "commit", "-qm", "feature");
-  await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
-  const captured = await collectCheckoutDiffBaseline({ cwd: root });
-  const baseline = captured && { ...captured, sessionId: "s1" };
-  const sessionPaths = async () =>
-    (
-      await collectCheckoutDiff({ cwd: root, scope: "uncommitted", baseline, sessionId: "s1" })
-    ).files.map((file) => file.path);
+it.each([
+  { baseCommit: undefined, tracked: true },
+  { baseCommit: "HEAD", tracked: true },
+  { baseCommit: undefined, tracked: false },
+])(
+  "ignores pre-session edits without repeating unrelated Git work ($baseCommit, tracked=$tracked)",
+  async ({ baseCommit, tracked }) => {
+    const root = repository();
+    await fs.writeFile(path.join(root, "base.txt"), "base\n");
+    commit(root, "base");
+    git(root, "checkout", "-qb", "feature");
+    await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
+    commit(root, "feature");
+    if (tracked) {
+      await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
+    }
+    await fs.writeFile(path.join(root, "draft.txt"), "pre-session draft\n");
+    const captured = await collectCheckoutDiffBaseline({ cwd: root });
+    const baseline = captured && { ...captured, sessionId: "s1" };
+    const commands = vi.spyOn(execRunner, "runCommandWithTimeout");
+    const sessionPaths = async () =>
+      (
+        await collectCheckoutDiff({
+          cwd: root,
+          scope: "uncommitted",
+          baseline,
+          sessionId: "s1",
+          baseCommit,
+        })
+      ).files.map((file) => file.path);
 
-  await expect(sessionPaths()).resolves.toEqual([]);
+    await expect(sessionPaths()).resolves.toEqual([]);
+    expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(1);
+    expect(commands.mock.calls.filter(([argv]) => argv.includes("--name-status"))).toHaveLength(
+      tracked ? 1 : 0,
+    );
 
-  await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
+    await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
+    await fs.appendFile(path.join(root, "draft.txt"), "session draft\n");
 
-  await expect(sessionPaths()).resolves.toEqual(["feature.txt"]);
-});
+    await expect(sessionPaths()).resolves.toEqual(["draft.txt", "feature.txt"]);
+  },
+);

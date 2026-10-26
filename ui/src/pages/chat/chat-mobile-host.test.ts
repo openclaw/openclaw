@@ -18,7 +18,7 @@ it("hides a mobile host without closing resources, losing its origin, or changin
   read().primary.chat.onOpenWorkspace?.();
   expect(host().destination.area).toBe("panels");
   expect(host().destination.backTo?.area).toBe("details");
-  host().resize(280);
+  host().resize(280, "dock", 0);
   expect(host().height).toBe(280);
   host().toggleExpanded(280);
   expect(host().height).toBeUndefined();
@@ -53,7 +53,7 @@ it("consumes suspension facts without discarding navigation, and scopes retained
     page: { key: "controlled-child", title: "Child", content: document.createElement("article") },
     backTo: { area: "details" },
   });
-  host().resize(260);
+  host().resize(260, "dock", 0);
   host().onComposerEditingChange(true);
   expect(host()).toMatchObject({ open: true, suspended: true, height: 260 });
   host().reveal();

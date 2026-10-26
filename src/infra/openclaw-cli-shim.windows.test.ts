@@ -7,39 +7,35 @@ import {
   buildWindowsCmdExeCommandLine,
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 import {
   createSourceCliFixture,
   runSourceCliProbe,
+  withSourceCliParent,
 } from "./openclaw-cli-invocation.test-support.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
 async function sourceFixture(root: string) {
   const f = await createSourceCliFixture(root);
-  function check(
-    result: ReturnType<typeof runSourceCliProbe>,
-    cwd: string,
-    args: string[],
-    extra = {},
-  ) {
+  function check(result: ReturnType<typeof runSourceCliProbe>, args: string[], extra = {}) {
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ source: "gateway", args, cwd, ...extra });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      source: "gateway",
+      args,
+      cwd: f.callerCwd,
+      ...extra,
+    });
   }
   return {
     ...f,
     check,
-    control(args: string[], execArgv?: string[]) {
-      const prefix = execArgv ? [...execArgv, f.entryPath] : f.invocation.args;
-      check(
-        runSourceCliProbe(f.invocation.command, [...prefix, ...args], f.checkout),
-        f.checkout,
-        args,
-      );
-    },
     async shim(env = {}) {
       const stateDir = path.join(root, "state");
-      await prepareGatewayAgentCliShim({ env, invocation: f.invocation, stateDir });
+      await withEnvAsync({ ...env, OPENCLAW_STATE_DIR: stateDir }, () =>
+        withSourceCliParent(f, prepareGatewayAgentCliShim),
+      );
       return path.join(stateDir, "tmp", "agent-cli", "openclaw.cmd");
     },
     cmd(file: string, args: string[], expansion = "on") {
@@ -61,11 +57,9 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       withTempDir("openclaw-source-cli-win-", async (root) => {
         const f = await sourceFixture(root);
         const args = ["--profile", "work", "probe"];
-        f.control(args);
         const shim = await f.shim({ OPENCLAW_PROFILE: "work" });
         f.check(
           f.cmd(shim, ["probe"], expansion),
-          f.callerCwd,
           args,
           process.versions.bun ? {} : { tsconfigPath: path.join(f.checkout, "tsconfig.json") },
         );
@@ -87,7 +81,7 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
           "",
         ].join("\r\n"),
       );
-      f.check(f.cmd(caller, []), f.callerCwd, ["probe", "literal!%USERPROFILE%!"]);
+      f.check(f.cmd(caller, []), ["probe", "literal!%USERPROFILE%!"]);
     }));
 
   it.each(["generic Node host", "bare TSX source parent"])(
@@ -107,18 +101,17 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
         await fs.writeFile(hostEntry, "// A generic Node host is not the OpenClaw CLI entry.\n");
         const sourceParent = parent === "bare TSX source parent";
         const execArgv = sourceParent ? ["--import", "tsx"] : f.execArgv;
-        f.control(["probe"], execArgv);
-        const invocation = resolveCurrentOpenClawCliInvocation(["probe"], {
-          argv1: sourceParent ? f.entryPath : hostEntry,
-          cwd: f.callerCwd,
-          execArgv: sourceParent ? execArgv : [],
-          execPath: process.execPath,
-        });
+        const invocation = withSourceCliParent(
+          {
+            entryPath: sourceParent ? f.entryPath : hostEntry,
+            execArgv: sourceParent ? execArgv : [],
+          },
+          () => resolveCurrentOpenClawCliInvocation(["probe"]),
+        );
         f.check(
           runSourceCliProbe(invocation.command, invocation.args, f.callerCwd, {
             env: invocation.env,
           }),
-          f.callerCwd,
           ["probe"],
         );
       }),

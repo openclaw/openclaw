@@ -2,8 +2,8 @@ import type { JSX } from "@solidjs/web";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -32,6 +32,8 @@ export type MessageRenderOptions = {
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
   mediaOwner?: object;
+  /** Saved transcript text can render before live resource admission. */
+  mediaReadAllowed?: boolean;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;

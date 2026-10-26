@@ -50,7 +50,6 @@ const registeredCodexPlugin = resolveGlobalSingleton<{ root?: string }>(
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
-  pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   /** False pins the shipped package, for callers that verify or mirror it. */
   preferInstalled?: boolean;
   /** Remaining allowance for installed selection, before bundled startup. */
@@ -103,10 +102,7 @@ export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void 
  */
 export async function resolveManagedCodexClientVersion(
   order: CodexManagedCommandOrder,
-  options: Pick<
-    ResolveManagedCodexAppServerOptions,
-    "platform" | "pathExists" | "selectionTimeoutMs"
-  > = {},
+  options: Pick<ResolveManagedCodexAppServerOptions, "platform" | "selectionTimeoutMs"> = {},
 ): Promise<string> {
   return (await resolveInstalledCodexForOrder(order, options))?.version ?? CODEX_APP_SERVER_VERSION;
 }
@@ -117,16 +113,12 @@ export async function resolveManagedCodexClientVersion(
  */
 async function resolveInstalledCodexForOrder(
   order: CodexManagedCommandOrder,
-  options: Pick<
-    ResolveManagedCodexAppServerOptions,
-    "platform" | "pathExists" | "selectionTimeoutMs"
-  >,
+  options: Pick<ResolveManagedCodexAppServerOptions, "platform" | "selectionTimeoutMs">,
 ): Promise<InstalledCodexAppServer | undefined> {
   const platform = options.platform ?? process.platform;
-  const pathExists = options.pathExists ?? commandPathExists;
   if (order === "desktop-first") {
     for (const command of resolveMacOSDesktopCodexAppServerCommandCandidates(platform)) {
-      if (await pathExists(command, platform)) {
+      if (await commandPathExists(command, platform)) {
         return undefined;
       }
     }
@@ -393,14 +385,12 @@ export async function resolveManagedCodexAppServerStartOptions(
     );
   }
   const platform = options.platform ?? process.platform;
-  const pathExists = options.pathExists ?? commandPathExists;
   const managedCommandOrder = startOptions.managedCommandOrder ?? "package-first";
   const installed =
     options.preferInstalled === false
       ? undefined
       : await resolveInstalledCodexForOrder(managedCommandOrder, {
           platform,
-          pathExists,
           selectionTimeoutMs: options.selectionTimeoutMs,
         });
   const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
@@ -413,8 +403,8 @@ export async function resolveManagedCodexAppServerStartOptions(
   for (const commandPath of candidateCommandPaths) {
     const isInstalled = commandPath === installed?.command;
     if (
-      (await pathExists(commandPath, platform)) &&
-      (!isInstalled || (await pathExists(installed.nativeCommand, platform)))
+      (await commandPathExists(commandPath, platform)) &&
+      (!isInstalled || (await commandPathExists(installed.nativeCommand, platform)))
     ) {
       commandPaths.push(commandPath);
     } else if (isInstalled) {

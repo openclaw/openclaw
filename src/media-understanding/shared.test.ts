@@ -332,6 +332,19 @@ describe("resolveProviderHttpRequestConfig", () => {
     });
   });
 
+  it("removes default headers marked null by the runtime caller", () => {
+    const defaults = { Authorization: "Bearer original", "X-Keep": "retained" };
+    const resolved = resolveProviderHttpRequestConfig({
+      defaultBaseUrl: "https://provider.example/v1",
+      defaultHeaders: defaults,
+      headers: { authorization: null },
+      provider: "custom",
+    });
+    expect(resolved.headers.has("authorization")).toBe(false);
+    expect(resolved.headers.get("x-keep")).toBe("retained");
+    expect(defaults.Authorization).toBe("Bearer original");
+  });
+
   it("keeps configured-origin trust eligibility internal to core callers", () => {
     const customConfig = {
       baseUrl: "https://models.internal/v1",

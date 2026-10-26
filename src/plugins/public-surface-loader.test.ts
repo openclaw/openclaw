@@ -98,7 +98,7 @@ describe("bundled plugin public surface loader", () => {
     );
   });
 
-  it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
+  it("loads candidate artifacts from each caller's environment without changing process.env", async () => {
     const createEnvironment = (marker: string) => {
       const { bundledPluginsDir, pluginRoot } = pluginFixture();
       writeArtifact(
@@ -114,8 +114,8 @@ describe("bundled plugin public surface loader", () => {
     const firstEnvironment = createEnvironment("first");
     const secondEnvironment = createEnvironment("second");
     const loader = await freshLoader("caller-environment");
-    const load = (env: NodeJS.ProcessEnv) => loader.load({ ...publicArtifact, env });
-    expect(load(firstEnvironment).marker).toBe("first");
+    const load = (env: NodeJS.ProcessEnv) => loader.candidates({ ...candidateArtifacts, env });
+    expect(load(firstEnvironment)?.marker).toBe("first");
     expect(
       loader.candidates({
         dirName: "demo",
@@ -123,7 +123,7 @@ describe("bundled plugin public surface loader", () => {
         env: secondEnvironment,
       })?.marker,
     ).toBe("second");
-    expect(load(firstEnvironment).marker).toBe("first");
+    expect(load(firstEnvironment)?.marker).toBe("first");
   });
 
   it.each([false, true])(
@@ -238,7 +238,7 @@ describe("bundled plugin public surface loader", () => {
     });
   });
 
-  it("loads import-only dependencies under tsx and shares source artifacts for one cache generation", () => {
+  it("loads import-only dependencies under tsx and retains bundled code across cache generations", () => {
     const tempRoot = tempDirs.make("openclaw-public-surface-source-");
     const bundledPluginsDir = path.join(tempRoot, "extensions");
     const pluginRoot = path.join(bundledPluginsDir, "demo");
@@ -274,10 +274,10 @@ describe("bundled plugin public surface loader", () => {
         fs.writeFileSync(${JSON.stringify(dependencyPath)}, 'export const marker = "replacement";\\n');
         assert.equal(load(), first);
         clearPluginMetadataLifecycleCaches();
-        const replacement = load();
-        assert.notEqual(replacement, first);
-        assert.equal(replacement.marker, "replacement");
-        assert.equal(replacement.shared, first.shared);
+        const refreshed = load();
+        assert.notEqual(refreshed, first);
+        assert.equal(refreshed.marker, "original");
+        assert.equal(refreshed.shared, first.shared);
         console.log("source artifact import, identity, and lifecycle verified");
       `,
       {
@@ -374,8 +374,9 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
-  it("reloads a replaced installed public artifact and its dependencies after plugin metadata changes", async () => {
+  it("shares warm installed artifacts with facades and reloads their dependencies after metadata changes", async () => {
     const loader = await freshLoader("installed-artifact-replacement");
+    const { loadFacadeModuleAtLocationSync } = await import("../plugin-sdk/facade-loader.js");
     const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
     const tempRoot = fs.realpathSync(tempDirs.make("openclaw-public-surface-replacement-"));
     const pluginRoot = path.join(tempRoot, "installed-plugin");
@@ -386,13 +387,31 @@ describe("bundled plugin public surface loader", () => {
       writeArtifact(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`);
       writeArtifact(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
     };
-    const loadArtifact = () => loader.installed({ pluginRoot, artifactBasename: "api.js" }).marker;
+    const loadArtifact = () => loader.installed({ pluginRoot, artifactBasename: "api.js" });
     replaceArtifact("retired");
-    expect(loadArtifact()).toBe("retired");
+    const first = loadArtifact();
+    const probes = [
+      vi.spyOn(fs, "existsSync"),
+      vi.spyOn(fs, "realpathSync"),
+      vi.spyOn(fs, "statSync"),
+      vi.spyOn(fs, "openSync"),
+    ];
+    expect(loadArtifact()).toBe(first);
+    expect(
+      loadFacadeModuleAtLocationSync({
+        location: { modulePath, boundaryRoot: pluginRoot },
+        trackedPluginId: "shared-artifact",
+      }),
+    ).toBe(first);
+    expect(first.marker).toBe("retired");
+    for (const probe of probes) {
+      expect(probe).not.toHaveBeenCalled();
+      probe.mockRestore();
+    }
     replaceArtifact("replacement");
-    expect(loadArtifact()).toBe("retired");
+    expect(loadArtifact()).toBe(first);
     clearPluginMetadataLifecycleCaches();
-    expect(loadArtifact()).toBe("replacement");
+    expect(loadArtifact().marker).toBe("replacement");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -435,37 +454,6 @@ describe("bundled plugin public surface loader", () => {
     const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
     clearPluginMetadataLifecycleCaches();
     expect(loader.load(publicArtifact).marker).toBe("demo");
-  });
-
-  it("shares installed artifact exports with SDK facades without warm filesystem probes", async () => {
-    const { loadPluginPublicArtifactModuleSync } = await import("./public-surface-loader.js");
-    const { loadFacadeModuleAtLocationSync } = await import("../plugin-sdk/facade-loader.js");
-    const pluginRoot = fs.realpathSync(tempDirs.make("openclaw-shared-plugin-artifact-"));
-    const modulePath = path.join(pluginRoot, "api.cjs");
-    fs.writeFileSync(modulePath, 'module.exports = { marker: "shared-artifact" };\n');
-    const loadArtifact = () =>
-      loadPluginPublicArtifactModuleSync<{ marker: string }>({
-        pluginRoot,
-        artifactBasename: "api.cjs",
-      });
-    const first = loadArtifact();
-    const exists = vi.spyOn(fs, "existsSync");
-    const realpath = vi.spyOn(fs, "realpathSync");
-    const stat = vi.spyOn(fs, "statSync");
-    const open = vi.spyOn(fs, "openSync");
-
-    expect(loadArtifact()).toBe(first);
-    expect(
-      loadFacadeModuleAtLocationSync({
-        location: { modulePath, boundaryRoot: pluginRoot },
-        trackedPluginId: "shared-artifact",
-      }),
-    ).toBe(first);
-    expect(first.marker).toBe("shared-artifact");
-    expect(exists).not.toHaveBeenCalled();
-    expect(realpath).not.toHaveBeenCalled();
-    expect(stat).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
   });
 
   it("rejects public artifacts that change after boundary validation", async () => {

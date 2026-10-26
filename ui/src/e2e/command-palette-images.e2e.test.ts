@@ -129,7 +129,7 @@ suite.define(() => {
         message: "",
         attachments,
       });
-      expect(await input.isDisabled()).toBe(true);
+      expect(await input.isEditable()).toBe(false);
       await page.keyboard.press("ControlOrMeta+Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       await gateway.rejectDeferred("sessions.create", {

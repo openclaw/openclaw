@@ -381,7 +381,7 @@ export async function searchKeyword(params: {
     // leg first; substring-only trigram hits fill spare capacity without a score.
     const mixedOr = params.matchAny && matchQuery && terms.length > 0;
     const sql = mixedOr
-      ? `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
+      ? /* pg-sqlite-only: manager-search.worker.ts:130 returns the PostgreSQL reader first. */ `WITH matches AS MATERIALIZED (${ranked}), substrings AS (
            SELECT ${columns}, NULL AS rank FROM ${params.ftsTable}
            WHERE 1=1${filter}${liveChunkClause}${sourceFilter.sql}
              AND id NOT IN (SELECT id FROM matches)

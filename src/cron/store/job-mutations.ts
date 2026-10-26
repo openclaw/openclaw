@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { assertCronBindApplies } from "../bind-parent.js";
 import {
   decodePluginCommandSchedule,
   isPluginCommandScheduleCapPeer,
@@ -17,6 +18,7 @@ import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js"
 import {
   reconcileCronChannelRequesterAuthority,
   reconcileCronOperatorSource,
+  resolveCronOperatorExecutionRevision,
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
@@ -36,6 +38,8 @@ function commandDeclarationDefinition(job: CronStoredJob): unknown {
     createdAtMs: _createdAtMs,
     updatedAtMs: _updatedAtMs,
     state: _state,
+    // Derived from the envelope, which the caller compares separately; a candidate has none yet.
+    payloadSource: _payloadSource,
     ...definition
   } = toPublicCronJob(job);
   // Compare the stored JSON contract, not omitted-versus-undefined JS properties.
@@ -109,11 +113,17 @@ export function planCronJobMutation(
       }
       if (
         pluginCommand &&
-        previous.jobs.filter((job) => isPluginCommandScheduleCapPeer(job, pluginCommand)).length >=
-          MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT
+        previous.jobs.filter((job) =>
+          isPluginCommandScheduleCapPeer(
+            job,
+            pluginCommand,
+            now,
+            options.pluginCommandSourceDigest,
+          ),
+        ).length >= MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT
       ) {
-        // Retired schedules and those of a replaced plugin instance or earlier Gateway process do
-        // not count: none can run plugin code again, and they must not block re-enrollment.
+        // Retired schedules, those bound to a replaced plugin instance or other code, and
+        // non-restartable ones of an earlier Gateway process do not count: none can run again.
         throw new Error(
           `plugin command schedules are limited to ${MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT} active jobs per plugin and parent session`,
         );
@@ -145,6 +155,7 @@ export function planCronJobMutation(
           mutation.input,
           {
             ...validation,
+            createdAtMs: mutation.createdAtMs,
             scheduledToolPolicy: options.scheduledToolPolicy ?? undefined,
           },
         );
@@ -152,6 +163,16 @@ export function planCronJobMutation(
         if (pluginCommand) {
           nextJob.pluginCommand = pluginCommand;
           nextJob.state.pluginCommandRuns = 0;
+          // Restart continuity: a later Gateway process can re-arm this schedule at its claim
+          // onto an instance that loaded exactly this code. Without captured source it ends with
+          // this process, as on hosts without continuity.
+          if (options.pluginCommandSourceDigest) {
+            nextJob.state.pluginCommandBinding = {
+              hostProcessId: pluginCommand.hostProcessId,
+              pluginIncarnation: pluginCommand.pluginIncarnation,
+              sourceDigest: options.pluginCommandSourceDigest,
+            };
+          }
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
@@ -176,6 +197,10 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (options.bindSourceConversation) {
+        assertCronBindApplies(previousJob, options.bindSourceConversation);
+        nextJob.sourceConversation = { ...options.bindSourceConversation };
+      }
       applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
       finalizeUpdatedJob({
         job: previousJob,
@@ -222,13 +247,27 @@ export function planCronJobMutation(
     }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
-      previousJob,
+      // Bind only records the parent link; the authenticated requester stays bound to an
+      // unchanged executable definition, so compare against the same link.
+      previousJob:
+        previousJob && options.bindSourceConversation
+          ? { ...previousJob, sourceConversation: nextJob.sourceConversation }
+          : previousJob,
       toolsAllowProvenance: options.toolsAllowProvenance,
       reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
       reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
     });
     resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
-    reconcileCronOperatorSource({ job: nextJob, previousJob, captured: options.operatorSource });
+    reconcileCronOperatorSource({
+      job: nextJob,
+      previousJob,
+      captured: options.operatorSource,
+      capturedExecutionRevision:
+        mutation.kind === "add"
+          ? resolveCronOperatorExecutionRevision(nextJob)
+          : options.operatorSourceExecutionRevision,
+      defaultAgentId,
+    });
     plan.created = !previousJob;
     plan.updated =
       previousJob !== undefined &&

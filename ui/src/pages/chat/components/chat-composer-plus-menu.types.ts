@@ -1,6 +1,8 @@
+import type { JSX } from "@solidjs/web";
 import type { ToolsEffectiveResult } from "../../../api/types.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import type { IconName } from "../../../components/solid/icon.tsx";
+import type { MenuEntry, MenuHandle, MenuItem } from "../../../components/solid/menu.tsx";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
@@ -23,16 +25,6 @@ export type ChatComposerMenuSkill = {
   blocked?: boolean;
 };
 
-type ChatComposerRootToggle = {
-  value: string;
-  label: string;
-  icon?: IconName;
-  checked: boolean;
-  disabled: boolean;
-  title?: string;
-  onChange: (checked: boolean) => void;
-};
-
 export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
   inputHandle: ChatAttachmentInputHandle;
@@ -41,7 +33,15 @@ export type ChatComposerPlusMenuProps = {
   open: boolean;
   view: ChatComposerPlusMenuView;
   toolOverrides: SessionToolOverrides | null | undefined;
-  rootToggles?: readonly ChatComposerRootToggle[];
+  rootToggles?: readonly {
+    value: string;
+    label: string;
+    icon?: IconName;
+    checked: boolean;
+    disabled: boolean;
+    title?: string;
+    onChange: (checked: boolean) => void;
+  }[];
   onOpenChange: (open: boolean) => void;
   onViewChange: (view: ChatComposerPlusMenuView) => void;
 };
@@ -73,3 +73,16 @@ export type ChatComposerCapabilityMenuProps = {
 
 export type ChatComposerPlusMenuContentProps = ChatComposerPlusMenuProps &
   ChatComposerCapabilityMenuProps & { showCapabilities: boolean };
+
+export type ChatComposerPlusMenuHandlers = {
+  items(): readonly MenuEntry[];
+  select(item: MenuItem, event: CustomEvent<MenuItem>): void;
+};
+
+export type ChatComposerPlusMenuBodyProps = {
+  menu: ChatComposerPlusMenuContentProps;
+  view: ChatComposerPlusMenuView;
+  readMenu: () => MenuHandle;
+  onReady: (handlers: ChatComposerPlusMenuHandlers | undefined) => void;
+  renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
+};

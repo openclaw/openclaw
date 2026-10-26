@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { readRegularFile, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -21,7 +21,7 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
 async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
-  const buffer = await fs.readFile(profilePath);
+  const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
     const [first, second, third] = buffer;
@@ -331,60 +331,6 @@ function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
   );
 }
 
-function updateCompletionProfile(
-  content: string,
-  binName: string,
-  cachePath: string,
-  shell: CompletionShell,
-  homeDir: string,
-): { next: string; changed: boolean; hadExisting: boolean } {
-  // Remove both cached and old dynamic blocks so installs converge to one fast source line,
-  // while preserving user-managed portable hooks byte-for-byte.
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let hadExisting = false;
-  let portableCoversCurrent = false;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    if (line.trim() === "# OpenClaw Completion") {
-      const following = lines[i + 1] ?? "";
-      if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
-        filtered.push(line);
-        continue;
-      }
-      hadExisting = true;
-      // An orphaned marker owns no following user line; remove only a recognized source line.
-      if (
-        isCompletionProfileLine(following, binName, cachePath) ||
-        isPreviousCompletionSourceLine(following, cachePath, shell)
-      ) {
-        i += 1;
-      }
-      continue;
-    }
-    if (isCompletionProfileLine(line, binName, cachePath)) {
-      hadExisting = true;
-      continue;
-    }
-    if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
-      // A portable hook for the current cache counts as configured and stays untouched.
-      hadExisting = true;
-      portableCoversCurrent = true;
-    }
-    filtered.push(line);
-  }
-
-  if (portableCoversCurrent) {
-    const next = filtered.join("\n");
-    return { next, changed: next !== content, hadExisting };
-  }
-  const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
-  const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
-  const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
-  return { next, changed: next !== content, hadExisting };
-}
-
 async function resolveCompletionProfileWritePath(profilePath: string): Promise<string> {
   const { existingPath, unresolvedSegments } = resolvePathPrefixSync(profilePath);
   // Keep unresolved `..` components until mkdir has created their physical parents.
@@ -503,6 +449,13 @@ export async function usesSlowDynamicCompletion(
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
 
+class CompletionCacheMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CompletionCacheMissingError";
+  }
+}
+
 export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
   if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
     return err;
@@ -518,7 +471,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    throw new Error(
+    throw new CompletionCacheMissingError(
       `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
     );
   }
@@ -541,8 +494,52 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       content = "";
     }
 
-    const update = updateCompletionProfile(content, binName, cachePath, shell, homeDir);
-    if (!update.changed) {
+    // Remove both cached and old dynamic blocks so installs converge to one fast source line,
+    // while preserving user-managed portable hooks byte-for-byte.
+    const lines = content.split("\n");
+    const filtered: string[] = [];
+    let hadExisting = false;
+    let portableCoversCurrent = false;
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i] ?? "";
+      if (line.trim() === "# OpenClaw Completion") {
+        const following = lines[i + 1] ?? "";
+        if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
+          filtered.push(line);
+          continue;
+        }
+        hadExisting = true;
+        // An orphaned marker owns no following user line; remove only a recognized source line.
+        if (
+          isCompletionProfileLine(following, binName, cachePath) ||
+          isPreviousCompletionSourceLine(following, cachePath, shell)
+        ) {
+          i += 1;
+        }
+        continue;
+      }
+      if (isCompletionProfileLine(line, binName, cachePath)) {
+        hadExisting = true;
+        continue;
+      }
+      if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
+        // A portable hook for the current cache counts as configured and stays untouched.
+        hadExisting = true;
+        portableCoversCurrent = true;
+      }
+      filtered.push(line);
+    }
+
+    let next: string;
+    if (portableCoversCurrent) {
+      next = filtered.join("\n");
+    } else {
+      const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
+      const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
+      next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
+    }
+    if (next === content) {
       if (!yes) {
         console.log(`Completion already installed in ${profilePath}`);
       }
@@ -550,7 +547,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
 
     if (!yes) {
-      const action = update.hadExisting ? "Updating" : "Installing";
+      const action = hadExisting ? "Updating" : "Installing";
       console.log(`${action} completion in ${profilePath}...`);
     }
 
@@ -559,7 +556,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, encodeCompletionProfile(update.next, encoding), {
+        await fs.writeFile(tempPath, encodeCompletionProfile(next, encoding), {
           flag: "wx",
         });
       },

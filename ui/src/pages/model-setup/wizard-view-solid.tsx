@@ -65,6 +65,11 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const retainedStep = createMemo(
     (previous: ReturnType<typeof stepState>) => stepState() ?? previous,
   );
+  // Browser sign-in steps carry their own provider heading and corner cancel control.
+  const signInStep = () => {
+    const step = stepState()?.step;
+    return Boolean(step && (step.externalUrl || step.deviceCode));
+  };
   const errorState = () =>
     props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined;
   return (
@@ -81,10 +86,22 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             {
               "model-setup-wizard--auth": props.mode === "auth",
               "model-setup-wizard--done": displayPhase() === "done",
+              "model-setup-wizard--sign-in": signInStep(),
             },
           ]}
         >
-          <Show when={displayPhase() !== "done"}>
+          <Show when={signInStep()}>
+            <button
+              type="button"
+              class="model-setup-wizard__close"
+              aria-label={t("modelSetup.wizard.cancelSignIn")}
+              title={t("modelSetup.wizard.cancelSignIn")}
+              onClick={() => props.onCancel()}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
+          <Show when={displayPhase() !== "done" && !signInStep()}>
             <div class="model-setup-wizard__header">
               <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
             </div>
@@ -171,6 +188,8 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                         presentation="model-setup"
                         step={state().step}
                         externalAuthInput={state().externalAuthInput}
+                        providerId={state().authChoice}
+                        providerLabel={props.state.authLabel}
                         value={props.value}
                         busy={props.busy || state().busy}
                         inputId="model-setup-wizard-text-input"
@@ -185,9 +204,11 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                             : undefined
                         }
                         leadingAction={
-                          <button type="button" class="btn" onClick={() => props.onCancel()}>
-                            {t("common.cancel")}
-                          </button>
+                          signInStep() ? undefined : (
+                            <button type="button" class="btn" onClick={() => props.onCancel()}>
+                              {t("common.cancel")}
+                            </button>
+                          )
                         }
                         onValueChange={(value) => props.onValueChange(value)}
                         onAnswer={(value) => props.onAnswer(value)}

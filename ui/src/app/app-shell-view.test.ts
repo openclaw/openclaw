@@ -4,15 +4,15 @@ import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
 import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
-import "../components/app-sidebar.tsx";
 import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
-import "../plugins/control-ui-view.solid.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
+import "../plugins/control-ui-view.solid.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
+import { createInertViewHost } from "../plugins/control-ui-view.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -21,8 +21,15 @@ import { ShellOwner } from "./app-host.tsx";
 import { readShellView } from "./app-shell-view-state.ts";
 import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
+import { createSolidControlUiReadiness } from "./control-ui-readiness-solid.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 import { registerRouteElement } from "./route-elements.ts";
+
+const sidebarImport = vi.hoisted(() => Promise.withResolvers<void>());
+vi.mock("../components/app-sidebar.tsx", async (importOriginal) => {
+  await sidebarImport.promise;
+  return importOriginal();
+});
 
 setupSidebarTest();
 
@@ -33,7 +40,7 @@ function mockMobile(read: () => boolean) {
   );
 }
 
-async function mountShell() {
+async function mountShell(waitForSidebar = true) {
   const runtime = bootstrapApplication();
   const { owner, dispose } = createRoot((disposeRoot) => ({
     owner: new ShellOwner(document.createElement("openclaw-app-shell"), runtime),
@@ -63,6 +70,9 @@ async function mountShell() {
     runtime.stop();
   });
   await Promise.resolve();
+  if (waitForSidebar) {
+    await vi.dynamicImportSettled();
+  }
   flush();
   const refresh = () => {
     owner.invalidate();
@@ -73,6 +83,56 @@ async function mountShell() {
   );
   return { owner, runtime, view, query, refresh };
 }
+
+it("publishes readiness when the retained sidebar's delayed module commits", async () => {
+  try {
+    const { owner, runtime, view, query, refresh } = await mountShell(false);
+    const sidebar = owner.navigationSidebar;
+    const routerState = runtime.router.getState();
+    vi.spyOn(runtime.router, "getState").mockReturnValue({
+      ...routerState,
+      status: "success",
+      pendingMatches: [],
+    });
+    // mock-isolation: unrelated owner publications must not supply the missing mount notification.
+    for (const source of [runtime.context.gateway, runtime.context.sessions, runtime.router]) {
+      vi.spyOn(source, "subscribe").mockImplementation(() => () => {});
+    }
+    // The fixture's boot router has no committed route; present workspace chrome explicitly.
+    owner.routeState = { routeId: "chat" };
+    refresh();
+    expect(owner.routeOutlet).toBeDefined();
+    vi.spyOn(owner.routeOutlet!, "settlePresentation").mockResolvedValue(true);
+    const { readiness, dispose } = createRoot((disposeRoot) => ({
+      dispose: disposeRoot,
+      readiness: createSolidControlUiReadiness(
+        view.container,
+        runtime,
+        () => {},
+        () => ({ shell: owner }),
+      ),
+    }));
+    onTestFinished(() => {
+      readiness.disconnect();
+      dispose();
+    });
+    await waitForSolid(() => {
+      expect(owner.readiness).toBe(readiness);
+      expect(readiness.hook.snapshot()).toMatchObject({ booted: true, routeReady: false });
+    });
+    expect(sidebar.isConnected).toBe(false);
+    sidebarImport.resolve();
+    await vi.dynamicImportSettled();
+    await customElements.whenDefined("openclaw-app-sidebar");
+    await waitForSolid(() => {
+      expect(customElements.get("openclaw-app-sidebar")).toBeDefined();
+      expect(query("openclaw-app-sidebar")).toBe(sidebar);
+      expect(readiness.hook.snapshot()).toMatchObject({ routeReady: true });
+    });
+  } finally {
+    sidebarImport.resolve();
+  }
+});
 
 it("exposes the Claws navigation entry only while its Labs toggle is enabled", async () => {
   const { owner, runtime } = await mountShell();
@@ -249,7 +309,7 @@ it("keeps pages interactive through transport loss and fences reload-required", 
   }
 });
 
-it("keeps one sidebar and outlet while navigation moves between desktop and drawer", async () => {
+it("keeps one sidebar through drawer and settings takeover transitions", async () => {
   let mobile = false;
   mockMobile(() => mobile);
   const { owner, view, query, refresh } = await mountShell();
@@ -257,6 +317,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   const outlet = query("openclaw-router-outlet");
   expect(sidebar).toBe(owner.navigationSidebar);
   expect(outlet).not.toBeNull();
+  expect(query(".sidebar-resizer")).not.toBeNull();
 
   mobile = true;
   owner.navDrawerOpen = true;
@@ -265,6 +326,7 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   expect(drawer?.getAttribute("role")).toBe("dialog");
   expect(drawer?.getAttribute("aria-modal")).toBe("true");
   expect(drawer?.contains(sidebar)).toBe(true);
+  expect(query(".sidebar-resizer")).toBeNull();
   expect(query("#control-ui-main")?.hasAttribute("inert")).toBe(true);
   expect(query("openclaw-router-outlet")).toBe(outlet);
 
@@ -277,8 +339,22 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   mobile = false;
   refresh();
   expect(drawer?.hasAttribute("role")).toBe(false);
+  expect(query(".sidebar-resizer")).not.toBeNull();
   expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
   expect(query("openclaw-app-sidebar")).toBe(sidebar);
+  expect(query("openclaw-router-outlet")).toBe(outlet);
+
+  owner.routeState = { routeId: "appearance" };
+  refresh();
+  expect(query("openclaw-app-sidebar")).toBeNull();
+  expect(owner.navigationSidebar).toBe(sidebar);
+
+  owner.routeState = { routeId: "chat" };
+  refresh();
+  await vi.dynamicImportSettled();
+  flush();
+  expect(query("openclaw-app-sidebar")).toBe(sidebar);
+  expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
   expect(query("openclaw-router-outlet")).toBe(outlet);
 });
 
@@ -710,14 +786,7 @@ it("restores the delegated shell after a pending update and can select another w
   };
   const abort = new AbortController();
   // This fixture delegates the built-in view without calling plugin services.
-  const host = {
-    signal: abort.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const host = createInertViewHost(abort.signal);
   const replacement: ControlUiRegistration<ControlUiReplacement> = {
     key: "fixture/workspace",
     pluginId: "fixture",

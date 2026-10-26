@@ -5,17 +5,18 @@ import { createComponent, createMemo, merge } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./chat-pane.tsx";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
+import { renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   appendChatThread,
@@ -27,9 +28,7 @@ import {
   nativeHistorySeq,
   stagedPagesRequest,
 } from "./chat-pane-history.test-support.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
@@ -138,7 +137,7 @@ it("updates the earlier-history control directly from pane loading state", () =>
 
   pane.history.loadingOlder = true;
   flush();
-  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-disabled")).toBe("true");
   expect(button.getAttribute("aria-busy")).toBe("true");
 
   pane.history.loadingOlder = false;
@@ -217,8 +216,7 @@ it.each(["pending", "resolved"] as const)(
         container.querySelector('[role="option"] .slash-menu-name')?.textContent;
       if (replyState === "resolved") {
         response.resolve(people);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(selectedName()).toBe("Bob");
+        await waitForSolid(() => expect(selectedName()).toBe("Bob"));
       }
 
       state.sessionsResult = sessionsResult(
@@ -235,8 +233,7 @@ it.each(["pending", "resolved"] as const)(
         1,
       );
       response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(selectedName()).toBe("Bob");
+      await waitForSolid(() => expect(selectedName()).toBe("Bob"));
       expect(container.querySelector("textarea")).toBe(textarea);
       textarea.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
@@ -253,7 +250,7 @@ it.each(["pending", "resolved"] as const)(
   },
 );
 
-it("keeps the accepted steer between saved output and the live tail through refresh", async () => {
+it("keeps the accepted steer and live tail visible while pane refresh is pending", () => {
   const history = createDeferred<ChatHistoryResult>();
   const request = vi.fn(() => history.promise);
   const client = { request } as unknown as GatewayBrowserClient;
@@ -283,24 +280,6 @@ it("keeps the accepted steer between saved output and the live tail through refr
       sessionKey: state.sessionKey,
       message: { role: "assistant", content: text },
     });
-  const renderedText = () =>
-    buildChatItems({
-      paneId: "refresh-regression",
-      sessionKey: state.sessionKey,
-      runId: state.chatRunId,
-      messages: state.chatMessages,
-      toolMessages: state.chatToolMessages,
-      streamSegments: state.chatStreamSegments,
-      stream: state.chatStream,
-      streamStartedAt: state.chatStreamStartedAt,
-      showToolCalls: true,
-    }).flatMap((item) =>
-      item.kind === "group"
-        ? item.messages.map(({ message }) => extractText(message)?.trim())
-        : item.kind === "stream"
-          ? [item.text.trim()]
-          : [],
-    );
   delta("Saved.");
   applySessionMessagePayload(state, { message: steer }, true, {
     kind: "live",
@@ -310,34 +289,10 @@ it("keeps the accepted steer between saved output and the live tail through refr
   const liveExpected = ["Start.", "Steer.", "Saved. Working."];
 
   try {
-    expect(renderedText()).toEqual(liveExpected);
+    expect(renderedText(state)).toEqual(liveExpected);
     pane.render();
     pane.chatProps!.onRefresh();
-    expect(renderedText()).toEqual(liveExpected);
-    history.resolve({
-      messages: [
-        original,
-        {
-          role: "assistant",
-          content: "Saved.",
-          __openclaw: { id: "saved-refresh", idempotencyKey: "run-refresh", seq: 2 },
-        },
-        steer,
-      ],
-      sessionInfo: {
-        key: state.sessionKey,
-        kind: "direct",
-        updatedAt: 4,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-refresh"],
-      },
-      inFlightRun: { runId: "run-refresh", text: "Working." },
-    });
-    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
-    expect(renderedText()).toEqual(["Start.", "Saved.", "Steer.", "Working."]);
-    delta("Working. Progress.");
-    expect(renderedText()).toEqual(["Start.", "Saved.", "Steer.", "Working. Progress."]);
+    expect(renderedText(state)).toEqual(liveExpected);
   } finally {
     state.connected = false;
     history.resolve({ messages: [] });

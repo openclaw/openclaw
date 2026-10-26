@@ -50,14 +50,15 @@ test("joins a direct history projection's accepted read before retiring the Gate
   const reader = vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
     const source = captureSource();
     return {
-      ...source,
+      own: (close) => source.own(close),
       createTransport(command) {
         const transport = source.createTransport(command);
         if (command.type !== "sessionRows.sharedFacts") {
           return transport;
         }
         return {
-          ...transport,
+          startValidateFresh: (...args) => transport.startValidateFresh(...args),
+          startClose: () => transport.startClose(),
           async startRead(...args) {
             const reply = await transport.startRead(...args);
             entered.resolve();

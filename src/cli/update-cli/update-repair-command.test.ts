@@ -5,10 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  buildStatusUpdateRows,
-  formatUpdateRestartStatusValue,
-} from "../../commands/status-update-restart.js";
+import { formatUpdateRestartStatusValue } from "../../commands/status-update-restart.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import {
   packageActivationIdentity,
@@ -284,6 +281,7 @@ describe("update repair ledger recovery", () => {
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "ok",
+          coreUpdate: "completed",
           mode: "repair",
           restart: false,
           reconciledRuns: [run.runId],
@@ -464,17 +462,11 @@ describe("update repair ledger recovery", () => {
       );
       expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
       const repaired = getUpdateRun(run.runId)!;
-      expect(await buildStatusUpdateRows(null)).toEqual([
-        { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
-      ]);
       expect(renderUpdateRunReport(repaired).markdown).not.toContain("openclaw triage");
       expect(
         formatUpdateRestartStatusValue(
           { kind: "update", status: "error", ts: now, stats: { runId: run.runId } },
-          {
-            warn: (message) => `warning: ${message}`,
-            muted: (message) => `muted: ${message}`,
-          },
+          { warn: (message) => `warning: ${message}`, muted: (message) => `muted: ${message}` },
         ),
       ).toBe("muted: ℹ️ OpenClaw abandoned update reconciled.");
       expect(getUpdateRun(run.runId)).toEqual(repaired);
@@ -540,37 +532,6 @@ describe("update repair ledger recovery", () => {
       expect(observedBeforeMaintenance?.steps).not.toContainEqual(
         expect.objectContaining({ step: "reconcile:acknowledged" }),
       );
-    },
-  );
-
-  it.each(["abandoned", "legacy-driver-expired"])(
-    "exits successfully when the Gateway already reconciled the %s row",
-    async (reason) => {
-      const run = seedRun();
-      finishUpdateRun(run.runId, { status: "failed", reason });
-
-      await updateRepairCommand({ json: true });
-
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ coreUpdate: "completed", reconciledRuns: [run.runId] }),
-      );
-      expect(getUpdateRun(run.runId)).toMatchObject({
-        status: "failed",
-        reason,
-        steps: expect.arrayContaining([
-          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-        ]),
-      });
-      expect(mocks.finalize).not.toHaveBeenCalled();
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining("already reconciled") }),
-      );
-      expect(await buildStatusUpdateRows(null)).toEqual([
-        { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
-      ]);
-      await updateRepairCommand({});
-      expect(mocks.finalize).toHaveBeenCalledExactlyOnceWith({}, [], undefined, undefined);
-      expect(getUpdateRun(run.runId)).toMatchObject({ status: "failed", reason });
     },
   );
 

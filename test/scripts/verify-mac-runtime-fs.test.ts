@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -35,6 +35,33 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime bundled filesystem p
       dts: false,
       logLevel: "silent",
     });
+    const chunks = bundles.flatMap((bundle) =>
+      bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+    );
+    const emittedFiles = new Set(chunks.map((chunk) => chunk.fileName));
+    const dependencies = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies;
+    // The SDK entry also imports memory helpers; provide their declared runtime
+    // dependencies while keeping fs-safe/native copies owned by each fixture.
+    for (const specifier of new Set(
+      chunks.flatMap((chunk) => chunk.imports.concat(chunk.dynamicImports)),
+    )) {
+      if (isBuiltin(specifier) || specifier.startsWith(".") || emittedFiles.has(specifier)) {
+        continue;
+      }
+      const packageName = specifier
+        .split("/")
+        .slice(0, specifier.startsWith("@") ? 2 : 1)
+        .join("/");
+      expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
+      if (packageName === "@openclaw/fs-safe") {
+        continue;
+      }
+      const destination = path.join(compiled, "node_modules", packageName);
+      if (!fs.existsSync(destination)) {
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.symlinkSync(fs.realpathSync(path.join("node_modules", packageName)), destination, "dir");
+      }
+    }
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
     }

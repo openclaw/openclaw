@@ -106,3 +106,36 @@ it("excludes generated native inventory for a configured proxy endpoint", () => 
   expect(registry.getAll()).toEqual([]);
   expect(registry.fork(AuthStorage.inMemory()).getAll()).toEqual([]);
 });
+
+it.each([
+  { source: "https://proxy.example/v1", baseUrl: "https://proxy.example", allowed: true },
+  { source: "https://foreign.example/v1", baseUrl: "https://proxy.example", allowed: false },
+  { source: "https://fixture.example/v1", baseUrl: undefined, allowed: true },
+  { source: "https://proxy.example/v1", baseUrl: undefined, allowed: false },
+])(
+  "admits retained runtime inventory from $source for configured origin $baseUrl",
+  ({ source, baseUrl, allowed }) => {
+    const registry = readCatalog(AuthStorage.inMemory(), {
+      config: baseUrl ? configured({ baseUrl, models: [] }) : {},
+      pluginCatalogs: catalogs({ fixture: { ...generatedProvider, baseUrl: source } }),
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "catalog-owner",
+            providers: ["fixture"],
+            modelCatalog: {
+              discovery: { fixture: "runtime" },
+              configuredEndpointDiscovery: ["fixture"],
+              providers: { fixture: { baseUrl: "https://fixture.example/v1", models: [] } },
+            },
+          },
+        ],
+      }),
+    });
+    expect(registry.getError()).toBeUndefined();
+    expect(Boolean(registry.find("fixture", "retained-model"))).toBe(allowed);
+    expect(Boolean(registry.fork(AuthStorage.inMemory()).find("fixture", "retained-model"))).toBe(
+      allowed,
+    );
+  },
+);

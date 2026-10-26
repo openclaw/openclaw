@@ -4,7 +4,7 @@ import type { Transferable } from "node:worker_threads";
 import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
@@ -95,7 +95,6 @@ it("sheds isolate-local caches at eighty percent of the actual worker heap limit
       kind: "prewarm" as const,
       database: { agentId: opened.agentId, path: opened.path },
       env: {},
-      history: false,
     };
     try {
       worker.heap = { used_heap_size: 799, heap_size_limit: 1000 };
@@ -171,6 +170,42 @@ it("borrows canonical writer proof without a native reader and still fences fore
     await expect(worker.read(request)).resolves.toMatchObject({ ok: true });
     Atomics.store(new Int32Array(validation.valid), 0, 0);
     await expect(worker.read(request)).resolves.toMatchObject(denied);
+  });
+});
+
+it("reads the latest projection status with one SELECT and no transaction envelope", async () => {
+  await withWorker("projection-status", async ({ state, database, scope }) => {
+    appendTranscriptMessageSync(scope, {
+      eventId: "projection-message",
+      message: { role: "assistant", content: [{ type: "text", text: "Synthetic projection" }] },
+    });
+    const request = {
+      kind: "projection-status" as const,
+      database: { agentId: database.agentId, path: database.path },
+      env: state.env,
+      sessionId: scope.sessionId,
+    };
+    await expect(worker.read(request)).resolves.toMatchObject({ ok: true, value: false });
+    const update = database.db.prepare(
+      "UPDATE session_transcript_index_state SET needs_rebuild = ? WHERE session_id = ?",
+    );
+    const native = nodeSqlite.requireNodeSqlite();
+    const observation = observeSqliteReadSql(native.StatementSync.prototype);
+    using reads = { ...observation, [Symbol.dispose]: observation.restore };
+    using exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
+    for (const needsReconcile of [false, true, false]) {
+      update.run(Number(needsReconcile), scope.sessionId);
+      reads.queries.length = 0;
+      exec.mockClear();
+      await expect(worker.read(request)).resolves.toMatchObject({
+        ok: true,
+        value: needsReconcile,
+      });
+      expect(reads.queries).toEqual([expect.stringMatching(/^\s*select\b/i)]);
+      expect(
+        exec.mock.calls.filter(([sql]) => /^\s*(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql)),
+      ).toEqual([]);
+    }
   });
 });
 
@@ -306,9 +341,7 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(
-          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
-        ).resolves.toEqual({
+        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

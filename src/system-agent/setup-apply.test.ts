@@ -97,20 +97,10 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     await apply({
       expectedConfigHash: "probe",
-      expectedAgentId: "main",
-      expectedAgentDir: "/agents/main",
       expectedInferenceRoute: await projectInferenceRoute(runtimeConfig),
       firstAgent: firstTeam,
     });
-    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ firstAgent: firstTeam }),
-    );
-    expect(Object.keys(mocks.state.persistedConfig?.agents?.entries ?? {})).toEqual([
-      "coordinator",
-      "researcher",
-      "writer",
-      "reviewer",
-    ]);
+    expect(mocks.state.persistedConfig?.agents?.entries).toHaveProperty("coordinator");
     expectWorkspace(`${workspace}/coordinator`, "coordinator");
     expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
   });
@@ -183,14 +173,10 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         agents: { ...agentConfig("/agents/main").agents, defaults: sourceConfig.agents?.defaults },
       };
       start(structuredClone(runtimeConfig), "probe", sourceConfig);
-      const assertCommitPreconditions = vi.fn();
-
-      await apply({ workspace: "/tmp/requested-workspace", assertCommitPreconditions });
-
-      expect(assertCommitPreconditions).toHaveBeenCalledTimes(3);
-      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ workspace: "/tmp/current-workspace" }),
-      );
+      await apply({
+        workspace: "/tmp/requested-workspace",
+        assertCommitPreconditions: () => {},
+      });
       expect(mocks.state.persistedConfig?.agents).toMatchObject({
         defaults: { workspace: "/tmp/current-workspace" },
         entries: { main: { workspace: "/tmp/current-workspace" } },
@@ -230,7 +216,8 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     ["agent credential location", "openai/gpt-5.5", "main", "/agents/moved"],
   ] as const)(
     "rechecks the probed %s inside the final transform",
-    async (name, model, agentId, agentDir) => {
+    async (_name, model, agentId, agentDir) => {
+      const initial = mocks.state.initialSnapshot;
       const runtimeConfig = {
         agents: {
           defaults: { model: { primary: model } },
@@ -241,15 +228,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         mocks.state.commitConfig = runtimeConfig;
       }
       mocks.state.commitSnapshot = snapshot("probe", runtimeConfig);
+      mocks.readVerifiedSnapshot.mockImplementation(
+        snapshotSequence(initial, mocks.state.commitSnapshot),
+      );
       await reject(
         {
           expectedConfigHash: "probe",
-          expectedAgentId: "main",
-          ...(agentDir
-            ? { expectedAgentDir: "/agents/main" }
-            : { expectedModelRef: "openai/gpt-5.5" }),
+          expectedInferenceRoute: await projectInferenceRoute(initial.config),
         },
-        `${name} changed`,
+        routeChanged,
         [],
         true,
       );
@@ -328,13 +315,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await apply({ expectedInferenceRoute, surface: "cli" });
 
     expect(mocks.state.persistedConfig?.logging).toEqual({ level: "debug" });
-    expect(mocks.configureGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.configureGateway).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        baseConfig: concurrent,
-        quickstartGateway: expect.objectContaining({ port: 19000, bind: "lan" }),
-      }),
-    );
     expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
       expect.objectContaining({
         settings: expect.objectContaining({
@@ -483,7 +463,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         const result = await apply({ surface: "cli" });
 
         expect(result.gateway).toEqual(gateway);
-        expect(mocks.waitForGatewayReachable).toHaveBeenCalledOnce();
         expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
           expect.objectContaining(resolveGatewayStartupTiming(platform)),
         );

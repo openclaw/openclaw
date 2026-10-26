@@ -14,8 +14,9 @@ const userFields = {
   identity: json.optional(identity),
 };
 const user = json.object(userFields);
+const sessionKey = json.refine(text, (key) => !isIncognitoSessionKey(key));
 const sessionFields = {
-  key: json.refine(text, (key) => !isIncognitoSessionKey(key)),
+  key: sessionKey,
   label: text,
   agentId: optionalText,
   subtitle: optionalText,
@@ -25,6 +26,7 @@ const sessionFields = {
   childrenDisplayMode: json.optional(
     json.enumeration(["collapsed-by-user", "expanded", "expanded-fully"]),
   ),
+  childLoadParentKeys: json.optional(json.array(sessionKey)),
   icon: optionalText,
   color: optionalText,
   pinned: json.boolean,
@@ -37,10 +39,13 @@ const sessionFields = {
 export type SidebarSnapshotSession = json.SnapshotObject<typeof sessionFields> & {
   children: SidebarSnapshotSession[];
 };
-const session: json.SnapshotReader<SidebarSnapshotSession> = json.object({
-  ...sessionFields,
-  children: json.lazy(() => json.array(session)),
-});
+const session: json.SnapshotReader<SidebarSnapshotSession> = json.refine(
+  json.object({
+    ...sessionFields,
+    children: json.lazy(() => json.array(session)),
+  }),
+  (row) => row.children.length === 0 || row.childLoadParentKeys !== undefined,
+);
 const sectionId = json.checked(
   (value): value is SidebarSessionSection<unknown>["id"] =>
     typeof value === "string" &&

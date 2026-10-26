@@ -7,17 +7,9 @@ import {
   type DatabaseEngineSelection as Selection,
 } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { createSqliteFamilyEngines } from "./selection-fixture.test-support.js";
 
-const sqliteEngines: Selection["effectiveEngines"] = {
-  state: "sqlite",
-  agent: "sqlite",
-  workboard: "sqlite",
-  logbook: "sqlite",
-  "team-reports": "sqlite",
-  quarantine: "sqlite",
-  "managed-update": "sqlite",
-  "package-activation": "sqlite",
-};
+const sqliteEngines: Selection["effectiveEngines"] = createSqliteFamilyEngines();
 const postgres = { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" };
 const selection = (family?: keyof Selection["effectiveEngines"], input = postgres): Selection => ({
   effectiveEngines: { ...sqliteEngines, ...(family ? { [family]: "postgres" } : {}) },

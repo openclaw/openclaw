@@ -25,6 +25,20 @@ import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { attachExecApprovalsSocket } from "./exec-approvals-socket.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const mac = it.runIf(process.platform === "darwin");
+const identityRead = { kind: "identity.read", identity_key: "primary" } as const;
+const tokenKey = (device_id: string) => ({ device_id, role: "operator" });
+function replaceToken(
+  deviceId: string,
+  token: string,
+): Extract<ClientCredentialOperation, { kind: "token.replace" }> {
+  const key = tokenKey(deviceId);
+  return {
+    kind: "token.replace",
+    key,
+    token: { ...key, token, scopes_json: "[]", updated_at_ms: 1 },
+  };
+}
 
 function fixture() {
   const root = dirs.make("cc-");
@@ -108,17 +122,7 @@ it("serializes first creation, preserves the winner and cancels queued writes wi
   const two = runClientCredentialOperationAsync(env, { kind: "identity.create", identity: second });
   const cancelled = runClientCredentialOperationAsync(
     env,
-    {
-      kind: "token.replace",
-      key: { device_id: first.device_id, role: "operator" },
-      token: {
-        device_id: first.device_id,
-        role: "operator",
-        token: "synthetic",
-        scopes_json: "[]",
-        updated_at_ms: 1,
-      },
-    },
+    replaceToken(first.device_id, "synthetic"),
     { signal: controller.signal },
   ).catch((error: unknown) => error);
   controller.abort();
@@ -128,11 +132,38 @@ it("serializes first creation, preserves the winner and cancels queued writes wi
   expect(
     await runClientCredentialOperationAsync(env, {
       kind: "token.read",
-      key: { device_id: first.device_id, role: "operator" },
+      key: tokenKey(first.device_id),
     }),
   ).toEqual({ kind: "token", token: null });
   expect(fs.existsSync(path.join(root, "state"))).toBe(false);
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps credential authority bound to the current root alias",
+  async () => {
+    const first = fixture();
+    const second = fixture();
+    const alias = path.join(dirs.make("cc-alias-"), "root");
+    const env = { ...first.env, OPENCLAW_STATE_DIR: alias };
+    const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity());
+    fs.symlinkSync(first.root, alias);
+    await runClientCredentialOperationAsync(env, { kind: "identity.create", identity });
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+    fs.unlinkSync(alias);
+    fs.symlinkSync(second.root, alias);
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity: null,
+    });
+    expect(await runClientCredentialOperationAsync(first.env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+  },
+);
 
 it("waits for a short-lived offline owner when no app endpoint exists", async () => {
   const { env } = fixture();
@@ -144,74 +175,60 @@ it("waits for a short-lived offline owner when no app endpoint exists", async ()
     released = releaseStore(child);
   }, 500);
   try {
-    expect(
-      await runClientCredentialOperationAsync(env, {
-        kind: "identity.read",
-        identity_key: "primary",
-      }),
-    ).toEqual({ kind: "identity", identity });
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
   } finally {
     clearTimeout(timer);
     await (released ?? releaseStore(child));
   }
 });
 
-it.runIf(process.platform === "darwin")(
-  "routes approval socket ensure through the captured named-profile app",
-  async () => {
-    const { root, env: homeEnv } = fixture();
-    const env = { ...homeEnv, OPENCLAW_PROFILE: "p" };
-    const context = captureOpenClawStateWorkerContext({ env });
-    const snapshot: ExecApprovalsSnapshot = {
-      path: path.join(root, "exec-approvals.json"),
-      exists: true,
-      raw: "synthetic-policy",
-      hash: "synthetic-policy-hash",
-      file: { version: 1, defaults: { security: "deny" } },
-    };
-    const appSocket = {
-      socket_key: "current" as const,
-      socket_path: path.join(root, "approvals.sock"),
-      socket_token: "synthetic-profile-socket-token",
-      updated_at_ms: 1,
-    };
-    const requests: unknown[] = [];
-    const server = await listenApp(
-      root,
-      (request, socket) => {
-        requests.push(request);
-        expect(request.credentialRoot).toBe(root);
-        expect(request.credentialOperation.kind).toBe("socket.ensure");
-        socket.end(
-          `${JSON.stringify({ ok: true, result: { kind: "socket", socket: appSocket } })}\n`,
-        );
-      },
-      "p",
-    );
-    try {
-      await withEnvAsync(
-        { HOME: root, USERPROFILE: root, OPENCLAW_PROFILE: "default" },
-        async () => {
-          expect(await attachExecApprovalsSocket(snapshot, context)).toEqual({
-            ...snapshot,
-            file: {
-              ...snapshot.file,
-              socket: { path: appSocket.socket_path, token: appSocket.socket_token },
-            },
-          });
-          expect(requests).toHaveLength(1);
-          expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
-        },
+mac("routes approval socket ensure through the captured named-profile app", async () => {
+  const { root, env: homeEnv } = fixture();
+  const env = { ...homeEnv, OPENCLAW_PROFILE: "p" };
+  const context = captureOpenClawStateWorkerContext({ env });
+  const snapshot: ExecApprovalsSnapshot = {
+    path: path.join(root, "exec-approvals.json"),
+    exists: true,
+    raw: "synthetic-policy",
+    hash: "synthetic-policy-hash",
+    file: { version: 1, defaults: { security: "deny" } },
+  };
+  const appSocket = {
+    socket_key: "current" as const,
+    socket_path: path.join(root, "approvals.sock"),
+    socket_token: "synthetic-profile-socket-token",
+    updated_at_ms: 1,
+  };
+  const requests: unknown[] = [];
+  await using _ = await listenApp(
+    root,
+    (request, socket) => {
+      requests.push(request);
+      expect(request.credentialRoot).toBe(root);
+      expect(request.credentialOperation.kind).toBe("socket.ensure");
+      socket.end(
+        `${JSON.stringify({ ok: true, result: { kind: "socket", socket: appSocket } })}\n`,
       );
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  },
-);
+    },
+    "p",
+  );
+  await withEnvAsync({ HOME: root, USERPROFILE: root, OPENCLAW_PROFILE: "default" }, async () => {
+    expect(await attachExecApprovalsSocket(snapshot, context)).toEqual({
+      ...snapshot,
+      file: {
+        ...snapshot.file,
+        socket: { path: appSocket.socket_path, token: appSocket.socket_token },
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
+  });
+});
 
-it.runIf(process.platform === "darwin")(
+mac(
   "uses authenticated app custody and never replays a dispatched request after reply loss",
   async () => {
     const { root, env } = fixture();
@@ -220,7 +237,7 @@ it.runIf(process.platform === "darwin")(
     let loseReply = false;
     let release: (() => void) | undefined;
     const requests: unknown[] = [];
-    const server = await listenApp(root, (request, socket) => {
+    await using _ = await listenApp(root, (request, socket) => {
       requests.push(request);
       expect(request.credentialRoot).toBe(root);
       expect(request.operation).toBe("client.credentials");
@@ -235,49 +252,34 @@ it.runIf(process.platform === "darwin")(
     let released: Promise<void> | undefined;
     try {
       await prepareStartupClientCredentials({ env });
-      expect(
-        await runClientCredentialOperationAsync(env, {
-          kind: "identity.read",
-          identity_key: "primary",
-        }),
-      ).toEqual({ kind: "identity", identity });
+      expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+        kind: "identity",
+        identity,
+      });
       loseReply = true;
       release = () => {
         released = releaseStore(child);
       };
       await expect(
-        runClientCredentialOperationAsync(env, {
-          kind: "token.replace",
-          key: { device_id: identity.device_id, role: "operator" },
-          token: {
-            device_id: identity.device_id,
-            role: "operator",
-            token: "must-not-replay",
-            scopes_json: "[]",
-            updated_at_ms: 1,
-          },
-        }),
+        runClientCredentialOperationAsync(env, replaceToken(identity.device_id, "must-not-replay")),
       ).rejects.toThrow("did not reply");
       await released;
       expect(requests).toHaveLength(3);
       expect(
         runClientCredentialOperation(env, {
           kind: "token.read",
-          key: { device_id: identity.device_id, role: "operator" },
+          key: tokenKey(identity.device_id),
         }),
       ).toEqual({ kind: "token", token: null });
     } finally {
       if (!released) {
         await releaseStore(child);
       }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   },
 );
 
-it.runIf(process.platform === "darwin").each([
+mac.each([
   { code: "credential_root_unowned", message: "synthetic refusal", fallback: true },
   // Released apps without the credential route refuse it before dispatch.
   { code: "invalid_request", message: "Unknown control operation.", fallback: true },
@@ -288,50 +290,32 @@ it.runIf(process.platform === "darwin").each([
     const { root, env: homeEnv } = fixture();
     const customRoot = path.join(root, "unrelated-client");
     const env = { ...homeEnv, OPENCLAW_STATE_DIR: customRoot };
-    const token = {
-      device_id: "custom-root-device",
-      role: "operator",
-      token: "synthetic-custom-root-token",
-      scopes_json: "[]",
-      updated_at_ms: 1,
-    };
-    const server = await listenApp(root, (request, socket) => {
+    const operation = replaceToken("custom-root-device", "synthetic-custom-root-token");
+    const { token } = operation;
+    await using _ = await listenApp(root, (request, socket) => {
       expect(request.credentialRoot).toBe(customRoot);
       socket.end(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
     });
-    try {
-      const result = runClientCredentialOperationAsync(env, {
-        kind: "token.replace",
-        key: token,
+    const result = runClientCredentialOperationAsync(env, operation);
+    if (fallback) {
+      await expect(result).resolves.toEqual({ kind: "changed", changed: true });
+      expect(runClientCredentialOperation(env, { kind: "token.read", key: token })).toEqual({
+        kind: "token",
         token,
       });
-      if (fallback) {
-        await expect(result).resolves.toEqual({ kind: "changed", changed: true });
-        expect(runClientCredentialOperation(env, { kind: "token.read", key: token })).toEqual({
-          kind: "token",
-          token,
-        });
-      } else {
-        await expect(result).rejects.toThrow("synthetic refusal");
-        expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
-      }
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+    } else {
+      await expect(result).rejects.toThrow("synthetic refusal");
+      expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
     }
   },
 );
 
-it.runIf(process.platform === "darwin")(
-  "rejects unsafe app credentials before dispatch",
-  async () => {
-    const { root, env } = fixture();
-    const directory = path.join(root, ".openclaw");
-    fs.mkdirSync(directory);
-    fs.writeFileSync(path.join(directory, "mac-control.token"), "synthetic", { mode: 0o644 });
-    await expect(requestClientCredentialsFromApp(env, { kind: "socket.read" })).rejects.toThrow(
-      "unsafe",
-    );
-  },
-);
+mac("rejects unsafe app credentials before dispatch", async () => {
+  const { root, env } = fixture();
+  const directory = path.join(root, ".openclaw");
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "mac-control.token"), "synthetic", { mode: 0o644 });
+  await expect(requestClientCredentialsFromApp(env, { kind: "socket.read" })).rejects.toThrow(
+    "unsafe",
+  );
+});

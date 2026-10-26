@@ -73,6 +73,7 @@ export type FrvConcreteClient = FrvClient & {
       | "rerunFailed"
       | "rerunJob"
       | "rerunParent"
+      | "rerunRun"
       | "listRuns"
       | "verify"
       | "verifySeal"
@@ -145,7 +146,13 @@ export function inspectUnsealedPlan(
   client: Pick<FrvClient, "getAttemptJobs" | "getRun">,
 ): Promise<Record<string, unknown>>;
 export function loadPlanForCommand(
-  options: { command: string; repository: string; runId: string },
+  options: {
+    command: string;
+    operationDeadline?: number;
+    repository: string;
+    runId: string;
+    waitForSeal?: boolean;
+  },
   client: Pick<FrvClient, "getAttemptJobs" | "getRun">,
   loadExecutionPlan?: (...args: unknown[]) => Promise<unknown>,
 ): Promise<
