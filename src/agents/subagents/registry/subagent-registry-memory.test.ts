@@ -68,7 +68,7 @@ describe("completed subagent payload residency", () => {
     expect(resident.task).toBe(original.task.slice(0, 160));
     expect(resident.completion?.resultText).toBeUndefined();
     expect(resident.completion?.fallbackResultText).toBeUndefined();
-    expect(resident.completion?.terminalReply).toEqual(original.completion?.terminalReply);
+    expect(resident.completion?.terminalReply).toBeUndefined();
     expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
     expect(compactSubagentRunForMemory(resident)).toBe(resident);
 
@@ -78,6 +78,7 @@ describe("completed subagent payload residency", () => {
       delivery: { status: "pending" },
     });
     expect(restored.completion).toEqual(original.completion);
+    expect(restored.completion?.terminalReply).toBe(original.completion?.terminalReply);
     expect(restored.task).toBe(original.task);
     expect(restored.cleanupCompletedAt).toBe(3);
     expect(restored.delivery?.status).toBe("delivered");

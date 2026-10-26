@@ -77,6 +77,7 @@ export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentR
   if (compact.completion) {
     delete compact.completion.resultText;
     delete compact.completion.fallbackResultText;
+    delete compact.completion.terminalReply;
   }
   bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
   evictedSubagentRunPayloads.add(compact);
@@ -104,6 +105,7 @@ export function restoreSubagentRunPayload(
             ...resident.completion,
             resultText: full.completion?.resultText,
             fallbackResultText: full.completion?.fallbackResultText,
+            terminalReply: full.completion?.terminalReply,
           },
         }
       : {}),

@@ -444,6 +444,8 @@ const repositoryScriptEntries = [
   "scripts/perf/session-pin-policy-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
   "scripts/perf/state-read-transport-bench.ts!",
+  "scripts/perf/subagent-run-retention-gateway.ts!",
+  "scripts/perf/subagent-run-retention-measure.ts!",
   "scripts/perf/subagent-runtime-registry-measure.ts!",
   "scripts/perf/transcript-resident-hydration-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
