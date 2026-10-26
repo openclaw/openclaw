@@ -118,10 +118,6 @@ function assignModelUsageAttrs(
     ["openclaw.model_call.usage.output_tokens", usage.output],
     ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
     ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
-    // Reported TTL buckets export verbatim on both usage vocabularies: the
-    // OpenClaw keys keep vendor-neutral tooling complete, and the generic
-    // flat keys let usage-type-pricing consumers price each bucket at its own
-    // rate. Both are decompositions of the blended total, never additive.
     ["openclaw.model_call.usage.cache_creation_input_tokens_1h", usage.cacheWrite1h],
     ["openclaw.model_call.usage.cache_creation_input_tokens_5m", usage.cacheWrite5m],
     ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
@@ -131,6 +127,12 @@ function assignModelUsageAttrs(
     ["gen_ai.usage.output_tokens", usage.output],
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
+    // Anthropic splits cache writes by TTL; the OTel GenAI conventions
+    // define no TTL attributes, so these keys extend gen_ai.usage.* in the
+    // usage-type dialect pricing consumers read. The standard keeps
+    // gen_ai.usage.input_tokens authoritative (cache counters SHOULD be
+    // included in it), so these buckets decompose the cache-write total:
+    // price the total or its buckets, never both.
     ["gen_ai.usage.input_cache_creation_1h", usage.cacheWrite1h],
     ["gen_ai.usage.input_cache_creation_5m", usage.cacheWrite5m],
   ] as const) {
