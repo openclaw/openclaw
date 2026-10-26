@@ -509,12 +509,7 @@ describe("chat abort transcript persistence", () => {
       const runId = "aborted-run";
       seedCommittedReply({ sessionId, storePath, runId: sameRun ? runId : "other-run" });
       await persistPartial(
-        await partialSnapshot({
-          runId,
-          sessionId,
-          text: "Completed reply",
-          abortOrigin: origin,
-        }),
+        await partialSnapshot({ runId, sessionId, text: "Completed reply", abortOrigin: origin }),
       );
       const rows = collectAssistantRowsWithText(await readTranscript(), "Completed reply");
       expect(rows).toHaveLength(count);
@@ -661,54 +656,68 @@ describe("chat abort transcript persistence", () => {
   });
 
   it.each([
-    ["scopes global chat.abort requests to the selected agent", "global", "work", false],
-    [
-      "scopes bare global chat.abort requests to the migrated default agent",
-      "global",
-      undefined,
-      true,
-    ],
-    [
-      "infers selected global chat.abort scope from agent-prefixed aliases",
-      "agent:work:main",
-      undefined,
-      true,
-    ],
-  ])("%s", async (_name, sessionKey, agentId, needsGlobalConfig) => {
-    const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
-    const cfg = globalConfig();
-    const respond = vi.fn();
-    const { mainActive, workActive, sources } = globalRuns();
-    const context = createChatAbortContext({
-      sources,
-      getRuntimeConfig: () => cfg,
-    });
-    const agentEvents: Array<{ runId: string; sessionKey?: string; agentId?: string }> = [];
-    const unsubscribe = onAgentEvent((event) => {
-      agentEvents.push({
-        runId: event.runId,
-        sessionKey: event.sessionKey,
-        agentId: event.agentId,
+    { sessionKey: "global", agentId: "work", exact: false, legacy: false },
+    { sessionKey: "global", agentId: undefined, exact: false, legacy: false },
+    { sessionKey: "agent:work:main", agentId: undefined, exact: false, legacy: false },
+    { sessionKey: "agent:work:main", agentId: undefined, exact: true, legacy: false },
+    { sessionKey: "global", agentId: "work", exact: true, legacy: true },
+  ])(
+    "scopes global chat.abort to its selected owner: %j",
+    async ({ sessionKey, agentId, exact, legacy }) => {
+      const expectedAgentId = agentId ?? (sessionKey.startsWith("agent:work:") ? "work" : "main");
+      const cfg = legacy ? { agents: { list: [{ id: "work", default: true }] } } : globalConfig();
+      const respond = vi.fn();
+      const runs = exact
+        ? [
+            [
+              "run-work-global",
+              createActiveRun("global", {
+                sessionId: "sess-work-global",
+                ...(legacy ? {} : { agentId: "work" }),
+              }),
+            ] as const,
+          ]
+        : globalRuns().sources;
+      const context = createChatAbortContext({
+        sources: runs,
+        getRuntimeConfig: () => cfg,
       });
-    });
-
-    try {
-      await abort(context, { sessionKey, ...(agentId ? { agentId } : {}) }, respond);
-    } finally {
-      unsubscribe();
-    }
-
-    expectAborted(respond, [`run-${expectedAgentId}-global`]);
-    expect(mainActive.input.abortSignal.aborted).toBe(expectedAgentId === "main");
-    expect(workActive.input.abortSignal.aborted).toBe(expectedAgentId === "work");
-    if (!needsGlobalConfig) {
-      expect(agentEvents).toContainEqual({
-        runId: "run-work-global",
-        sessionKey: "global",
-        agentId: "work",
+      const agentEvents: Array<{ runId: string; sessionKey?: string; agentId?: string }> = [];
+      const unsubscribe = onAgentEvent((event) => {
+        agentEvents.push({
+          runId: event.runId,
+          sessionKey: event.sessionKey,
+          agentId: event.agentId,
+        });
       });
-    }
-  });
+
+      try {
+        await abort(
+          context,
+          {
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+            ...(exact && !legacy ? { runId: "run-work-global" } : {}),
+          },
+          respond,
+        );
+      } finally {
+        unsubscribe();
+      }
+
+      expectAborted(respond, [`run-${expectedAgentId}-global`]);
+      for (const [runId, active] of runs) {
+        expect(active.input.abortSignal.aborted).toBe(runId === `run-${expectedAgentId}-global`);
+      }
+      if (!exact && agentId) {
+        expect(agentEvents).toContainEqual({
+          runId: "run-work-global",
+          sessionKey: "global",
+          agentId: "work",
+        });
+      }
+    },
+  );
 
   it("rejects selected global chat.abort when agentId conflicts with the key agent", async () => {
     const respond = vi.fn();
@@ -728,53 +737,6 @@ describe("chat abort transcript persistence", () => {
     expect(error).toMatchObject({
       message: 'agentId "work" does not match session key "agent:main:main"',
     });
-  });
-
-  it("accepts selected global chat.abort run ids with agent-prefixed aliases", async () => {
-    const respond = vi.fn();
-    const workActive = createActiveRun("global", {
-      sessionId: "sess-work-global",
-      agentId: "work",
-    });
-    const context = createChatAbortContext({
-      getRuntimeConfig: globalConfig,
-      sources: [["run-work-global", workActive]],
-    });
-
-    await abort(
-      context,
-      {
-        sessionKey: "agent:work:main",
-        runId: "run-work-global",
-      },
-      respond,
-    );
-
-    expectAborted(respond, ["run-work-global"]);
-    expect(workActive.input.abortSignal.aborted).toBe(true);
-  });
-
-  it("uses the configured default agent for legacy unscoped global aborts", async () => {
-    const respond = vi.fn();
-    const active = createActiveRun("global", {
-      sessionId: "sess-work-global",
-    });
-    const context = createChatAbortContext({
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "work", default: true }] } }),
-      sources: [["run-work-global", active]],
-    });
-
-    await abort(
-      context,
-      {
-        sessionKey: "global",
-        agentId: "work",
-      },
-      respond,
-    );
-
-    expectAborted(respond, ["run-work-global"]);
-    expect(active.input.abortSignal.aborted).toBe(true);
   });
 
   it("does not match stop targets by client-supplied session id without a stored entry", async () => {

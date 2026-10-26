@@ -137,6 +137,30 @@ function trackEmbeddedRun(...args: Parameters<typeof setActiveEmbeddedRun>) {
   return { [Symbol.dispose]: () => clearActiveEmbeddedRun(args[0], args[1], args[2]) };
 }
 
+function seedParent() {
+  return writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: parentKey,
+    defaultSessionId: parentId,
+  });
+}
+
+function endingEmbeddedRun(runId: string, sessionId: string, sessionKey: string) {
+  const abort = vi.fn(() => {
+    emitAgentEvent({
+      runId,
+      sessionKey,
+      sessionId,
+      stream: "lifecycle",
+      data: { phase: "end", ...resolveAgentRunAbortLifecycleFields(AbortSignal.abort()) },
+    });
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+  });
+  const handle = createEmbeddedRunHandle({ runId, abort });
+  return { handle, abort };
+}
+
 async function seedOwnedParent(client: ReturnType<typeof roleClient>) {
   await sessions.upsertSessionEntryCore(
     { agentId: "main", sessionKey: parentKey },
@@ -585,12 +609,7 @@ async function seedChild(id: string, turn: string, queued = true, requester = pa
 }
 
 it("exact embedded Stop cancels running and queued collectors without dispatching the queued sibling", async () => {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: parentKey,
-    defaultSessionId: parentId,
-  });
+  await seedParent();
   await seedChild("running", "parent", false);
   await seedChild("queued", "parent");
   await seedChild("other-turn", "other-parent");
@@ -605,29 +624,12 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
     enqueueCollector("selected", runId, start);
   }
   enqueueCollector("unrelated", "other-session", otherSessionDispatch, "unrelated-capacity");
-  const parentAbort = vi.fn(() => {
-    emitAgentEvent({
-      runId: "parent",
-      sessionKey: parentKey,
-      sessionId: parentId,
-      stream: "lifecycle",
-      data: { phase: "end", ...resolveAgentRunAbortLifecycleFields(AbortSignal.abort()) },
-    });
-    clearActiveEmbeddedRun(parentId, parent, parentKey);
-  });
-  const childAbort = vi.fn(() => {
-    // The real lifecycle listener/cleanup releases the active collector slot.
-    emitAgentEvent({
-      runId: "running",
-      sessionKey: childKey("running"),
-      sessionId: "running",
-      stream: "lifecycle",
-      data: { phase: "end", ...resolveAgentRunAbortLifecycleFields(AbortSignal.abort()) },
-    });
-    clearActiveEmbeddedRun("running", child, childKey("running"));
-  });
-  const parent = createEmbeddedRunHandle({ runId: "parent", abort: parentAbort });
-  const child = createEmbeddedRunHandle({ runId: "running", abort: childAbort });
+  const { handle: parent, abort: parentAbort } = endingEmbeddedRun("parent", parentId, parentKey);
+  const { handle: child, abort: childAbort } = endingEmbeddedRun(
+    "running",
+    "running",
+    childKey("running"),
+  );
   setActiveEmbeddedRun(parentId, parent, parentKey);
   setActiveEmbeddedRun("running", child, childKey("running"));
   try {
@@ -664,12 +666,7 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
   "%s embedded Stop applies parent acceptance to descendants",
 
   async (state) => {
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: parentKey,
-      defaultSessionId: parentId,
-    });
+    await seedParent();
     await seedChild("queued", "parent");
     const dispatch = vi.fn(async () => {});
     enqueueCollector("declined", "queued", dispatch, "capacity");
@@ -744,12 +741,7 @@ it.each(["missing", "replaced", "finalizing", "throwing", "unreadable child"])(
 it.each([true, false])(
   "sessions.abort controller-backed Stop respects parent acceptance (finalizing=%s)",
   async (finalizing) => {
-    const parentStorePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: parentKey,
-      defaultSessionId: parentId,
-    });
+    const parentStorePath = await seedParent();
     await seedChild("running", "parent", false);
     await seedChild("queued", "parent");
     const dispatch = vi.fn(async () => {});
@@ -793,17 +785,11 @@ it.each([true, false])(
       releaseSessionControllerClaim(claim);
     });
     const parent = createEmbeddedRunHandle({ runId: "parent", abort: parentAbort });
-    const childAbort = vi.fn(() => {
-      emitAgentEvent({
-        runId: "running",
-        sessionKey: childKey("running"),
-        sessionId: "running",
-        stream: "lifecycle",
-        data: { phase: "end", ...resolveAgentRunAbortLifecycleFields(AbortSignal.abort()) },
-      });
-      clearActiveEmbeddedRun("running", child, childKey("running"));
-    });
-    const child = createEmbeddedRunHandle({ runId: "running", abort: childAbort });
+    const { handle: child, abort: childAbort } = endingEmbeddedRun(
+      "running",
+      "running",
+      childKey("running"),
+    );
     setActiveEmbeddedRun(parentId, parent, parentKey, undefined, "main", operation);
     setActiveEmbeddedRun("running", child, childKey("running"));
     try {
