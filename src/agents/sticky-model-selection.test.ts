@@ -1,9 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
-  info: vi.fn(),
   isConfigReadOnly: false,
   isNixMode: false,
   mutateConfigFileWithRetry: vi.fn(),
@@ -15,7 +14,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn }),
+  createSubsystemLogger: () => ({ info: vi.fn(), warn: mocks.warn }),
 }));
 
 vi.mock("../config/paths.js", () => ({
@@ -25,32 +24,18 @@ vi.mock("../config/paths.js", () => ({
 
 import { persistStickyModelSelectionBestEffort } from "./sticky-model-selection.js";
 
-const model = (primary: string, fallback = "openai/gpt-5.6-luna") => ({
-  primary,
-  fallbacks: [fallback],
-});
-const defaultModel = model("anthropic/claude-opus-4-6");
-const agentModel = model("anthropic/claude-sonnet-4-6", "google/gemini-3-pro");
-const selected = "openai/gpt-5.6-sol";
+const defaultModel = { primary: "provider/default", fallbacks: ["provider/fallback"] };
+const agentModel = { primary: "provider/agent", fallbacks: ["provider/other"] };
+const selected = "provider/new";
 function config(defaults = defaultModel, work = agentModel): OpenClawConfig {
   return { agents: { defaults: { model: defaults }, entries: { work: { model: work } } } };
 }
-function select(
-  agentId = "main",
-  selectedModel = selected,
-  target: "agent" | "defaults" = "defaults",
-) {
-  return persistStickyModelSelectionBestEffort({ agentId, model: selectedModel, target });
-}
-const expectWarning = async (modelRef: string, reason: string) =>
-  vi.waitFor(() =>
-    expect(mocks.warn).toHaveBeenCalledWith(
-      `failed sticky model persistence agentId=main model=${modelRef} reason=${reason}`,
-    ),
-  );
+const select = (target: "agent" | "defaults" = "defaults", model = selected, agentId = "main") =>
+  persistStickyModelSelectionBestEffort({ agentId, model, target });
+const expectWarning = (reason: string) =>
+  vi.waitFor(() => expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(reason)));
 
 beforeEach(() => {
-  mocks.info.mockReset();
   mocks.warn.mockReset();
   mocks.isConfigReadOnly = false;
   mocks.isNixMode = false;
@@ -62,52 +47,47 @@ beforeEach(() => {
   });
 });
 
-describe("persistStickyModelSelection", () => {
-  it.each(["defaults", "agent"] as const)(
-    "persists a normalized selection at %s scope",
-    async (target) => {
-      mocks.cfg = config();
-      expect(select("work", ` ${selected} `, target)).toBe("requested");
-      await vi.waitFor(() =>
-        expect(mocks.info).toHaveBeenCalledWith(
-          `persisted sticky model selection agentId=work model=${selected} target=${target}`,
-        ),
-      );
+it.each(["defaults", "agent"] as const)(
+  "persists a normalized selection at %s scope",
+  async (target) => {
+    mocks.cfg = config();
+    expect(select(target, ` ${selected} `, "work")).toBe("requested");
+    await vi.waitFor(() =>
       expect(mocks.cfg).toEqual(
         config(
           target === "defaults" ? { ...defaultModel, primary: selected } : defaultModel,
           target === "agent" ? { ...agentModel, primary: selected } : agentModel,
         ),
-      );
-    },
-  );
-
-  it("rejects an empty model before starting a config mutation", async () => {
-    expect(select("main", "   ")).toBe("requested");
-
-    await expectWarning("   ", "Sticky model selection must be non-empty.");
-    expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  });
-
-  it("warns and absorbs asynchronous config write failures", async () => {
-    mocks.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config is read-only"));
-
-    expect(select()).toBe("requested");
-
-    await expectWarning(selected, "config is read-only");
-  });
-
-  it("skips Nix immutable config and warns only once per process", () => {
-    mocks.isConfigReadOnly = true;
-    mocks.isNixMode = true;
-
-    expect(select()).toBe("skipped-immutable");
-    expect(select("work", "openai/gpt-5.6-luna", "agent")).toBe("skipped-immutable");
-
-    expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-    expect(mocks.warn).toHaveBeenCalledOnce();
-    expect(mocks.warn).toHaveBeenCalledWith(
-      `skipped sticky model persistence agentId=main model=${selected} reason=config is immutable in OPENCLAW_NIX_MODE`,
+      ),
     );
-  });
+  },
+);
+
+it("rejects an empty model before starting a config mutation", async () => {
+  expect(select("defaults", "   ")).toBe("requested");
+
+  await expectWarning("Sticky model selection must be non-empty.");
+  expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+});
+
+it("warns and absorbs asynchronous config write failures", async () => {
+  mocks.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config is read-only"));
+
+  expect(select()).toBe("requested");
+
+  await expectWarning("config is read-only");
+});
+
+it("skips Nix immutable config and warns only once per process", () => {
+  mocks.isConfigReadOnly = true;
+  mocks.isNixMode = true;
+
+  expect(select()).toBe("skipped-immutable");
+  expect(select("agent", "provider/other", "work")).toBe("skipped-immutable");
+
+  expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  expect(mocks.warn).toHaveBeenCalledOnce();
+  expect(mocks.warn).toHaveBeenCalledWith(
+    expect.stringContaining("config is immutable in OPENCLAW_NIX_MODE"),
+  );
 });

@@ -23,7 +23,7 @@ async function workspace() {
 
 describe("leading-@ host and mounted sandbox paths", () => {
   it.each([false, true])(
-    "preserves literal files, new descendants, and file-reference shorthand with workspaceOnly=%s",
+    "reads, writes and edits literal @ paths (workspaceOnly=%s)",
     async (workspaceOnly) => {
       const { root: workspaceDir, writeFile, expectFile } = await workspace();
       await writeFile("@existing.md", "literal original");
