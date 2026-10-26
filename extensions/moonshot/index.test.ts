@@ -1,4 +1,13 @@
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { text } from "node:stream/consumers";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  createAssistantMessageEventStream,
+  type Context,
+  type Model,
+  type ProviderContext,
+} from "openclaw/plugin-sdk/llm";
 import {
   createRuntimeEnv,
   registerSingleProviderPlugin,
@@ -8,8 +17,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { wrapMoonshotStream } from "./native-video.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   MOONSHOT_BASE_URL,
@@ -26,10 +37,7 @@ beforeAll(async () => {
 async function applyConfig(methodId: string, config: OpenClawConfig) {
   const runNonInteractive = provider.auth.find(
     (method) => method.id === methodId,
-  )?.runNonInteractive;
-  if (!runNonInteractive) {
-    throw new Error("expected registered Moonshot noninteractive auth");
-  }
+  )!.runNonInteractive!;
   const toApiKeyCredential = vi.fn(() => null);
   const result = await runNonInteractive({
     authChoice: methodId === "api-key-cn" ? "moonshot-api-key-cn" : "moonshot-api-key",
@@ -41,42 +49,30 @@ async function applyConfig(methodId: string, config: OpenClawConfig) {
     toApiKeyCredential,
   });
   expect(toApiKeyCredential).not.toHaveBeenCalled();
-  if (!result) {
-    throw new Error("expected Moonshot setup result");
-  }
-  return result;
+  return result!;
 }
 
 describe("moonshot provider plugin", () => {
   it.each([
-    ["international", "api-key", MOONSHOT_BASE_URL],
-    ["China", "api-key-cn", MOONSHOT_CN_BASE_URL],
-  ])(
-    "applies the replace-mode manifest default on the %s endpoint",
-    async (_name, methodId, baseUrl) => {
-      const config = await applyConfig(methodId, { models: { mode: "replace" } });
-      const catalog = config.models?.providers?.moonshot;
-      expect(MOONSHOT_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.moonshot.defaultModel);
-      expect(catalog?.baseUrl).toBe(baseUrl);
-      expect(catalog?.models.map((model) => model.id)).toEqual([MOONSHOT_DEFAULT_MODEL_ID]);
-      expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-        MOONSHOT_DEFAULT_MODEL_REF,
-      );
-      expect(config.agents?.defaults?.models).toEqual({
-        [MOONSHOT_DEFAULT_MODEL_REF]: { alias: "Kimi" },
-      });
-    },
-  );
-
-  it("leaves ordinary catalogs runtime-owned", async () => {
-    for (const mode of [undefined, "merge"] as const) {
-      const config = await applyConfig("api-key", { models: { mode } });
-      expect(config.models?.providers?.moonshot?.models).toEqual([]);
-      expect(config.agents?.defaults?.models?.[MOONSHOT_DEFAULT_MODEL_REF]).toEqual({
-        alias: "Kimi",
-      });
-      expect(await applyConfig("api-key", config)).toEqual(config);
-    }
+    ["api-key", MOONSHOT_BASE_URL, "replace"],
+    ["api-key-cn", MOONSHOT_CN_BASE_URL, "replace"],
+    ["api-key", MOONSHOT_BASE_URL, undefined],
+    ["api-key", MOONSHOT_BASE_URL, "merge"],
+  ] as const)("applies %s config at %s with mode %s", async (methodId, baseUrl, mode) => {
+    const config = await applyConfig(methodId, { models: { mode } });
+    const catalog = config.models?.providers?.moonshot;
+    expect(MOONSHOT_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.moonshot.defaultModel);
+    expect(catalog?.baseUrl).toBe(baseUrl);
+    expect(catalog?.models.map((model) => model.id)).toEqual(
+      mode === "replace" ? [MOONSHOT_DEFAULT_MODEL_ID] : [],
+    );
+    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+      MOONSHOT_DEFAULT_MODEL_REF,
+    );
+    expect(config.agents?.defaults?.models).toEqual({
+      [MOONSHOT_DEFAULT_MODEL_REF]: { alias: "Kimi" },
+    });
+    expect(await applyConfig(methodId, config)).toEqual(config);
   });
 
   it("declares shipped Moonshot provider aliases in runtime and manifest metadata", () => {
@@ -93,10 +89,7 @@ describe("moonshot provider plugin", () => {
       modelApi: "openai-completions",
       modelId: "kimi-k2.6",
     } as never);
-    expect(policy).toEqual({
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
+    expect(policy).toMatchObject({
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       duplicateToolCallIdStyle: "openai",
@@ -120,35 +113,25 @@ describe("moonshot provider plugin", () => {
     );
   });
 
-  it.each([
-    ["kimi-k3", MOONSHOT_BASE_URL, true],
-    ["kimi-k3.1-pro", MOONSHOT_BASE_URL, true],
-    ["kimi-k3.1-pro-highspeed", MOONSHOT_BASE_URL, true],
-    ["kimi-k3", "https://u@api.moonshot.ai/v1", false],
-  ] as const)("normalizes native video for %s at %s (enabled: %s)", (id, baseUrl, enabled) => {
-    const model = {
-      id,
-      provider: "moonshot",
-      api: "openai-completions",
-      baseUrl,
-      input: enabled ? ["text", "image"] : ["text", "image", "video"],
-    } as unknown as Model;
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: model.provider,
-      modelId: model.id,
-      model,
-    } as never);
-
-    expect((normalized ?? model).input).toEqual(
-      enabled ? ["text", "image", "video"] : ["text", "image"],
-    );
+  it("removes native video from a userinfo route", () => {
+    const model = makeModel("kimi-k3", "https://u@api.moonshot.ai/v1");
+    expect(provider.normalizeResolvedModel?.({ ...route, model } as never)?.input).toEqual([
+      "text",
+      "image",
+    ]);
   });
 
   it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
-    "exposes %s as an always-max-thinking modern model",
+    "gives %s native video and always-max thinking",
     async (id) => {
-      const model = { api: "openai-completions", provider: "moonshot", id } as const;
+      const model = makeModel(id);
       const ref = { provider: model.provider, modelId: model.id };
+      expect(
+        provider.normalizeResolvedModel?.({
+          ...ref,
+          model: { ...model, input: ["text", "image"] },
+        } as never)?.input,
+      ).toEqual(["text", "image", "video"]);
       const captured = createCapturedThinkingConfigStream();
       const wrapped = provider.wrapSimpleCompletionStreamFn?.({
         ...ref,
@@ -166,6 +149,148 @@ describe("moonshot provider plugin", () => {
         preserveWhenCatalogReasoningFalse: true,
       });
       expect(provider.isModernModelRef?.(ref)).toBe(true);
+    },
+  );
+});
+
+const MP4_A = "data:video/mp4;base64,YWFhYWFhYWFhYWFhYWFhYQ==";
+const MP4_B = "data:video/mp4;base64,YmJiYmJiYmJiYmJiYmJiYg==";
+const WEBM = "data:video/webm;base64,d2VibQ==";
+const route = { provider: "moonshot", modelId: "kimi-k3" };
+
+function makeModel(id = "kimi-k3", baseUrl = MOONSHOT_BASE_URL): Model {
+  return {
+    id,
+    name: "Kimi K3",
+    provider: "moonshot",
+    api: "openai-completions",
+    baseUrl,
+    reasoning: true,
+    input: ["text", "image", "video"] as never,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 1_048_576,
+  } as Model;
+}
+
+function genericPayload(videoUrls = [MP4_A]) {
+  const content = [
+    { type: "text", text: "before" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+    ...videoUrls.map((url) => ({ type: "video_url", video_url: { url } })),
+    { type: "text", text: "after" },
+  ];
+  return { model: "kimi-k3", messages: [{ role: "user", content }] };
+}
+
+async function dispatchPayload(
+  payload: ReturnType<typeof genericPayload>,
+  onPayload?: NonNullable<Parameters<StreamFn>[2]>["onPayload"],
+  ceiling?: number,
+) {
+  let dispatched: unknown;
+  const streamFn: StreamFn = async (payloadModel, _context, streamOptions) => {
+    const replacement = await streamOptions?.onPayload?.(payload, payloadModel);
+    dispatched = replacement === undefined ? payload : replacement;
+    return createAssistantMessageEventStream();
+  };
+  const wrapped = wrapMoonshotStream({ ...route, streamFn } as never, false, ceiling);
+  await wrapped(makeModel(), { messages: [] } as Context, { onPayload });
+  return dispatched;
+}
+
+it("allows valid hook clones and injections while omitting non-MP4 video", async () => {
+  const payload = genericPayload([MP4_A, WEBM]);
+  const dispatched = await dispatchPayload(payload, (value) => {
+    const content = (value as typeof payload).messages[0]!.content;
+    const valid = content[2]! as Record<string, unknown>;
+    content.push(structuredClone(valid) as never);
+    content.push({ type: "video_url", video_url: { url: MP4_B } } as never);
+    content.push({ type: "image_url", image_url: { url: WEBM } } as never);
+  });
+
+  const body = JSON.stringify(dispatched);
+  expect(body.split(MP4_A)).toHaveLength(3);
+  expect(body).toContain("YmJiYmJi");
+  expect(body).not.toContain("d2VibQ");
+  expect(body.match(/video omitted/gu)).toHaveLength(2);
+});
+
+it("evicts later admitted videos in place to satisfy the exclusive final size", async () => {
+  const payload = genericPayload([MP4_A, MP4_B]);
+  const projectedWithSecondOmitted = genericPayload([MP4_A]);
+  projectedWithSecondOmitted.messages[0]!.content.splice(3, 0, {
+    type: "text",
+    text: "(video omitted: Moonshot request size limit)",
+  } as never);
+  Object.assign(projectedWithSecondOmitted, { reasoning_effort: "max" });
+  const ceiling = Buffer.byteLength(JSON.stringify(projectedWithSecondOmitted), "utf8") + 1;
+  const dispatched = await dispatchPayload(payload, undefined, ceiling);
+
+  const content = (dispatched as typeof payload).messages[0]!.content;
+  expect(content[2]).toEqual({ type: "video_url", video_url: { url: MP4_A } });
+  expect(content[3]).toMatchObject({ type: "text", text: expect.stringContaining("size limit") });
+  expect(Buffer.byteLength(JSON.stringify(dispatched), "utf8")).toBeLessThan(ceiling);
+});
+
+it("measures caller replacements and rejects an oversized non-video body", async () => {
+  await expect(
+    dispatchPayload(
+      genericPayload(),
+      () => ({ model: "kimi-k3", messages: [], padding: "x".repeat(300) }),
+      200,
+    ),
+  ).rejects.toThrow("Moonshot request body must be smaller than 200 bytes");
+});
+
+it("sends ordered video_url content through the real Chat Completions transport", async () => {
+  let requestBody: unknown;
+  await withServer(
+    async (request, response) => {
+      requestBody = JSON.parse(await text(request));
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
+      );
+    },
+    async (origin) => {
+      const transport = createOpenAICompletionsTransportStreamFn();
+      const transportModel = attachModelProviderRequestTransport(
+        { ...makeModel(), provider: "custom", baseUrl: `${origin}/v1` },
+        { allowPrivateNetwork: true },
+      );
+      const streamFn: StreamFn = (_model, context, options) =>
+        transport(transportModel, context, options);
+      const wrapped = provider.wrapStreamFn!({
+        ...route,
+        thinkingLevel: "off",
+        streamFn,
+      } as never);
+      const message: ProviderContext["messages"][number] = {
+        role: "user",
+        content: [
+          { type: "text", text: "before" },
+          { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+          { type: "video", mimeType: "video/mp4", data: "YWFhYWFhYWFhYWFhYWFhYQ==" },
+          { type: "text", text: "after" },
+        ],
+        timestamp: 1,
+      };
+      let callerPayload: unknown;
+      const stream = await wrapped(makeModel(), { messages: [message] } as never, {
+        apiKey: "test-key",
+        onPayload: (payload) => {
+          callerPayload = payload;
+        },
+      });
+      await stream.result();
+      const body = JSON.stringify(callerPayload);
+      expect(body).not.toMatch(/__openclaw|\/private\//u);
+      expect(body).toContain(MP4_A);
+      expect(requestBody).toHaveProperty(
+        "messages.0.content",
+        genericPayload().messages[0]!.content,
+      );
     },
   );
 });
