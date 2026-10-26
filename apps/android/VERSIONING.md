@@ -283,10 +283,11 @@ For each audience, the shared generator shortlists up to ten changed files from
 a compact inventory and commit subjects, then drafts highlights from focused
 endpoint diffs. Current source and Play flavor configuration check availability.
 A separate factual review can request one correction. Each stage reports
-progress, with at most five model requests per audience and a five-minute budget
-for the complete generation. Exhausted budgets or unapproved notes stop
-preparation before upload. Retrying a saved, valid artifact reuses its exact text
-without another model call.
+progress, with at most five model stages per audience. Each stage permits one SDK
+retry for a transient connection, timeout, or retryable API failure, including
+backoff within the unchanged five-minute budget for the complete generation.
+Exhausted budgets or unapproved notes stop preparation before upload. Retrying a
+saved, valid artifact reuses its exact text without another model call.
 
 If Play accepted an upload but recording its v2 ref failed, the next run stops on
 the unmapped codes. Preserve `android-plan.json`, the notes, and both uploaded
