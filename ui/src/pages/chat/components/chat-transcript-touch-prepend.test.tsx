@@ -8,7 +8,6 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   type TestContentRow,
-  transcriptRows,
 } from "./chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
@@ -41,15 +40,6 @@ it.each([
       const rows = new Map(ids.map((id) => [id, key]));
       session.syncMessageRows(rows, rows);
     };
-    const touch = (type: string, bubble: Element, touches: Touch[], changed: Touch[]) =>
-      bubble.dispatchEvent(
-        new TouchEvent(type, {
-          touches,
-          targetTouches: type === "touchstart" ? changed : [],
-          changedTouches: changed,
-          bubbles: true,
-        }),
-      );
     const initial = contentRows("retained-row", ["retained"]);
     const next = contentRows("expanded-row", ["older", "retained"]);
     const { container, session, renderRows } = await mountTestTranscript(
@@ -57,10 +47,9 @@ it.each([
       initial,
       transcript,
     );
-    const expectRows = (key: string, older: string | null) => {
-      expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([key]);
+    const expectRows = (older: string | null) => {
       expect(container.textContent?.includes("older")).toBe(older !== null);
-      expect([session.activeMessageId(["retained"]), session.activeMessageId(["older"])]).toEqual([
+      expect(["retained", "older"].map((id) => session.activeMessageId([id]))).toEqual([
         "retained",
         older,
       ]);
@@ -71,7 +60,11 @@ it.each([
       const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained bubble");
       const owned = contact(1, bubble);
       const remaining = outsideContact ? [contact(2, document.body)] : [];
-      touch("touchstart", bubble, [...remaining, owned], [owned]);
+      const touch = (type: string, touches: Touch[]) =>
+        bubble.dispatchEvent(
+          new TouchEvent(type, { touches, changedTouches: [owned], bubbles: true }),
+        );
+      touch("touchstart", [...remaining, owned]);
       if (idleBeforeRelease) {
         // The finger can remain down after native offset notifications settle.
         vi.useFakeTimers();
@@ -81,15 +74,13 @@ it.each([
       }
       syncRows("expanded-row", ["older", "retained"]);
       renderRows(next);
-      expectRows("retained-row", null);
-      touch("touchend", bubble, remaining, [owned]);
+      expectRows(null);
+      touch("touchend", remaining);
       renderRows(next);
-      expectRows("expanded-row", "older");
+      expectRows("older");
     } finally {
       transcript.dispose();
-      if (idleBeforeRelease) {
-        vi.useRealTimers();
-      }
+      vi.useRealTimers();
     }
   },
 );

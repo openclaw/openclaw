@@ -18,11 +18,7 @@ async function mountOutputs() {
     currentAgentId: "main",
     messages: [],
     selectedSession: { key: "agent:main:details", sessionId: "session-1", kind: "direct" },
-    desktopPresentation: {
-      peopleLabel: "People",
-      outputsLabel: "Outputs",
-      subagentsWorkingLabel: "Working",
-    },
+    desktopPresentation: { peopleLabel: "", outputsLabel: "Outputs", subagentsWorkingLabel: "" },
     desktopDisclosures: { expanded: { outputs: true }, onExpandedChange: vi.fn() },
     outputs: {
       artifacts,
@@ -37,7 +33,6 @@ async function mountOutputs() {
   };
   const view = mountSolid(() => <ChatDetailsSession props={value} presented desktop />);
   const element = view.container.querySelector("openclaw-chat-details-session")!;
-  await element.updateComplete;
   await waitForSolid(() => expect(element.querySelector(".chat-outputs__view-all")).not.toBeNull());
   const button = element.querySelector<HTMLButtonElement>(".chat-outputs__view-all")!;
   return { element, button, value, navigate, artifacts };
