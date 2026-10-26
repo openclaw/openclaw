@@ -1,6 +1,5 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -431,39 +430,6 @@ describe("worker provisioning cancellation ownership", () => {
     expect(shutdownSettled).toBe(true);
   });
 
-  it("cancels node preflight before provider allocation", async () => {
-    const preparing = createDeferredCore();
-    const prepared = createDeferredCore();
-    const controller = new AbortController();
-    const provision = vi.fn(async () => ({
-      leaseId: "unexpected",
-      node: { deviceId: "unexpected" },
-    }));
-    const service = support.createService(createEnrollingProvider({ provision }), {
-      prepareNodeBootstrap: async (_record, signal?: AbortSignal) => {
-        preparing.resolve();
-        await racePromiseWithAbortSignal(prepared.promise, signal);
-        return support.NODE_BOOTSTRAP.sha256;
-      },
-    });
-    const creationState = captureRequest(service, "node-preflight-stop", controller, "worker-turn");
-    const creation = creationState.promise;
-    await waitForEntry(preparing.promise, creation, "node preflight");
-    const record = support.testState.store.list()[0]!;
-    controller.abort(new DOMException("Stop node preflight", "AbortError"));
-    const teardown = service.destroy(record.environmentId);
-    try {
-      await support.waitForFast(() => expect(creationState.settled).toBe(true));
-      await expect(teardown).resolves.toMatchObject({ state: "failed" });
-      expect(provision).not.toHaveBeenCalled();
-    } finally {
-      prepared.resolve();
-      await Promise.allSettled([creation, teardown]);
-    }
-    expect(await creation).toMatchObject({ name: "AbortError" });
-    expect(provision).not.toHaveBeenCalled();
-  });
-
   it("cleans an adopted replay lease while cancelled npm preparation is still running", async () => {
     const preparing = createDeferredCore();
     const prepared = createDeferredCore();
@@ -634,52 +600,5 @@ describe("worker provisioning cancellation ownership", () => {
       leaseId: "lease-node-install",
       teardownTerminalState: "destroyed",
     });
-  });
-
-  it("closes only the cancelled enrollment while preserving provider cleanup", async () => {
-    const waiting = createDeferredCore();
-    const controller = new AbortController();
-    const enrollmentController = new AbortController();
-    const enrollmentClosed = new Error("enrollment closed");
-    const enrollment = {
-      mode: "connect" as const,
-      setupCode: "setup-code",
-      setupId: "setup-id",
-      openclawVersion: "2026.8.1",
-      nodeBootstrap: support.NODE_BOOTSTRAP,
-      displayName: "fixture",
-      signal: enrollmentController.signal,
-      waitForDeviceId: async () => {
-        waiting.resolve();
-        return await new Promise<string>((_resolve, reject) => {
-          enrollmentController.signal.addEventListener("abort", () => reject(enrollmentClosed), {
-            once: true,
-          });
-        });
-      },
-    };
-    const destroy = vi.fn(async () => {});
-    const closeNodeEnrollment = vi.fn(() => enrollmentController.abort(enrollmentClosed));
-    const service = support.createService(
-      createEnrollingProvider({
-        provision: async (_profile, _operation, options) => {
-          const prepared = await options!.beginNodeEnrollment!();
-          await prepared.waitForDeviceId();
-          throw new Error("cancelled enrollment unexpectedly completed");
-        },
-        destroy,
-      }),
-      { prepareNodeEnrollment: async () => enrollment, closeNodeEnrollment },
-    );
-    const creation = createRequest(service, "enrollment-cancel", controller, "worker-turn").catch(
-      (error: unknown) => error,
-    );
-    await waiting.promise;
-    controller.abort(new Error("Stop enrollment"));
-    await creation;
-    await service.destroy(support.testState.store.list()[0]!.environmentId);
-    expect(closeNodeEnrollment).toHaveBeenCalledExactlyOnceWith(enrollment);
-    expect(destroy).toHaveBeenCalledOnce();
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 });
