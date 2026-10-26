@@ -16,6 +16,7 @@ import * as entryReader from "../../config/sessions/session-entry-read-runtime.j
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { handleManagedOutgoingMediaHttpRequest } from "../../gateway/managed-image-attachments.js";
+import * as managedMedia from "../../gateway/managed-image-attachments.js";
 import { artifactsHandlers } from "../../gateway/server-methods/artifacts.js";
 import { chatHistoryHandlers } from "../../gateway/server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "../../gateway/server-methods/chat-history.test-helpers.js";
@@ -72,6 +73,7 @@ async function requester(
   key = sessionKey,
   id = sessionId,
   revision: string | null = "original",
+  mediaMaxMb?: number,
 ) {
   const scope = {
     agentId: "main",
@@ -80,7 +82,11 @@ async function requester(
   };
   const entry = { sessionId: id, lifecycleRevision: revision ?? undefined, updatedAt: 1 };
   const config: OpenClawConfig = {
-    agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+    agents: {
+      ownership: "explicit",
+      ...(mediaMaxMb ? { defaults: { mediaMaxMb } } : {}),
+      entries: { main: { workspace: state.workspaceDir } },
+    },
   };
   await configure(state, config);
   await replaceSessionEntry(scope, entry);
@@ -145,7 +151,10 @@ async function invokeHistoryMethod(
 ) {
   let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   const context = await createHistoryReadContext();
-  await (method === "chat.history" ? chatHistoryHandlers[method] : artifactsHandlers[method])({
+  const handler =
+    method === "chat.history" ? chatHistoryHandlers[method] : artifactsHandlers[method];
+  assert(handler, `${method} handler is unavailable`);
+  await handler({
     params,
     context,
     req: { type: "req", id: "retained-media", method },
@@ -250,7 +259,9 @@ it("exposes a blocked generated image through chat.history and downloads it for 
           }
         });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
     try {
       const address = server.address() as AddressInfo;
       const response = await fetch(`http://127.0.0.1:${address.port}${downloadUrl}`);
@@ -262,6 +273,81 @@ it("exposes a blocked generated image through chat.history and downloads it for 
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  });
+});
+
+it("keeps a prepared image when another blocked-completion image exceeds the limit", async () => {
+  await withOpenClawTestState({ prefix: "media-blocked-partial-image-" }, async (state) => {
+    const { scope } = await requester(state, sessionKey, sessionId, "original", 20);
+    const imageBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+    const imagePath = state.statePath("media", "retained.png");
+    const oversizedPath = state.statePath("media", "too-large.png");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, Buffer.from(imageBase64, "base64"));
+    await fs.writeFile(oversizedPath, Buffer.alloc(12 * 1024 * 1024 + 1));
+    const lifecycle = createMediaGenerationTaskLifecycle("image");
+    const handle = await lifecycle.createTaskRun({
+      sessionKey: scope.sessionKey,
+      requesterAgentId: "main",
+      prompt: "two synthetic images",
+    });
+    assert(handle, "Expected an active media-generation handle");
+
+    await retainBlockedMediaCompletion({
+      handle,
+      terminalResult: { terminalOutcome: "blocked" },
+      attachments: [
+        { type: "image", path: imagePath, mimeType: "image/png" },
+        { type: "image", path: oversizedPath, mimeType: "image/png" },
+      ],
+    });
+
+    const history = await invokeHistoryMethod("chat.history", { sessionKey: scope.sessionKey });
+    expect(history.ok).toBe(true);
+    const messages = (history.payload as { messages?: unknown[] }).messages ?? [];
+    const retained = messages.find((message) => isRecord(message) && message.role === "assistant");
+    const content = isRecord(retained) && Array.isArray(retained.content) ? retained.content : [];
+    expect(content.filter((block) => isRecord(block) && block.type === "image")).toHaveLength(1);
+  });
+});
+
+it("reconciles image ownership when a blocked-completion retry finds its message", async () => {
+  await withOpenClawTestState({ prefix: "media-blocked-reconcile-" }, async (state) => {
+    const { scope } = await requester(state);
+    const imageBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+    const imagePath = state.statePath("media", "generated.png");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, Buffer.from(imageBase64, "base64"));
+    const lifecycle = createMediaGenerationTaskLifecycle("image");
+    const handle = await lifecycle.createTaskRun({
+      sessionKey: scope.sessionKey,
+      requesterAgentId: "main",
+      prompt: "synthetic lighthouse",
+    });
+    assert(handle, "Expected an active media-generation handle");
+    const attach = vi.spyOn(managedMedia, "attachManagedOutgoingMediaToMessage");
+    attach.mockImplementationOnce(async () => false);
+
+    const params = {
+      handle,
+      terminalResult: { terminalOutcome: "blocked" as const },
+      attachments: [{ type: "image" as const, path: imagePath, mimeType: "image/png" }],
+    };
+    await expect(retainBlockedMediaCompletion(params)).rejects.toThrow(
+      "Could not persist retained generated image ownership",
+    );
+    await retainBlockedMediaCompletion(params);
+
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect(attach.mock.calls[1]?.[0].messageId).toBe(attach.mock.calls[0]?.[0].messageId);
+    const history = await invokeHistoryMethod("chat.history", { sessionKey: scope.sessionKey });
+    expect(history.ok).toBe(true);
+    const messages = (history.payload as { messages?: unknown[] }).messages ?? [];
+    const retained = messages.find((message) => isRecord(message) && message.role === "assistant");
+    const content = isRecord(retained) && Array.isArray(retained.content) ? retained.content : [];
+    expect(content.filter((block) => isRecord(block) && block.type === "image")).toHaveLength(1);
   });
 });
 

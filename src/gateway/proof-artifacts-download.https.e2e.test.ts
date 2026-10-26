@@ -1,5 +1,7 @@
 import { X509Certificate } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Agent, fetch } from "undici";
 import { expect, test, vi } from "vitest";
 import type {
@@ -8,14 +10,19 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../agents/media-generation-activity.test-support.js";
+import { retainBlockedMediaCompletion } from "../agents/tools/media-generate-background-completion.js";
+import { createMediaGenerationTaskLifecycle } from "../agents/tools/media-generate-background-shared.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
@@ -274,6 +281,169 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
         async () => dispatcher?.close(),
         async () => server?.close({ reason: "artifact HTTPS proof complete" }),
         () => claim.release(),
+      );
+    },
+  );
+}, 60_000);
+
+test("authenticated Gateway retains blocked images, denies an unscoped reader, and revokes tickets before image I/O", async () => {
+  await withOpenClawTestState(
+    {
+      label: "blocked-media-gateway-proof",
+      env: {
+        ...KERNEL_TEST_ENV,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+    },
+    async (state) => {
+      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const token = "synthetic-blocked-media-gateway-token";
+      const certPath = state.statePath("tls", "cert.pem");
+      const keyPath = state.statePath("tls", "key.pem");
+      const sessionKey = "agent:main:blocked-media-gateway";
+      const sessionId = "blocked-media-gateway-session";
+      const scope = { agentId: "main", sessionKey, sessionId, env: state.env };
+      const imageBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      const imagePath = state.statePath("media", "generated.png");
+      await mkdir(path.dirname(imagePath), { recursive: true });
+      await writeFile(imagePath, Buffer.from(imageBase64, "base64"));
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let dispatcher: Agent | undefined;
+      const clients: GatewayClient[] = [];
+      await runQaGatewayFixture(
+        async () => {
+          const policy = rolePolicyConfig();
+          await state.writeConfig({
+            ...policy,
+            agents: { defaults: { workspace: state.workspaceDir } },
+            gateway: {
+              ...policy.gateway,
+              auth: { mode: "token", token },
+              controlUi: { enabled: false, basePath: "/gateway" },
+              tls: { enabled: true, certPath, keyPath },
+            },
+          });
+          await captureRuntimeConfigAsyncReader()();
+          await replaceSessionEntry(scope, {
+            sessionId,
+            updatedAt: 1,
+            visibility: "shared",
+          });
+          const lifecycle = createMediaGenerationTaskLifecycle("image");
+          const handle = await lifecycle.createTaskRun({
+            sessionKey,
+            requesterAgentId: "main",
+            prompt: "synthetic lighthouse",
+          });
+          if (!handle) {
+            throw new Error("Expected an active media-generation handle");
+          }
+          await retainBlockedMediaCompletion({
+            handle,
+            terminalResult: { terminalOutcome: "blocked" },
+            attachments: [{ type: "image", path: imagePath, mimeType: "image/png" }],
+          });
+
+          server = await startClaimedGateway(claim, () =>
+            startGatewayServer(claim.port, {
+              bind: "loopback",
+              auth: { mode: "token", token },
+              controlUiEnabled: false,
+              sidecarStartup: "defer",
+            }),
+          );
+          const cert = await readFile(certPath, "utf8");
+          dispatcher = new Agent({ connect: { ca: cert, servername: "openclaw-gateway" } });
+          const origin = `https://127.0.0.1:${claim.port}`;
+          const connect = async (label: string, scopes: string[]) => {
+            const client = await acquireGatewayTestClient(
+              {
+                url: `wss://127.0.0.1:${claim.port}`,
+                token,
+                tlsFingerprint: new X509Certificate(cert).fingerprint256,
+                clientName: "test",
+                mode: "test",
+                scopes,
+                deviceIdentity: loadOrCreateDeviceIdentity({
+                  path: state.statePath(label, "client", "credentials.sqlite"),
+                }),
+              },
+              {
+                timeoutMs: 10_000,
+                timeoutMessage: "TLS Gateway connect timed out",
+                closeMessage: "TLS Gateway closed",
+              },
+            );
+            clients.push(client);
+            return client;
+          };
+          const reader = await connect("allowed-reader", ["operator.read"]);
+          const unscopedReader = await connect("unscoped-reader", ["operator.approvals"]);
+          using openedMedia = vi.spyOn(fsSafe, "openLocalFileSafely");
+          await expect(unscopedReader.request("chat.history", { sessionKey })).rejects.toThrow(
+            "missing scope: operator.read",
+          );
+          expect(openedMedia).not.toHaveBeenCalled();
+
+          const history = await reader.request<{ messages?: unknown[] }>("chat.history", {
+            sessionKey,
+          });
+          const retained = (history.messages ?? []).find(
+            (message) =>
+              isRecord(message) &&
+              message.role === "assistant" &&
+              Array.isArray(message.content) &&
+              message.content.some(
+                (block) =>
+                  isRecord(block) &&
+                  block.type === "text" &&
+                  typeof block.text === "string" &&
+                  block.text.includes("completion delivery"),
+              ),
+          );
+          const content =
+            isRecord(retained) && Array.isArray(retained.content) ? retained.content : [];
+          const image = content.find((block) => isRecord(block) && block.type === "image");
+          expect(image).toBeDefined();
+          expect(isRecord(image) && image.artifactId).toEqual(expect.any(String));
+          const artifactId = (image as Record<string, unknown>).artifactId as string;
+          const download = await reader.request<ArtifactsDownloadResult>("artifacts.download", {
+            sessionKey,
+            artifactId,
+            transport: "http",
+          });
+          expect(download.url).toBeDefined();
+          const request = async (url: string) => {
+            const response = await fetch(new URL(url, origin), { dispatcher });
+            return {
+              status: response.status,
+              bytes: Buffer.from(await response.arrayBuffer()),
+            };
+          };
+          const served = await request(download.url!);
+          expect(served.status).toBe(200);
+          expect(served.bytes.toString("base64")).toBe(imageBase64);
+
+          const openedBeforeRevocation = openedMedia.mock.calls.length;
+          await replaceSessionEntry(scope, {
+            sessionId,
+            updatedAt: 2,
+            visibility: "draft",
+          });
+          const revoked = await request(download.url!);
+          expect(revoked.status).toBe(404);
+          expect(openedMedia).toHaveBeenCalledTimes(openedBeforeRevocation);
+        },
+        async () => {
+          for (const client of clients) {
+            await client.stopAndWait();
+          }
+        },
+        async () => dispatcher?.close(),
+        async () => server?.close({ reason: "blocked media Gateway proof complete" }),
+        () => claim.release(),
+        () => resetGeneratedMediaTaskActivityForTests(),
       );
     },
   );
