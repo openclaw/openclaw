@@ -31,28 +31,27 @@ function fallback(agentMeta: Record<string, unknown>, diagnosticTrace?: TraceCon
 }
 async function runWithEvents(
   params: Parameters<typeof runCron>[0] = makeParams(),
-  publicEvents = false,
   events: diagnostics.DiagnosticEventPayload[] = [],
 ) {
-  const listener = (event: diagnostics.DiagnosticEventPayload) => events.push(event);
-  const unsubscribe = publicEvents
-    ? diagnostics.onDiagnosticEvent(listener)
-    : diagnostics.onInternalDiagnosticEvent(listener, {
-        include: [
-          "message.queued",
-          "message.dispatch.started",
-          "message.dispatch.completed",
-          "message.processed",
-          "session.state",
-          "model.usage",
-        ],
-      });
+  const published: diagnostics.DiagnosticEventPayload[] = [];
+  const unsubscribePublic = diagnostics.onDiagnosticEvent((event) => published.push(event));
+  const unsubscribe = diagnostics.onInternalDiagnosticEvent((event) => events.push(event), {
+    include: [
+      "message.queued",
+      "message.dispatch.started",
+      "message.dispatch.completed",
+      "message.processed",
+      "session.state",
+      "model.usage",
+    ],
+  });
   try {
     const result = await runCron(params);
     await diagnostics.waitForDiagnosticEventsDrained();
-    return { result, events };
+    return { result, events, published };
   } finally {
     unsubscribe();
+    unsubscribePublic();
   }
 }
 
@@ -67,7 +66,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     );
   });
 
-  it("anchors cron execution to a child message lifecycle trace and restores its parent", async () => {
+  it("keeps lifecycle trace and adopted session identity through execution and parent restoration", async () => {
     const parent = trace.createDiagnosticTraceContext();
     const observedEvents: diagnostics.DiagnosticEventPayload[] = [];
     let dispatchStartedBeforeExecution = false;
@@ -80,14 +79,20 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       );
       executionTrace = trace.getActiveDiagnosticTraceContext();
       harnessTrace = trace.createDiagnosticTraceContextFromActiveScope();
-      return fallback({ usage: { input: 10, output: 20 } }, harnessTrace);
+      return fallback(
+        { sessionId: "persisted-run-session", usage: { input: 10, output: 20 } },
+        harnessTrace,
+      );
     });
 
-    const { result, events } = await trace.runWithDiagnosticTraceContext(parent, async () => {
-      const run = await runWithEvents(makeParams(), false, observedEvents);
-      expect(trace.getActiveDiagnosticTraceContext()).toEqual(parent);
-      return run;
-    });
+    const { result, events, published } = await trace.runWithDiagnosticTraceContext(
+      parent,
+      async () => {
+        const run = await runWithEvents(makeParams(), observedEvents);
+        expect(trace.getActiveDiagnosticTraceContext()).toEqual(parent);
+        return run;
+      },
+    );
     expect(result.status).toBe("ok");
     const starts = events.filter((event) => event.type === "message.dispatch.started");
     expect(starts).toHaveLength(1);
@@ -113,32 +118,13 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       parentSpanId: harnessTrace?.spanId,
     });
     expect(trace.getActiveDiagnosticTraceContext()).toBeUndefined();
-  });
-
-  it("emits final lifecycle events under the adopted run session id", async () => {
-    harness.resolveCronSessionMock.mockReturnValue(
-      harness.makeCronSession({
-        storePath: sessionStorePath,
-        sessionEntry: harness.makeCronSessionEntry({
-          sessionId: "fallback-run-session",
-        }),
-      }),
-    );
-    harness.runWithModelFallbackMock.mockResolvedValue(
-      fallback({
-        sessionId: "persisted-run-session",
-        usage: { input: 10, output: 20 },
-      }),
-    );
-    const { result, events } = await runWithEvents(makeParams(), true);
-    expect(result.status).toBe("ok");
     expect(
-      events.filter(({ type }) =>
+      published.filter(({ type }) =>
         ["message.queued", "session.state", "message.processed"].includes(type),
       ),
     ).toMatchObject([
-      { type: "message.queued", sessionId: "fallback-run-session" },
-      { type: "session.state", state: "processing", sessionId: "fallback-run-session" },
+      { type: "message.queued", sessionId: "test-session-id" },
+      { type: "session.state", state: "processing", sessionId: "test-session-id" },
       { type: "session.state", state: "idle", sessionId: "persisted-run-session" },
       { type: "message.processed", sessionId: "persisted-run-session" },
     ]);

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import type { Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -30,23 +30,21 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-const observed = vi.hoisted(() => ({ dispatch: undefined as (() => void) | undefined }));
-vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      override postMessage(...args: Parameters<Worker["postMessage"]>): void {
-        if (asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind === "session-exact-entries") {
-          observed.dispatch?.();
-        }
-        super.postMessage(...args);
-      }
-    },
-  };
-});
+function atDispatch(run: () => void) {
+  const postMessage = Worker.prototype.postMessage;
+  const spy = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    ...args
+  ) {
+    if (asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind === "session-exact-entries") {
+      spy.mockRestore();
+      run();
+    }
+    postMessage.apply(this, args);
+  });
+}
 afterEach(() => {
-  observed.dispatch = undefined;
+  vi.restoreAllMocks();
   memorySessionActorOwners.reset();
 });
 
@@ -111,12 +109,11 @@ it("captures store ownership before dispatch without host SQLite", async () => {
   };
   replaceSessionEntrySync({ agentId: "main", env: state.env, storePath, sessionKey }, entry);
   const input = readInput(sessionKey, storePath, false);
-  observed.dispatch = () => {
-    observed.dispatch = undefined;
+  atDispatch(() => {
     input.storePath = state.path("replacement.sqlite");
     input.env.OPENCLAW_STATE_DIR = state.path("replacement-state");
     input.sessionKeys[0] = "agent:main:cron:other";
-  };
+  });
   const result = await withoutHostSql(() => readSessionEntriesFromStoreInWorker(input));
   expect(result.entries).toEqual([{ sessionKey, entry: expect.objectContaining(entry) }]);
   expect(fs.existsSync(input.storePath)).toBe(false);
@@ -161,12 +158,11 @@ it.each(["revoked", "redirected"])("rejects a %s read at dispatch", async (inter
   if (interruption === "revoked") {
     // Closing must not inherit the read's writer FIFO context.
     const runExternalClose = AsyncLocalStorage.snapshot();
-    observed.dispatch = () => {
-      observed.dispatch = undefined;
+    atDispatch(() => {
       closing = runExternalClose(() =>
         closeOpenClawAgentDatabaseByPathAsync(database.path, "main"),
       );
-    };
+    });
   } else {
     const replacementRoot = state.path("replacement-root");
     const replacement = openOpenClawAgentDatabase({
@@ -178,11 +174,10 @@ it.each(["revoked", "redirected"])("rejects a %s read at dispatch", async (inter
     const alias = state.path("alias-full");
     fs.symlinkSync(state.stateDir, alias, "junction");
     storePath = path.join(alias, "agents", "main", "agent", "openclaw-agent.sqlite");
-    observed.dispatch = () => {
-      observed.dispatch = undefined;
+    atDispatch(() => {
       fs.unlinkSync(alias);
       fs.symlinkSync(replacementRoot, alias, "junction");
-    };
+    });
   }
   await expect(
     readSessionEntriesFromStoreInWorker(readInput(sessionKey, storePath)),

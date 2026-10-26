@@ -4,9 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
+import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   createCronFixture,
@@ -58,20 +58,8 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
     const listHandler = vi.fn((options: GatewayRequestHandlerOptions) =>
       expectDefined(cronHandlers["cron.list"], "cron.list")(options),
     );
-    const methods = [
-      ["cron.add", "operator.admin"],
-      ["cron.run", "operator.write"],
-      ["cron.list", "operator.read"],
-    ] as const;
     context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry(
-        methods.map(([name, scope]) => ({
-          name,
-          scope,
-          owner: { kind: "core", area: "cron" },
-          handler: name === "cron.list" ? listHandler : expectDefined(cronHandlers[name], name),
-        })),
-      );
+      createRequestGatewayMethodRegistry({ "cron.list": listHandler });
     const toolsReady = createDeferredCore();
     const continueTool = createDeferredCore();
     const finished = createDeferredCore<CronEvent>();

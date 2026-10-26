@@ -25,41 +25,22 @@ const actualCliRunner = await vi.importActual<typeof import("../../agents/cli-ru
 const sessionId = "cron-sandbox-admission-session";
 const tempRoots: string[] = [];
 
-function createRealCliStubExecutable(dir: string) {
-  const commandPath = path.join(dir, "test-cli-bin.sh");
-  const markerPath = path.join(dir, "cli-launched.marker");
-  fs.writeFileSync(
-    commandPath,
-    [
-      "#!/bin/sh",
-      `printf 'launched:%s\\n' "$*" >> ${JSON.stringify(markerPath)}`,
-      "printf 'real cli stub output\\n'",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
-  return { commandPath, markerPath };
-}
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
 describe("cron isolated-agent sandbox placement admission", () => {
   setupRunCronIsolatedAgentTurnSuite();
   let tempDir: string;
-  let commandPath: string;
   let markerPath: string;
   function run(
     defaults: AgentDefaults,
-    {
-      model,
-      sessionKey = "existing-cron-session",
-      agentModel,
-      occurrence,
-    }: {
+    options: {
       model?: string;
       sessionKey?: string;
       agentModel?: string;
       occurrence?: ScheduledOccurrence;
     } = {},
   ) {
+    const { model, sessionKey = "existing-cron-session", agentModel, occurrence } = options;
     const cfg: OpenClawConfig = {
       session: { store: path.join(tempDir, "sessions.json") },
       agents: {
@@ -112,7 +93,17 @@ describe("cron isolated-agent sandbox placement admission", () => {
       return { ...lease, snapshot: { ...lease.snapshot, isCurrent: () => true } };
     });
     tempDir = makeTempDir(tempRoots, "cron-sandbox-admission-");
-    ({ commandPath, markerPath } = createRealCliStubExecutable(tempDir));
+    const commandPath = path.join(tempDir, "test-cli-bin.sh");
+    markerPath = path.join(tempDir, "cli-launched.marker");
+    fs.writeFileSync(
+      commandPath,
+      [
+        "#!/bin/sh",
+        `printf 'launched:%s\\n' "$*" >> ${JSON.stringify(markerPath)}`,
+        "printf 'real cli stub output\\n'",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
     const backend = {
       ...buildDefaultTestCliBackend(),
       modelProvider: "anthropic",

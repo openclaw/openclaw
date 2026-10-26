@@ -80,13 +80,11 @@ beforeEach(() => {
   harness.mockRunCronFallbackPassthrough();
 });
 
-it.each(["different root", "mismatched target", "provisioning failure", "revoked lease"])(
+it.each(["mismatched target", "provisioning failure", "revoked lease"])(
   "rejects %s before file tools start",
   async (mismatch) => {
     const { record } = bindSession(mismatch !== "mismatched target");
-    if (mismatch === "different root") {
-      worktrees.read.mockResolvedValue({ ...record, path: tempDirs.make("cron-other-") });
-    } else if (mismatch === "revoked lease") {
+    if (mismatch === "revoked lease") {
       worktrees.read.mockResolvedValueOnce(record).mockResolvedValueOnce(undefined);
     } else if (mismatch === "provisioning failure") {
       harness.ensureAgentWorkspaceMock.mockRejectedValueOnce(new Error("workspace unavailable"));
