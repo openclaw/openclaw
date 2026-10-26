@@ -17,6 +17,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { getSessionRowSelectionMetrics } from "../../infra/gateway-work-metrics.js";
 import { mergeProfiles } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -143,8 +144,16 @@ it("counts caller-visible conversations once through direct and delegated work b
       await read();
       const projection = getSessionRowProjection(context)!;
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const candidateSelections = () =>
+        getSessionRowSelectionMetrics().selections.reduce(
+          (total, selection) =>
+            total + (selection.kind === "running-candidate" ? selection.calls : 0),
+          0,
+        );
       for (const offset of [0, 3, 100]) {
+        const before = candidateSelections();
         expect((await read({ offset })).ownerSessionCounts).toEqual(expected(8, 2));
+        expect(candidateSelections() - before).toBe(1);
       }
       expect(prepares).not.toHaveBeenCalled();
       prepares.mockRestore();
@@ -209,7 +218,9 @@ it("counts caller-visible conversations once through direct and delegated work b
       // Retained terminal history is not a candidate for the live running-count facet.
       expect(
         selections.mock.calls.filter(
-          ([query]) => query?.sessionIdOrKey === idle || query?.sessionIdOrKey === child,
+          ([query]) =>
+            query?.candidateSessionIdsOrKeys?.has(idle) ||
+            query?.candidateSessionIdsOrKeys?.has(child),
         ),
       ).toEqual([]);
       selections.mockRestore();

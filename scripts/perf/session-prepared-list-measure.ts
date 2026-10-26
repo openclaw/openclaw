@@ -37,6 +37,7 @@ const { values } = parseArgs({
     "sort-rows": { type: "string" },
     "sort-workload": { type: "boolean", default: false },
     "collector-presentation": { type: "boolean", default: false },
+    "running-candidates": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -173,6 +174,16 @@ if (values["sort-workload"]) {
   for (const query of cases) {
     query.limit = 200;
   }
+}
+
+if (values["running-candidates"]) {
+  cases.splice(0, cases.length, {
+    source: "agent-roster",
+    rowMode: "sidebar",
+    archived: "all",
+    limit: 50,
+    includeOwnerSessionCounts: true,
+  });
 }
 
 if (values.mode === "verify") {
@@ -523,6 +534,13 @@ try {
     );
   const firstPartitions = partitionTotals(beforeSelections);
   const lastPartitions = partitionTotals(afterSelections);
+  const candidateSelections = (snapshot: typeof beforeSelections) =>
+    snapshot.selections.reduce(
+      (total, metric) => total + (metric.kind === "running-candidate" ? metric.calls : 0),
+      0,
+    );
+  const runningCandidateSelections =
+    candidateSelections(afterSelections) - candidateSelections(beforeSelections);
   const result = {
     mode: values.mode,
     cpuProfile: values["cpu-profile"],
@@ -537,6 +555,9 @@ try {
     presentationCpuMsPerCall: presentationCpuMicros / 1000 / iterations,
     presentationSelectionsPerCall: presentationSelections / iterations,
     collectorChildrenPerCall: collectorChildren / iterations,
+    runningCandidateWorkload: values["running-candidates"],
+    runningCandidateSelections,
+    runningCandidateSelectionsPerList: runningCandidateSelections / iterations,
     sessions,
     iterations,
     warmup,
