@@ -162,6 +162,13 @@ on each identity RPC; this is not a whole-network latency simulation. Other
 scenarios install no network delay. Gateway callbacks use the existing mock transport;
 Usage filtering/paging and session-window selection reuse production owners.
 
+Agent selection also records `agentAvatarsInitial`, `agentAvatarsRetained`, and
+`agentAvatarsFinal` alongside the outer-row identity probe. These compare the
+avatar elements before reopening and after selection; they count retained final
+elements, not transient construction. Both endpoints must contain 300 avatars,
+while the retained count remains observational so the same scenario runs on a
+baseline that replaces inner content.
+
 The workload does not invent sort controls on pages without them. Plugin-provided
 views and heavy iframe documents belong to their separate lane. Mobile coverage
 is available through `--viewport mobile` but is not implied by desktop results.

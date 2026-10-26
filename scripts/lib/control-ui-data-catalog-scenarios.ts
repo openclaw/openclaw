@@ -279,22 +279,43 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
       await frames(page);
     },
     run: async (page) => {
-      const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
-      await trigger.click();
-      await countRows(page, "[data-agent-option]", agentCount);
-      await page.locator('[data-agent-option][value="data-agent-0299"]').click();
-      await page.waitForFunction(() =>
-        document
-          .querySelector(".settings-sidebar__agent .agent-select__trigger")
-          ?.textContent?.includes("Data agent 0299"),
+      const originalAvatars = await page.evaluateHandle(() =>
+        Array.from(document.querySelectorAll("[data-agent-option] .agent-select__avatar")),
       );
-      await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
-      await frames(page);
-      return {
-        fixtureAgents: agentCount,
-        selectedFinalAgent: true,
-        identityRoundTripMs: roundTripMs,
-      };
+      try {
+        const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+        await trigger.click();
+        await countRows(page, "[data-agent-option]", agentCount);
+        await page.locator('[data-agent-option][value="data-agent-0299"]').click();
+        await page.waitForFunction(() =>
+          document
+            .querySelector(".settings-sidebar__agent .agent-select__trigger")
+            ?.textContent?.includes("Data agent 0299"),
+        );
+        await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
+        await frames(page);
+        const avatars = await originalAvatars.evaluate((original) => {
+          const current = new Set(
+            document.querySelectorAll("[data-agent-option] .agent-select__avatar"),
+          );
+          return {
+            agentAvatarsInitial: original.length,
+            agentAvatarsRetained: original.filter((avatar) => current.has(avatar)).length,
+            agentAvatarsFinal: current.size,
+          };
+        });
+        if (avatars.agentAvatarsInitial !== agentCount || avatars.agentAvatarsFinal !== agentCount) {
+          throw new Error("Expected all 300 agent row avatars before and after warm selection");
+        }
+        return {
+          fixtureAgents: agentCount,
+          selectedFinalAgent: true,
+          identityRoundTripMs: roundTripMs,
+          ...avatars,
+        };
+      } finally {
+        await originalAvatars.dispose();
+      }
     },
   };
 }
