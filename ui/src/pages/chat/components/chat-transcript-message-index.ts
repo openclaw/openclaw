@@ -251,14 +251,14 @@ export function projectTranscriptIndex(
   expandedToolCards: Map<string, boolean>,
   props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
 ): TranscriptIndex {
-  const key = [
+  const cacheKey = [
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     props.assistantName,
     props.userId,
     props.userName,
   ];
-  return indexes(chain, key, (): TranscriptIndex => {
+  return indexes(chain, cacheKey, (): TranscriptIndex => {
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
