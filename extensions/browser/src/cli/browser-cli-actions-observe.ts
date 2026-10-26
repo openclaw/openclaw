@@ -49,6 +49,19 @@ export function registerBrowserActionObserveCommands(
     });
 
   browser
+    .command("archive")
+    .description("Save the rendered page and loaded resources as an offline MHTML archive")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+    .action(async (opts, cmd) => {
+      await runBrowserCliRequest<{ path: string }>({
+        parent: parentOpts(cmd),
+        path: "/archive",
+        body: { targetId: normalizeOptionalString(opts.targetId) },
+        successMessage: (result) => `Archive: ${shortenHomePath(result.path)}`,
+      });
+    });
+
+  browser
     .command("pdf")
     .description("Save page as PDF")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)

@@ -413,6 +413,7 @@ remain invalid for `set`; omitting the key in `get` lists all entries.
 ```bash
 openclaw browser console --level error
 openclaw browser pdf
+openclaw browser archive --target-id <id>
 openclaw browser responsebody "**/api"
 openclaw browser highlight <ref>
 openclaw browser errors --clear
@@ -420,6 +421,15 @@ openclaw browser requests --filter api
 openclaw browser trace start
 openclaw browser trace stop --out trace.zip
 ```
+
+`archive` saves the selected Chromium CDP tab as an MHTML file in the browser
+media directory and prints `Archive: <path>`. `--json` returns `ok`, `path`,
+`targetId`, and `url`. Open the file in Chromium to inspect the rendered document
+and its captured resources offline. Copy it to durable storage if needed; the
+media directory is temporary. Archives use the media store's 5 MiB per-file limit.
+Chrome MCP existing-session and Lightpanda profiles do not support this command.
+An archive can contain private page content; it is a capture, not a sanitized
+document or a backup of the application's server state, video, or live scripts.
 
 `responsebody` writes the bounded response prefix to stdout and warns on stderr
 when it is truncated. `--json` includes the response metadata and `truncated`

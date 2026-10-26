@@ -64,6 +64,26 @@ beforeEach(() => {
 });
 
 describe("node browser proxy admission", () => {
+  it("rechecks profile authority at synchronous media publication", async () => {
+    const write = vi.fn();
+    mocks.config = {
+      ...mocks.config,
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    };
+    mocks.dispatch.mockImplementationOnce(async (request) => {
+      await request.assertCurrent?.();
+      mocks.config = {
+        ...mocks.config,
+        nodeHost: { browserProxy: { enabled: true, allowProfiles: ["user"] } },
+      };
+      request.requester?.isCurrent();
+      write();
+      return { status: 200, body: { ok: true } };
+    });
+    await expect(invoke({ profile: "openclaw" })).rejects.toThrow("browser profile not allowed");
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("checks current policy inside the admitted route before its write", async () => {
     const write = vi.fn();
     mocks.dispatch.mockImplementationOnce(async (request) => {

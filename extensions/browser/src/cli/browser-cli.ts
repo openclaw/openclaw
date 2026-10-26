@@ -142,6 +142,7 @@ function browserCommandGroups(
     {
       placeholders: [
         command("console", "Get recent console messages"),
+        command("archive", "Save the rendered page as an offline MHTML archive"),
         command("pdf", "Save page as PDF"),
         command("responsebody", "Wait for a network response and return its body"),
       ],

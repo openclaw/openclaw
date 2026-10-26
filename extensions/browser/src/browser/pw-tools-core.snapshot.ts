@@ -7,6 +7,7 @@ import {
 import type { Page } from "playwright-core";
 import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
@@ -47,6 +48,7 @@ import {
 import {
   assertInteractionCurrent,
   type InteractionTargetOptions,
+  type NavigationTargetOptions,
 } from "./pw-tools-core.interactions.navigation.js";
 import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
 export { snapshotRoleViaPlaywright } from "./pw-role-snapshot-capture.js";
@@ -434,4 +436,35 @@ export async function pdfViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };
+}
+
+/** Serialize the selected, already-rendered document without reloading its URL. */
+export async function archiveViaPlaywright(
+  opts: NavigationTargetOptions & { signal?: AbortSignal },
+): Promise<{ buffer: Buffer }> {
+  const page = await getPageForTargetId(opts);
+  return await withSnapshotFrameGuard({
+    page,
+    signal: opts.signal,
+    run: async (assertCurrent) => {
+      await assertBrowserNavigationResultAllowed({
+        url: page.url(),
+        signal: opts.signal,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+      });
+      await assertInteractionCurrent(opts);
+      assertCurrent();
+      const { data } = await withPageScopedCdpClient({
+        page,
+        timeoutMs: DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+        fn: async (send) => {
+          assertCurrent();
+          return await send("Page.captureSnapshot", { format: "mhtml" });
+        },
+      });
+      assertCurrent();
+      return { buffer: Buffer.from(data, "utf8") };
+    },
+  });
 }
