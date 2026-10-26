@@ -503,3 +503,13 @@ The separate diagnostic establishes the removed recurring geometry rAF work;
 this uninstrumented confirmation establishes its CPU effect. These are page-task
 measurements, not audio latency or battery estimates. The unchanged A/A tails
 are noisy, but every A/B pair improves and both candidate p95s fall substantially.
+
+### PR typecheck correction
+
+The first PR run exposed an HTML/SVG union test assignment to readonly
+`className`, plus the narrower core-test ES2023 library declaration reached
+through the new observer import. The test now uses `classList.add`. The existing
+observer owner explicitly references `es2024.collection` for its existing
+`Map.groupBy` calls, as other UI owners already do. Application behavior is
+unchanged. The owner and browser-test files were also formatted with the pinned
+formatter. Final owner/test LOC is 526/395, versus 314/306 at the merge base.

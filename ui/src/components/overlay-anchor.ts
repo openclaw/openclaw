@@ -206,9 +206,10 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
           return (
             effect instanceof KeyframeEffect &&
             !effect.pseudoElement &&
-            effect.getKeyframes().some((keyframe) =>
-              Object.keys(keyframe).some(
-                (property) =>
+            effect
+              .getKeyframes()
+              .some((keyframe) =>
+                Object.keys(keyframe).some((property) =>
                   [
                     "transform",
                     "transformOrigin",
@@ -223,8 +224,8 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
                     "offsetAnchor",
                     "offsetPosition",
                   ].includes(property),
-              ),
-            )
+                ),
+              )
           );
         });
     };
@@ -261,7 +262,11 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
             rect.height !== observedHeight
           ) {
             invalidate();
-          } else if (initial && entry.intersectionRatio > 0 && entry.intersectionRatio !== threshold) {
+          } else if (
+            initial &&
+            entry.intersectionRatio > 0 &&
+            entry.intersectionRatio !== threshold
+          ) {
             observePosition(entry.intersectionRatio);
           }
           initial = false;
@@ -287,7 +292,10 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
     const reconnect = () => {
       const anchorNodes = composedAncestors(anchor);
       const next = [...new Set([...anchorNodes, ...composedAncestors(surface)])];
-      if (next.length === ancestors.length && next.every((node, index) => node === ancestors[index])) {
+      if (
+        next.length === ancestors.length &&
+        next.every((node, index) => node === ancestors[index])
+      ) {
         return;
       }
       mutations.disconnect();

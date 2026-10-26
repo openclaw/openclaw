@@ -163,11 +163,13 @@ it("follows outside layout shifts and a signaled ancestor animation", async () =
   await open(owner);
   await frame();
   spacer.style.height = "80px";
-  await expect.poll(() => {
-    const source = element.getBoundingClientRect();
-    const target = surface.getBoundingClientRect();
-    return Math.abs(target.top - source.bottom - 6);
-  }).toBeLessThan(1);
+  await expect
+    .poll(() => {
+      const source = element.getBoundingClientRect();
+      const target = surface.getBoundingClientRect();
+      return Math.abs(target.top - source.bottom - 6);
+    })
+    .toBeLessThan(1);
 
   container.style.willChange = "transform";
   const animation = container.animate(
@@ -194,7 +196,7 @@ it("follows outside layout shifts and a signaled ancestor animation", async () =
 it("follows padding shrinkage from a stylesheet without an anchor mutation", async () => {
   const element = anchor(document.body);
   element.style.boxSizing = "content-box";
-  element.className = "anchor-padding-proof";
+  element.classList.add("anchor-padding-proof");
   const style = append(document.head, "style");
   style.textContent = ".anchor-padding-proof { padding: 20px !important }";
   const { surface, owner } = popup(shadow("closed"), element);
@@ -203,11 +205,13 @@ it("follows padding shrinkage from a stylesheet without an anchor mutation", asy
   expectAnchored(surface, element);
 
   style.textContent = ".anchor-padding-proof { padding: 0 !important }";
-  await expect.poll(() => {
-    const source = element.getBoundingClientRect();
-    const target = surface.getBoundingClientRect();
-    return Math.abs(target.top - source.bottom - 6);
-  }).toBeLessThan(1);
+  await expect
+    .poll(() => {
+      const source = element.getBoundingClientRect();
+      const target = surface.getBoundingClientRect();
+      return Math.abs(target.top - source.bottom - 6);
+    })
+    .toBeLessThan(1);
 });
 
 it.each([false, true])("opens an adopted template (same-root=%s)", async (sameRoot) => {
