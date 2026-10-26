@@ -8,6 +8,7 @@ const ENV_PRIVATE_KEY = "22".repeat(32);
 const PLAINTEXT = { privateKey: PRIVATE_KEY, authTag: "configured-auth-tag" };
 const EMPTY_IDENTITY = { configured: false, privateKey: "", authTag: "", relayUrl: "" };
 const UNAVAILABLE = { configured: true, tokenStatus: "configured_unavailable" };
+const secretRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
 
 function buzzConfig(buzz: BuzzConfigInput): OpenClawConfig {
   return { channels: { buzz } } as OpenClawConfig;
@@ -86,41 +87,31 @@ it("selects a configured default deterministically and applies the global disabl
 });
 
 it.each([
-  {
-    label: "keeps explicit plaintext credentials ahead of ambient credentials",
-    credentials: PLAINTEXT,
-    env: { BUZZ_PRIVATE_KEY: ENV_PRIVATE_KEY, BUZZ_AUTH_TAG: "ambient-auth-tag" },
-    expected: { ...PLAINTEXT, configured: true, tokenStatus: "available" },
-  },
-  {
-    label: "distinguishes a missing private key from a configured unavailable key",
-    credentials: {},
-    env: { BUZZ_PRIVATE_KEY: "" },
-    expected: { configured: false, privateKey: "", tokenStatus: "missing" },
-  },
-  {
-    label: "never substitutes an ambient private key for an unavailable SecretRef",
-    credentials: {
-      privateKey: { source: "env", provider: "default", id: "MISSING_BUZZ_PRIVATE_KEY" },
-    },
-    env: { BUZZ_PRIVATE_KEY: ENV_PRIVATE_KEY },
-    expected: { ...UNAVAILABLE, privateKey: "", publicKey: "" },
-  },
-  {
-    label: "never substitutes an ambient auth tag for an unavailable SecretRef",
-    credentials: {
-      privateKey: PRIVATE_KEY,
-      authTag: { source: "env", provider: "default", id: "MISSING_BUZZ_AUTH_TAG" },
-    },
-    env: { BUZZ_AUTH_TAG: "ambient-auth-tag" },
-    expected: {
-      ...UNAVAILABLE,
-      privateKey: PRIVATE_KEY,
-      authTag: "",
-      publicKey: expect.stringMatching(/./),
-    },
-  },
-] as const)("$label", ({ credentials, env, expected }) => {
+  [
+    "keeps explicit plaintext credentials ahead of ambient credentials",
+    PLAINTEXT,
+    { BUZZ_PRIVATE_KEY: ENV_PRIVATE_KEY, BUZZ_AUTH_TAG: "ambient-auth-tag" },
+    { ...PLAINTEXT, configured: true, tokenStatus: "available" },
+  ],
+  [
+    "distinguishes a missing private key from a configured unavailable key",
+    {},
+    { BUZZ_PRIVATE_KEY: "" },
+    { configured: false, privateKey: "", tokenStatus: "missing" },
+  ],
+  [
+    "never substitutes an ambient private key for an unavailable SecretRef",
+    { privateKey: secretRef("MISSING_BUZZ_PRIVATE_KEY") },
+    { BUZZ_PRIVATE_KEY: ENV_PRIVATE_KEY },
+    { ...UNAVAILABLE, privateKey: "", publicKey: "" },
+  ],
+  [
+    "never substitutes an ambient auth tag for an unavailable SecretRef",
+    { privateKey: PRIVATE_KEY, authTag: secretRef("MISSING_BUZZ_AUTH_TAG") },
+    { BUZZ_AUTH_TAG: "ambient-auth-tag" },
+    { ...UNAVAILABLE, privateKey: PRIVATE_KEY, authTag: "", publicKey: expect.stringMatching(/./) },
+  ],
+] as const)("%s", (_label, credentials, env, expected) => {
   for (const [name, value] of Object.entries(env)) {
     vi.stubEnv(name, value);
   }
