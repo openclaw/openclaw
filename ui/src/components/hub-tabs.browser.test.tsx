@@ -7,14 +7,15 @@ import "../styles/base.css";
 import "../styles/agents.css";
 
 const tabDefaults: HubTabsProps<string> = {
-  id: "bounded",
-  active: "sessions",
+  id: "agent-files",
+  active: "agents",
   panelId: "bounded-panel",
   ariaLabel: "Activity view",
-  tabs: [
-    { value: "sessions", label: "Sessions" },
-    { value: "live", label: "Live activity" },
-  ],
+  tabs: ["agents", "heartbeat", "identity"].map((value) => ({
+    value,
+    label: value.toUpperCase(),
+    badge: value === "agents" ? undefined : "Missing",
+  })),
   onSelect: () => {},
 };
 
@@ -54,16 +55,7 @@ it.each(["primary", "sub"] as const)(
 it("shrinks row tabs to fit Add File", async () => {
   const { root, tabs } = await mountTabs(
     "width:280px",
-    {
-      id: "agent-files",
-      active: "agents",
-      variant: "sub",
-      tabs: ["agents", "heartbeat", "identity"].map((value) => ({
-        value,
-        label: value.toUpperCase(),
-        badge: value === "agents" ? undefined : "Missing",
-      })),
-    },
+    { variant: "sub" },
     <select class="agent-tab-add" aria-label="Add File">
       <option>Add File</option>
       <option>MEMORY</option>
