@@ -160,7 +160,10 @@ describe("bundled plugin public surface loader", () => {
       const createJiti = vi.fn(() => {
         throw new Error("built artifacts must load without source transforms");
       });
-      vi.doMock("./jiti-factory.js", () => ({ createJiti }));
+      vi.doMock("./jiti-factory.js", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("./jiti-factory.js")>()),
+        createJiti,
+      }));
       const { root, bundledPluginsDir: sourceRoot, pluginRoot } = pluginFixture();
       const packageLocal = layout === "package-local dist";
       const bundledPluginsDir = packageLocal ? sourceRoot : path.join(root, "dist", "extensions");
@@ -382,7 +385,10 @@ describe("bundled plugin public surface loader", () => {
 
   it("rejects public artifacts that change after boundary validation", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "should-not-load" })));
-    vi.doMock("./jiti-factory.js", () => ({ createJiti }));
+    vi.doMock("./jiti-factory.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./jiti-factory.js")>()),
+      createJiti,
+    }));
     const loader = await freshLoader("post-validation-identity");
     const { modulePath } = bundledArtifact(undefined, undefined, false);
     const realStatSync = fs.statSync.bind(fs);
