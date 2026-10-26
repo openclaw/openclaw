@@ -63,33 +63,19 @@ describe("PostgreSQL SQL boundary", () => {
 
   it("decodes safe int8, bytea, nulls, and scalar results", () => {
     const fields = { count: 20, bytes: 17, empty: 20, text: 25, truth: 16 };
+    const bytes = () => new Uint8Array([0, 255]);
     const result = {
-      rows: [
-        {
-          bytes: new Uint8Array([0, 255]),
-          empty: null,
-          text: "hi",
-          count: "9007199254740991",
-          truth: true,
-        },
-      ],
+      rows: [{ bytes: bytes(), empty: null, text: "hi", count: "9007199254740991", truth: true }],
       fields: Object.entries(fields).map(([name, dataTypeID]) => ({ name, dataTypeID })),
     };
     expect(decodePostgresRows(result, false)).toEqual([
-      {
-        bytes: new Uint8Array([0, 255]),
-        empty: null,
-        text: "hi",
-        count: Number.MAX_SAFE_INTEGER,
-        truth: 1,
-      },
+      { bytes: bytes(), empty: null, text: "hi", count: Number.MAX_SAFE_INTEGER, truth: 1 },
     ]);
   });
 
   it("rejects unsafe int8 numbers unless the statement opts into bigints", () => {
     const result = {
       rows: [{ count: "9007199254740992" }],
-      rowCount: 1,
       fields: [{ name: "count", dataTypeID: 20 }],
     };
     expect(() => decodePostgresRows(result, false)).toThrow(RangeError);
