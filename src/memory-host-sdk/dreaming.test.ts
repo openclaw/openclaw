@@ -17,9 +17,17 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const resolveConfig = (dreaming: Record<string, unknown>, cfg?: OpenClawConfig) =>
   resolveMemoryDreamingConfig({ pluginConfig: { dreaming }, cfg });
 const roster = (
-  entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  workspaces: Record<string, string>,
   options: Omit<NonNullable<OpenClawConfig["agents"]>, "entries"> = {},
-): OpenClawConfig => ({ agents: { ...options, entries } });
+): OpenClawConfig => ({
+  agents: {
+    ...options,
+    entries: Object.fromEntries(
+      Object.entries(workspaces).map(([id, workspace]) => [id, { workspace }]),
+    ),
+  },
+});
+const workspace = (workspaceDir: string, ...agentIds: string[]) => ({ workspaceDir, agentIds });
 const memoryPlugin = (slot: string, id: string, dreaming: Record<string, unknown>) => ({
   plugins: { slots: { memory: slot }, entries: { [id]: { config: { dreaming } } } },
 });
@@ -130,33 +138,38 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.storage).toEqual({ mode: "separate", separateReports: false });
   });
 
-  it("uses canonical roster identities when agent aliases share a workspace", () => {
-    const cfg = roster({
-      "Team Alpha": { workspace: "/workspace/shared" },
-      "team-alpha": { workspace: "/workspace/shared" },
-    });
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir: "/workspace/shared", agentIds: ["team-alpha"] },
-    ]);
-  });
-
-  it("does not require a default owner when no primary workspace is supplied", () => {
-    const cfg = roster(
-      {
-        alpha: { workspace: "/workspace/alpha" },
-        beta: { workspace: "/workspace/beta" },
-      },
-      { ownership: "explicit" },
-    );
-
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir: "/workspace/alpha", agentIds: ["alpha"] },
-      { workspaceDir: "/workspace/beta", agentIds: ["beta"] },
-    ]);
-  });
-
-  it("returns no workspaces for an explicitly empty roster", () => {
-    expect(resolveMemoryDreamingWorkspaces({ agents: { entries: {} } })).toEqual([]);
+  it.each<
+    [
+      string,
+      OpenClawConfig,
+      ReturnType<typeof resolveMemoryDreamingWorkspaces>,
+      Parameters<typeof resolveMemoryDreamingWorkspaces>[1]?,
+    ]
+  >([
+    [
+      "canonicalizes shared-workspace agent aliases",
+      roster({ "Team Alpha": "/shared", "team-alpha": "/shared" }),
+      [workspace("/shared", "team-alpha")],
+    ],
+    [
+      "needs no default owner without a primary workspace",
+      roster({ alpha: "/alpha", beta: "/beta" }, { ownership: "explicit" }),
+      [workspace("/alpha", "alpha"), workspace("/beta", "beta")],
+    ],
+    ["returns no workspaces for an explicitly empty roster", roster({}), []],
+    [
+      "includes the runtime primary alongside configured workspaces",
+      roster({ "agi-ceo": "/ceo", "agi-cdo": "/cdo" }),
+      [workspace("/ceo", "agi-ceo"), workspace("/cdo", "agi-cdo"), workspace("/main", "main")],
+      { primaryWorkspaceDir: "/main", primaryAgentId: "main" },
+    ],
+    [
+      "uses default agent fallback",
+      { agents: { entries: { main: {} }, defaults: { workspace: "/workspace" } } },
+      [workspace("/workspace", "main")],
+    ],
+  ])("%s", (_name, cfg, expected, options) => {
+    expect(resolveMemoryDreamingWorkspaces(cfg, options)).toEqual(expected);
   });
 
   it("dedupes non-adjacent workspace symlink aliases across agents", async () => {
@@ -171,45 +184,18 @@ describe("memory dreaming host helpers", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
     const cfg = roster({
-      alpha: { workspace: workspaceDir },
-      gamma: { workspace: otherWorkspaceDir },
-      beta: { workspace: workspaceAliasDir },
+      alpha: workspaceDir,
+      gamma: otherWorkspaceDir,
+      beta: workspaceAliasDir,
     });
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir, agentIds: ["alpha", "beta"] },
-      { workspaceDir: otherWorkspaceDir, agentIds: ["gamma"] },
+      workspace(workspaceDir, "alpha", "beta"),
+      workspace(otherWorkspaceDir, "gamma"),
     ]);
-    expect(resolveMemoryDreamingWorkspace(cfg, workspaceAliasDir)).toEqual({
-      workspaceDir,
-      agentIds: ["alpha", "beta"],
-    });
-  });
-
-  it("includes the runtime primary workspace alongside configured subagent workspaces", () => {
-    const cfg = roster({
-      "agi-ceo": { workspace: "/workspace/agi-ceo" },
-      "agi-cdo": { workspace: "/workspace/agi-cdo" },
-    });
-
-    expect(
-      resolveMemoryDreamingWorkspaces(cfg, {
-        primaryWorkspaceDir: "/workspace/main",
-        primaryAgentId: "main",
-      }),
-    ).toEqual([
-      { workspaceDir: "/workspace/agi-ceo", agentIds: ["agi-ceo"] },
-      { workspaceDir: "/workspace/agi-cdo", agentIds: ["agi-cdo"] },
-      { workspaceDir: "/workspace/main", agentIds: ["main"] },
-    ]);
-  });
-
-  it("uses default agent fallback", () => {
-    const cfg = roster({ main: {} }, { defaults: { workspace: "/workspace" } });
-
-    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
-      { workspaceDir: "/workspace", agentIds: ["main"] },
-    ]);
+    expect(resolveMemoryDreamingWorkspace(cfg, workspaceAliasDir)).toEqual(
+      workspace(workspaceDir, "alpha", "beta"),
+    );
   });
 
   it("preserves timezone-aware day selection and local fallback", () => {
