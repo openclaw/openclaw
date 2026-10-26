@@ -40,7 +40,8 @@ export async function channelsDeadLettersListCommand(
     defaultRuntime.writeJson({ channelId, accountId, deadLetters });
     return;
   }
-  defaultRuntime.log(theme.heading(`Channel ingress dead letters (${channelId}/${accountId})`));
+  const scopeLabel = `${sanitizeTerminalText(channelId)}/${sanitizeTerminalText(accountId)}`;
+  defaultRuntime.log(theme.heading(`Channel ingress dead letters (${scopeLabel})`));
   if (deadLetters.length === 0) {
     defaultRuntime.log(theme.muted("No dead-lettered ingress events."));
     return;
@@ -64,25 +65,28 @@ export async function channelsDeadLettersResubmitCommand(
   if (!queue.resubmit) {
     throw new Error("This runtime does not support channel ingress dead-letter resubmission.");
   }
+  const scopeLabel = `${sanitizeTerminalText(channelId)}/${sanitizeTerminalText(accountId)}`;
+  const safeEventId = sanitizeTerminalText(eventId);
   const result = await queue.resubmit(eventId);
   if (result.kind === "resubmitted") {
     if (options.json) {
       defaultRuntime.writeJson({ channelId, accountId, eventId, result });
     } else {
       defaultRuntime.log(
-        `${theme.success("Resubmitted")} channel ingress event ${sanitizeTerminalText(eventId)} (${channelId}/${accountId}). The running channel retries it within 5 minutes by default (longer if configured).`,
+        `${theme.success("Resubmitted")} channel ingress event ${sanitizeTerminalText(eventId)} (${scopeLabel}). The running channel retries it within 5 minutes by default (longer if configured).`,
       );
     }
     return;
   }
   if (result.kind === "completed") {
-    throw new Error(`Ingress event ${eventId} is completed and cannot be resubmitted.`);
+    throw new Error(`Ingress event ${safeEventId} is completed and cannot be resubmitted.`);
   }
   if (result.kind === "active") {
-    throw new Error(`Ingress event ${eventId} is already ${result.status}.`);
+    throw new Error(`Ingress event ${safeEventId} is already ${sanitizeTerminalText(result.status)}.`);
   }
   if (result.kind === "unrecoverable") {
-    throw new Error(`Ingress event ${eventId} has no retained payload and cannot be resubmitted.`);
+    throw new Error(`Ingress event ${safeEventId} has no retained payload and cannot be resubmitted.`);
   }
-  throw new Error(`Ingress event ${eventId} was not found for ${channelId}/${accountId}.`);
+  throw new Error(`Ingress event ${safeEventId} was not found for ${scopeLabel}.`);
 }
+
