@@ -5803,8 +5803,6 @@
 ["src/infra/update-run-interruption-health.test.ts","./package-json.js","5bcf6d4e4e20b23d763d1127ed47393fe5b7623a01592d64b8ae6a50404dea2f",1]
 ["src/infra/update-run-interruption-health.test.ts","./update-git-runtime.js","93111f69a919e73b1c72df62e43c16dd962740509b39dd954fd43260e1508639",1]
 ["src/infra/update-run-interruption.worker.test.ts","./update-run-interruption-health.js","528ea9b1914fe04a2bac0b47b4c614fe607489bfefcbf6db743cbdbe3d0bf477",1]
-["src/infra/update-runner.test.ts","../process/exec.js","d2c2f214d7a3c19c27a74ae65ea7bbd2cc77ffd33b58835cc8b80ad8c955ddd5",1]
-["src/infra/update-runner.test.ts","./update-global.js","ec16a76cc129a8a2396fe27cf6bdadc6aa1c9a1d08319538e1776ad781138db2",1]
 ["src/infra/update-startup-campaign-run.test.ts","./update-triage.js","0528ec9f44af75aa6fbd5df96b86cab6d6c0b2f80ef4176fe7123315896adcbf",1]
 ["src/infra/update-startup-host-owned.test.ts","../process/exec.js","304fcd027595fb7d069fc08e411b160d6f740a7e3604df362eebda7a764334e4",1]
 ["src/infra/update-startup-host-owned.test.ts","./telemetry.js","11a56933c3b77a0602748f4a03a533ab79231d6555d85a95c1a5b771c39d3191",1]
