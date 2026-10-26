@@ -178,7 +178,7 @@ export type PreparedModelRuntimeLeaseOptions = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   abortSignal?: AbortSignal;
   /**
-   * PROTOTYPE (#182024): a plugin-runtime refresh continuation already ran tools on
+   * A plugin-runtime refresh continuation already ran tools on
    * the previous generation, so it waits for every pending reload to settle
    * instead of failing after the usual three publication gates.
    */

@@ -203,7 +203,7 @@ export function ownPreparedPluginGeneration(
       retainRuntimePluginWork(
         selectedRegistries,
         "prepared-generation-lease",
-        captureTurnHandoverRequest(),
+        captureTurnHandoverRequest(selectedRegistries),
       ),
   );
   try {

@@ -1,5 +1,5 @@
-/** PROTOTYPE (#182024): verifies how held plugin work reacts when a reload reserves its plugin. */
-import { afterEach, describe, expect, it, vi } from "vitest";
+/** Verifies how held plugin work reacts when a reload reserves its plugin. */
+import { describe, expect, it, vi } from "vitest";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -10,16 +10,13 @@ import {
 import { captureTurnHandoverRequest } from "./plugin-turn-handover.js";
 import { retainRuntimePluginWork } from "./runtime-plugin-work.js";
 
-function createRegistryWithInstance(id = "swap") {
+function createRegistryWithInstance(id = "swap", turnHandover = false) {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({ id });
+  record.turnHandover = turnHandover || undefined;
   registry.plugins.push(record);
   return { registry, instance: new PluginInstance(record.id, { record, registry }) };
 }
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 describe("plugin turn handover", () => {
   it("tells held work when a reload reserves its plugin, and stops after release", () => {
@@ -54,33 +51,30 @@ describe("plugin turn handover", () => {
     expect(instance.retainedWorkCount).toBe(0);
   });
 
-  it("keeps holds on plugins that are not opted in", () => {
-    vi.stubEnv("OPENCLAW_PLUGIN_TURN_HANDOVER", "other");
+  it("keeps holds on plugins that do not declare turn handover", () => {
     const { registry, instance } = createRegistryWithInstance();
-    retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest());
+    retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
 
     instance.reserveReplacement();
     expect(instance.retainedWorkCount).toBe(1);
   });
 
   it("yields a whole-run hold outside a turn", () => {
-    vi.stubEnv("OPENCLAW_PLUGIN_TURN_HANDOVER", "swap");
-    const { registry, instance } = createRegistryWithInstance();
-    retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest());
+    const { registry, instance } = createRegistryWithInstance("swap", true);
+    retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
 
     instance.reserveReplacement();
     expect(instance.retainedWorkCount).toBe(0);
   });
 
   it("asks a turn to hand over at its next step while keeping its hold", () => {
-    vi.stubEnv("OPENCLAW_PLUGIN_TURN_HANDOVER", "swap");
-    const { registry, instance } = createRegistryWithInstance();
+    const { registry, instance } = createRegistryWithInstance("swap", true);
     const refresh = createAgentPluginRuntimeRefresh();
     const pending = refresh.run(() => {
       // The attempt registers itself as the refresh consumer while it streams.
       const control = captureAgentPluginRuntimeRefresh();
       control.bindConsumer(() => true);
-      retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest());
+      retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
       instance.reserveReplacement();
       return control.isPending();
     });

@@ -1,21 +1,19 @@
-// PROTOTYPE (#182024): hands running turns to a reloaded plugin at their next step boundary.
+// Hands running turns to a reloaded plugin at their next step boundary (#182024).
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 
 const log = createSubsystemLogger("agents/plugin-turn-handover");
 
-/**
- * Plugins whose reload may hand a running turn to the new generation. Stands in
- * for the manifest opt-in (`reload.turnHandover`) the issue proposes; the
- * prototype reads it from `OPENCLAW_PLUGIN_TURN_HANDOVER` (comma-separated IDs).
- */
-function turnHandoverPluginIds(): ReadonlySet<string> {
-  return new Set(
-    (process.env.OPENCLAW_PLUGIN_TURN_HANDOVER ?? "")
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean),
-  );
+// The retiring generation's manifest decides; a plugin hands turns over only when it
+// declares `reload.turnHandover`, so every other plugin keeps today's wait for the turn.
+function handsOverTurns(registries: Iterable<PluginRegistry>, pluginId: string): boolean {
+  for (const registry of registries) {
+    if (registry.plugins.some((record) => record.id === pluginId && record.turnHandover === true)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -30,10 +28,12 @@ function turnHandoverPluginIds(): ReadonlySet<string> {
  *   hold yields its work count but keeps its custody. A later fresh call into
  *   the replaced plugin waits for the reload and rebinds to the current registry.
  */
-export function captureTurnHandoverRequest(): (pluginId: string) => "yield" | undefined {
+export function captureTurnHandoverRequest(
+  registries: Iterable<PluginRegistry>,
+): (pluginId: string) => "yield" | undefined {
   const refresh = captureAgentPluginRuntimeRefresh();
   return (pluginId) => {
-    if (!turnHandoverPluginIds().has(pluginId)) {
+    if (!handsOverTurns(registries, pluginId)) {
       return undefined;
     }
     if (!refresh.isOwned()) {
