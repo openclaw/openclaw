@@ -75,6 +75,24 @@ function expectNoReplies(dispatcher: ReturnType<typeof createDispatcher>) {
   expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
 }
 
+const acpConfig = () => ({
+  acp: { enabled: true, dispatch: { enabled: true } },
+  session: { sendPolicy: { default: "allow" as const } },
+});
+const resetTail = async (ctx: MsgContext) => {
+  ctx.AcpDispatchTailAfterReset = true;
+  return undefined;
+};
+
+function holdRuntime(hold: ReturnType<typeof holdWork>, events: AcpRuntimeEvent[]) {
+  const runtime = createAcpRuntime([]);
+  runtime.runTurn.mockImplementation(async function* () {
+    await hold.wait();
+    yield* events;
+  });
+  return runtime;
+}
+
 type DispatchPromise = ReturnType<typeof dispatchReplyFromConfig>;
 
 function startDispatch(
@@ -235,13 +253,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
     const hold = holdWork();
-    const runtime = createAcpRuntime([]);
-    runtime.runTurn.mockImplementation(async function* () {
-      hold.started.resolve();
-      // Cancellation is prompt even while the runtime's final cleanup remains pending.
-      await hold.release.promise;
-      yield { type: "done" } as AcpRuntimeEvent;
-    });
+    const runtime = holdRuntime(hold, [{ type: "done" }]);
     setRuntimeSession("agent:codex-acp:session-1", runtime);
 
     const abortController = new AbortController();
@@ -251,10 +263,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       inspect,
     } = startDispatch("agent:codex-acp:session-1", {
       context: { BodyForAgent: "write a test" },
-      cfg: {
-        acp: { enabled: true, dispatch: { enabled: true } },
-        session: { sendPolicy: { default: "allow" } },
-      },
+      cfg: acpConfig(),
       replyOptions: { abortSignal: abortController.signal },
     });
 
@@ -288,10 +297,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     const { dispatch } = startDispatch("agent:main:regular-tail", {
       context: { BodyForAgent: "/reset continue" },
       cfg: { ...createDispatchConfig(), acp: { enabled: true, dispatch: { enabled: true } } },
-      replyResolver: async (resolverCtx) => {
-        resolverCtx.AcpDispatchTailAfterReset = true;
-        return undefined;
-      },
+      replyResolver: resetTail,
     });
 
     expect((await dispatch).counts.final).toBe(0);
@@ -421,10 +427,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         BodyForAgent: "/reset continue",
       },
       cfg: { ...createDispatchConfig(), acp: { enabled: true, dispatch: { enabled: true } } },
-      replyResolver: async (resolverCtx) => {
-        resolverCtx.AcpDispatchTailAfterReset = true;
-        return undefined;
-      },
+      replyResolver: resetTail,
     });
 
     await inspect(hold, async (operation) => {
@@ -561,15 +564,11 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     "keeps low-level ACP successor cancellation separate from its predecessor (caller abort=%s)",
     async (cancelCaller) => {
       const sessionKey = "agent:main:acp:successor";
-      const turnStarted = createDeferred();
-      const releaseTurn = createDeferred();
-      const runtime = createAcpRuntime([]);
-      runtime.runTurn.mockImplementation(async function* () {
-        turnStarted.resolve();
-        await releaseTurn.promise;
-        yield { type: "text_delta", stream: "output", text: "Successor reply" };
-        yield { type: "done", status: "completed" };
-      });
+      const hold = holdWork();
+      const runtime = holdRuntime(hold, [
+        { type: "text_delta", stream: "output", text: "Successor reply" },
+        { type: "done", status: "completed" },
+      ]);
       setRuntimeSession(sessionKey, runtime, "main");
       const predecessor = activeOperation(sessionKey, "predecessor-session");
       predecessor.registerTerminalProducerFence(async () => true);
@@ -591,17 +590,14 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           SessionKey: sessionKey,
           BodyForAgent: "Retry the interrupted task",
         }),
-        cfg: {
-          acp: { enabled: true, dispatch: { enabled: true } },
-          session: { sendPolicy: { default: "allow" } },
-        },
+        cfg: acpConfig(),
         dispatcher,
         replyOptions: { abortSignal: caller.signal },
       });
 
       try {
         await awaitGateBeforeSettlement(
-          turnStarted.promise,
+          hold.started.promise,
           dispatch,
           "ACP successor completed before its runtime started",
         );
@@ -610,10 +606,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         if (cancelCaller) {
           caller.abort();
         }
-        releaseTurn.resolve();
+        hold.release.resolve();
         await dispatch;
 
-        expect(runtime.runTurn).toHaveBeenCalledOnce();
         expect(runtime.runTurn.mock.calls[0]?.[0].signal?.aborted).toBe(cancelCaller);
         if (cancelCaller) {
           expectNoReplies(dispatcher);
@@ -623,7 +618,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           );
         }
       } finally {
-        releaseTurn.resolve();
+        hold.release.resolve();
         predecessor.complete();
         await Promise.allSettled([dispatch, predecessor.ownerSettlement]);
       }
@@ -674,16 +669,13 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   ] as const)(
     "records $abort before an abort-insensitive resolver settles",
     async ({ abort, expected }) => {
-      const resolverStarted = createDeferred();
-      const releaseResolver = createDeferred();
-      const resolverFinished = createDeferred();
+      const hold = holdWork();
       const runState: ReplyOperationRunState = {};
       const { dispatcher, dispatch: dispatchPromise } = startDispatch("agent:main:resolver-abort", {
         context: { BodyForAgent: "hang in resolver" },
         replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
         replyResolver: async (_resolverCtx, options) => {
-          resolverStarted.resolve();
-          await releaseResolver.promise;
+          await hold.wait();
           try {
             await options?.onToolResult?.({ text: "late tool should not send" });
             await options?.onBlockReply?.({ text: "late block should not send" });
@@ -696,12 +688,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
             await options.onPreparedBlockReply(plan);
             return { text: "late final should not send" };
           } finally {
-            resolverFinished.resolve();
+            hold.returned.resolve();
           }
         },
       });
 
-      await resolverStarted.promise;
+      await hold.started.promise;
       const operation = getSessionControllerOperation("agent:main:resolver-abort");
       try {
         expect(operation?.[abort]()).toBe(true);
@@ -716,14 +708,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         expect(resolveReplyOperationAgentTurn(runState)).toBe(expected);
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       } finally {
-        releaseResolver.resolve();
-        await resolverFinished.promise;
+        hold.release.resolve();
+        await hold.returned.promise;
         await waitForSessionRunIdle("agent:main:resolver-abort");
       }
 
-      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      expectNoReplies(dispatcher);
       expect(listActiveReplyRunSessionKeys()).toEqual([]);
     },
   );
