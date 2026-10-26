@@ -3,7 +3,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../../packages/gateway-client/src/websocket.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/capability-provider.types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
@@ -34,54 +34,48 @@ afterEach(async () => {
   }
 });
 
-describe("managed proxy routing for OpenAI realtime voice", () => {
-  it("tunnels the realtime voice socket through the managed proxy", async () => {
+it.each([true, false])(
+  "routes realtime voice through the managed proxy (admit=%s), without direct fallback",
+  async (admit) => {
     const target = await startRealtimeTarget();
-    const proxy = await startForwardProxy(true);
-    await startManagedProxy(proxy.url, "gateway-only");
-    // Only the proxy reaches this host, like api.openai.com behind egress restrictions.
-    const authority = `realtime.openai.test:${target.port}`;
-    const bridge = createRealtimeBridge(`ws://${authority}/v1/realtime`);
-
-    await bridge.connect();
-
-    expect(bridge.isConnected()).toBe(true);
+    const proxy = await startForwardProxy(admit);
+    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", undefined);
+    const handle = await startProxy({
+      proxyUrl: proxy.url,
+      loopbackMode: admit ? "gateway-only" : "proxy",
+    });
+    closers.push(() => stopProxy(handle));
+    // Admission needs proxy DNS; refusal uses a directly reachable target to detect bypass.
+    const authority = `${admit ? "realtime.openai.test" : "127.0.0.1"}:${target.port}`;
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "test-realtime-key", baseUrl: `ws://${authority}/v1/realtime` },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    closers.push(() => bridge.close());
+    if (admit) {
+      await bridge.connect();
+      expect(bridge.isConnected()).toBe(true);
+    } else {
+      await expect(bridge.connect()).rejects.toThrow();
+    }
     expect(proxy.connects).toEqual([authority]);
-    expect(target.authorizations).toEqual(["Bearer test-realtime-key"]);
-  }, 15_000);
+    expect(target.authorizations).toEqual(admit ? ["Bearer test-realtime-key"] : []);
+  },
+  15_000,
+);
 
-  it("fails closed without a direct connection when the managed proxy refuses", async () => {
-    const target = await startRealtimeTarget();
-    const proxy = await startForwardProxy(false);
-    // Loopback mode "proxy" keeps this target directly reachable, so a bypass would connect.
-    await startManagedProxy(proxy.url, "proxy");
-    const authority = `127.0.0.1:${target.port}`;
-    const bridge = createRealtimeBridge(`ws://${authority}/v1/realtime`);
-
-    await expect(bridge.connect()).rejects.toThrow();
-
-    expect(proxy.connects).toEqual([authority]);
-    expect(target.authorizations).toEqual([]);
-  }, 15_000);
-});
-
-async function startManagedProxy(proxyUrl: string, loopbackMode: "gateway-only" | "proxy") {
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
-    vi.stubEnv(key, undefined);
-  }
-  vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", undefined);
-  const handle = await startProxy({ proxyUrl, loopbackMode });
-  closers.push(() => stopProxy(handle));
-}
-
-function createRealtimeBridge(baseUrl: string) {
-  const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
-    providerConfig: { apiKey: "test-realtime-key", baseUrl },
-    onAudio: vi.fn(),
-    onClearAudio: vi.fn(),
-  });
-  closers.push(() => bridge.close());
-  return bridge;
+function closeAfterEach(server: { close(callback: () => void): unknown }, disconnect: () => void) {
+  closers.push(
+    () =>
+      new Promise<void>((resolve) => {
+        disconnect();
+        server.close(() => resolve());
+      }),
+  );
 }
 
 async function startRealtimeTarget() {
@@ -97,15 +91,11 @@ async function startRealtimeTarget() {
     });
   });
   await once(server, "listening");
-  closers.push(
-    () =>
-      new Promise<void>((resolve) => {
-        for (const client of server.clients) {
-          client.terminate();
-        }
-        server.close(() => resolve());
-      }),
-  );
+  closeAfterEach(server, () => {
+    for (const client of server.clients) {
+      client.terminate();
+    }
+  });
   return { port: (server.address() as AddressInfo).port, authorizations };
 }
 
@@ -133,14 +123,10 @@ async function startForwardProxy(admit: boolean) {
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  closers.push(
-    () =>
-      new Promise<void>((resolve) => {
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-        server.close(() => resolve());
-      }),
-  );
+  closeAfterEach(server, () => {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+  });
   return { connects, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
