@@ -104,6 +104,12 @@ function requestDownload(
   return { res, end, pending };
 }
 
+async function expectNotFound(response: ReturnType<typeof requestDownload>) {
+  expect(await response.pending).toBe(true);
+  expect(response.res.statusCode).toBe(404);
+  expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+}
+
 function listen(client: GatewayClient, before?: (res: ServerResponse) => void) {
   return reserveTestPortListener({
     offsets: [0],
@@ -149,22 +155,19 @@ it.each(["source", "connection", "expiry"] as const)(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let sourceCurrent = true;
-    const grantOptions: Parameters<typeof createArtifactDownload>[0] = {
-      client,
-      prepared: prepareArtifactDownload(artifact)!,
-      release: vi.fn(),
+    const grantOptions = {
       assertCurrent() {
         if (!sourceCurrent) {
           throw new Error("Captured artifact authority retired");
         }
       },
-      async read(request) {
+      async read(request: Parameters<typeof prepareArtifactDownloadResponse>[1]) {
         entered.resolve();
         await release.promise;
         return prepareArtifactDownloadResponse(artifact, request);
       },
     };
-    const grant = createArtifactDownload(grantOptions);
+    const grant = grantFor(client, artifact, grantOptions);
     const response = requestDownload(client, grant.url);
     try {
       await entered.promise;
@@ -178,9 +181,7 @@ it.each(["source", "connection", "expiry"] as const)(
         clock.mockReturnValue(Date.parse(grant.expiresAt));
       }
       release.resolve();
-      expect(await response.pending).toBe(true);
-      expect(response.res.statusCode).toBe(404);
-      expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+      await expectNotFound(response);
     } finally {
       release.resolve();
       await response.pending;
@@ -219,8 +220,7 @@ it.each([
     }
     const thumbnail = await fetch("?variant=thumbnail");
     if (dimensions === null) {
-      expect(thumbnail.res.statusCode).toBe(404);
-      expect(thumbnail.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+      await expectNotFound(thumbnail);
       return;
     }
     const bytes = thumbnail.end.mock.calls[0]?.[0];
@@ -277,9 +277,7 @@ it.each(["missing", "stream", "body-and-stream"] as const)(
       },
     });
     const response = requestDownload(client, grant.url + "?variant=thumbnail");
-    await response.pending;
-    expect(response.res.statusCode).toBe(404);
-    expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+    await expectNotFound(response);
     expect(stream).not.toHaveBeenCalled();
   },
 );
@@ -354,12 +352,6 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
     );
     const oriented = await fetchImage(orientedUrl + "?variant=thumbnail&width=1920");
     await expectWebp(oriented.bytes, 16, 32);
-
-    const invalid = await fetchImage(
-      grantImage(Buffer.from("not an image")) + "?variant=thumbnail&width=480",
-    );
-    expect(invalid.response.status).toBe(404);
-    expect(invalid.bytes.toString()).toBe("Not Found");
   } finally {
     await close(server);
   }

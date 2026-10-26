@@ -53,6 +53,17 @@ const locator = {
   shareId: "a".repeat(48),
 };
 const rowQuery = { key: locator.sessionKey, agentId: locator.agentId };
+const message = (role: string, content: unknown, fields: Record<string, unknown> = {}) => ({
+  role,
+  content,
+  ...fields,
+});
+const widget = (details: unknown, fields: Record<string, unknown> = {}) => ({
+  role: "toolResult",
+  toolName: "show_widget",
+  details,
+  ...fields,
+});
 
 let projection: SessionRowProjection | undefined;
 function currentProjection() {
@@ -147,16 +158,15 @@ describe("anonymous published session reader", () => {
     await withPublicTestState(async () => {
       await seed(
         Array.from({ length: 40 }, (_, index) => [
-          { role: "user", content: `Question ${index}` },
+          message("user", `Question ${index}`),
           ...Array.from({ length: 3 }, (_unused, call) => [
-            { role: "assistant", content: [{ type: "thinking", thinking: "Private" }] },
-            {
-              role: "assistant",
-              content: [{ type: "toolCall", id: `${index}-${call}`, name: "read", arguments: {} }],
-            },
-            { role: "toolResult", toolCallId: `${index}-${call}`, content: "Private output" },
+            message("assistant", [{ type: "thinking", thinking: "Private" }]),
+            message("assistant", [
+              { type: "toolCall", id: `${index}-${call}`, name: "read", arguments: {} },
+            ]),
+            message("toolResult", "Private output", { toolCallId: `${index}-${call}` }),
           ]).flat(),
-          { role: "assistant", content: `Answer ${index}` },
+          message("assistant", `Answer ${index}`),
         ]).flat(),
       );
       const pages = [];
@@ -224,24 +234,9 @@ describe("anonymous published session reader", () => {
         };
       };
       await seed([
-        {
-          role: "toolResult",
-          toolName: "show_widget",
-          toolCallId: "inline-chart",
-          details: details("top-level-chart"),
-        },
-        {
-          role: "toolResult",
-          toolName: "show_widget",
-          display: false,
-          details: details("hidden-chart"),
-        },
-        {
-          role: "toolResult",
-          toolName: "show_widget",
-          provenance: { kind: "internal" },
-          details: details("internal-chart"),
-        },
+        widget(details("top-level-chart"), { toolCallId: "inline-chart" }),
+        widget(details("hidden-chart"), { display: false }),
+        widget(details("internal-chart"), { provenance: { kind: "internal" } }),
         createNestedToolActivity({
           runId: "chart-run",
           scopeId: "chart-scope",
@@ -263,7 +258,7 @@ describe("anonymous published session reader", () => {
         {
           type: "message",
           id: "private-widget",
-          message: { role: "toolResult", toolName: "show_widget", details: details("other-chart") },
+          message: widget(details("other-chart")),
         },
       ]);
       const read = (docId: string, target = locator) =>

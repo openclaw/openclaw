@@ -31,6 +31,8 @@ function render(
   });
 }
 
+const fragment = (...args: Parameters<typeof render>) => JSDOM.fragment(render(...args));
+
 describe("public session document", () => {
   const widgetDetails = {
     kind: "canvas",
@@ -65,16 +67,14 @@ describe("public session document", () => {
   };
 
   it("renders hosted shortcodes with the public widget URL and preserves surrounding text", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          message(
-            "assistant",
-            'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
-          ),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        message(
+          "assistant",
+          'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
+        ),
+      ],
+      widgetOptions,
     );
     const article = page.querySelector("article")!;
     const frame = article.querySelector("iframe")!;
@@ -107,22 +107,20 @@ describe("public session document", () => {
       expect(row.getAttribute("data-public-revision")).toMatch(/^[a-f0-9]{24}$/);
     }
     expect(
-      JSDOM.fragment(
-        render([widgetReceipt], { mediaBaseUrl: widgetOptions.mediaBaseUrl }),
-      ).querySelector("iframe"),
+      fragment([widgetReceipt], { mediaBaseUrl: widgetOptions.mediaBaseUrl }).querySelector(
+        "iframe",
+      ),
     ).toBeNull();
   });
 
   it("merges a nested receipt into its same-turn shortcode and inherits its title", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          message("user", "Show the timeline"),
-          nestedReceipt,
-          message("assistant", 'Here it is [embed ref="cv_timeline" /]'),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        message("user", "Show the timeline"),
+        nestedReceipt,
+        message("assistant", 'Here it is [embed ref="cv_timeline" /]'),
+      ],
+      widgetOptions,
     );
     expect(page.querySelectorAll("iframe")).toHaveLength(1);
     const frame = page.querySelector("iframe")!;
@@ -131,20 +129,18 @@ describe("public session document", () => {
   });
 
   it("renders standalone tool receipts at their position and deduplicates across turns", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          widgetReceipt,
-          message("assistant", "Done"),
-          message("user", "Again"),
-          nestedReceipt,
-          message(
-            "assistant",
-            '[embed url="/__openclaw__/canvas/documents/cv_timeline/index.html" /]',
-          ),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        widgetReceipt,
+        message("assistant", "Done"),
+        message("user", "Again"),
+        nestedReceipt,
+        message(
+          "assistant",
+          '[embed url="/__openclaw__/canvas/documents/cv_timeline/index.html" /]',
+        ),
+      ],
+      widgetOptions,
     );
     expect(page.querySelectorAll("iframe")).toHaveLength(1);
     const article = page.querySelector("article")!;
@@ -155,19 +151,14 @@ describe("public session document", () => {
   it("keeps code literal and excludes non-inline receipts", () => {
     const text =
       '```text\n[embed ref="cv_timeline" /]\n```\n`[embed url="https://example.test" /]`';
-    const page = JSDOM.fragment(
-      render(
-        [
-          message("assistant", text),
-          { ...widgetReceipt, isError: true },
-          { ...widgetReceipt, display: false },
-          {
-            ...widgetReceipt,
-            details: { ...widgetDetails, presentation: { target: "node_panel" } },
-          },
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        message("assistant", text),
+        { ...widgetReceipt, isError: true },
+        { ...widgetReceipt, display: false },
+        { ...widgetReceipt, details: { ...widgetDetails, presentation: { target: "node_panel" } } },
+      ],
+      widgetOptions,
     );
     expect(page.querySelector("iframe")).toBeNull();
     expect(page.querySelector("article a")).toBeNull();
@@ -176,22 +167,20 @@ describe("public session document", () => {
   });
 
   it("links non-hosted embeds without loading them and omits private Gateway pages", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          message(
-            "assistant",
-            [
-              'Watch [embed url="https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42" title="A & B" /] now.',
-              '[embed url="https://example.test/page"]ignored body[/embed]',
-              '[embed url="/__openclaw__/canvas/game/index.html" title="Private" /]',
-              '[embed url="javascript:alert(1)" /][embed url="https://user:pw@example.test/" /]',
-            ].join("\n\n"),
-          ),
-          message("assistant", '[embed url="/__openclaw__/canvas/" /]'),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        message(
+          "assistant",
+          [
+            'Watch [embed url="https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42" title="A & B" /] now.',
+            '[embed url="https://example.test/page"]ignored body[/embed]',
+            '[embed url="/__openclaw__/canvas/game/index.html" title="Private" /]',
+            '[embed url="javascript:alert(1)" /][embed url="https://user:pw@example.test/" /]',
+          ].join("\n\n"),
+        ),
+        message("assistant", '[embed url="/__openclaw__/canvas/" /]'),
+      ],
+      widgetOptions,
     );
     const articles = page.querySelectorAll("article");
     expect(articles).toHaveLength(1);
@@ -212,16 +201,14 @@ describe("public session document", () => {
   });
 
   it("renders mixed widget and link embeds in shortcode order", () => {
-    const page = JSDOM.fragment(
-      render(
-        [
-          message(
-            "assistant",
-            '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
-          ),
-        ],
-        widgetOptions,
-      ),
+    const page = fragment(
+      [
+        message(
+          "assistant",
+          '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
+        ),
+      ],
+      widgetOptions,
     );
     expect(
       [...page.querySelectorAll("article a, article iframe")].map(
@@ -232,10 +219,10 @@ describe("public session document", () => {
 
   it("retains shortcode-only messages and requires a mapped widget URL to render frames", () => {
     const messages = [message("assistant", '[embed ref="cv_timeline" /]')];
-    expect(JSDOM.fragment(render(messages, widgetOptions)).querySelector("iframe")?.title).toBe(
+    expect(fragment(messages, widgetOptions).querySelector("iframe")?.title).toBe(
       "A shared conversation",
     );
-    expect(JSDOM.fragment(render(messages)).querySelector("iframe")).toBeNull();
+    expect(fragment(messages).querySelector("iframe")).toBeNull();
   });
   it("adds only a protected login handoff, including unavailable conversations", () => {
     const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
