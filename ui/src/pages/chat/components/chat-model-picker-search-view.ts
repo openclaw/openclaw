@@ -25,7 +25,7 @@ function modelMatchRank(row: ChatModelSearchRow, query: string): number | null {
   if (row.providerLabel.includes(query)) {
     return 4;
   }
-  return row.reference.toLocaleLowerCase().includes(query) ? 5 : null;
+  return row.reference.includes(query) ? 5 : null;
 }
 
 /** The retained lazy panel owns ranking and disclosure; input/shortcut admission stays eager. */
@@ -67,23 +67,16 @@ export function createChatModelSearchView(
   const matches = createMemo(
     () => {
       const term = query().trim().toLocaleLowerCase();
-      const buckets: ChatModelSearchRow[][] = [[], [], [], [], [], []];
-      for (const row of read().rows) {
-        const visible = row.provider
-          ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
-          : row.visible !== false;
-        const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
-        if (score !== null) {
-          buckets[score]!.push(row);
-        }
-      }
-      const rankedMatches: SearchMatch[] = [];
-      for (const bucket of buckets) {
-        for (const row of bucket) {
-          rankedMatches.push({ row, rank: rankedMatches.length });
-        }
-      }
-      return rankedMatches;
+      return read()
+        .rows.flatMap((row, index) => {
+          const visible = row.provider
+            ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
+            : row.visible !== false;
+          const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
+          return score === null ? [] : [{ row, score, index }];
+        })
+        .toSorted((a, b) => a.score - b.score || a.index - b.index)
+        .map(({ row }, rank): SearchMatch => ({ row, rank }));
     },
     {
       equals: (a, b) =>

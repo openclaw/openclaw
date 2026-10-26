@@ -8,6 +8,7 @@ export type ChatModelSearchRow = {
   name: string;
   keywords?: string;
   providerLabel: string;
+  /** Normalized search text; selection keeps the original option value. */
   reference: string;
   disabled: boolean;
   selected: boolean;

@@ -1552,7 +1552,11 @@ async function prepareModelPicker(page: Page) {
 }
 
 async function searchModels(page: Page) {
-  await page.locator("[data-chat-model-search]").pressSequentially(modelQuery);
+  await searchModelQuery(page, modelQuery);
+}
+
+async function searchModelQuery(page: Page, query: string) {
+  await page.locator("[data-chat-model-search]").pressSequentially(query);
   await page.locator('[data-chat-model-option="example/model-999"]').waitFor();
   await page.waitForFunction(
     () =>
@@ -2422,6 +2426,19 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
     },
     run: searchModels,
+  },
+  {
+    id: "model-picker-reference-search",
+    route: controlUiSessionPath(sessionKeys[0]),
+    resourceOnly: true,
+    expected: "A case-insensitive provider/model reference finds the original model choice.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").waitFor();
+      await frames(page);
+    },
+    run: (page) => searchModelQuery(page, "EXAMPLE/MODEL-999"),
   },
   ...(["sessions", "cron"] as const).map((route): InteractionScenario => ({
     id: `${route}-open`,
