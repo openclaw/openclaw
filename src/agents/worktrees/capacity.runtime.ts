@@ -339,9 +339,7 @@ async function readCheckoutBlobSizes(repoRoot: string, blobs: string[]) {
 
 function unavailableCheckoutSize(result: Awaited<ReturnType<typeof runGitBuffered>>) {
   return (
-    result.cleanup !== "uncertain" &&
-    (result.termination === "output-limit" ||
-      (result.termination === "exit" && result.code === 128))
+    result.termination === "output-limit" || (result.termination === "exit" && result.code === 128)
   );
 }
 
