@@ -5,24 +5,23 @@ import {
   runWizardWithPromptNavigation,
   runWizardWithPromptNavigationScope,
 } from "./navigation-prompter.js";
-import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import type { WizardPrompter } from "./prompts.js";
 import { WizardNavigationError } from "./prompts.js";
 
 function pick(prompter: WizardPrompter, message: string, values: string[]) {
   return prompter.select({ message, options: values.map((value) => ({ value, label: value })) });
 }
 
-function scriptedSelect(...steps: Array<[string, string | WizardNavigationError]>) {
-  return vi.fn(async (params: WizardSelectParams) => {
-    const step = steps.shift();
-    if (!step) {
-      throw new Error(`unexpected prompt ${params.message}`);
+const back = new WizardNavigationError("back");
+const forward = new WizardNavigationError("forward");
+
+function scriptedSelect(...answers: Array<string | WizardNavigationError>) {
+  return vi.fn(async () => {
+    const answer = expectDefined(answers.shift(), "scripted answer");
+    if (answer instanceof WizardNavigationError) {
+      throw answer;
     }
-    expect(params.message).toBe(step[0]);
-    if (step[1] instanceof WizardNavigationError) {
-      throw step[1];
-    }
-    return step[1];
+    return answer;
   }) as unknown as WizardPrompter["select"];
 }
 
@@ -41,56 +40,42 @@ async function navigate<T>(
   return result;
 }
 
-it("restarts at the previous prompt when back is requested", async () => {
-  const select = scriptedSelect(
-    ["First", "alpha"],
-    ["Second", new WizardNavigationError("back")],
-    ["First", "beta"],
-    ["Second", "two"],
-  );
-  const result = await navigate({ select }, async (prompter) => ({
-    first: await pick(prompter, "First", ["alpha", "beta"]),
-    second: await pick(prompter, "Second", ["one", "two"]),
-  }));
-  expect(result).toEqual({ first: "beta", second: "two" });
-  expect([2, 3].map((index) => selectParamsAt(select, index).navigation)).toEqual([
-    { canGoBack: false, canGoForward: true },
-    { canGoBack: true, canGoForward: false },
-  ]);
-});
-
-it("uses right navigation to accept a remembered prompt answer", async () => {
+it.each(["replace", "forward"])("replays answers with %s navigation", async (action) => {
+  const replacing = action === "replace";
+  const script = replacing
+    ? ["alpha", back, "beta", "two"]
+    : ["alpha", "two", back, forward, "final"];
+  const expected = replacing ? ["beta", "two"] : ["alpha", "two", "final"];
   const note = vi.fn(async () => {});
-  const select = scriptedSelect(
-    ["First", "alpha"],
-    ["Second", "two"],
-    ["Third", new WizardNavigationError("back")],
-    ["Second", new WizardNavigationError("forward")],
-    ["Third", "final"],
-  );
-  const result = await navigate({ note, select }, async (navigationPrompter) => {
-    const first = await pick(navigationPrompter, "First", ["alpha"]);
-    await navigationPrompter.note("after first");
-    const second = await pick(navigationPrompter, "Second", ["one", "two"]);
-    await navigationPrompter.note("after second");
-    const third = await pick(navigationPrompter, "Third", ["final"]);
-    return { first, second, third };
+  const select = scriptedSelect(...script);
+  const result = await navigate({ note, select }, async (prompter) => {
+    const answers = [];
+    for (const message of ["First", "Second", "Third"].slice(0, expected.length)) {
+      answers.push(await pick(prompter, message, ["alpha", "beta", "one", "two", "final"]));
+      if (message !== "Third") {
+        await prompter.note(`after ${message}`);
+      }
+    }
+    return answers;
   });
-  expect(result).toEqual({ first: "alpha", second: "two", third: "final" });
-  expect(selectParamsAt(select, 3)).toMatchObject({
-    message: "Second",
-    initialValue: "two",
-    navigation: { canGoBack: true, canGoForward: true },
+  expect(result).toEqual(expected);
+  expect(selectParamsAt(select, replacing ? 2 : 3)).toMatchObject({
+    message: replacing ? "First" : "Second",
+    initialValue: replacing ? "alpha" : "two",
+    navigation: { canGoBack: !replacing, canGoForward: true },
   });
-  expect(note.mock.calls).toEqual([
-    ["after first", undefined],
-    ["after second", undefined],
-    ["after second", undefined],
-  ]);
+  expect(selectParamsAt(select, script.length - 1).navigation).toEqual({
+    canGoBack: true,
+    canGoForward: false,
+  });
+  const notes = replacing
+    ? ["after First", "after First", "after Second"]
+    : ["after First", "after Second", "after Second"];
+  expect(note.mock.calls).toEqual(notes.map((message) => [message, undefined]));
 });
 
 it("does not cache sensitive text answers for forward navigation", async () => {
-  const select = scriptedSelect(["Done", new WizardNavigationError("back")], ["Done", "done"]);
+  const select = scriptedSelect(back, "done");
   const text = vi
     .fn<WizardPrompter["text"]>()
     .mockResolvedValueOnce("secret-one")
@@ -107,7 +92,7 @@ it("does not cache sensitive text answers for forward navigation", async () => {
 });
 
 it("disables back replay for prompts after an irreversible boundary", async () => {
-  const select = scriptedSelect(["First", "alpha"], ["Second", new WizardNavigationError("back")]);
+  const select = scriptedSelect("alpha", back);
   await expect(
     navigate({ select }, async (navigationPrompter) => {
       await pick(navigationPrompter, "First", ["alpha"]);
@@ -121,9 +106,7 @@ it("disables back replay for prompts after an irreversible boundary", async () =
   });
 });
 it("creates a fresh scope inside an outer wizard whose back history is disabled", async () => {
-  const select = vi.fn(async () => {
-    throw new WizardNavigationError("back");
-  }) as unknown as WizardPrompter["select"];
+  const select = scriptedSelect(back);
   const outcome = await navigate({ select }, async (outerPrompter) => {
     outerPrompter.disableBackNavigation?.();
     return await runWizardWithPromptNavigationScope(outerPrompter, async (scopedPrompter) => {
