@@ -22,13 +22,6 @@ type TargetFilters = {
 
 const GOOGLE_LIVE_TARGET_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
-function normalizeLiveTargetModelId(provider: string, modelId: string): string {
-  const trimmed = modelId.trim();
-  return GOOGLE_LIVE_TARGET_PROVIDERS.has(provider)
-    ? normalizeGooglePreviewModelId(trimmed)
-    : trimmed;
-}
-
 function normalizeCsvSet(values: Set<string> | null): Set<string> | null {
   const normalized = new Set([...(values ?? [])].map((value) => value.trim()).filter(Boolean));
   return normalized.size > 0 ? normalized : null;
@@ -47,8 +40,11 @@ function parseModelTarget(raw: string): ModelTarget | null {
     };
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const rawModelId = trimmed.slice(slash + 1).trim();
   const modelId = normalizeLowercaseStringOrEmpty(
-    normalizeLiveTargetModelId(provider, trimmed.slice(slash + 1)),
+    GOOGLE_LIVE_TARGET_PROVIDERS.has(provider)
+      ? normalizeGooglePreviewModelId(rawModelId)
+      : rawModelId,
   );
   if (!provider || !modelId) {
     return null;
