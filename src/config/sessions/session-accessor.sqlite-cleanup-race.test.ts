@@ -41,6 +41,14 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
+function databaseOptionsFor(storePath: string) {
+  const { path: databasePath } = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "main",
+  });
+  assert(databasePath, "expected cleanup database path");
+  return { agentId: "main", path: databasePath };
+}
+
 const hooks = vi.hoisted(() => ({
   synchronous: false,
   before: undefined as (() => Promise<void>) | undefined,
@@ -146,11 +154,7 @@ describe("cleanup races", () => {
       nowMs: now,
       ...options,
     });
-  function database() {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    assert(target.path, "expected cleanup database path");
-    return openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-  }
+  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
   const deletion = (sessionKey: string) =>
     deleteLifecycle({
       archiveTranscript: true,
@@ -430,13 +434,7 @@ describe("generation cleanup races", () => {
       await replaceTranscript({ ...scope, sessionId }, [event(sessionId, index)]);
     }
     const currentEntry = expectDefined(readEntry(scope), "Expected current generation");
-    const databaseOptions = {
-      agentId: "main",
-      path: expectDefined(
-        resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-        "Expected generation cleanup database path",
-      ),
-    };
+    const databaseOptions = databaseOptionsFor(storePath);
     const write = <T>(operation: (database: OpenClawAgentDatabase) => T) =>
       runOpenClawAgentWriteTransaction(operation, databaseOptions);
     const expected = write((database) => ({
@@ -653,11 +651,7 @@ describe("cleanup reclamation", () => {
   function scope(sessionId: string) {
     return { sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
   }
-  function database() {
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    assert.ok(target.path, "expected reclamation database path");
-    return openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-  }
+  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
   const cleanup = (nowMs: number, options: Partial<Parameters<typeof cleanupArtifacts>[0]> = {}) =>
     cleanupArtifacts({
       storePath,
