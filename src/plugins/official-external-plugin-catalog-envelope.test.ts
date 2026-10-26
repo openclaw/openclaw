@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, expect, it } from "vitest";
 import {
-  CATALOG_PAYLOAD_TYPE as PAYLOAD_TYPE,
   createSigningKey,
   signCatalogEnvelope,
   legacyCatalogEnvelope,
@@ -36,28 +35,21 @@ function expectVerification(
   ).toMatchObject(typeof expected === "string" ? { ok: false, error: expected } : expected);
 }
 
-function signedEnvelope(
-  params: {
-    keys?: readonly SigningKey[];
-    feed?: unknown;
-    payloadType?: string;
-  } = {},
-) {
-  return signCatalogEnvelope(params.feed ?? feed, params.keys ?? [key], params.payloadType);
-}
+const sign = (keys = [key], body: unknown = feed, type?: string) =>
+  signCatalogEnvelope(body, keys, type);
 
 let key: SigningKey;
-let envelope: ReturnType<typeof signedEnvelope>;
+let envelope: ReturnType<typeof sign>;
 beforeEach(() => {
   key = createSigningKey("catalog-root");
-  envelope = signedEnvelope();
+  envelope = sign();
 });
 
 it("enforces distinct trusted key material for signature thresholds", () => {
   const first = createSigningKey("first");
   const second = createSigningKey("second");
   expectVerification(
-    signedEnvelope({ keys: [first, second] }),
+    sign([first, second]),
     {
       ok: true,
       signedByKeyIds: ["first", "second"],
@@ -68,12 +60,9 @@ it("enforces distinct trusted key material for signature thresholds", () => {
     { threshold: 2 },
   );
   const duplicate = { ...first, keyId: "duplicate-material" };
-  expectVerification(
-    signedEnvelope({ keys: [first, duplicate] }),
-    "invalid-signature",
-    [first, duplicate],
-    { threshold: 2 },
-  );
+  expectVerification(sign([first, duplicate]), "invalid-signature", [first, duplicate], {
+    threshold: 2,
+  });
 });
 
 it("rejects payload bytes changed after signing", () => {
@@ -86,44 +75,30 @@ it("rejects payload bytes changed after signing", () => {
 it("distinguishes unknown keys from invalid trusted signatures", () => {
   const signer = createSigningKey("signer");
   const other = createSigningKey("other");
-  const signed = signedEnvelope({ keys: [signer] });
+  const signed = sign([signer]);
   expectVerification(signed, "missing-trust-key", [other]);
   expectVerification(signed, "invalid-signature", [{ ...other, keyId: signer.keyId }]);
 });
 
-it("rejects duplicate key ids and excessive signature lists", () => {
-  const signature = envelope.signatures[0];
-  expectVerification({ ...envelope, signatures: [signature, signature] }, "invalid-envelope");
-  expectVerification(
-    {
-      ...envelope,
-      signatures: Array.from({ length: 17 }, (_, index) => ({
-        ...signature,
-        keyid: `key-${index}`,
-      })),
-    },
-    "invalid-envelope",
-  );
+it.each([
+  ["duplicate keys", () => [envelope.signatures[0], envelope.signatures[0]]],
+  [
+    "excess signatures",
+    () => Array.from({ length: 17 }, (_, i) => ({ ...envelope.signatures[0], keyid: `key-${i}` })),
+  ],
+  ["missing key id", () => [{ sig: envelope.signatures[0]!.sig }]],
+  ["empty signatures", () => []],
+] as const)("rejects %s before verification", (_name, signatures) => {
+  expectVerification({ ...envelope, signatures: signatures() }, "invalid-envelope");
 });
 
 it("rejects unsupported payload types and signed invalid feeds", () => {
-  expectVerification(signedEnvelope({ payloadType: "example.unsupported" }), "unsupported-payload");
-  expectVerification(signedEnvelope({ feed: { entries: [] } }), {
+  expectVerification(sign(undefined, feed, "example.unsupported"), "unsupported-payload");
+  expectVerification(sign(undefined, { entries: [] }), {
     ok: false,
     error: "invalid-payload",
     authenticatedPayload: { entries: [] },
   });
-});
-
-it("rejects malformed envelopes before verification", () => {
-  const signature = envelope.signatures[0];
-  assert(signature);
-  expectVerification(
-    { payloadType: PAYLOAD_TYPE, payload: "", signatures: [] },
-    "invalid-envelope",
-    [],
-  );
-  expectVerification({ ...envelope, signatures: [{ sig: signature.sig }] }, "invalid-envelope");
 });
 
 it("accepts beta legacy field names only for persisted snapshots", () => {

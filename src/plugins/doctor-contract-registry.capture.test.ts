@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectPluginDoctorStateMigrationPlans } from "../infra/state-migrations.plugin-doctor.js";
 import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
+import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
@@ -12,19 +13,7 @@ import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function migrationInput(root: string) {
-  return {
-    config: {},
-    env: {},
-    stateDir: root,
-    oauthDir: root,
-    context: {
-      openPluginStateKeyedStore() {
-        throw new Error("fixture must not open state");
-      },
-    },
-  };
-}
+const migrationInput = (root: string) => createDoctorGenerationFixture(root, "fixture").input;
 
 it("retains direct dependency resource reads for dedicated Doctor callbacks", async () => {
   const rootDir = fs.realpathSync(dirs.make("doctor-dependency-resource-"));

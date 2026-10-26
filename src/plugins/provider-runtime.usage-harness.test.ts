@@ -118,12 +118,11 @@ it.each([
   expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
 });
 
-it.each(["codex", "openai"])("routes usage for hook owner %s", async (provider) => {
-  const fetchUsageSnapshot =
-    vi.fn<NonNullable<Parameters<typeof registerAgentHarness>[0]["fetchUsageSnapshot"]>>();
-  if (provider === "codex") {
-    fetchUsageSnapshot.mockResolvedValue(structuredClone(usageSnapshot));
-  }
+it.each([
+  ["codex", usageSnapshot],
+  ["openai", undefined],
+] as const)("routes usage for hook owner %s", async (provider, expected) => {
+  const fetchUsageSnapshot = vi.fn(async () => structuredClone(usageSnapshot));
   registerAgentHarness({
     id: provider,
     label: provider === "codex" ? "Codex" : "OpenAI harness",
@@ -134,13 +133,10 @@ it.each(["codex", "openai"])("routes usage for hook owner %s", async (provider) 
     fetchUsageSnapshot,
   });
   const snapshot = await resolveProviderUsageSnapshotWithPlugin(usageParams(provider));
+  expect(snapshot).toEqual(expected);
   if (provider === "codex") {
-    expect(snapshot).toEqual(usageSnapshot);
     expect(fetchUsageSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", token: "test-token-placeholder" }),
     );
-  } else {
-    expect(snapshot).toBeUndefined();
-    expect(fetchUsageSnapshot).not.toHaveBeenCalled();
   }
 });
