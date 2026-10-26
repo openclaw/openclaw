@@ -181,12 +181,37 @@ describe("ManagedWorktreeService provisioned state", () => {
     const destination = path.join(root, "destination");
     await fs.mkdir(destination);
     await fs.writeFile(path.join(destination, ".env.local"), "destination-owned\n");
+    const { executeGitWorktreeOperation } = await import("./git-worktree-operations.runtime.js");
+    using stats = vi.spyOn(fs, "lstat");
+    expect(
+      await executeGitWorktreeOperation({
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repo, estimateBytes: false },
+      }),
+    ).toEqual({ paths: inspection.paths, estimatedBytes: 0 });
+    expect(
+      stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
+    ).toHaveLength(0);
+    stats.mockClear();
     expect(await provisionIncludedFiles(repo, destination)).toEqual([
       "dependencies/package/settings.local",
     ]);
+    expect(
+      stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
+    ).toHaveLength(1);
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
+    // Copy-time inspection still propagates unreadable sources without a size pass.
+    const pathExistence = await import("../../infra/path-existence.js");
+    const lstat = pathExistence.lstatIfExists;
+    const unreadable = Object.assign(new Error("synthetic unreadable source"), { code: "EACCES" });
+    vi.spyOn(pathExistence, "lstatIfExists").mockImplementation((target, missing) =>
+      target === path.join(dependencies, "settings.local")
+        ? Promise.reject(unreadable)
+        : lstat(target, missing),
+    );
+    await expect(provisionIncludedFiles(repo, destination)).rejects.toBe(unreadable);
   });
 
   it.skipIf(process.platform === "win32")(

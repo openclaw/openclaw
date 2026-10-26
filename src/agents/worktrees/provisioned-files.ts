@@ -32,7 +32,7 @@ async function copyProvisionedFile(params: {
   }
   const source = resolveGitPath(params.sourceRoot.rootReal, relativePath);
   const destination = resolveGitPath(params.destinationRoot.rootReal, relativePath);
-  const sourceStat = await fs.lstat(source).catch(() => undefined);
+  const sourceStat = await lstatIfExists(source, "ENOENT");
   if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
     return false;
   }
@@ -73,7 +73,10 @@ export async function provisionIncludedFiles(
   options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ): Promise<string[]> {
   const inspection = await runGitWorkerOperation(
-    { type: "worktree.provisioning-inspection", input: { sourceRoot: repoRoot } },
+    {
+      type: "worktree.provisioning-inspection",
+      input: { sourceRoot: repoRoot, estimateBytes: false },
+    },
     options,
   );
   const assertCurrent = () => {
@@ -101,7 +104,8 @@ export async function provisionIncludedFiles(
       provisioned.push(normalized);
     }
   }
-  return provisioned.toSorted();
+  // oxlint-disable-next-line unicorn/no-array-sort -- The result is private until returned.
+  return provisioned.sort();
 }
 
 /** Restores provisioned bytes and modes from SQLite, never from the mutable source checkout. */
