@@ -26,11 +26,9 @@ export function telegramMessageUpdate(updateId: number, text: string): TestTeleg
 }
 
 export function createNearLimitTelegramPayload(): { payload: string; sizeBytes: number } {
-  const update = telegramMessageUpdate(77_777, "");
-  const textBytes = 1_024 * 1_024 - 4_096 - Buffer.byteLength(JSON.stringify(update));
-  const pattern = "the quick brown fox jumps over the lazy dog ";
-  update.message.text = pattern.repeat(Math.ceil(textBytes / pattern.length)).slice(0, textBytes);
-  const payload = JSON.stringify(update);
+  // Just under 1 MiB, including the message envelope.
+  const text = "the quick brown fox jumps over the lazy dog ".repeat(23_730);
+  const payload = JSON.stringify(telegramMessageUpdate(77_777, text));
   return { payload, sizeBytes: Buffer.byteLength(payload, "utf-8") };
 }
 
@@ -53,10 +51,7 @@ export function requireMockCall(mock: unknown, index: number, label: string): un
   return call;
 }
 
-export function expectStatusCall(
-  mock: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
+export function expectStatusCall(mock: unknown, expected: Record<string, unknown>) {
   const match = (mock as MockCallReader).mock.calls
     .map((call) => requireRecord(call[0], "status call"))
     .find((status) => Object.entries(expected).every(([key, value]) => status[key] === value));

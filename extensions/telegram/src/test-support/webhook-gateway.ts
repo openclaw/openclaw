@@ -12,6 +12,7 @@ import * as ingressFactory from "../telegram-ingress-drain-factory.js";
 type StartWebhook = typeof import("../webhook.js").startTelegramWebhook;
 type StartWebhookOptions = Omit<Parameters<StartWebhook>[0], "token" | "abortSignal">;
 type Ingress = ReturnType<typeof ingressFactory.createTelegramTransportIngressMonitor>;
+type WebhookContext = { server: Server; port: number; ingress: Ingress; stop: () => Promise<void> };
 
 export function getServerPort(server: Server): number {
   const address = server.address();
@@ -19,9 +20,7 @@ export function getServerPort(server: Server): number {
   return address.port;
 }
 
-export function webhookUrl(port: number, path: string): string {
-  return `http://127.0.0.1:${port}${path}`;
-}
+export const webhookUrl = (port: number, path: string) => `http://127.0.0.1:${port}${path}`;
 
 export function createTelegramWebhookTestGateway(options: {
   token: string;
@@ -67,9 +66,7 @@ export function createTelegramWebhookTestGateway(options: {
       production = (await import("../webhook.js")).startTelegramWebhook;
     },
     async close() {
-      const closed = once(server, "close");
-      server.close();
-      await closed;
+      await once(server.close(), "close");
     },
     resetRegistry() {
       registry = createEmptyPluginRegistry();
@@ -78,7 +75,7 @@ export function createTelegramWebhookTestGateway(options: {
     startWebhook,
     withWebhook: async <T>(
       params: StartWebhookOptions,
-      run: (ctx: { server: Server; port: number; ingress: Ingress }) => Promise<T>,
+      run: (ctx: WebhookContext) => Promise<T>,
     ): Promise<T> => {
       using createIngress = vi.spyOn(ingressFactory, "createTelegramTransportIngressMonitor");
       const abort = new AbortController();
@@ -91,7 +88,7 @@ export function createTelegramWebhookTestGateway(options: {
       try {
         const result = createIngress.mock.results.at(-1);
         assert(result?.type === "return", "Expected the started webhook's ingress monitor");
-        return await run({ server, port: getServerPort(server), ingress: result.value });
+        return await run({ ...started, port: getServerPort(server), ingress: result.value });
       } finally {
         await started.stop();
         abort.abort();

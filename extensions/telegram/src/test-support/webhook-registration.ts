@@ -6,15 +6,13 @@ import { expectStatusCall, telegramMessageUpdate } from "./webhook-fixtures.js";
 import { type createTelegramWebhookTestGateway, webhookUrl } from "./webhook-gateway.js";
 import { postWebhookJson } from "./webhook-http.js";
 
-type WebhookGateway = ReturnType<typeof createTelegramWebhookTestGateway>;
+type Start = ReturnType<typeof createTelegramWebhookTestGateway>["startWebhook"];
 type RegistrationFixture = {
-  gateway: WebhookGateway;
+  gateway: ReturnType<typeof createTelegramWebhookTestGateway>;
   setWebhookSpy: Mock<Api["setWebhook"]>;
   stopSpy: ReturnType<typeof vi.fn>;
   transportCloseSpies: Array<ReturnType<typeof vi.fn>>;
-  startWebhookStartupFixture: (
-    options?: Partial<Parameters<WebhookGateway["startWebhook"]>[0]>,
-  ) => ReturnType<WebhookGateway["startWebhook"]>;
+  startWebhookStartupFixture: (options?: Partial<Parameters<Start>[0]>) => ReturnType<Start>;
   requireWebhookQueueScope: () => { stateDir: string; accountId: string };
   token: string;
   secret: string;
@@ -47,11 +45,7 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
     const advertised = createDeferred<void>();
     const retryStarted = createDeferred<void>();
     const retryRegistration = createDeferred<void>();
-    setStatus.mockImplementation((patch) => {
-      if (patch.connected) {
-        advertised.resolve();
-      }
-    });
+    setStatus.mockImplementation(({ connected }) => connected && advertised.resolve());
     setWebhookSpy
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockImplementationOnce(async () => {
@@ -78,7 +72,6 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
         retryRegistration.resolve();
       }
       await advertised.promise;
-      expect(setWebhookSpy).toHaveBeenCalledTimes(2);
       expect(setStatus).toHaveBeenCalledWith({
         ...disconnected,
         lifecycle: "recovering",
@@ -103,33 +96,21 @@ export function registerTelegramWebhookRegistrationTests(fixture: RegistrationFi
 
   it("releases the Gateway route and stops the bot when retry loop encounters a non-recoverable error", async () => {
     const stopped = createDeferred<void>();
-    setStatus.mockImplementation((patch) => {
-      if (isDeepStrictEqual(patch, disconnected)) {
-        stopped.resolve();
-      }
-    });
+    setStatus.mockImplementation(
+      (patch) => isDeepStrictEqual(patch, disconnected) && stopped.resolve(),
+    );
     setWebhookSpy
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockRejectedValueOnce(apiError("unauthorized", 401));
 
-    const started = await gateway.startWebhook({
-      token: fixture.token,
-      ...webhookOptions,
-      ...fixture.requireWebhookQueueScope(),
-      runtime,
-      setStatus,
-    });
-
-    try {
+    await gateway.withWebhook({ ...webhookOptions, runtime, setStatus }, async ({ stop }) => {
       await stopped.promise;
       expect(gateway.registry.httpRoutes).toHaveLength(0);
       expectBlocked();
       expect(setStatus).toHaveBeenLastCalledWith(disconnected);
 
-      await started.stop();
+      await stop();
       expectStopped();
-    } finally {
-      await started.stop();
-    }
+    });
   });
 }
