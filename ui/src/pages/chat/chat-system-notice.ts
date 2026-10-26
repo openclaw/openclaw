@@ -38,7 +38,12 @@ export function createSubmittedModelNoticeProjector() {
       hasConversation = false;
       return undefined;
     }
-    if (!raw || raw.display === false || raw.excludeFromContext === true) {
+    if (
+      !raw ||
+      raw.display === false ||
+      raw.excludeFromContext === true ||
+      metadata?.lateMedia === true
+    ) {
       return undefined;
     }
     if (raw.role === "assistant") {

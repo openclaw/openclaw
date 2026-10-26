@@ -176,10 +176,12 @@ it.each([false, true])(
             providerOverride: "fixture",
             modelOverride: "x",
             modelOverrideSource: "user",
+            modelProvider: "fixture",
+            model: "x",
           },
         }));
       } else {
-        await seedSession();
+        await seedSession("low", { modelProvider: "fixture", model: "x" });
       }
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       const message = { role: "user" as const, content: "Keep the conversation.", timestamp: 1 };
@@ -188,9 +190,14 @@ it.each([false, true])(
         ["fixture/y", true],
         ["fixture/y", true],
         ["fixture/not-allowed", false],
+        ["fixture/z", true],
         ["fixture/x", true],
       ] as const) {
         expect((await patchSession({ key: target.sessionKey, model }))[0]).toBe(accepted);
+        expect(loadSessionEntry(target)?.lastSubmittedModel).toEqual({
+          provider: "fixture",
+          model: "x",
+        });
       }
       const followup = { role: "user" as const, content: "Continue.", timestamp: 2 };
       await manager.appendMessageAsync(followup);

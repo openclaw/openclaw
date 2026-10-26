@@ -117,6 +117,16 @@ suite.define(() => {
     ).toBe(0);
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     await composer.fill("Suggest a watering schedule.");
+    const noticeLoading = await page.evaluateHandle(() => {
+      const seen = { loading: false };
+      const observer = new MutationObserver(() => {
+        seen.loading ||= Array.from(document.querySelectorAll('.chat-group[role="status"]')).some(
+          (status) => status.textContent?.includes("Loading"),
+        );
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      return { seen, observer };
+    });
     await composer.press("Enter");
     const send = await gateway.waitForRequest("chat.send");
     const sent = {
@@ -151,6 +161,13 @@ suite.define(() => {
       hasText: "Model changed from openai/demo-a to openai/demo-b.",
     });
     await noticeLine.waitFor();
+    expect(
+      await noticeLoading.evaluate(({ seen, observer }) => {
+        observer.disconnect();
+        return seen.loading;
+      }),
+    ).toBe(false);
+    await noticeLoading.dispose();
     await page.reload();
     await noticeLine.waitFor();
     await expect.poll(() => selectedModel(picker)).toBe("openai/demo-b");

@@ -2,13 +2,13 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import {
   createOperatorInputRecoverySource,
   createRestartRecoveryOperatorSource,
 } from "../../agents/operator-run-recovery-source.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
+import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
 import { hasSessionActiveAutoModelFallback } from "../../config/sessions/model-override-provenance.js";
@@ -99,16 +99,7 @@ export function createGatewayChatUserTurnController(params: {
       : undefined;
   // Automatic failover has its own notice; capture the user's underlying selection.
   const selectedModel = fallbackOrigin ?? session.resolvedSessionModel;
-  const previousModel =
-    (entry?.fallbackNotice?.selectedModel
-      ? parseModelRef(entry.fallbackNotice.selectedModel, selectedModel.provider, {
-          allowPluginNormalization: false,
-        })
-      : undefined) ??
-    fallbackOrigin ??
-    (entry?.modelProvider && entry.model
-      ? { provider: entry.modelProvider, model: entry.model }
-      : undefined);
+  const previousModel = resolveSessionSubmittedModelRef(entry);
   const modelSelection = {
     ...selectedModel,
     ...(previousModel ? { previous: previousModel } : {}),

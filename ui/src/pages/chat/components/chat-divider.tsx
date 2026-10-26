@@ -1,4 +1,4 @@
-import { Match, Show, Switch } from "solid-js";
+import { lazy, Match, Show, Switch } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
@@ -6,8 +6,14 @@ import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { ChatNoticeProps } from "./chat-notice-view.tsx";
-import { ChatPermissionCard } from "./chat-permission-card.tsx";
-import { ChatSkillLearnedNotice } from "./chat-skill-learned-notice.tsx";
+
+// Text-only notices paint with their transcript row; only interactive cards load later.
+const ChatPermissionCard = lazy(() => import("./chat-permission-card.tsx"), {
+  export: "ChatPermissionCard",
+});
+const ChatSkillLearnedNotice = lazy(() => import("./chat-skill-learned-notice.tsx"), {
+  export: "ChatSkillLearnedNotice",
+});
 
 function SystemLine(props: {
   icon?: Extract<ChatItem, { kind: "divider" }>["icon"];

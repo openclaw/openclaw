@@ -400,7 +400,14 @@ it("records only submitted model transitions and coalesces repeated queued selec
   expect(labels([before, first])).toEqual(["Model changed from fixture/a to fixture/c."]);
   expect(labels([{ ...before, model: "fallback-b" }, submitted("2", "a")])).toEqual([]);
   // The last-run fallback can still be A while several user messages are queued.
-  const history = [before, first, submitted("3", "c"), submitted("4", "b")];
+  const lateMedia = submitted("3", "a");
+  const history = [
+    before,
+    first,
+    { ...lateMedia, __openclaw: { ...lateMedia["__openclaw"], lateMedia: true } },
+    submitted("5", "c"),
+    submitted("6", "b"),
+  ];
   expect(labels(history)).toEqual([
     "Model changed from fixture/a to fixture/c.",
     "Model changed from fixture/c to fixture/b.",
