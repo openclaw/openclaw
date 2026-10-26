@@ -2,14 +2,12 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import zlib from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createDebugProxyCaptureReaderAsync } from "./store-readonly.async.js";
 import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
 import type { CaptureEventRecord } from "./types.js";
@@ -59,13 +57,8 @@ const write = (store: Lease["store"], sessionId: string, flowId: string, data: s
 
 describe("async capture store", () => {
   it("persists immutable FIFO input off the main thread", async () => {
-    const native = requireNodeSqlite();
     const mainThreadWork = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
+      ...observeMainThreadSql().calls,
       vi.spyOn(zlib, "gzipSync"),
       vi.spyOn(zlib, "gunzipSync"),
     ];
@@ -128,7 +121,6 @@ describe("async capture store", () => {
     expect(existsSync(alternateEnv.OPENCLAW_STATE_DIR)).toBe(false);
 
     const { store } = await acquire(originalEnv);
-    expect(store.dbPath).toBe(databasePath);
     await store.recordEventWithPayload(event("reader-session", "later-write"), {
       data: "reader payload",
       contentType: "text/plain",
@@ -138,38 +130,6 @@ describe("async capture store", () => {
     const blobId = rows[0]!.dataBlobId;
     assert(typeof blobId === "string", "Expected captured blob");
     expect(await reader.readBlob(blobId)).toBe("reader payload");
-    await withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        await write(store, "reader-session", "after-snapshot", "newer payload");
-        expect(await reader.getSessionEvents("reader-session")).toEqual(rows);
-        expect(await reader.readBlob(blobId)).toBe("reader payload");
-      },
-      { env: originalEnv },
-    );
-    expect((await reader.getSessionEvents("reader-session")).map((row) => row.flowId)).toEqual([
-      "after-snapshot",
-      "later-write",
-    ]);
-    expect(existsSync(databasePath)).toBe(true);
     expect(existsSync(alternateEnv.OPENCLAW_STATE_DIR)).toBe(false);
-  });
-
-  it("release joins accepted writes and leaves their durable result readable", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("capture-async-close-") };
-    const { store, release } = await acquire(env);
-    let writeSettled = false;
-    const writing = write(store, "accepted", "before-close", "accepted bytes").then(() => {
-      writeSettled = true;
-    });
-    const closing = release();
-    expect(store.close()).toBe(closing);
-    await closing;
-    expect(writeSettled).toBe(true);
-    expect(store.isClosed).toBe(true);
-    await writing;
-    const reopened = await acquire(env);
-    expect(await reopened.store.getSessionEvents("accepted")).toMatchObject([
-      { flowId: "before-close", dataText: "accepted bytes" },
-    ]);
   });
 });

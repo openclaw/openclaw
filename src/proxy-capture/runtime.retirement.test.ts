@@ -1,9 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { resolveDebugProxySettings } from "./env.js";
 import { captureHttpExchangeAsync, finalizeDebugProxyCaptureAsync } from "./runtime.js";
 import { createDebugProxyCaptureStoreForContext } from "./store.async.js";
+import * as synchronousStore from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
 
 const fixture = vi.hoisted(() => {
@@ -19,31 +20,10 @@ const fixture = vi.hoisted(() => {
   return { state, accepted, failure, record, endSession: vi.fn().mockRejectedValue(failure) };
 });
 
-vi.mock("../state/openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: (): OpenClawStateWorkerContext => ({
-    admission: {
-      coordinationKey: "synthetic-capture",
-      databasePath: "/synthetic/capture.sqlite",
-      identity: { key: "synthetic-capture", canonicalPath: "/synthetic/capture.sqlite" },
-      assertCurrent: () => {},
-    },
-    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-  }),
-}));
-
-vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
-  getOpenClawDatabaseMaintenanceScope: () => undefined,
-}));
-
-vi.mock("./store.sqlite.js", () => {
-  const forbidden = () => {
-    throw new Error("Retired capture must not use synchronous storage");
-  };
-  return {
-    getDebugProxyCaptureStore: forbidden,
-    persistEventPayload: forbidden,
-    safeJsonString: JSON.stringify,
-  };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // mock-isolation: Drive retirement and lost terminal writes without opening a capture database.
@@ -56,10 +36,8 @@ vi.mock("./store.async.js", () => ({
       get isClosed() {
         return fixture.state.retired;
       },
-      recordEvent: fixture.record,
       recordEventWithPayload: fixture.record,
       endSession: fixture.endSession,
-      close: release,
     };
     return {
       store,
@@ -71,8 +49,10 @@ vi.mock("./store.async.js", () => ({
 }));
 
 it("settles accepted capture and reports lost terminal writes after canonical retirement", async () => {
+  const synchronous = vi.spyOn(synchronousStore, "getDebugProxyCaptureStore");
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("capture-retirement-"));
   const settings = {
-    ...resolveDebugProxySettings({ OPENCLAW_STATE_DIR: "/synthetic" }),
+    ...resolveDebugProxySettings(),
     enabled: true,
     sessionId: "retired-capture",
   };
@@ -90,16 +70,15 @@ it("settles accepted capture and reports lost terminal writes after canonical re
     expect(settled).not.toHaveBeenCalled();
     fixture.state.retired = true;
 
-    const finalizationError = await finalizeDebugProxyCaptureAsync(settings).catch(
-      (error: unknown) => error,
-    );
-    expect(finalizationError).toBeInstanceOf(AggregateError);
-    expect(collectNestedErrorCandidates(finalizationError)).toContain(fixture.failure);
+    const error = await finalizeDebugProxyCaptureAsync(settings).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(collectNestedErrorCandidates(error)).toContain(fixture.failure);
     expect(settled).toHaveBeenCalledOnce();
     await expect(capturing).rejects.toBe(fixture.failure);
     expect(fixture.record.mock.calls.map(([event]) => event.kind)).toEqual(["request", "response"]);
     expect(fixture.endSession).not.toHaveBeenCalled();
     expect(createDebugProxyCaptureStoreForContext).toHaveBeenCalledOnce();
+    expect(synchronous).not.toHaveBeenCalled();
   } finally {
     fixture.state.retired = true;
     await Promise.allSettled([capturing, finalizeDebugProxyCaptureAsync(settings)]);
