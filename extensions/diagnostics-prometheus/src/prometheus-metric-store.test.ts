@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
-import renderShape from "../benchmarks/render-shape.json";
+import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
 import {
   PROMETHEUS_FAMILY_RESERVES,
   type PrometheusMetricName,
