@@ -468,34 +468,39 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       });
       return current;
     };
-    const reconcileActivePlacements = (): Promise<void> => {
+    const reconcileActivePlacements = (includeActive = true): Promise<void> => {
       if (isReconciliationPaused()) {
         return Promise.resolve();
       }
-      return (
-        operations.get("reconcile") ??
-        trackOperation(
-          "reconcile",
-          runWithSpawnBroker(spawnBroker, async () => {
-            await reconcilePhase("reconcile.session-retirement", () =>
-              sessionRetirement.reconcile(optionalWorkSignal),
-            );
-            if (isReconciliationPaused()) {
-              return;
-            }
+      const pending = operations.get("reconcile");
+      if (pending) {
+        // A periodic sweep must still recover active owners after an identity-only pass.
+        const resume = () => reconcileActivePlacements();
+        return includeActive ? pending.then(resume, resume) : pending;
+      }
+      return trackOperation(
+        "reconcile",
+        runWithSpawnBroker(spawnBroker, async () => {
+          await reconcilePhase("reconcile.session-retirement", () =>
+            sessionRetirement.reconcile(optionalWorkSignal),
+          );
+          if (isReconciliationPaused()) {
+            return;
+          }
+          if (includeActive) {
             await reconcilePhase("reconcile.active", () => dispatchService.reconcileActive());
-            if (isReconciliationPaused()) {
-              return;
-            }
-            await reconcilePhase("reconcile.publications", () =>
-              reconcilePublications(isReconciliationPaused),
-            );
-            if (!isReconciliationPaused()) {
-              void nodeWorkspaceRetention.schedule();
-            }
-          }),
-          "Worker placement reconcile sweep failed",
-        )
+          }
+          if (isReconciliationPaused()) {
+            return;
+          }
+          await reconcilePhase("reconcile.publications", () =>
+            reconcilePublications(isReconciliationPaused),
+          );
+          if (!isReconciliationPaused()) {
+            void nodeWorkspaceRetention.schedule();
+          }
+        }),
+        "Worker placement reconcile sweep failed",
       );
     };
     const sweepDiskSpace = (): Promise<void> => {
@@ -546,14 +551,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         if (previousSessionId && previousSessionId !== currentSessionId) {
           sessionRetirement.markPending(previousSessionId);
           const pending = operations.get("reconcile");
-          if (!pending) {
-            void reconcileActivePlacements();
-            return;
-          }
-          // The sweep owns reporting and settlement; returning it would create an
-          // unobserved rejecting promise for this best-effort event subscriber.
-          const resume = () => void reconcileActivePlacements();
-          void pending.then(resume, resume);
+          // Retire changed identities without sweeping unrelated active placements.
+          // The sweep owns reporting; this best-effort subscriber must not return its promise.
+          const resume = () => void reconcileActivePlacements(false);
+          void (pending ? pending.then(resume, resume) : reconcileActivePlacements(false));
         }
       }),
     );

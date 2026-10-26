@@ -21,7 +21,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runPublicationCommand } from "./github-publication-git-transport.js";
-import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import {
+  createGatewayGitHubPublicationRuntime,
+  createGatewayWorkerPlacementRuntime,
+} from "./server-worker-placement-startup.js";
 import {
   createIdleDiskSpace,
   createRuntimeFactory,
@@ -63,14 +66,22 @@ function startRuntime(
   reconcileActive: () => Promise<void>,
   warn: RuntimeOptions["warn"],
   placements: RuntimeOptions["placements"] = placementAsyncDefaults() as never,
+  onReconciled = () => {},
 ) {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
     ...createIdleDiskSpace(),
     version: () => 0,
   });
   setDispatchMock(runtimeFactoryMocks.createDispatch, { reconcileActive });
+  const githubPublicationRuntime = createGatewayGitHubPublicationRuntime({
+    placements,
+    getCommittedRuntimeConfig: getRuntimeConfig,
+    warn,
+  });
+  githubPublicationRuntime.reconcilePublications = async () => onReconciled();
   return startSidecar(
     createRuntime({
+      githubPublicationRuntime,
       scheduler: createTestGatewayScheduler(time.clock),
       placements,
       warn,
@@ -98,13 +109,11 @@ it("retires changed placements after real placement and session writes without i
       evidence.createWorkerPlacementSessionEvidenceResolver,
     );
     const list = vi.spyOn(placements, "listAsync");
+    const reconcileActive = vi.fn(async () => {});
     let reconciled = createDeferredCore();
     const warn = vi.fn();
-    const sidecar = await startRuntime(
-      time,
-      vi.fn(async () => reconciled.resolve()),
-      warn,
-      placements,
+    const sidecar = await startRuntime(time, reconcileActive, warn, placements, () =>
+      reconciled.resolve(),
     );
     try {
       await time.advanceBy(60_000);
@@ -146,6 +155,7 @@ it("retires changed placements after real placement and session writes without i
       expect(list).toHaveBeenCalledTimes(3);
 
       reconciled = createDeferredCore();
+      const recoveriesBeforeDeletion = reconcileActive.mock.calls.length;
       await deleteSessionEntryLifecycle({
         agentId: identity.agentId,
         storePath,
@@ -153,6 +163,7 @@ it("retires changed placements after real placement and session writes without i
         target: { canonicalKey: identity.sessionKey, storeKeys: [identity.sessionKey] },
       });
       await reconciled.promise;
+      expect(reconcileActive).toHaveBeenCalledTimes(recoveriesBeforeDeletion);
       expect(await placements.getAsync(identity.sessionId)).toBeUndefined();
       expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
         [expect.objectContaining(identity)],
@@ -174,8 +185,9 @@ it("finishes background reconciliation after the notifying session request close
       database: openOpenClawStateDatabase(),
     });
     const completed = createDeferredCore<boolean>();
+    let reconciled = createDeferredCore();
     const parents: string[] = [];
-    const reconcileActive = vi.fn(async () => {
+    const retirementReads = vi.fn(async () => {
       try {
         await placements.readRecoveryCandidates();
         const result = await runPublicationCommand([
@@ -186,23 +198,33 @@ it("finishes background reconciliation after the notifying session request close
         expect(result.code).toBe(0);
         parents.push(result.stdout.toString());
         completed.resolve(true);
+        return new Map();
       } catch (error) {
         completed.resolve(false);
         throw error;
       }
     });
+    const reconcileActive = vi.fn(async () => {});
+    const retirementPlacements = {
+      ...placementAsyncDefaults(),
+      getManyAsync: retirementReads,
+    } as RuntimeOptions["placements"];
     const warn = vi.fn();
     const sidecar = await runWithSpawnBroker(broker, () =>
-      startRuntime(time, reconcileActive, warn),
+      startRuntime(time, reconcileActive, warn, retirementPlacements, () => reconciled.resolve()),
     );
     try {
+      await reconciled.promise;
+      reconciled = createDeferredCore();
       const request = new AsyncWorkScope();
       runWithSpawnBroker(undefined, () =>
         request.run(() => emitDeletion(Symbol("session-database"))),
       );
       await request.drain();
       expect(await completed.promise).toBe(true);
-      expect(reconcileActive).toHaveBeenCalledOnce();
+      await reconciled.promise;
+      expect(retirementReads).toHaveBeenCalledOnce();
+      expect(reconcileActive).not.toHaveBeenCalled();
       expect(parents).toEqual([String(broker?.pid ?? process.pid)]);
       expect(warn).not.toHaveBeenCalled();
     } finally {
@@ -218,25 +240,31 @@ it("reports a failed reconciliation queued by a session change without leaking r
   const failureReported = createDeferredCore();
   const reconcileActive = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const warn = vi.fn(() => failureReported.resolve());
-  const sidecar = await startRuntime(time, reconcileActive, warn);
+  const retirementReads = vi.fn(async () => {
+    throw new Error("Worker environment inventory has closed");
+  });
+  const placements = {
+    ...placementAsyncDefaults(),
+    getManyAsync: retirementReads,
+  } as RuntimeOptions["placements"];
+  const sidecar = await startRuntime(time, reconcileActive, warn, placements);
   let scheduledWake: void | Promise<void> = undefined;
   try {
     await time.advanceBy(60_000);
     expect(warn).not.toHaveBeenCalled();
     reconcileActive.mockClear();
-    reconcileActive
-      .mockImplementationOnce(() => {
-        reconcileStarted.resolve();
-        return releaseReconcile.promise;
-      })
-      .mockRejectedValue(new Error("Worker environment inventory has closed"));
+    reconcileActive.mockImplementationOnce(() => {
+      reconcileStarted.resolve();
+      return releaseReconcile.promise;
+    });
     scheduledWake = time.advanceBy(60_000);
     await reconcileStarted.promise;
     expect(reconcileActive).toHaveBeenCalledOnce();
     emitDeletion(Symbol("worker-placement-database"));
     releaseReconcile.resolve();
     await failureReported.promise;
-    expect(reconcileActive).toHaveBeenCalledTimes(2);
+    expect(reconcileActive).toHaveBeenCalledOnce();
+    expect(retirementReads).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(
       "Worker placement reconcile sweep failed: Worker environment inventory has closed",
     );
@@ -244,5 +272,42 @@ it("reports a failed reconciliation queued by a session change without leaking r
     releaseReconcile.resolve();
     await sidecar?.stop();
     await scheduledWake;
+  }
+});
+
+it("runs the periodic recovery after an in-flight identity-only pass", async () => {
+  const time = createGatewaySchedulerClock();
+  const retirementStarted = createDeferredCore();
+  const releaseRetirement = createDeferredCore();
+  const reconcileActive = vi.fn(async () => {});
+  const warn = vi.fn();
+  let reconciled = createDeferredCore();
+  const placements = {
+    ...placementAsyncDefaults(),
+    getManyAsync: async () => {
+      retirementStarted.resolve();
+      await releaseRetirement.promise;
+      return new Map();
+    },
+  } as RuntimeOptions["placements"];
+  const sidecar = await startRuntime(time, reconcileActive, warn, placements, () =>
+    reconciled.resolve(),
+  );
+  let scheduledWake: void | Promise<void>;
+  try {
+    await reconciled.promise;
+    reconciled = createDeferredCore();
+    emitDeletion(Symbol("worker-placement-database"));
+    await retirementStarted.promise;
+    scheduledWake = time.advanceBy(60_000);
+    expect(reconcileActive).not.toHaveBeenCalled();
+    releaseRetirement.resolve();
+    await scheduledWake;
+    expect(reconcileActive).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    releaseRetirement.resolve();
+    await scheduledWake;
+    await sidecar?.stop();
   }
 });
