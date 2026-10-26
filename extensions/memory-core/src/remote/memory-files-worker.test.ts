@@ -17,14 +17,9 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   watch: observer.watch,
 }));
 const fixture = memoryWatchFixture(() => observer.reset(), "memory-files-watch");
-function start(output: Writable) {
+function start(output: Writable, watch = true) {
   const input = new PassThrough();
-  const worker = serveMemoryFiles({
-    workspace: fixture.state.workspaceDir,
-    input,
-    output,
-    watch: true,
-  });
+  const worker = serveMemoryFiles({ workspace: fixture.state.workspaceDir, input, output, watch });
   const finished = vi.fn();
   void worker.then(finished, finished);
   fixture.cleanup(async () => {
@@ -131,16 +126,10 @@ it.each(["input end", "output error"] as const)(
 
 it("preserves the malformed diary error code across the remote file protocol", async () => {
   const dreamsPath = path.join(fixture.state.workspaceDir, "DREAMS.md");
-  const bytes = Buffer.concat([Buffer.from("# Dream Diary\n"), Buffer.from([0xff])]);
+  const bytes = Buffer.from("# Dream Diary\n\xff", "latin1");
   await fs.writeFile(dreamsPath, bytes);
-  const input = new PassThrough();
   const output = new PassThrough();
-  const worker = serveMemoryFiles({ workspace: fixture.state.workspaceDir, input, output });
-  fixture.cleanup(async () => {
-    input.end();
-    await worker;
-    output.destroy();
-  });
+  const { input, worker } = start(output, false);
   input.end(JSON.stringify({ operation: "maintenance", method: "readDreams", args: [dreamsPath] }));
   await worker;
 
