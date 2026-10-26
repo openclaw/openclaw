@@ -89,24 +89,7 @@ it.each([true, false])("reports readiness with dependencies=%s", async (availabl
   expect(result.checks.every((check) => check.ok === available && check.required)).toBe(true);
 });
 
-it("does not treat a running Phone app as FaceTime readiness", async () => {
-  const result = await preflight({ runningApp: "Phone" });
-  expect(result.ok).toBe(false);
-  expect(result.checks.find((check) => check.id === "call-app-running")).toMatchObject({
-    ok: false,
-  });
-});
-
 afterEach(() => vi.unstubAllEnvs());
-
-it("rejects legacy text instead of JSON from system_profiler", async () => {
-  const result = await preflight({ profiler: "        OpenClaw-Mic:\n        OpenClaw-Feed:\n" });
-  expect(result.ok).toBe(false);
-  expect(result.checks.filter((check) => check.id.startsWith("paired-driver-"))).toEqual([
-    expect.objectContaining({ id: "paired-driver-mic", ok: false }),
-    expect.objectContaining({ id: "paired-driver-feed", ok: false }),
-  ]);
-});
 
 it("fails provider readiness for an unresolved configured SecretRef", async () => {
   const missingKey = "OPENCLAW_FACETIME_TEST_MISSING_KEY";
@@ -119,22 +102,26 @@ it("fails provider readiness for an unresolved configured SecretRef", async () =
   expect(result.ok).toBe(false);
 });
 
+const output = (name: string, isAggregate = false) => ({ name, isAggregate, uid: "output" });
 it.each([
-  ["Aggregate Device", true, false],
-  ["OpenClaw-Feed", false, false],
-  ["Jump Desktop Audio", false, true],
-] as const)("rejects unsafe output %s", async (name, isAggregate, virtualTransport) => {
-  const output = { isAggregate, name, uid: "output" };
-  const result = await preflight({
-    output,
-    profiler: virtualTransport
-      ? audioProfile(["OpenClaw-Mic", "OpenClaw-Feed", name], true)
-      : undefined,
-  });
-  expect(result.checks.find((check) => check.id === "physical-output")).toMatchObject({
-    ok: false,
-    message: virtualTransport
-      ? `system output is virtual device ${name}`
-      : expect.stringContaining(isAggregate ? "aggregate" : "virtual"),
-  });
+  ["Phone instead of FaceTime", { runningApp: "Phone" }, ["call-app-running"]],
+  [
+    "legacy profiler text",
+    { profiler: "OpenClaw-Mic:\nOpenClaw-Feed:\n" },
+    ["paired-driver-mic", "paired-driver-feed"],
+  ],
+  ["aggregate output", { output: output("Aggregate Device", true) }, ["physical-output"]],
+  ["loopback output", { output: output("OpenClaw-Feed") }, ["physical-output"]],
+  [
+    "virtual output",
+    {
+      output: output("Jump Desktop Audio"),
+      profiler: audioProfile(["OpenClaw-Mic", "OpenClaw-Feed", "Jump Desktop Audio"], true),
+    },
+    ["physical-output"],
+  ],
+] as const)("rejects %s", async (_name, options, failedChecks) => {
+  const result = await preflight(options);
+  expect(result.ok).toBe(false);
+  expect(result.checks.filter((check) => !check.ok).map((check) => check.id)).toEqual(failedChecks);
 });
