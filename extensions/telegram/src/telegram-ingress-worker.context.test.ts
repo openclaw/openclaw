@@ -34,9 +34,7 @@ it("keeps immediate and deferred offset writes with each Worker's construction o
     const record = createPluginRecord({ id });
     registry.plugins.push(record);
     const api = createApi(record, { config: {} });
-    onTestFinished(async () => {
-      await disposePluginRegistryInstances(registry);
-    });
+    onTestFinished(() => disposePluginRegistryInstances(registry));
     const run = api.lifecycle.runInBackgroundContext;
     if (!run) {
       throw new Error("Expected a managed plugin background context");
