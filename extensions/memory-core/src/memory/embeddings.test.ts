@@ -122,31 +122,31 @@ describe("createEmbeddingProvider", () => {
 
   it("uses the provider's canonical model for cold identity and creation without inventing a cache key", async () => {
     registerTestMemoryAdapter({
-      id: "dynamic",
-      normalizeModel: ({ model }) => model.replace(/^dynamic\//, ""),
+      id: "Tenant",
+      normalizeModel: ({ model }) => model.replace(/^Tenant\//, ""),
       create: async ({ model }) => ({
         provider: {
-          id: "dynamic",
+          id: "Tenant",
           model,
           embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),
     });
-    const options = { ...createOptions("dynamic"), model: " dynamic/embed-v1 " };
+    const options = { ...createOptions("Tenant"), model: " Tenant/embed-v1 " };
     expect(resolveEmbeddingProviderIndexIdentity(options)).toEqual({
-      provider: { id: "dynamic", model: "embed-v1" },
+      provider: { id: "Tenant", model: "embed-v1" },
       cacheKeyData: undefined,
       aliases: undefined,
     });
     expect((await createEmbeddingProvider(options)).provider?.model).toBe("embed-v1");
     expect(resolveEmbeddingProviderIndexIdentity({ ...options, model: "" })?.provider).toEqual({
-      id: "dynamic",
+      id: "Tenant",
       model: "",
     });
   });
 
-  it("normalizes legacy auto mode to OpenAI", async () => {
+  it.each(["auto", "Auto"])("normalizes %s mode to OpenAI", async (provider) => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter({ id: "bedrock" }));
     registerTestMemoryAdapter({
       id: "openai",
@@ -162,18 +162,20 @@ describe("createEmbeddingProvider", () => {
       }),
     });
 
-    const result = await createEmbeddingProvider(createOptions("auto"));
+    const options = createOptions(provider);
+    expect(resolveEmbeddingProviderIndexIdentity(options)?.provider.id).toBe("openai");
+    const result = await createEmbeddingProvider(options);
 
     expect(result.provider?.id).toBe("openai");
     expect(result.requestedProvider).toBe("openai");
   });
 
-  it("still throws missing credentials for an explicit provider request", async () => {
+  it.each(["none", "NoNe"])("preserves primary error with fallback %s", async (fallback) => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter());
 
-    await expect(createEmbeddingProvider(createOptions("bedrock"))).rejects.toThrow(
-      missingBedrockCredentialsError.message,
-    );
+    await expect(
+      createEmbeddingProvider({ ...createOptions("bedrock"), fallback }),
+    ).rejects.toThrow(missingBedrockCredentialsError.message);
   });
 
   it("drops the fallback remote config when it contains only primary-provider fields", () => {

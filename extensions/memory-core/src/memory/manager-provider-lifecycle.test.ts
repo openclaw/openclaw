@@ -24,6 +24,41 @@ describe("memory index", () => {
     trackManager,
   } = fixture;
 
+  it("indexes and searches NoNe without an embedding provider", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "NoNe", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+
+    expect(await manager.search("zebra")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    expect(await manager.statusAsync({ includeCounts: false })).toMatchObject({
+      provider: "none",
+      custom: { searchMode: "fts-only" },
+    });
+    expect(providerFixture.providerCalls).toEqual([]);
+  });
+
+  it.each(["auto", "Auto"])(
+    "keeps keyword recall available when %s cannot initialize embeddings",
+    async (provider) => {
+      const indexed = await getPersistentManager(createCfg({ provider: "none" }));
+      await indexed.sync({ reason: "test" });
+      await indexed.close();
+      providerFixture.providerCreationFailure = "openai";
+
+      const manager = await getFreshManager(createCfg({ provider }));
+      expect(await manager.search("zebra")).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+      // The stable search owner attempts initial activation and then its bootstrap path.
+      // Keep that retry contract identical for both spellings rather than importing newer scheduling.
+      expect(providerFixture.providerCalls.map((call) => call.provider)).toEqual([
+        "openai",
+        "openai",
+      ]);
+    },
+  );
+
   it.each([false, true])(
     "drains startup transcript discovery before closing (scan failure: %s)",
     async (failScan) => {

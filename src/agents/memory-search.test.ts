@@ -129,6 +129,80 @@ describe("memory search config", () => {
     });
   }
 
+  type Search = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
+  function resolve(defaults: Search, overrides?: Search) {
+    for (const id of ["tenant-a", "tenant-b"]) {
+      registerEmbeddingProvider({
+        id,
+        transport: "remote",
+        create: async () => ({ provider: null }),
+      });
+    }
+    return resolveMemorySearchConfig(
+      asConfig({
+        memory: { search: defaults },
+        agents: { entries: { main: { memory: { search: overrides } } } },
+      }),
+      "main",
+    );
+  }
+
+  it.each([
+    { sharedProvider: "openai", provider: "gemini", baseUrl: undefined },
+    { sharedProvider: "openai", provider: "gemini", baseUrl: "https://other.example/v1" },
+    { sharedProvider: "tenant-a", provider: "tenant-b", baseUrl: undefined },
+  ])(
+    "does not inherit another destination's credentials: $sharedProvider -> $provider",
+    ({ sharedProvider, provider, baseUrl }) => {
+      const resolved = resolve(
+        {
+          provider: sharedProvider,
+          remote: {
+            apiKey: "shared-owner-key",
+            headers: { Authorization: "Bearer shared-owner" },
+            batch: { enabled: true },
+          },
+        },
+        { provider, remote: { baseUrl } },
+      );
+      expect(resolved?.remote).toMatchObject({ batch: { enabled: true } });
+      expect(resolved?.remote?.apiKey).toBeUndefined();
+      expect(resolved?.remote?.headers).toBeUndefined();
+      expect(resolved?.remote?.baseUrl).toBe(baseUrl);
+    },
+  );
+
+  it.each([
+    { sharedProvider: "gemini", provider: "google" },
+    { sharedProvider: "google", provider: "gemini" },
+    { sharedProvider: "auto", provider: "openai" },
+    { sharedProvider: undefined, provider: "openai" },
+    { sharedProvider: "OpenAI", provider: "openai" },
+  ])(
+    "retains credentials for the same canonical provider: $sharedProvider -> $provider",
+    ({ sharedProvider, provider }) => {
+      expect(
+        resolve({ provider: sharedProvider, remote: { apiKey: "same-owner-key" } }, { provider })
+          ?.remote?.apiKey,
+      ).toBe("same-owner-key");
+    },
+  );
+
+  it("inherits a shared router and its credentials together across adapters", () => {
+    const remote = {
+      baseUrl: "https://router.example/v1",
+      apiKey: "router-owned-key",
+      headers: { "X-Router": "owner" },
+    };
+    expect(resolve({ provider: "openai", remote }, { provider: "gemini" })?.remote).toMatchObject(
+      remote,
+    );
+    expect(
+      resolve({ provider: "openai", remote }, { provider: "gemini", remote: { baseUrl: "" } })
+        ?.remote?.apiKey,
+    ).toBeUndefined();
+  });
+
   it("returns null when disabled", () => {
     const cfg = asConfig({
       memory: { search: { enabled: true } },
@@ -269,8 +343,8 @@ describe("memory search config", () => {
     expect(resolved?.sources).toEqual(["memory"]);
   });
 
-  it("normalizes legacy auto provider config to openai", () => {
-    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
+  it.each(["auto", "Auto"])("normalizes %s provider config to openai", (provider) => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider(provider), "main");
 
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
@@ -278,17 +352,25 @@ describe("memory search config", () => {
 
   it("resolves providers from the generic embedding provider registry", () => {
     registerEmbeddingProvider({
-      id: "generic-local",
+      id: "Tenant",
       defaultModel: "local-gguf-default",
       transport: "local",
       create: async () => ({ provider: null }),
     });
 
-    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("generic-local"), "main");
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("Tenant"), "main");
 
-    expect(resolved?.provider).toBe("generic-local");
+    expect(resolved?.provider).toBe("Tenant");
     expect(resolved?.model).toBe("local-gguf-default");
     expect(resolved?.remote).toBeUndefined();
+  });
+
+  it.each(["none", "NoNe"])("normalizes %s provider and fallback", (provider) => {
+    expect(resolve({ provider, fallback: "NoNe" })).toMatchObject({
+      provider: "none",
+      fallback: "none",
+    });
+    expect(resolve({ provider: "openai" }, { provider })).toMatchObject({ provider: "none" });
   });
 
   it("skips multimodal provider discovery for provider-none", () => {
