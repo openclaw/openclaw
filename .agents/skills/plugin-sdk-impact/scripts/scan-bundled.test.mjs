@@ -9,36 +9,28 @@ import { promisify } from "node:util";
 import { captureSource, verifySource } from "./scan-bundled.mjs";
 
 const exec = promisify(execFile);
+const write = (root, file, content) => writeFile(path.join(root, file), content);
+const identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"];
+const git = (root, ...args) => exec("git", ["-C", root, ...identity, ...args]);
+const verify = ({ source, plugins }) => verifySource(source, plugins);
 
 async function commit(root, message) {
-  await exec("git", ["-C", root, "add", "."]);
-  await exec("git", [
-    "-C",
-    root,
-    "-c",
-    "commit.gpgsign=false",
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "commit",
-    "--quiet",
-    "-m",
-    message,
-  ]);
+  await git(root, "add", ".");
+  await git(root, "commit", "--no-gpg-sign", "--quiet", "-m", message);
 }
 
 async function checkout(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sdk-bundled-source-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "extensions", "local"), { recursive: true });
-  await writeFile(path.join(root, "extensions/local/openclaw.plugin.json"), '{"id":"local"}');
-  await writeFile(
-    path.join(root, "extensions/local/package.json"),
+  await write(root, "extensions/local/openclaw.plugin.json", '{"id":"local"}');
+  await write(
+    root,
+    "extensions/local/package.json",
     '{"name":"@example/local","openclaw":{"extensions":["./index.ts"]}}',
   );
-  await writeFile(path.join(root, "extensions/local/index.ts"), "export default {};\n");
-  await exec("git", ["init", "--quiet", root]);
+  await write(root, "extensions/local/index.ts", "export default {};\n");
+  await git(root, "init", "--quiet");
   await commit(root, "fixture");
   return root;
 }
@@ -52,10 +44,7 @@ test("bundled source receipts reject stale commits, changed plugin code, and omi
   ]);
   await verifySource(source, plugins);
   await assert.rejects(verifySource(source, []), /roster/);
-  await writeFile(
-    path.join(root, "extensions/local/index.ts"),
-    "export default { changed: true };\n",
-  );
+  await write(root, "extensions/local/index.ts", "export default { changed: true };\n");
   await assert.rejects(verifySource(source, plugins), /uncommitted/);
   await commit(root, "changed");
   await assert.rejects(verifySource(source, plugins), /commit/);
@@ -63,9 +52,9 @@ test("bundled source receipts reject stale commits, changed plugin code, and omi
 
 test("untracked bundled code prevents a clean receipt while unrelated notes do not", async (t) => {
   const root = await checkout(t);
-  await writeFile(path.join(root, "notes.md"), "unrelated\n");
+  await write(root, "notes.md", "unrelated\n");
   await captureSource(root);
-  await writeFile(path.join(root, "extensions/local/new.ts"), "export default {};\n");
+  await write(root, "extensions/local/new.ts", "export default {};\n");
   await assert.rejects(captureSource(root), /uncommitted/);
 });
 
@@ -80,7 +69,7 @@ test("malformed plugin metadata stays visible and symlinked plugins cannot disap
     verifySource(manifestOnly.source, [{ ...manifestOnly.plugins[0], error: undefined }]),
     /metadata failure/,
   );
-  await writeFile(path.join(root, "extensions/local/package.json"), "{}");
+  await write(root, "extensions/local/package.json", "{}");
   await commit(root, "missing package identity");
   const { source, plugins } = await captureSource(root);
   assert.equal(plugins.length, 1);
@@ -98,18 +87,15 @@ test("malformed plugin metadata stays visible and symlinked plugins cannot disap
 
 test("ignored generated SDK declarations and plugin code invalidate a source receipt", async (t) => {
   const root = await checkout(t);
-  await writeFile(path.join(root, ".gitignore"), "dist/\n*.generated.ts\n");
+  await write(root, ".gitignore", "dist/\n*.generated.ts\n");
   await commit(root, "generated inputs");
   const before = await captureSource(root);
   await mkdir(path.join(root, "dist/plugin-sdk"), { recursive: true });
-  await writeFile(path.join(root, "dist/plugin-sdk/core.d.ts"), "export type Host = {};\n");
-  await assert.rejects(verifySource(before.source, before.plugins), /fingerprint/);
+  await write(root, "dist/plugin-sdk/core.d.ts", "export type Host = {};\n");
+  await assert.rejects(verify(before), /fingerprint/);
   const withDeclarations = await captureSource(root);
-  await writeFile(path.join(root, "extensions/local/extra.generated.ts"), "export default {};\n");
-  await assert.rejects(
-    verifySource(withDeclarations.source, withDeclarations.plugins),
-    /fingerprint/,
-  );
+  await write(root, "extensions/local/extra.generated.ts", "export default {};\n");
+  await assert.rejects(verify(withDeclarations), /fingerprint/);
 });
 
 test("CLI runs through a symlinked skill installation", async (t) => {
