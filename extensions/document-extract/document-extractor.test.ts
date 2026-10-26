@@ -1,16 +1,25 @@
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import type { DocumentExtractionRequest } from "openclaw/plugin-sdk/document-extractor";
 import { afterAll, expect, it, vi } from "vitest";
-import { createPdfDocumentExtractor } from "./document-extractor.js";
 import { createPdfFixture } from "./document-extractor.test-support.js";
 
-const postMessage = Worker.prototype.postMessage;
-const dispatch = vi.spyOn(Worker.prototype, "postMessage");
-afterAll(async () => {
-  const workers = new Set(dispatch.mock.contexts.filter((worker) => worker instanceof Worker));
-  dispatch.mockRestore();
-  await Promise.all([...workers].map((worker) => worker.terminate()));
+const workers = vi.hoisted(() => [] as Worker[]);
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        super(...args);
+        workers.push(this);
+      }
+    },
+  };
 });
+
+import { createPdfDocumentExtractor } from "./document-extractor.js";
+
+afterAll(() => Promise.all(workers.splice(0).map((worker) => worker.terminate())));
 
 const textPage = (text: string, size = 12) => `BT /F1 ${size} Tf 50 700 Td (${text}) Tj ET`;
 const request = {
@@ -69,18 +78,23 @@ it("preserves image-only pages beside text within the aggregate pixel budget", a
 
 it("joins canceled extraction before allowing the next document to succeed", async () => {
   await extract();
-  const worker = dispatch.mock.contexts.findLast((context) => context instanceof Worker)!;
+  const worker = workers.at(-1)!;
   const abort = new AbortController();
   const reason = new Error("owning turn cancelled");
-  dispatch.mockImplementationOnce(function (this: Worker, ...args) {
-    postMessage.apply(this, args);
+  const postMessage = worker.postMessage.bind(worker);
+  const dispatch = vi.spyOn(worker, "postMessage").mockImplementationOnce((...args) => {
+    postMessage(...args);
     // Cancel at dispatch so a fast worker reply cannot beat the abort.
     abort.abort(reason);
   });
-  await expect(
-    extract({ minTextChars: 10_000, maxPixels: 4_000_000, signal: abort.signal }),
-  ).rejects.toBe(reason);
-  expect(worker.threadId).toBe(-1);
+  try {
+    await expect(
+      extract({ minTextChars: 10_000, maxPixels: 4_000_000, signal: abort.signal }),
+    ).rejects.toBe(reason);
+    expect(worker.threadId).toBe(-1);
+  } finally {
+    dispatch.mockRestore();
+  }
   await expect(extract({ signal: abort.signal })).rejects.toBe(reason);
   expect((await extract())?.text).toContain("First PDF page");
 });

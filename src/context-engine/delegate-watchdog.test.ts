@@ -12,6 +12,7 @@ import type { ContextEngine } from "./types.js";
 type StageParams = { abortSignal?: AbortSignal; compactionTimeoutReset?: () => void };
 const { compactRuntime } = vi.hoisted(() => ({ compactRuntime: vi.fn() }));
 
+// mock-isolation: Drive staged compaction without loading native runner state or model calls.
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
   compactEmbeddedAgentSessionOnDemand: compactRuntime,
 }));

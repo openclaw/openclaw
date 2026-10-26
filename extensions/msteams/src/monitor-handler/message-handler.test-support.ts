@@ -12,7 +12,7 @@ export const channelConversationId = "19:general@thread.tacv2";
 export function createDebounceControl() {
   let drain: () => Promise<void> = () => Promise.reject(new Error("Debouncer not created"));
   return {
-    createDebouncer<T>(options: Parameters<typeof createInboundDebouncer<T>>[0]) {
+    createDebouncer: <T>(options: Parameters<typeof createInboundDebouncer<T>>[0]) => {
       const debouncer = createInboundDebouncer(options);
       drain = debouncer.drain;
       return debouncer;
