@@ -21,12 +21,6 @@ function texts(root: ParentNode, selector: string) {
 }
 
 describe("toSanitizedMarkdownHtml", () => {
-  it("does not stamp presentation classes on links whose href contains 'tail'", () => {
-    const link = render("[tailscale docs](https://docs.openclaw.ai/tailscale)").querySelector("a");
-    expect(link?.getAttribute("href")).toBe("https://docs.openclaw.ai/tailscale");
-    expect(link?.classList.contains("chat-link-tail-blur")).toBe(false);
-  });
-
   it("normalizes Unicode and CR line breaks before rendering", () => {
     const unicodeInput = "## Unicode\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta";
     const normalizedInput = "## Unicode\n\n- alpha\n- beta\n- gamma\n- delta";

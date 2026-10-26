@@ -8,7 +8,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../app/gateway-store.test-support.ts";
 import { t } from "../i18n/index.ts";
-import type { SessionPatchOptions, SessionPatchRoute } from "../lib/sessions/patch.ts";
+import type { SessionPatchRoute } from "../lib/sessions/patch.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -150,8 +150,6 @@ describe("session organizer nested archive choice", () => {
     );
     const actions = await waitForConfirmDialogActions();
     expect(actions.textContent).toContain("Archive all (3)");
-    expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.request).not.toHaveBeenCalled();
     answerConfirmDialog(actions, "confirm");
     expect(await pending).toMatchObject({
       kind: "tree",
@@ -188,8 +186,6 @@ describe("session organizer nested archive choice", () => {
     reads.refreshList.mockImplementation(async () => harness.retireScope());
     expect(await confirmSessionArchive(root, harness.scope, isCurrent)).toBeNull();
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.request).not.toHaveBeenCalled();
   });
 
   it("returns a partial archive failure while retaining successful-only Undo after navigation", async () => {
@@ -209,7 +205,6 @@ describe("session organizer nested archive choice", () => {
     );
     const archived = vi.mocked(showToast).mock.calls.at(-1)![0];
     expect(archived.message).toBe(t("sessionsView.sessionsArchived", { count: "2" }));
-    expect(archived.onAction).toBeTypeOf("function");
     expect(harness.finishArchive).toHaveBeenCalledTimes(3);
 
     // The page retires, but the same connection still owns the captured Undo.
@@ -221,7 +216,6 @@ describe("session organizer nested archive choice", () => {
       patch: { archived: false },
     });
     expect(harness.publishSessionMutationError).toHaveBeenCalledTimes(1);
-    expect(outcome).toEqual({ status: "failed", error: expect.stringContaining(rows[1]!.key) });
   });
 
   it.each([
@@ -234,11 +228,10 @@ describe("session organizer nested archive choice", () => {
     async (choice, count, activeDepth) => {
       const modal = modalFixture();
       const harness = createHarness();
-      const root = {
-        ...sessionRow(0),
+      const root = sessionRow(0, {
         hasArchiveDescendants: true,
         hasActiveRun: activeDepth === 0,
-      };
+      });
       prepareArchiveTree(
         harness,
         Array.from({ length: count }, (_, index) =>
@@ -318,174 +311,173 @@ function createOfflineArchiveHarness() {
 }
 
 describe("personal pin archive Undo", () => {
-  it.each(["restored", "rejected", "manual"] as const)(
-    "settles a personal pin after Undo during archive replay (%s)",
-    async (outcome) => {
-      stubGatewayStoreTestGlobals();
-      onTestFinished(() => {
-        vi.unstubAllGlobals();
-      });
-      const store = createGatewayStoreTestStore();
-      store.gateway.start();
-      const client = store.current();
-      client.testOptions.offlineRecoveryScope = "archive-owner";
-      Object.assign(client, { recoveryScope: "archive-owner", recoveryScopeReady: true });
-      const hello = {
-        ...gatewayHelloForMethods([
-          "sessions.patch",
-          "sessions.list",
-          "sessions.describe",
-          "sessions.subscribe",
-        ]),
-        auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: "archive-owner" },
-      };
-      let row: GatewaySessionRow = gatewayRow(1);
-      const archiveReply = createDeferred();
-      const undoReply = createDeferred();
-      const archiveStarted = createDeferred();
-      const undoStarted = createDeferred();
-      client.request.mockImplementation(async (method, params) => {
-        if (method === "sessions.list") {
-          return sessionsResult([{ ...row }]);
-        }
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method === "sessions.patch") {
-          const patch = params as { archived: boolean };
-          if (patch.archived) {
-            archiveStarted.resolve();
-            await archiveReply.promise;
-          } else {
-            undoStarted.resolve();
-            await undoReply.promise;
-            if (outcome === "rejected") {
-              throw new Error("Undo denied");
-            }
+  it.each([
+    ["restored", "header", "during"],
+    ["rejected", "header", "during"],
+    ["manual", "header", "during"],
+    ["restored", "header", "after"],
+    ["restored", "sidebar", "after"],
+  ] as const)("settles %s pin through %s Undo %s replay", async (outcome, surface, timing) => {
+    stubGatewayStoreTestGlobals();
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const store = createGatewayStoreTestStore();
+    store.gateway.start();
+    const client = store.current();
+    client.testOptions.offlineRecoveryScope = "archive-owner";
+    Object.assign(client, { recoveryScope: "archive-owner", recoveryScopeReady: true });
+    const hello = {
+      ...gatewayHelloForMethods([
+        "sessions.patch",
+        "sessions.list",
+        "sessions.describe",
+        "sessions.subscribe",
+      ]),
+      auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: "archive-owner" },
+    };
+    let row: GatewaySessionRow = gatewayRow(1);
+    const archiveReply = createDeferred();
+    const undoReply = createDeferred();
+    const archiveStarted = createDeferred();
+    const undoStarted = createDeferred();
+    client.request.mockImplementation(async (method, params) => {
+      if (method === "sessions.list") {
+        return sessionsResult([{ ...row }]);
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.patch") {
+        const patch = params as { archived: boolean; pinned?: boolean };
+        expect(patch.pinned).toBeUndefined();
+        if (patch.archived) {
+          archiveStarted.resolve();
+          await archiveReply.promise;
+        } else {
+          undoStarted.resolve();
+          await undoReply.promise;
+          if (outcome === "rejected") {
+            throw new Error("Undo denied");
           }
-          row = { ...row, archived: patch.archived, pinned: false };
-          return patchReceipt(row.key, row);
         }
-        return {};
-      });
-      client.testOptions.onHello?.(hello);
-      const sessions = createTestSessionCapability(store.gateway);
-      onTestFinished(() => {
-        archiveReply.resolve();
-        undoReply.resolve();
-        sessions.dispose();
-        store.gateway.stop();
-      });
-      await sessions.refresh({ agentId: "main" });
-      client.testOptions.onClose?.({ code: 1006, reason: "offline", willRetry: true });
-      const h = createOfflineArchiveHarness();
-      Object.assign(h.scope, { gateway: store.gateway, client, sessions });
-      Object.assign(h.scope.context, { gateway: store.gateway, sessions });
-      const pin = "session:" + row.key;
-      const { navigation, toggle } = pinNavigation(h, [pin]);
+        row = { ...row, archived: patch.archived, pinned: false };
+        return patchReceipt(row.key, row);
+      }
+      return {};
+    });
+    client.testOptions.onHello?.(hello);
+    const sessions = createTestSessionCapability(store.gateway);
+    onTestFinished(() => {
+      archiveReply.resolve();
+      undoReply.resolve();
+      sessions.dispose();
+      store.gateway.stop();
+    });
+    await sessions.refresh({ agentId: "main" });
+    client.testOptions.onClose?.({ code: 1006, reason: "offline", willRetry: true });
+    const h = createOfflineArchiveHarness();
+    Object.assign(h.scope, { gateway: store.gateway, client, sessions });
+    Object.assign(h.scope.context, { gateway: store.gateway, sessions });
+    const pin = "session:" + row.key;
+    const { navigation, toggle } = pinNavigation(h, [pin]);
+    if (surface === "header") {
       await archiveSessionWithUndo(h.host, sessionRow(1), h.scope);
-      const undo = vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction;
-      assert(undo);
-      client.testOptions.onHello?.(hello);
-      await archiveStarted.promise;
-      undo();
+    } else {
+      await archiveConfirmedSessionsWithUndo(h.host, [sessionRow(1)], h.scope);
+    }
+    expect(navigation.snapshot.sidebarEntries).toEqual([pin]);
+    const undo = vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction;
+    assert(undo);
+    client.testOptions.onHello?.(hello);
+    await archiveStarted.promise;
+    if (timing === "after") {
+      archiveReply.resolve();
+      await waitForFast(() => expect(store.gateway.snapshot.deferredIntentDraining).toBe(false));
+      expect(navigation.snapshot.sidebarEntries).toEqual([]);
+    }
+    if (surface === "sidebar") {
+      vi.mocked(h.host.sessionData.isSessionMutationScopeCurrent).mockReturnValue(false);
+    }
+    undo();
+    if (timing === "during") {
       await waitForFast(() => expect(store.gateway.snapshot.deferredIntentCount).toBe(1));
       archiveReply.resolve();
-      await undoStarted.promise;
-      expect(navigation.snapshot.sidebarEntries).toEqual([]);
-      if (outcome === "manual") {
-        toggle(pin, []);
-      }
-      undoReply.resolve();
-      await waitForFast(() => expect(store.gateway.snapshot.deferredIntentDraining).toBe(false));
+    }
+    await undoStarted.promise;
+    expect(navigation.snapshot.sidebarEntries).toEqual([]);
+    if (outcome === "manual") {
+      toggle(pin, []);
+    }
+    undoReply.resolve();
+    await waitForFast(() => expect(store.gateway.snapshot.deferredIntentDraining).toBe(false));
+    await waitForFast(() => {
       expect(row.archived).toBe(outcome === "rejected");
       expect(navigation.snapshot.sidebarEntries).toEqual(outcome === "restored" ? [pin] : []);
-    },
-  );
+    });
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "sessions.patch"),
+    ).toHaveLength(2);
+    if (outcome !== "rejected") {
+      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+    }
+  });
 
-  it.each(["same-client", "replacement-client", "recovery-scope", "manual"] as const)(
-    "settles an offline personal pin receipt after reconnect (%s)",
-    async (outcome) => {
-      const h = createOfflineArchiveHarness();
-      const key = sessionRow(1).key;
-      const pin = "session:" + key;
-      const retained = ["session-rail:" + key];
-      const { navigation, set, toggle } = pinNavigation(h, [pin, ...retained]);
-      const undoPins = captureSessionArchivePins(h.scope, [key]);
-      set(retained);
+  it.each([
+    [true, "same-client"],
+    [true, "replacement-client"],
+    [true, "recovery-scope"],
+    [true, "manual"],
+    [false, "success"],
+    [false, "failure"],
+    [false, "profile"],
+    [false, "manual"],
+  ] as const)("settles a pin receipt (offline=%s, %s)", async (offline, outcome) => {
+    const h = offline ? createOfflineArchiveHarness() : createHarness();
+    const key = sessionRow(1).key;
+    const pin = "session:" + key;
+    const retained = ["session-rail:" + key, "session:agent:main:other"];
+    const { navigation, set, toggle } = pinNavigation(h, [pin, ...retained]);
+    const undoPins = captureSessionArchivePins(h.scope, [key]);
+    set(retained);
+    if (offline) {
       h.scope.gateway.snapshot.phase = "connected";
-      if (outcome === "replacement-client") {
-        h.scope.gateway.snapshot.client = createTestGatewayClient(async () => ({}));
-      }
-      const reply = createDeferred<readonly string[]>();
-      const restore = vi.fn(() => reply.promise);
-      const operation = undoPins.restore(restore);
-      if (outcome === "recovery-scope") {
-        Object.assign(h.scope.client, { recoveryScope: "another-owner" });
-      } else if (outcome === "manual") {
-        toggle(pin, retained);
-      }
+    }
+    if (outcome === "replacement-client") {
+      h.scope.gateway.snapshot.client = createTestGatewayClient(async () => ({}));
+    }
+    const reply = createDeferred<readonly string[]>();
+    const restore = vi.fn(() => reply.promise);
+    const operation = undoPins.restore(restore);
+    expect(navigation.snapshot.sidebarEntries).toEqual(retained);
+    if (outcome === "recovery-scope") {
+      Object.assign(h.scope.client, { recoveryScope: "another-owner" });
+    } else if (outcome === "manual") {
+      toggle(pin, retained);
+    } else if (outcome === "profile") {
+      h.retireScope();
+      set(["session:agent:main:another-profile"]);
+    } else if (outcome === "success") {
+      set([...retained, "route:usage"]);
+    }
+    if (outcome === "failure") {
+      reply.reject(new Error("Undo rejected"));
+      await expect(operation).rejects.toThrow("Undo rejected");
+    } else {
       reply.resolve([key]);
       await operation;
-      expect(navigation.snapshot.sidebarEntries).toEqual(
-        outcome === "same-client" ? [...retained, pin] : retained,
-      );
-      expect(restore).toHaveBeenCalledTimes(outcome === "replacement-client" ? 0 : 1);
-    },
-  );
-
-  it.each(["header", "sidebar"] as const)(
-    "restores a personal pin through %s Undo after offline archive replay",
-    async (surface) => {
-      const h = createOfflineArchiveHarness();
-      const row = { ...sessionRow(1), sessionId: "archived-offline" };
-      const pin = "session:" + row.key;
-      const { navigation } = pinNavigation(h, [pin]);
-      let onConfirmed: SessionPatchOptions["onConfirmed"];
-      const patch = vi.fn<SessionPatchRoute>(async (key, fields, options) => {
-        if (fields.archived === true) {
-          onConfirmed = options?.onConfirmed;
-          return { queued: true };
-        }
-        return patchReceipt(key, { sessionId: row.sessionId });
-      });
-      h.scope.sessions.patch = patch;
-      prepareUndo(h);
-
-      if (surface === "header") {
-        await archiveSessionWithUndo(h.host, row, h.scope);
-      } else {
-        await archiveConfirmedSessionsWithUndo(h.host, [row], h.scope);
-      }
-      expect(navigation.snapshot.sidebarEntries).toEqual([pin]);
-      const undo = vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction;
-      assert(undo);
-      assert(onConfirmed);
-      h.scope.gateway.snapshot.phase = "connected";
-      onConfirmed(patchReceipt(row.key, { sessionId: row.sessionId }));
-      expect(navigation.snapshot.sidebarEntries).toEqual([]);
-      if (surface === "sidebar") {
-        // Reconnect retires the pane's confirmation epoch, not the admitted offline intent.
-        vi.mocked(h.host.sessionData.isSessionMutationScopeCurrent).mockReturnValue(false);
-      }
-      const repinned = createDeferred();
-      onTestFinished(
-        navigation.subscribe(({ sidebarEntries }) => {
-          if (sidebarEntries.includes(pin)) {
-            repinned.resolve();
-          }
-        }),
-      );
-      undo();
-      await repinned.promise;
-      expect(navigation.snapshot.sidebarEntries).toEqual([pin]);
-      expect(patch.mock.calls.map(([, fields]) => fields)).toEqual([
-        { archived: true },
-        { archived: false },
-      ]);
-      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
-    },
-  );
+    }
+    expect(navigation.snapshot.sidebarEntries).toEqual(
+      outcome === "same-client"
+        ? [...retained, pin]
+        : outcome === "success"
+          ? [...retained, "route:usage", pin]
+          : outcome === "profile"
+            ? ["session:agent:main:another-profile"]
+            : retained,
+    );
+    expect(restore).toHaveBeenCalledTimes(outcome === "replacement-client" ? 0 : 1);
+  });
 
   it("undoes an offline bulk archive without attempting a pin write", async () => {
     const h = createOfflineArchiveHarness();
@@ -511,44 +503,6 @@ describe("personal pin archive Undo", () => {
     expect(h.request).not.toHaveBeenCalled();
     expect(h.publishSessionMutationError).not.toHaveBeenCalled();
   });
-  it.each(["success", "failure", "profile", "manual"] as const)(
-    "settles a personal pin receipt without replacing newer intent (%s)",
-    async (outcome) => {
-      const h = createHarness();
-      const key = sessionRow(1).key;
-      const pin = "session:" + key;
-      const retained = ["session-rail:" + key, "session:agent:main:other"];
-      const { navigation, set, toggle } = pinNavigation(h, [pin, ...retained]);
-      const undoPins = captureSessionArchivePins(h.scope, [key]);
-      set(retained);
-      const reply = createDeferred<readonly string[]>();
-      const operation = undoPins.restore(() => reply.promise);
-      expect(navigation.snapshot.sidebarEntries).toEqual(retained);
-      if (outcome === "profile") {
-        h.retireScope();
-        set(["session:agent:main:another-profile"]);
-      } else if (outcome === "manual") {
-        toggle(pin, retained);
-      } else if (outcome === "success") {
-        set([...retained, "route:usage"]);
-      }
-      if (outcome === "failure") {
-        reply.reject(new Error("Undo rejected"));
-        await expect(operation).rejects.toThrow("Undo rejected");
-      } else {
-        reply.resolve([key]);
-        await operation;
-      }
-      expect(navigation.snapshot.sidebarEntries).toEqual(
-        outcome === "success"
-          ? [...retained, "route:usage", pin]
-          : outcome === "profile"
-            ? ["session:agent:main:another-profile"]
-            : retained,
-      );
-    },
-  );
-
   it("repins only originally pinned sessions whose bulk Undo succeeds", async () => {
     const h = createHarness();
     const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];

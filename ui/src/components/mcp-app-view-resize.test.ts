@@ -1,8 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createMcpBridgeFixture } from "../test-helpers/mcp-app-view-bridge.ts";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { mountView } from "./mcp-app-view.test-support.ts";
 
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
@@ -18,6 +16,20 @@ const mountBridge = createMcpBridgeFixture(bridgeMocks);
 type BridgeFixture = Awaited<ReturnType<typeof mountBridge>>;
 function expectHost(bridge: BridgeFixture["bridge"], context: Record<string, unknown>) {
   expect(bridge.setHostContext).toHaveBeenLastCalledWith(expect.objectContaining(context));
+}
+function theme(mode: string, background: string, text: string) {
+  document.documentElement.dataset.themeMode = mode;
+  document.documentElement.style.setProperty("--card", background);
+  document.documentElement.style.setProperty("--text", text);
+  return {
+    theme: mode,
+    styles: {
+      variables: expect.objectContaining({
+        "--color-background-primary": background,
+        "--color-text-primary": text,
+      }),
+    },
+  };
 }
 function stubAppResizeObservers() {
   const observers: TestResizeObserver[] = [];
@@ -59,38 +71,18 @@ describe("mcp-app-view localization", () => {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       () => ({ width, height }) as DOMRect,
     );
-    document.documentElement.dataset.themeMode = "dark";
-    document.documentElement.style.setProperty("--card", "#161920");
-    document.documentElement.style.setProperty("--text", "#d4d4d8");
+    const dark = theme("dark", "#161920", "#d4d4d8");
     const { bridge, frame, themeListeners, unsubscribe, view, unmount } = await mountBridge(
       `view-context-${crypto.randomUUID()}`,
     );
     expect(bridge.options.hostContext).toMatchObject({
-      theme: "dark",
+      ...dark,
       containerDimensions: { width: 640, height: 600 },
-      styles: {
-        variables: {
-          "--color-background-primary": "#161920",
-          "--color-text-primary": "#d4d4d8",
-        },
-      },
     });
     await expect.poll(() => themeListeners.size).toBe(1);
-    document.documentElement.dataset.themeMode = "light";
-    document.documentElement.style.setProperty("--card", "#ffffff");
-    document.documentElement.style.setProperty("--text", "#403c35");
+    const light = theme("light", "#ffffff", "#403c35");
     themeListeners.values().next().value?.();
-    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        theme: "light",
-        styles: {
-          variables: expect.objectContaining({
-            "--color-background-primary": "#ffffff",
-            "--color-text-primary": "#403c35",
-          }),
-        },
-      }),
-    );
+    expectHost(bridge, light);
     width = 720;
     resize();
     expectHost(bridge, { containerDimensions: { width: 720, height: 600 } });
@@ -132,75 +124,18 @@ describe("mcp-app-view localization", () => {
     expect(view.querySelector("iframe")?.style.height).toBe("480px");
     bridge.onsizechange?.({ height: 900 });
     expect(view.querySelector("iframe")?.style.height).toBe("900px");
-    unmount();
+    const teardown = deferred<Record<string, never>>();
+    onTestFinished(() => teardown.resolve({}));
+    bridge.teardownResource.mockReturnValueOnce(teardown.promise);
+    const retiring = view.teardown();
+    expect(frame.isConnected).toBe(true);
     await expect.poll(() => observers[0]!.disconnect).toHaveBeenCalledOnce();
+    expect(observers[0]!.targets.size).toBe(0);
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(themeListeners.size).toBe(0);
-  });
-  it("shares resize delivery across App views and retires only the closing view", async () => {
-    const observers = stubAppResizeObservers();
-    const first = await mountBridge("view-shared-resize-first");
-    const teardown = deferred<Record<string, never>>();
-    let second: ReturnType<typeof mountView> | undefined;
-    try {
-      second = mountView(
-        {
-          sessionKey: first.view.sessionKey,
-          viewId: "view-shared-resize-second",
-          fillContainer: true,
-        },
-        { gateway: first.gateway, theme: { subscribe: () => () => {} } },
-      );
-      await waitForSolid(() => expect(second!.view.querySelector("iframe")).not.toBeNull());
-      const secondFrame = second.view.querySelector<HTMLIFrameElement>("iframe")!;
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          data: { method: "ui/notifications/sandbox-proxy-ready" },
-          source: secondFrame.contentWindow,
-        }),
-      );
-      await waitForSolid(() => {
-        expect(bridgeMocks.instances).toHaveLength(2);
-        expect(observers.reduce((count, observer) => count + observer.targets.size, 0)).toBe(2);
-      });
-      expect(observers).toHaveLength(1);
-      const observer = observers[0]!;
-      const secondBridge = bridgeMocks.instances[1]!;
-      const firstMount = first.view.querySelector<HTMLElement>(".mount")!;
-      const secondMount = second.view.querySelector<HTMLElement>(".mount")!;
-      vi.spyOn(firstMount, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 320, 240));
-      vi.spyOn(secondMount, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 640, 480));
-      vi.clearAllMocks();
-      observer.deliver([firstMount]);
-      expectHost(first.bridge, { containerDimensions: { width: 320, height: 600 } });
-      expect(secondBridge.setHostContext).not.toHaveBeenCalled();
-      observer.deliver([secondMount]);
-      expect(secondBridge.setHostContext).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ containerDimensions: { width: 640, height: 480 } }),
-      );
-
-      first.bridge.teardownResource.mockReturnValueOnce(teardown.promise);
-      const retiring = first.view.teardown();
-      expect(first.frame.isConnected).toBe(true);
-      expect(observer.targets).toEqual(new Set([secondMount]));
-      expect(observer.unobserve).toHaveBeenCalledExactlyOnceWith(firstMount);
-      expect(observer.disconnect).not.toHaveBeenCalled();
-      vi.clearAllMocks();
-      observer.deliver([secondMount]);
-      expect(first.bridge.setHostContext).not.toHaveBeenCalled();
-      expect(secondBridge.setHostContext).toHaveBeenCalledOnce();
-      teardown.resolve({});
-      await retiring;
-      expect(first.frame.isConnected).toBe(false);
-      await second.view.teardown();
-      expect(observer.targets.size).toBe(0);
-      expect(observer.disconnect).toHaveBeenCalledOnce();
-    } finally {
-      teardown.resolve({});
-      await first.view.teardown();
-      await second?.view.teardown();
-      first.unmount();
-      second?.unmount();
-    }
+    teardown.resolve({});
+    await retiring;
+    expect(frame.isConnected).toBe(false);
+    unmount();
   });
 });

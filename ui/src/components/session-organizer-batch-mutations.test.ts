@@ -49,13 +49,8 @@ describe("patchSessionRows", () => {
     async (phase) => {
       const h = createHarness({ phase });
       h.scope.gateway.snapshot.deferredIntentCount = 1;
-      const row = {
-        ...sessionRow(1),
-        archiveGuard: { expectedArchived: false },
-      };
-      const result = await patchSessionRows(h.host, [row], { archived: true }, h.scope, {
-        sessionScope: true,
-      });
+      const row = sessionRow(1, { archiveGuard: { expectedArchived: false } });
+      const result = await h.patchRows([row], { archived: true }, { sessionScope: true });
       expect(h.patch).not.toHaveBeenCalled();
       if (phase === "connected") {
         expect(result).toEqual([row]);
@@ -74,9 +69,9 @@ describe("patchSessionRows", () => {
     h.scope.allowDeferred = true;
     h.scope.sessions.patch = vi.fn(async () => ({ queued: true as const }));
     const rows = [sessionRow(0), sessionRow(1)];
-    await expect(
-      patchSessionRows(h.host, rows, { archived: true }, h.scope, { sessionScope: true }),
-    ).resolves.toEqual(rows);
+    await expect(h.patchRows(rows, { archived: true }, { sessionScope: true })).resolves.toEqual(
+      rows,
+    );
     expect(h.scope.sessions.patch).toHaveBeenCalledTimes(2);
     expect(h.request).not.toHaveBeenCalled();
     expect(h.publishSessionMutationError).not.toHaveBeenCalled();
@@ -101,40 +96,36 @@ describe("patchSessionRows", () => {
     },
   );
 
-  it.each(["move", "create"])(
-    "preserves mixed group placement and target order for %s",
-    async (action) => {
-      const h = createHarness();
-      const rows = [
-        makeRow(0, { pinnable: true, isChild: false }),
-        makeRow(1, { pinnable: false, isChild: false }),
-        makeRow(2, { key: "agent:main:subagent:hidden", pinnable: false, isChild: false }),
-        makeRow(3, { pinnable: true, sidebarRoot: true, isChild: false }),
-      ];
-      if (action === "create") {
-        h.host.knownSessionGroups = () => ["Projects"];
-        await expect(createSessionGroup(h.host, "Projects", rows, h.scope)).resolves.toBe(
-          "completed",
-        );
-      } else {
-        await h.action({ kind: "move-to-group", category: "Projects" }, rows, false);
-      }
-      expect(h.request.mock.calls.map(([, params]) => params)).toEqual([
-        { targets: [sessionTarget(rows[0]!)], patch: { category: "Projects" } },
-        { targets: [sessionTarget(rows[1]!)], patch: { category: "Projects", sidebarRoot: true } },
-        { targets: rows.slice(2).map(sessionTarget), patch: { category: "Projects" } },
-      ]);
-      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["move", "create"])("preserves placement/order for %s", async (action) => {
+    const h = createHarness();
+    const rows = [
+      makeRow(0, { pinnable: true, isChild: false }),
+      makeRow(1, { pinnable: false, isChild: false }),
+      makeRow(2, { key: "agent:main:subagent:hidden", pinnable: false, isChild: false }),
+      makeRow(3, { pinnable: true, sidebarRoot: true, isChild: false }),
+    ];
+    if (action === "create") {
+      h.host.knownSessionGroups = () => ["Projects"];
+      await expect(createSessionGroup(h.host, "Projects", rows, h.scope)).resolves.toBe(
+        "completed",
+      );
+    } else {
+      await h.action({ kind: "move-to-group", category: "Projects" }, rows, false);
+    }
+    expect(h.request.mock.calls.map(([, params]) => params)).toEqual([
+      { targets: [sessionTarget(rows[0]!)], patch: { category: "Projects" } },
+      { targets: [sessionTarget(rows[1]!)], patch: { category: "Projects", sidebarRoot: true } },
+      { targets: rows.slice(2).map(sessionTarget), patch: { category: "Projects" } },
+    ]);
+    expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+  });
 
   it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
     const h = createHarness();
-    const root = {
-      ...sessionRow(0),
+    const root = sessionRow(0, {
       key: "agent:main:subagent:hidden",
       hasArchiveDescendants: true,
-    };
+    });
     h.scope.sessions.describe = vi.fn(async () => ({
       session: {
         key: root.key,
@@ -156,7 +147,7 @@ describe("patchSessionRows", () => {
   });
 
   it.each(["operator.write", "operator.sessions.write", "operator.admin"])(
-    "acknowledges hidden runs conditionally with %s",
+    "acknowledges hidden runs with %s",
     async (scope) => {
       const run = makeRow(1, { key: "agent:main:subagent:done", isChild: true });
       const parent = withHiddenRun(run, { unread: false });
@@ -167,9 +158,9 @@ describe("patchSessionRows", () => {
       await h.action({ kind: "toggle-unread" }, [parent], false);
 
       // Selected rows keep their explicit batch read; folded runs keep manual markers.
-      expect(h.request.mock.calls.map(([, params]) => params)).toEqual([
-        { targets: [sessionTarget(parent)], patch: { unread: false } },
-        { targets: [sessionTarget(parent)], patch: { unread: true } },
+      expect(requestParams(h)).toEqual([
+        mutation([parent], { unread: false }),
+        mutation([parent], { unread: true }),
       ]);
       expect(h.patch).toHaveBeenCalledExactlyOnceWith(
         run.key,
@@ -257,14 +248,7 @@ describe("patchSessionRows", () => {
 
     await expect(h.patchRows(rows, { archived: true })).resolves.toEqual([rows[1]]);
 
-    expect(h.request).toHaveBeenCalledWith(
-      "sessions.patchMany",
-      expect.objectContaining({
-        targets: rows.map((row) => ({ ...sessionTarget(row), ...archiveGuard })),
-        patch: { archived: true },
-      }),
-      expect.anything(),
-    );
+    expect(requestParams(h)).toEqual([mutation(rows, { archived: true }, archiveGuard)]);
     expect(h.pruneSidebarSessionEntry).toHaveBeenCalledExactlyOnceWith(rows[1]!.key);
     expectError(
       h,
@@ -364,10 +348,14 @@ function expectPatch(
   });
 }
 function expectArchive(h: OperationsHarness, rows: SidebarRecentSession[], archived: boolean) {
-  expect(h.request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-    ["sessions.patchMany", { targets: rows.map(sessionTarget), patch: { archived } }],
-  ]);
+  expect(h.request.mock.calls.map(([method]) => method)).toEqual(["sessions.patchMany"]);
+  expect(requestParams(h)).toEqual([mutation(rows, { archived })]);
 }
+const requestParams = (h: OperationsHarness) => h.request.mock.calls.map(([, params]) => params);
+const mutation = (rows: SidebarRecentSession[], patch: SessionsPatchMutation, guard = {}) => ({
+  targets: rows.map((row) => ({ ...sessionTarget(row), ...guard })),
+  patch,
+});
 function batchRows(count: number) {
   return Array.from({ length: count }, (_, index) => sessionRow(index));
 }
@@ -535,12 +523,7 @@ describe("session organizer destructive confirmations", () => {
     await pending;
 
     expect(h.deleteMany).toHaveBeenCalledWith(
-      rows.map((row) => ({
-        key: row.key,
-        agentId: "main",
-        expectedSessionId: row.sessionId,
-        deleteTranscript: true,
-      })),
+      rows.map((row) => Object.assign(sessionTarget(row), { deleteTranscript: true })),
     );
     expectError(h, retryError);
     expect(alertSpy).toHaveBeenCalledWith(
@@ -598,7 +581,7 @@ describe("session organizer destructive confirmations", () => {
   });
 
   it.each(["snapshot failure", "request rejection"] as const)(
-    "surfaces one forced worktree removal %s after confirmed session deletion",
+    "reports forced worktree removal %s",
     async (failure) => {
       const h = worktreeHarness("snapshot-failed");
       const rejection = new Error("worktree removal failed");
@@ -708,49 +691,43 @@ describe("session organizer batch archive confirmation", () => {
     { activity: { hasActiveRun: true }, decision: "cancel" },
     { activity: { gatewayHasActiveRun: true }, decision: "confirm" },
     { activity: { hasActiveSubagentRun: true }, decision: "retire" },
-  ] as const)(
-    "waits for $decision before archiving active work",
-    async ({ activity, decision }) => {
-      const modal = createModalDialogTestFixture();
-      const h = createHarness();
-      const rows = [sessionRow(0), makeRow(1, { ...activity })];
-      vi.mocked(showToast).mockClear();
-      try {
-        const pending = modal.track(h.action({ kind: "toggle-archived" }, rows, false));
-        const actions = await waitForConfirmDialogActions();
-        expect(document.body.textContent).toContain("This selection contains active work.");
-        expectNoCalls(h.beginArchive, h.request);
-        if (decision === "retire") {
-          h.retireScope();
-        } else {
-          answerConfirmDialog(actions, decision);
-        }
-        await pending;
-        if (decision === "confirm") {
-          expectArchive(h, rows, true);
-          expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
-        } else {
-          expectNoCalls(h.beginArchive, h.request, h.reconcileMutation, h.pruneSidebarSessionEntry);
-          expect(showToast).not.toHaveBeenCalled();
-        }
-      } finally {
-        await modal.cleanup();
+  ] as const)("waits for $decision on active work", async ({ activity, decision }) => {
+    const modal = createModalDialogTestFixture();
+    const h = createHarness();
+    const rows = [sessionRow(0), makeRow(1, { ...activity })];
+    vi.mocked(showToast).mockClear();
+    try {
+      const pending = modal.track(h.action({ kind: "toggle-archived" }, rows, false));
+      const actions = await waitForConfirmDialogActions();
+      expect(document.body.textContent).toContain("This selection contains active work.");
+      expectNoCalls(h.beginArchive, h.request);
+      if (decision === "retire") {
+        h.retireScope();
+      } else {
+        answerConfirmDialog(actions, decision);
       }
-    },
-  );
+      await pending;
+      if (decision === "confirm") {
+        expectArchive(h, rows, true);
+        expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
+      } else {
+        expectNoCalls(h.beginArchive, h.request, h.reconcileMutation, h.pruneSidebarSessionEntry);
+        expect(showToast).not.toHaveBeenCalled();
+      }
+    } finally {
+      await modal.cleanup();
+    }
+  });
 
-  it.each([false, true])(
-    "keeps idle archive and archived=%s restore immediate",
-    async (archived) => {
-      const h = createHarness();
-      const rows = [sessionRow(0), sessionRow(1)].map((row) =>
-        Object.assign(row, { archived, hasActiveRun: true, gatewayHasActiveRun: false }),
-      );
-      await h.action({ kind: "toggle-archived" }, rows, false);
-      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-      expectArchive(h, rows, !archived);
-    },
-  );
+  it.each([false, true])("immediately toggles idle archived=%s", async (archived) => {
+    const h = createHarness();
+    const rows = [sessionRow(0), sessionRow(1)].map((row) =>
+      Object.assign(row, { archived, hasActiveRun: true, gatewayHasActiveRun: false }),
+    );
+    await h.action({ kind: "toggle-archived" }, rows, false);
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    expectArchive(h, rows, !archived);
+  });
 });
 
 describe("session organizer snooze", () => {

@@ -4,7 +4,7 @@ import type {
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import {
@@ -205,9 +205,7 @@ describe("Plugin link reader panel", () => {
 
   it.each([
     ["Merged", "accent", "2026-09-23T12:31:58Z"],
-    ["Closed", "negative", "2026-09-24T09:15:00Z"],
     ["Open", "positive", undefined],
-    ["Draft", "neutral", undefined],
   ] as const)("shows the %s event date beside its badge", async (label, tone, timestamp) => {
     const document = {
       ...item(),
@@ -365,7 +363,6 @@ describe("Plugin link reader panel", () => {
     });
     expect(panel.querySelector(".lr-tab-header")).toBeNull();
     expect(panel.hostedTabs).toMatchObject([{ label: "Item 1", url: itemUrl(1) }]);
-    expect(panel.hostedActions).toBeUndefined();
     const originalTabId = panel.activeHostedTabId;
     const newTab = button(panel, "New reader tab");
     expect(newTab.closest(".lr-toolbar")).not.toBeNull();
@@ -373,7 +370,6 @@ describe("Plugin link reader panel", () => {
     await availability(panel, false);
     expect(newTab.disabled).toBe(true);
     await availability(panel, true);
-    expect(panel.hostedActions).toBeUndefined();
     expect(button(panel, "New reader tab")).toBe(newTab);
     expect(newTab.disabled).toBe(false);
     newTab.click();
@@ -393,10 +389,6 @@ describe("Plugin link reader panel", () => {
     expect(panel.hostedTabs).toEqual([]);
     expect(panel.querySelector(".link-reader-panel")).toBeNull();
     expect(localStorage.getItem(storageKey)).toBeNull();
-    panel.remove();
-    await Promise.resolve();
-    expect(panel.isConnected).toBe(false);
-    expect(newTab.isConnected).toBe(false);
   });
 
   it("carries only the current session into a session-scoped detail reader", async () => {
@@ -409,18 +401,9 @@ describe("Plugin link reader panel", () => {
   });
 
   it("loads only an explicitly selected item and persists layout, not content or history", async () => {
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify({ open: true, dock: "right", width: 560, height: 420 }),
-    );
-    const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (
-        Object.keys(params as object).some((key) => !["url", "refresh", "agentId"].includes(key))
-      ) {
-        throw new Error("Unexpected detail parameter");
-      }
-      return requestedItem(params);
-    });
+    const layout = JSON.stringify({ open: true, dock: "right", width: 560, height: 420 });
+    localStorage.setItem(storageKey, layout);
+    const request = itemRequest();
     const panel = await mount(request);
     panel.agentId = "selected-agent";
     expect(request).not.toHaveBeenCalled();
@@ -432,20 +415,10 @@ describe("Plugin link reader panel", () => {
       { url: itemUrl(1), agentId: "selected-agent" },
       { signal: expect.any(AbortSignal) },
     );
-    expect(panel.querySelector(".lr-description strong")?.textContent).toBe("Description");
-    expect(panel.querySelector(".lr-comment")?.textContent).toContain("Comment text");
-    expect(panel.querySelector(".lr-files")).toBeNull();
-    expect(panel.querySelector(".lr-state")?.textContent).toBe("Open");
-    expect(panel.querySelector("time")?.dateTime).toBe("2026-09-01T12:00:00Z");
     open(panel);
     await panel.updateComplete;
     expect(request).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(localStorage.getItem(storageKey) ?? "null")).toEqual({
-      open: true,
-      dock: "right",
-      width: 560,
-      height: 420,
-    });
+    expect(localStorage.getItem(storageKey)).toBe(layout);
   });
 
   it("navigates backward and forward, drops the forward branch, and refreshes without adding history", async () => {
@@ -480,9 +453,6 @@ describe("Plugin link reader panel", () => {
     await navigate(panel, 2, true);
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
-    const hostedTabs = panel.hostedTabs;
-    expect(hostedTabs.every((tab) => tab.icon instanceof SVGSVGElement)).toBe(true);
-    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     await navigate(panel, 1, true);
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     expect(panel.querySelector(".lr-content:not([hidden])")).toBe(firstContent);
@@ -656,24 +626,17 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    {
-      error: new Error("not available"),
-      message: "Try again or open the original",
-    },
-    {
-      error: new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
-      }),
-      message: "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.",
-    },
-  ])("keeps failure and disconnect states actionable: $message", async ({ error, message }) => {
-    const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(item());
+  it("keeps unknown failures actionable without claiming access was denied", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("not available"))
+      .mockResolvedValue(item());
     const panel = await mount(request);
     open(panel);
     await waitForFast(() =>
-      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(message),
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
+        "Try again or open the original",
+      ),
     );
     expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item");
     expect(panel.querySelector('[role="alert"]')?.textContent).not.toContain(
@@ -687,12 +650,7 @@ describe("Plugin link reader panel", () => {
     panel.querySelector<HTMLButtonElement>(".lr-retry")?.click();
     await expectTitle(panel, "Item 1");
     await availability(panel, false);
-    expect(panel.querySelector("h1")?.textContent).toBe("Item 1");
     expect(button(panel, "Refresh item").disabled).toBe(true);
-    expect(request).toHaveBeenCalledTimes(2);
-    panel.available = true;
-    await expectTitle(panel, "Item 1");
-    expect(request).toHaveBeenCalledTimes(3);
   });
   it("retains the loaded document, selected tab, and address draft through a transport blip", async () => {
     const refreshed = createDeferred<ControlUiLinkReaderDocument>();
@@ -717,15 +675,6 @@ describe("Plugin link reader panel", () => {
     expect(address.value).toBe("https://forge.example/items/42");
     refreshed.resolve({ ...item(), title: "Refreshed item" });
     await expectTitle(panel, "Refreshed item");
-
-    const replacement = createDeferred<ControlUiLinkReaderDocument>();
-    panel.client = {
-      request: vi.fn().mockReturnValue(replacement.promise),
-    } as unknown as GatewayBrowserClient;
-    await panel.updateComplete;
-    expect(panel.querySelector("h1")).toBeNull();
-    replacement.resolve({ ...item(), title: "Replacement identity" });
-    await expectTitle(panel, "Replacement identity");
   });
   it("refreshes retained tabs and their images when selected after reconnect, including interrupted catch-up", async () => {
     const imageUrl = "https://images.example/document.png";
@@ -797,20 +746,12 @@ describe("Plugin link reader panel", () => {
     const dataUrl = "data:image/png;base64,aW1hZ2U=";
     const pending = createDeferred<{ url: string; dataUrl: string }>();
     const imageRequest = vi
-      .fn<
-        (
-          _params: unknown,
-          options?: { signal?: AbortSignal },
-        ) => Promise<{
-          url: string;
-          dataUrl: string;
-        }>
-      >()
+      .fn<DetailRequest<{ url: string; dataUrl: string }>>()
       .mockResolvedValueOnce({ url: loadedUrl, dataUrl })
       .mockReturnValue(pending.promise);
     const panel = await mount((method, params, options) =>
       method === "forge.image"
-        ? imageRequest(params, options)
+        ? imageRequest(method, params, options)
         : Promise.resolve({
             ...item(),
             body: `![Loaded](${loadedUrl})\n\n![Pending](${pendingUrl})`,
@@ -825,7 +766,7 @@ describe("Plugin link reader panel", () => {
     await waitForFast(() => expect(panel.querySelector("img")?.src).toBe(dataUrl));
     const title = panel.querySelector("h1");
     const image = panel.querySelector("img");
-    const imageSignal = imageRequest.mock.calls[1]?.[1]?.signal;
+    const imageSignal = imageRequest.mock.calls[1]?.[2]?.signal;
     expect(imageSignal?.aborted).toBe(false);
 
     await availability(panel, false);

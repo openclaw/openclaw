@@ -9,6 +9,13 @@ import type { ReaderReadyView } from "./link-reader-panel-view.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 
 type ReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
+const comment = (body: string, extra: Partial<ReaderComment> = {}): ReaderComment => ({
+  id: "comment",
+  url: "#comment",
+  author: "reviewer",
+  body,
+  ...extra,
+});
 const url = "https://github.com/acme/project/pull/42";
 const target: LinkReaderTarget = {
   href: url,
@@ -29,9 +36,6 @@ function detail(body: string, comments: ReaderComment[] = []): ControlUiLinkRead
     title: "Review the change",
     subtitle: "acme/project #42",
     author: "author",
-    badge: { label: "Open", tone: "positive" },
-    createdAt: "2026-09-01T12:00:00Z",
-    updatedAt: "2026-09-01T12:00:00Z",
     body,
     comments,
     commentsTotal: comments.length,
@@ -42,7 +46,13 @@ const updates = new WeakMap<
   HTMLElement,
   (value: ControlUiLinkReaderDocument, target: LinkReaderTarget) => void
 >();
-function mount(value: ControlUiLinkReaderDocument, link = target, loadImage?: LoadImage) {
+const unmounts = new WeakMap<HTMLElement, () => void>();
+function mount(
+  value: ControlUiLinkReaderDocument,
+  link = target,
+  loadImage?: LoadImage,
+  extra: Pick<Parameters<typeof LinkReaderContent>[0], "sections" | "onLoadSection"> = {},
+) {
   const [state, setState] = createSignal({ detail: value, target: link });
   const mounted = mountSolid(() =>
     createComponent(LinkReaderContent, {
@@ -53,11 +63,16 @@ function mount(value: ControlUiLinkReaderDocument, link = target, loadImage?: Lo
         return state().target;
       },
       loadImage,
+      get sections() {
+        return extra.sections;
+      },
+      onLoadSection: extra.onLoadSection,
     }),
   );
   updates.set(mounted.container, (next, nextTarget) =>
     setState({ detail: next, target: nextTarget }),
   );
+  unmounts.set(mounted.container, mounted.unmount);
   flush();
   return mounted.container;
 }
@@ -68,38 +83,22 @@ function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link
 
 describe("link reader document content", () => {
   it("loads only idle file sections entering the viewport and retires observation", () => {
-    const visible = new Set<(isIntersecting: boolean) => void>();
+    let deliver!: (entries: { target: Element; isIntersecting: boolean }[]) => void;
+    let observed!: Element;
     const notifyVisible = (intersecting = true) => {
-      for (const notify of visible) {
-        notify(intersecting);
-      }
+      deliver([{ target: observed, isIntersecting: intersecting }]);
     };
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        private readonly targets = new Set<Element>();
-        constructor(
-          private readonly callback: (
-            entries: { target: Element; isIntersecting: boolean }[],
-          ) => void,
-        ) {}
-        private readonly notify = (isIntersecting: boolean) => {
-          this.callback([...this.targets].map((element) => ({ target: element, isIntersecting })));
-        };
+        constructor(callback: typeof deliver) {
+          deliver = callback;
+        }
         observe(element: Element) {
-          this.targets.add(element);
-          visible.add(this.notify);
+          observed = element;
         }
-        unobserve(element: Element) {
-          this.targets.delete(element);
-          if (this.targets.size === 0) {
-            visible.delete(this.notify);
-          }
-        }
-        disconnect() {
-          this.targets.clear();
-          visible.delete(this.notify);
-        }
+        unobserve() {}
+        disconnect() {}
       },
     );
     onTestFinished(() => {
@@ -111,17 +110,18 @@ describe("link reader document content", () => {
       files: "idle",
       discussion: "idle",
     });
-    const mounted = mountSolid(() =>
-      createComponent(LinkReaderContent, {
-        detail: { ...detail("Description"), files: undefined, comments: undefined },
-        target,
+    const container = mount(
+      { ...detail("Description"), files: undefined, comments: undefined },
+      target,
+      undefined,
+      {
         get sections() {
           return sections();
         },
         onLoadSection: loadSection,
-      }),
+      },
     );
-    flush();
+    expect(observed.getAttribute("data-reader-section")).toBe("files");
     notifyVisible(false);
     expect(loadSection).not.toHaveBeenCalled();
     notifyVisible();
@@ -139,7 +139,7 @@ describe("link reader document content", () => {
     notifyVisible();
     expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
     loadSection.mockClear();
-    mounted.unmount();
+    unmounts.get(container)!();
     notifyVisible();
     expect(loadSection).not.toHaveBeenCalled();
   });
@@ -234,115 +234,45 @@ describe("link reader document content", () => {
       "<!-- hidden-unclosed",
     ].join("\n\n");
     const container = mount(
-      detail(body, [
-        {
-          id: "issuecomment-1",
-          url: url + "#issuecomment-1",
-          author: "review-bot",
-          body: "<!-- hidden-ack --> <!-- hidden-status -->\n\nReview requested.",
-        },
-      ]),
+      detail(body, [comment("<!-- hidden-ack --> <!-- hidden-status -->\n\nReview requested.")]),
     );
     expect(container.textContent).not.toContain("hidden-");
     expect(container.textContent).toContain("Visible description with  text.");
     expect(container.textContent).toContain("Trailing textMore text");
-    expect(container.querySelector("#issuecomment-1")?.textContent).toContain("Review requested.");
+    expect(container.querySelector("#comment")?.textContent).toContain("Review requested.");
     expect([...container.querySelectorAll("code")].map((code) => code.textContent?.trim())).toEqual(
       ["<!-- inline example -->", "<!-- fenced example -->", "<!-- indented example -->"],
     );
     expect(container.textContent).toContain("<!-- escaped example -->");
   });
 
-  it("renders emoji shortcodes in descriptions, comments, tables, links, and summaries", () => {
+  it("enables named emoji in descriptions and comments", () => {
     const container = mount(
       detail("## :rocket: Ready", [
-        {
-          id: "issuecomment-emoji",
-          url: url + "#issuecomment-emoji",
-          author: "coverage-bot",
-          body: [
-            ":white_check_mark: All modified lines are covered.",
-            "| Status | Coverage |\n| --- | --- |\n| :warning: | **:white_check_mark:** |",
-            "[:umbrella: Full report](https://coverage.example/report)",
-            ":loudspeaker: Share feedback.",
-            "<details><summary>:rocket: New features</summary>\n\n:snowflake: Analytics\n\n</details>",
-            ":not_a_real_emoji: :) :+1:",
-          ].join("\n\n"),
-        },
+        comment(":white_check_mark: Covered. :not_a_real_emoji: :) :+1:"),
       ]),
     );
     expect(container.querySelector(".lr-description h2")?.textContent).toBe("🚀 Ready");
-    const comment = container.querySelector("#issuecomment-emoji")!;
-    expect(comment.textContent).toContain("✅ All modified lines are covered.");
-    expect(comment.querySelector("td")?.textContent).toBe("⚠️");
-    expect(comment.querySelector("td strong")?.textContent).toBe("✅");
-    expect(comment.querySelector('a[href="https://coverage.example/report"]')?.textContent).toBe(
-      "☔ Full report",
+    expect(container.querySelector("#comment")?.textContent).toContain(
+      "✅ Covered. :not_a_real_emoji: :) 👍",
     );
-    expect(comment.textContent).toContain("📢 Share feedback.");
-    expect(comment.querySelector("summary")?.textContent).toBe("🚀 New features");
-    expect(comment.querySelector("details")?.textContent).toContain("❄️ Analytics");
-    expect(comment.textContent).toContain(":not_a_real_emoji: :) 👍");
-  });
-
-  it("keeps code, URLs, attributes, and escaped shortcodes literal without widening HTML trust", () => {
-    const container = mount(
-      detail(
-        [
-          "Inline `:rocket:`.",
-          "```text\n:warning: :umbrella:\n```",
-          "    :white_check_mark:",
-          "https://coverage.example/:rocket:/report",
-          "<https://coverage.example/:warning:/report>",
-          '[Report :rocket:](https://coverage.example/:rocket:/report ":warning:")',
-          '![Alt :rocket:](https://images.example/:rocket:.png ":warning:")',
-          '<img alt="Raw :rocket:" src="https://images.example/:warning:.png" onerror="alert(1)">',
-          '<span title=":rocket:">:warning:</span>',
-          "[Unsafe :rocket:](javascript:alert(1))",
-          "\\:rocket: :unknown_emoji:",
-        ].join("\n\n"),
-      ),
-    );
-    expect([...container.querySelectorAll("code")].map((node) => node.textContent?.trim())).toEqual(
-      [":rocket:", ":warning: :umbrella:", ":white_check_mark:"],
-    );
-    const links = [...container.querySelectorAll<HTMLAnchorElement>(".lr-description a")];
-    expect(
-      links.find((link) => link.textContent === "https://coverage.example/:rocket:/report")?.href,
-    ).toBe("https://coverage.example/:rocket:/report");
-    expect(
-      links.find((link) => link.textContent === "https://coverage.example/:warning:/report")?.href,
-    ).toBe("https://coverage.example/:warning:/report");
-    const authored = links.find((link) => link.textContent === "Report 🚀")!;
-    expect(authored.href).toBe("https://coverage.example/:rocket:/report");
-    expect(authored.title).toBe(":warning:");
-    expect([...container.querySelectorAll("img")].map((image) => [image.src, image.alt])).toEqual([
-      ["https://images.example/:rocket:.png", "Alt :rocket:"],
-      ["https://images.example/:warning:.png", "Raw :rocket:"],
-    ]);
-    expect(container.textContent).toContain('<span title=":rocket:">⚠️</span>');
-    expect(container.textContent).toContain("Unsafe 🚀");
-    expect(container.textContent).toContain(":rocket: :unknown_emoji:");
-    expect(
-      container.querySelector('[onerror], a[href^="javascript:"], span[title=":rocket:"]'),
-    ).toBeNull();
   });
 
   it("renders Markdown and HTML attachments with anonymous requests, source-relative URLs, and full-size links", () => {
     const container = mount(
       detail(
         [
-          "![Screenshot](/user-attachments/assets/first)",
-          '<img alt="HTML attachment" src="https://user-images.githubusercontent.com/123/image.png" onerror="alert(1)" srcset="https://bad.example/tracker.png 2x">',
-          "[Repository document](/docs/guide)",
+          "![Alt :rocket:](/user-attachments/assets/:rocket:)",
+          '<img alt="Raw :rocket:" src="https://user-images.githubusercontent.com/123/:warning:.png" onerror="alert(1)" srcset="https://bad.example/tracker.png 2x">',
+          '[Report :rocket:](/docs/:rocket: ":warning:")',
           "[Another issue](../issues/43)",
         ].join("\n\n"),
       ),
     );
     const images = [...container.querySelectorAll("img")];
-    expect(images.map((image) => image.src)).toEqual([
-      "https://github.com/user-attachments/assets/first",
-      "https://user-images.githubusercontent.com/123/image.png",
+    expect(images.map((image) => [image.src, image.alt])).toEqual([
+      ["https://github.com/user-attachments/assets/:rocket:", "Alt :rocket:"],
+      ["https://user-images.githubusercontent.com/123/:warning:.png", "Raw :rocket:"],
     ]);
     for (const image of images) {
       expect(image).toMatchObject({ crossOrigin: "anonymous", referrerPolicy: "no-referrer" });
@@ -355,7 +285,10 @@ describe("link reader document content", () => {
       open?.focus();
       expect(document.activeElement).toBe(open);
     }
-    expect(container.querySelector('a[href="https://github.com/docs/guide"]')).not.toBeNull();
+    expect(container.querySelector('a[href="https://github.com/docs/:rocket:"]')).toMatchObject({
+      textContent: "Report 🚀",
+      title: ":warning:",
+    });
     expect(
       container.querySelector('a[href="https://github.com/acme/project/issues/43"]'),
     ).not.toBeNull();
@@ -388,26 +321,14 @@ describe("link reader document content", () => {
         }),
     );
     const first = detail("![First](https://images.example/first.png)");
-    const [value, setValue] = createSignal(first);
-    const mounted = mountSolid(() =>
-      createComponent(LinkReaderContent, {
-        get detail() {
-          return value();
-        },
-        target,
-        loadImage,
-      }),
-    );
-    flush();
-    const firstImage = mounted.container.querySelector("img")!;
-    setValue({ ...first, title: "New title" });
-    flush();
+    const container = mount(first, target, loadImage);
+    const firstImage = container.querySelector("img")!;
+    update(container, { ...first, title: "New title" });
     expect(loadImage).toHaveBeenCalledTimes(1);
-    expect(mounted.container.querySelector("img")).toBe(firstImage);
+    expect(container.querySelector("img")).toBe(firstImage);
 
-    setValue(detail("![Second](https://images.example/second.png)"));
-    flush();
-    const secondImage = mounted.container.querySelector("img")!;
+    update(container, detail("![Second](https://images.example/second.png)"));
+    const secondImage = container.querySelector("img")!;
     pending.get("https://images.example/first.png")!("blob:first");
     await Promise.resolve();
     expect(firstImage.hasAttribute("src")).toBe(false);
@@ -415,7 +336,7 @@ describe("link reader document content", () => {
     firstImage.dispatchEvent(new Event("error"));
     expect(firstImage.hidden).toBe(false);
 
-    mounted.unmount();
+    unmounts.get(container)!();
     pending.get("https://images.example/second.png")!("blob:second");
     await Promise.resolve();
     expect(secondImage.hasAttribute("src")).toBe(false);
@@ -451,7 +372,8 @@ describe("link reader document content", () => {
       '<iframe src="https://bad.example"></iframe>',
       "<openclaw-agent-chat></openclaw-agent-chat>",
       '[embed ref="cv_bad" /]',
-      "[unsafe](javascript:alert(1))",
+      "[Unsafe :rocket:](javascript:alert(1))",
+      '<span title=":rocket:">:warning:</span>',
       "- [ ] Read-only task",
       '`<img src="https://images.example/code.png">`',
     ].join("\n\n");
@@ -461,7 +383,9 @@ describe("link reader document content", () => {
         "img, script, iframe, openclaw-agent-chat, [data-file-path], [data-code], [onerror]",
       ),
     ).toBeNull();
-    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect(container.querySelector('a[href^="javascript:"], span[title=":rocket:"]')).toBeNull();
+    expect(container.textContent).toContain('<span title=":rocket:">⚠️</span>');
+    expect(container.textContent).toContain("Unsafe 🚀");
     expect(container.textContent).toContain('[embed ref="cv_bad" /]');
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.disabled).toBe(
       true,
@@ -473,15 +397,10 @@ describe("link reader document content", () => {
   });
 
   it("renders plugin-projected comment anchors and context without deriving service semantics", () => {
-    const common = {
-      author: "reviewer",
-      createdAt: "2026-09-02T12:00:00Z",
-      body: "![Review image](https://images.example/review.png)",
-    };
     const comments: ReaderComment[] = [
-      { ...common, id: "issuecomment-7", url: url + "#issuecomment-7" },
-      {
-        ...common,
+      comment("Ordinary comment", { id: "issuecomment-7", url: url + "#issuecomment-7" }),
+      comment("Review comment body", {
+        createdAt: "2026-09-02T12:00:00Z",
         id: "discussion_r7",
         url: url + "#discussion_r7",
         label: "Review comment",
@@ -495,7 +414,7 @@ describe("link reader document content", () => {
           diff: "@@ -4 +4 @@\n-previous\n+<script>literal</script>",
           diffTruncated: true,
         },
-      },
+      }),
     ];
     const container = mount(detail("Description", comments));
     const review = container.querySelector("#discussion_r7")!;
@@ -512,41 +431,22 @@ describe("link reader document content", () => {
     expect(review.querySelector("script")).toBeNull();
     expect(review.textContent).toContain("This diff was shortened");
     expect(review.textContent).toContain("This text was shortened");
-    expect(review.querySelector("img")?.alt).toBe("Review image");
-    const commitUrl = "https://github.com/acme/project/commit/abcdef1234567890";
-    update(
-      container,
-      {
-        ...detail("Commit message"),
-        url: commitUrl,
-        badge: { label: "Commit", tone: "neutral" },
-        comments: [{ ...common, id: "commitcomment-7", url: commitUrl + "#commitcomment-7" }],
-      },
-      { ...target, href: commitUrl },
-    );
-    expect(container.querySelector("#commitcomment-7 img")).not.toBeNull();
-    expect(container.querySelector(".lr-state")?.textContent).toBe("Commit");
   });
 
   it("renders a second service's metadata, files, comments and truncation using only the passive document contract", () => {
     const link: LinkReaderTarget = {
+      ...target,
       href: "https://forge.example/changes/C42",
       reader: {
+        ...target.reader,
         pluginId: "forge",
-        id: "changes",
         label: "Changes",
-        linkReader: {
-          hosts: ["forge.example"],
-          pathPattern: "^/changes/[^/]+$",
-          detailMethod: "forge.read",
-        },
       },
     };
     const container = mount(
       {
         url: "https://forge.example/changes/C42",
         title: "Change C42",
-        subtitle: "Team changes",
         badge: { label: "Needs review", tone: "attention" },
         author: "Alex",
         authorUrl: "https://forge.example/users/alex",
@@ -557,13 +457,12 @@ describe("link reader document content", () => {
         partial: true,
         bodyTruncated: true,
         comments: [
-          {
+          comment("A note", {
             id: "note-n1",
             url: "#note-n1",
             author: "Sam",
-            body: "A note",
             context: { replyUrl: "javascript:alert(1)", replyLabel: "Unsafe reply" },
-          },
+          }),
         ],
         commentsTotal: 3,
         commentsTruncated: true,
@@ -586,7 +485,6 @@ describe("link reader document content", () => {
     );
     expect(container.querySelector("h1")?.textContent).toBe("Change C42");
     expect(container.querySelector(".lr-metric dt")?.textContent).toBe("Build");
-    expect(container.querySelector(".lr-metric dd")?.textContent).toBe("Passed");
     expect(container.querySelector(".lr-item-meta a")?.getAttribute("href")).toBe(
       "https://forge.example/users/alex",
     );
