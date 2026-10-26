@@ -139,59 +139,46 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
-  it("hangs up a GA call when sideband startup fails", async () => {
+  it.each(["sideband startup", "answer delivery"])("hangs up after GA %s fails", async (phase) => {
     const privateValue = "sensitive-route";
     const onError = vi.fn();
-    const bridge = makeBridge({
-      connect: vi.fn(async () => {
-        throw new Error(privateValue);
-      }),
-      isConnected: vi.fn(() => false),
-    });
+    const bridge = makeBridge();
+    if (phase === "sideband startup") {
+      vi.mocked(bridge.connect).mockRejectedValue(new Error(privateValue));
+      vi.mocked(bridge.isConnected).mockReturnValue(false);
+    }
     const fetchMock = createGaFetch("rtc_error");
     const { realtime } = makeBroker({ fetchImpl: fetchMock });
     const reservation = await reserveGaSession(realtime, () => bridge, {
       bindBridge: vi.fn(),
       onError,
     });
-    const response = await post(realtime, {
-      token: reservation.clientSecret,
-      body: AUDIO_ONLY_SDP,
-    });
-    expect(response.res.statusCode).toBe(502);
-    expect(response.readBody()).toContain("OpenAI GPT-Live transport failed");
-    expect(response.readBody()).not.toContain(privateValue);
-    expect(onError).toHaveBeenCalledOnce();
-    const callbackError = onError.mock.calls[0]?.[0] as Error | undefined;
-    expect(callbackError).toBeInstanceOf(Error);
-    expect(callbackError).toMatchObject({
-      name: "Error",
-      message: "OpenAI GPT-Live transport failed",
-    });
-    expect(callbackError?.cause).toBeUndefined();
-    expect(bridge.close).toHaveBeenCalledOnce();
-    expect(
-      fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_error/hangup")),
-    ).toHaveLength(1);
-  });
-
-  it("hangs up when the GA answer is not delivered to the client", async () => {
-    const bridge = makeBridge();
-    const fetchMock = createGaFetch("rtc_delivery");
-    const { realtime } = makeBroker({ fetchImpl: fetchMock });
-    const reservation = await reserveGaSession(realtime, () => bridge);
     const response = createResponseHarness();
-    response.end.mockImplementationOnce(() => {
-      queueMicrotask(() => response.res.emit("close"));
-    });
+    if (phase === "answer delivery") {
+      response.end.mockImplementationOnce(() => {
+        queueMicrotask(() => response.res.emit("close"));
+      });
+    }
     await realtime.handler(
       createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
       response.res,
     );
-
+    if (phase === "sideband startup") {
+      expect(response.res.statusCode).toBe(502);
+      expect(response.readBody()).toContain("OpenAI GPT-Live transport failed");
+      expect(response.readBody()).not.toContain(privateValue);
+      expect(onError).toHaveBeenCalledOnce();
+      const callbackError = onError.mock.calls[0]?.[0] as Error | undefined;
+      expect(callbackError).toBeInstanceOf(Error);
+      expect(callbackError).toMatchObject({
+        name: "Error",
+        message: "OpenAI GPT-Live transport failed",
+      });
+      expect(callbackError?.cause).toBeUndefined();
+    }
     expect(bridge.close).toHaveBeenCalledOnce();
     expect(
-      fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_delivery/hangup")),
+      fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_error/hangup")),
     ).toHaveLength(1);
   });
 
@@ -669,48 +656,44 @@ describe("GPT-Live browser session lifecycle", () => {
   });
 
   it.each([
-    {
-      name: "throwing error callback",
-      trigger: (socket: FakeSocket) => socket.emit("error", new Error("connection lost")),
-      throwingCallback: "error",
-    },
-    {
-      name: "binary protocol failure",
-      trigger: (socket: FakeSocket) => emitSideband(socket, { unexpected: true }, true),
-    },
-  ])(
-    "reports $name once and releases the active browser owner",
-    async ({ trigger, throwingCallback }) => {
-      const { realtime, redeem, reserveLegacy, runAgentConsult } = makeBroker();
-      const notifications: string[] = [];
-      let reentered: Promise<void> | undefined;
-      const onError = vi.fn(() => {
-        notifications.push("error");
-        reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
-        if (throwingCallback === "error") {
-          throw new Error("host error callback failed");
-        }
-      });
-      const onClose = vi.fn((reason: string) => {
-        notifications.push(`close:${reason}`);
-      });
-      const reservation = await reserveLegacy({ bindBridge: vi.fn(), onError, onClose });
-      const { socket } = await redeem(reservation.clientSecret);
-      trigger(socket);
-      expect(socket.closed).toBe(true);
-      await reentered;
-      expect(realtime.getSessionCounts()).toEqual(emptyCounts);
-      await realtime.cleanup();
-      socket.emit("error", new Error("late socket error"));
-      socket.emit("close", 1006, Buffer.from("late close"));
-      emitSideband(socket, delegation("late", "must not run"));
+    [
+      "throwing error callback",
+      (socket: FakeSocket) => socket.emit("error", new Error("connection lost")),
+    ],
+    [
+      "binary protocol failure",
+      (socket: FakeSocket) => emitSideband(socket, { unexpected: true }, true),
+    ],
+  ] as const)("reports %s once and releases the active browser owner", async (name, trigger) => {
+    const { realtime, redeem, reserveLegacy, runAgentConsult } = makeBroker();
+    const notifications: string[] = [];
+    let reentered: Promise<void> | undefined;
+    const onError = vi.fn(() => {
+      notifications.push("error");
+      reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
+      if (name === "throwing error callback") {
+        throw new Error("host error callback failed");
+      }
+    });
+    const onClose = vi.fn((reason: string) => {
+      notifications.push(`close:${reason}`);
+    });
+    const reservation = await reserveLegacy({ bindBridge: vi.fn(), onError, onClose });
+    const { socket } = await redeem(reservation.clientSecret);
+    trigger(socket);
+    expect(socket.closed).toBe(true);
+    await reentered;
+    expect(realtime.getSessionCounts()).toEqual(emptyCounts);
+    await realtime.cleanup();
+    socket.emit("error", new Error("late socket error"));
+    socket.emit("close", 1006, Buffer.from("late close"));
+    emitSideband(socket, delegation("late", "must not run"));
 
-      expect(notifications).toEqual(["error", "close:error"]);
-      expect(onError).toHaveBeenCalledTimes(1);
-      expect(onClose).toHaveBeenCalledOnce();
-      expect(runAgentConsult).not.toHaveBeenCalled();
-    },
-  );
+    expect(notifications).toEqual(["error", "close:error"]);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(runAgentConsult).not.toHaveBeenCalled();
+  });
   it("releases browser transport while accepted delegation work finishes without late delivery", async () => {
     let consultSignal: AbortSignal | undefined;
     const { promise: result, resolve: finishConsult } = Promise.withResolvers<{ text: string }>();
