@@ -1,27 +1,40 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
-import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiInitialRoster,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
+import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Warm history subscription" });
-const sessionId = "b1c2cd3c-1234-4321-9876-123456789abc";
-const sessionKey = `agent:main:chat:${sessionId}`;
+const inventory = createControlUiTeamScaleFixture({ offRosterSession: true });
+const sessionKey = inventory.selectedSessionKey;
+const sessionId = sessionKey.slice(sessionKey.lastIndexOf(":") + 1);
 const cursor = "cached-history-cursor";
-const session = createControlUiSessionRow(sessionKey, "Warm history", 1, {
+const inventorySession = inventory.sidebarListInput.rows.find((row) => row.key === sessionKey);
+if (!inventorySession) {
+  throw new Error("Missing off-roster session inventory");
+}
+const session = {
+  ...inventorySession,
+  label: "Warm history",
+  displayName: "Warm history",
+  updatedAt: 1,
   activeLeafEntryId: "cached-leaf",
-});
+};
+const sessions = inventory.sidebarListInput.rows.map((row) =>
+  row.key === sessionKey ? session : row,
+);
 const message = (seq: number, text: string, id = `entry-${seq}`) => ({
   role: seq % 2 ? "user" : "assistant",
   content: text,
@@ -40,19 +53,6 @@ async function expectTranscript(page: Page, texts: string[]): Promise<void> {
       ).map((text) => text.trim()),
     )
     .toEqual(texts);
-}
-
-async function persistTranscript(page: Page): Promise<void> {
-  await page.waitForFunction(() =>
-    Object.keys(localStorage).some((key) => key.startsWith("openclaw.control.bootRecord.v1:")),
-  );
-  await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
-    const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
-    if (!pane.sessionSnapshotStore) {
-      throw new Error("Missing transcript snapshot owner");
-    }
-    await pane.sessionSnapshotStore.flush();
-  });
 }
 
 async function expectTranscriptReady(page: Page): Promise<void> {
@@ -78,26 +78,52 @@ suite.define(() => {
     "scope change",
   ] as const)("revalidates a persisted transcript after %s on warm reload", async (change) => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        awaitInitialRoster: false,
-        authMethod: "trusted-proxy",
-        authMode: "trusted-proxy",
-        sessionKey,
-        sessions: [],
-        heldMethods: ["connect", "sessions.resolve", "sessions.messages.subscribe", "chat.startup"],
-        methodResponses: {
-          "sessions.describe": { session },
-          "sessions.resolve": { ok: true, ...session, agentId: "main" },
-          "chat.startup": {
-            sessionId: session.sessionId,
-            sessionInfo: session,
-            messages: cached,
-            deltaCursor: cursor,
-            hasMore: false,
-            totalMessages: cached.length,
+      const roster = createTeamScaleSidebarListOwner({
+        ...inventory.sidebarListInput,
+        rows: sessions,
+      });
+      const gateway = await installMockGateway(
+        page,
+        {
+          awaitInitialRoster: false,
+          authMethod: "trusted-proxy",
+          authMode: "trusted-proxy",
+          sessionKey,
+          sessions,
+          presenceUsers: inventory.scenario.presenceUsers?.filter((person) => person.self),
+          heldMethods: [
+            "connect",
+            "sessions.resolve",
+            "sessions.messages.subscribe",
+            "chat.startup",
+          ],
+          methodResponses: {
+            "sessions.describe": { session },
+            "sessions.resolve": { ok: true, ...session, agentId: "main" },
+            "chat.startup": {
+              sessionId: session.sessionId,
+              sessionInfo: session,
+              messages: cached,
+              deltaCursor: cursor,
+              hasMore: false,
+              totalMessages: cached.length,
+            },
           },
         },
-      });
+        {
+          requestHandlers: {
+            "sessions.list": (params) => roster.list(isRecord(params) ? params : {}).result,
+          },
+        },
+      );
+      const updateSession = async (next: typeof session) => {
+        roster.apply({ upsert: [next] });
+        await gateway.setSessionsListResponse({
+          sessions: sessions.map((row) => (row.key === sessionKey ? next : row)),
+        });
+        await gateway.setMethodResponse("sessions.describe", { session: next });
+        await gateway.setMethodResponse("sessions.resolve", { ok: true, ...next, agentId: "main" });
+      };
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
@@ -110,7 +136,16 @@ suite.define(() => {
       await expectTranscript(page, ["Saved question", "Saved answer"]);
       expect(await gateway.getRequests("chat.startup")).toEqual([]);
       await waitForControlUiInitialRoster(page);
-      await persistTranscript(page);
+      await page.waitForFunction(() =>
+        Object.keys(localStorage).some((key) => key.startsWith("openclaw.control.bootRecord.v1:")),
+      );
+      const persisted = await page.evaluate(persistColdLoadWarmState, {
+        sessionKey,
+        sidebarView: "sessions",
+        offRosterSession: true,
+      });
+      expect(persisted.rosterContainsSession).toBe(false);
+      expect(persisted.messages).toBe(2);
 
       const reset = change === "stale" || change === "compaction" || change === "branch change";
       const replacement = change === "compaction" || change === "branch change";
@@ -199,13 +234,7 @@ suite.define(() => {
           ...hello,
           auth: { ...hello.auth, recoveryScope: "other-history-owner" },
         });
-        await gateway.setSessionsListResponse({ sessions: [otherSession] });
-        await gateway.setMethodResponse("sessions.describe", { session: otherSession });
-        await gateway.setMethodResponse("sessions.resolve", {
-          ok: true,
-          ...otherSession,
-          agentId: "main",
-        });
+        await updateSession(otherSession);
         await gateway.setMethodResponse("chat.startup", {
           sessionId: otherSession.sessionId,
           sessionInfo: otherSession,
@@ -222,11 +251,10 @@ suite.define(() => {
         await gateway.waitForRequest("connect", { after: connects });
         await gateway.resolveDeferred("connect");
         await waitForControlUiGatewayReady(page);
-        const replacementSubscribe = await gateway.waitForRequest("sessions.messages.subscribe", {
+        await gateway.waitForRequest("sessions.messages.subscribe", {
           match: { key: sessionKey },
           after: subscriptions,
         });
-        expect(replacementSubscribe.params).not.toHaveProperty("initialHistory.cursor");
         await gateway.resolveDeferred(
           "sessions.messages.subscribe",
           {
@@ -248,16 +276,24 @@ suite.define(() => {
           { match: warm.params, exactParams: true },
         );
         await gateway.resolveDeferred("sessions.messages.subscribe");
+        const scopedRefill = await gateway.waitForRequest("chat.startup");
+        expect(scopedRefill.params).not.toHaveProperty("cursor");
+        for (const text of ["Next question", "Next answer"]) {
+          expect(await page.locator(".chat-thread").getByText(text, { exact: true }).count()).toBe(
+            0,
+          );
+        }
+        await gateway.resolveDeferred("chat.startup");
         await expectTranscriptReady(page);
         await expectTranscript(
           page,
           otherMessages.map((entry) => entry.content),
         );
-        expect(await gateway.getRequests("chat.startup")).toEqual([]);
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
         return;
       }
       await expectTranscript(page, ["Saved question", "Saved answer"]);
-      await gateway.setSessionsListResponse({ sessions: [finalSession] });
+      await updateSession(finalSession);
       await gateway.resolveDeferred("sessions.messages.subscribe");
       if (reset) {
         const refill = await gateway.waitForRequest("chat.startup");
