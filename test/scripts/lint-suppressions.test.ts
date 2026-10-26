@@ -186,6 +186,8 @@ describe("production lint suppressions", () => {
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
+        // The counts-only probe restores the native copying sort in finally.
+        "scripts/perf/memory-prompt-copy-measure.ts|no-extend-native|2",
         // Keep measured fixture shapes unchanged; construction is outside the benchmark loop.
         "scripts/perf/memory-ranking-copies.ts|oxc/no-map-spread|2",
         // The size-record probe forwards Map.set with the original map receiver.
@@ -311,6 +313,8 @@ describe("production lint suppressions", () => {
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/installed-plugin-index-policy.ts|unicorn/no-array-sort|2",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        // Prompt preparation sorts only fresh private tool and supplement arrays.
+        "src/plugins/memory-state.ts|unicorn/no-array-sort|2",
         // Reflect.apply supplies the wrapped callable as Function.prototype.bind's receiver.
         "src/plugins/plugin-instance-bindings.ts|typescript/unbound-method|1",
         "src/plugins/plugin-instance-owned-values.ts|eslint/no-constructor-return|1",
