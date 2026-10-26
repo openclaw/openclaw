@@ -285,6 +285,7 @@ const repositoryScriptEntries = [
   "scripts/perf/audio-queue-pool-retention.ts!",
   "scripts/perf/catalog-worker-retention-measure.ts!",
   "scripts/perf/codex-catalog-reconcile-measure.ts!",
+  "scripts/perf/codex-catalog-rollouts.ts!",
   "scripts/perf/command-capture-pool-retention.ts!",
   "scripts/perf/control-ui-forbidden-rpc-measure.ts!",
   "scripts/perf/device-pairing-publication-measure.ts!",
