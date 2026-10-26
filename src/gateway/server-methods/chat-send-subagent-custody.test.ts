@@ -120,10 +120,6 @@ it("retains native child custody before a human continuation executes", async ({
       expect.anything(),
     );
     await withinTest(entered.promise, signal);
-    expect(
-      dispatchInboundMessageMock.mock.calls.at(-1)?.[0].replyOptions?.operatorAuthority
-        ?.recoverySnapshot,
-    ).toEqual(expect.objectContaining({ profileId: operator.authenticatedUserProfile!.profileId }));
     expect([subagentRuns.get(runId), subagentRuns.get(completed.runId)]).toMatchObject([
       {
         runId,

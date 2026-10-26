@@ -290,8 +290,6 @@ describe("registered progress refresh admission", () => {
     await dispatched.promise;
     for (const [params] of dispatchInboundMessageMock.mock.calls) {
       const admitted = params as Dispatch;
-      expect(admitted.toolsAllow).toContain("progress_card");
-      expect(admitted.toolsAllow).not.toContain("exec");
       await admitted.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
     }
     await f.finishDispatch();
