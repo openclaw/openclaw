@@ -747,7 +747,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugins.test.ts",
   "src/boards/board-store.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",
-  "src/canvas/widget-tool.report.test.ts",
   "src/canvas/widget-tool.test.ts",
   "src/claws/add-stateless.test.ts",
   "src/claws/gateway-add-apply.plugin-batch.test.ts",

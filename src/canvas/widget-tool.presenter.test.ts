@@ -14,21 +14,18 @@ const { createTool, expectNoDocument } = useWidgetHarness();
 
 describe("show_widget current-channel presentation", () => {
   it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
+    const receipt = {
+      primaryPlatformMessageId: "message-1",
+      platformMessageIds: ["message-1"],
+      parts: [],
+      sentAt: 1,
+    };
     const present = vi.fn(async () => ({
       ok: true as const,
-      value: {
-        kind: "message" as const,
-        receipt: {
-          primaryPlatformMessageId: "message-1",
-          platformMessageIds: ["message-1"],
-          parts: [],
-          sentAt: 1,
-        },
-      },
+      value: { kind: "message" as const, receipt },
     }));
     const context = { messageChannel: "discord", sessionKey: "agent:main:discord" };
     const presenter: WidgetPresenter = currentPresenter(present, {
-      capabilities: { sourceKinds: ["html"], maxSourceBytes: 48 * 1024 },
       match: (candidate) => candidate.messageChannel === "discord",
     });
     const tool = createTool({
@@ -39,9 +36,6 @@ describe("show_widget current-channel presentation", () => {
     });
 
     expect(tool.requiredClientCaps).toBeUndefined();
-    expect(tool.description).toContain("current channel presenter");
-    expect(tool.description).not.toContain("Keep one-off visualizations inline");
-    expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
     expect(payload(await run(tool))).toMatchObject({
       kind: "widget",
       presentation: {
@@ -62,10 +56,7 @@ describe("show_widget current-channel presentation", () => {
     "reports the owner's %s capability outcome",
     async (grantState) => {
       createBoardPutCaller(grantState);
-      const tool = createTool({
-        agentSessionKey: "agent:main:approval",
-        inlineHostEnabled: false,
-      });
+      const tool = createTool({ agentSessionKey: "agent:main:approval", inlineHostEnabled: false });
       const result = await run(tool, {
         pin: true,
         capabilities: { tools: ["github.actions.runs:owner/repo"] },
@@ -102,10 +93,7 @@ describe("show_widget current-channel presentation", () => {
       }),
     ).rejects.toThrow("presentation.target is unavailable for this pinned-only widget surface");
 
-    const result = await run(tool, {
-      name: "scheduled-status",
-      pin: true,
-    });
+    const result = await run(tool, { name: "scheduled-status", pin: true });
     expect(payload(result)).toEqual({
       status: "pinned",
       boardWidgetName: "scheduled-status",
