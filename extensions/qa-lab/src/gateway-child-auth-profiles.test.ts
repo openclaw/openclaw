@@ -65,18 +65,10 @@ describe("QA Gateway auth profile staging", () => {
       await mkdir(path.dirname(configPath));
       await writeFile(
         configPath,
-        `{
-          // Normal OpenClaw config syntax, not strict JSON.
-          models: { providers: {
-            'custom-openai': {
-              baseUrl: 'https://proxy.example.test/v1',
-              api: 'openai-responses',
-              apiKey: 'qa-json5-key',
-              models: [],
-            },
-            ignored: { baseUrl: 'https://ignored.example.test', models: [] },
-          } },
-        }`,
+        // Comments, single quotes, unquoted keys and a trailing comma exercise JSON5.
+        "// JSON5 provider config\n{models:{providers:{'custom-openai':{baseUrl:'https://proxy.example.test/v1'," +
+          "api:'openai-responses',apiKey:'qa-json5-key',models:[]}," +
+          "ignored:{baseUrl:'https://ignored.example.test',models:[]},}}}",
       );
       vi.spyOn(os, "homedir").mockReturnValue(home);
       const {
@@ -116,10 +108,7 @@ describe("QA Gateway auth profile staging", () => {
     const token = `sk-ant-oat01-${"c".repeat(80)}`;
     vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", token);
 
-    const cfg = await stageQaLiveAnthropicSetupToken({
-      cfg: {},
-      stateDir,
-    });
+    const cfg = await stageQaLiveAnthropicSetupToken({ cfg: {}, stateDir });
 
     expect(cfg.auth?.profiles?.["anthropic:qa-setup-token"]).toMatchObject({
       provider: "anthropic",
@@ -138,9 +127,7 @@ describe("QA Gateway auth profile staging", () => {
       env,
       apiKey === undefined
         ? {}
-        : {
-            models: { providers: { openai: { baseUrl: "", models: [], apiKey } } },
-          },
+        : { models: { providers: { openai: { baseUrl: "", models: [], apiKey } } } },
     );
     expect(cfg.auth?.profiles?.["qa-live-openai-env"]).toMatchObject({
       provider: "openai",
@@ -172,12 +159,7 @@ describe("QA Gateway auth profile staging", () => {
     for (const agentId of ["main", "qa"]) {
       expect((await readAuthProfileStore(stateDir, agentId)).profiles).toEqual({});
     }
-    const { env } = await setup.prepare(
-      {
-        providerMode: "live-frontier",
-      },
-      baseEnv,
-    );
+    const { env } = await setup.prepare({ providerMode: "live-frontier" }, baseEnv);
     expect(env.CODEX_API_KEY).toBe("synthetic-qa-api-key");
     expect("OPENCLAW_QA_CODEX_API_KEY_HANDOFF" in env).toBe(false);
   });

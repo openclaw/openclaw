@@ -221,16 +221,6 @@ describe("qa multipass runtime", () => {
     );
   });
 
-  it("forwards fail-fast to the real guest QA suite command", async () => {
-    const { persistedScript: script } = await guestScripts({
-      outputDirName: "multipass-fail-fast-test",
-      failFast: true,
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(script).toContain("'--fail-fast'");
-  });
-
   it.skipIf(process.platform === "win32").each([
     ["missing", "24.99.0", false],
     ["24.15.0", "24.99.0", false],
@@ -380,7 +370,7 @@ describe("qa multipass runtime", () => {
     );
   });
 
-  it("redacts persisted credentials while forwarding them to the executable script", async () => {
+  it("forwards guest options and credentials while redacting persisted credentials", async () => {
     const credentials = [
       "OPENAI_API_KEY",
       "OPENROUTER_API_KEY",
@@ -403,7 +393,12 @@ describe("qa multipass runtime", () => {
         alternateModel: "openai/gpt-5.6-luna",
         fastMode: true,
         allowFailures: true,
+        failFast: true,
         scenarioIds: ["channel-chat-baseline"],
+        runtimePair: ["openclaw", "codex"],
+        channelDriver: "crabline",
+        channelId: "telegram",
+        enabledPluginIds: ["browser", "memory-core", "browser"],
       },
       true,
     );
@@ -416,24 +411,18 @@ describe("qa multipass runtime", () => {
     expect(executableScript).not.toContain("UNRELATED_SECRET");
     expect(executableScript).not.toContain("NODE_OPTIONS");
     expect(executableScript).not.toContain("<redacted>");
-    expect(persistedScript).toContain("'--model' 'openai/gpt-5.6-luna'");
-    expect(persistedScript).toContain("'--alt-model' 'openai/gpt-5.6-luna'");
-    expect(persistedScript).toContain("'--fast'");
-    expect(persistedScript).toContain("'--allow-failures'");
-  });
-
-  it("persists runtime, channel-driver, and plugin selections", async () => {
-    const { persistedScript: script } = await guestScripts({
-      outputDirName: "multipass-selection-test",
-      runtimePair: ["openclaw", "codex"],
-      channelDriver: "crabline",
-      channelId: "telegram",
-      enabledPluginIds: ["browser", "memory-core", "browser"],
-    });
-
-    expect(script).toContain("'--runtime-pair' 'openclaw,codex'");
-    expect(script).toContain("'--channel-driver' 'crabline' '--channel' 'telegram'");
-    expect(script).toContain("'--enable-plugin' 'browser' '--enable-plugin' 'memory-core'");
+    for (const option of [
+      "'--model' 'openai/gpt-5.6-luna'",
+      "'--alt-model' 'openai/gpt-5.6-luna'",
+      "'--fast'",
+      "'--allow-failures'",
+      "'--fail-fast'",
+      "'--runtime-pair' 'openclaw,codex'",
+      "'--channel-driver' 'crabline' '--channel' 'telegram'",
+      "'--enable-plugin' 'browser' '--enable-plugin' 'memory-core'",
+    ]) {
+      expect(persistedScript).toContain(option);
+    }
   });
 
   it("uses os.homedir() when HOME is unset for CODEX_HOME discovery", async () => {
