@@ -1292,6 +1292,7 @@ src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
+src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -2376,7 +2377,6 @@ packages/ai/src/utils/sanitize-unicode.ts
 packages/ai/src/utils/stream-first-event-timeout.ts
 packages/ai/src/utils/streaming-byte-guard.ts
 packages/ai/src/utils/system-prompt-cache-boundary.ts
-packages/ai/src/utils/tls-certificate-errors.ts
 packages/ai/src/utils/usage.ts
 packages/gateway-protocol/src/chat-work-context.ts
 packages/gateway-protocol/src/schema/agent-database-admission.ts
