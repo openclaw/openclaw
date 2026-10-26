@@ -84,6 +84,7 @@ describe("detached subagent restart recovery", () => {
     { verified: false, transcript: true, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "operator" },
     { verified: true, transcript: true, sourceKind: "operator-drain" },
+    { verified: true, transcript: true, sourceKind: "operator-independent-drain" },
     { verified: true, transcript: true, sourceKind: "operator-followup" },
     { verified: true, transcript: true, sourceKind: "operator-followup-mismatched" },
     { verified: true, transcript: false, sourceKind: "operator" },
@@ -108,6 +109,7 @@ describe("detached subagent restart recovery", () => {
       });
       const channelSource = sourceKind.includes("channel");
       const drain = sourceKind.endsWith("-drain");
+      const independent = sourceKind === "operator-independent-drain";
       const requesterAgentId = sourceKind === "channel-cross-agent-drain" ? "requester" : "main";
       const requesterSessionKey = channelSource
         ? `agent:${requesterAgentId}:discord:channel:original-requester`
@@ -337,7 +339,7 @@ describe("detached subagent restart recovery", () => {
       await activateSubagentRegistry(() => previousContext).settled;
       bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
       client.internal = { ...client.internal, operatorRunAuthority: source?.authority };
-      if (collect && source) {
+      if ((collect || independent) && source) {
         await inPreviousGateway(() =>
           registerSubagentRun({
             runId,
@@ -346,14 +348,14 @@ describe("detached subagent restart recovery", () => {
             sessionEntry: predecessor.childSessionIdentity,
             requesterAgentId: "main",
             requesterSessionKey,
-            requesterTurnRunId: "warm-restart-parent-turn",
+            requesterTurnRunId: independent ? undefined : "warm-restart-parent-turn",
             requesterDisplayKey: requesterSessionKey,
             task: predecessor.task,
             cleanup: "keep",
-            collect: true,
-            groupId: "restart-group",
-            swarmRequesterSessionKey: requesterSessionKey,
-            expectsCompletionMessage: false,
+            collect: collect || undefined,
+            groupId: collect ? "restart-group" : undefined,
+            swarmRequesterSessionKey: collect ? requesterSessionKey : undefined,
+            expectsCompletionMessage: !collect,
             completionTarget: "parent",
             completionRequesterSessionId: requesterIdentity.sessionId,
             completionRequesterLifecycleRevision: requesterIdentity.lifecycleRevision,
@@ -361,8 +363,8 @@ describe("detached subagent restart recovery", () => {
           }),
         );
         expect(loadSubagentRegistryFromSqlite().get(runId)?.operatorRecoverySource).toMatchObject({
-          sessionKey: requesterSessionKey,
-          sourceRunId: "warm-restart-parent-turn",
+          sessionKey: independent ? childSessionKey : requesterSessionKey,
+          sourceRunId: independent ? runId : "warm-restart-parent-turn",
           snapshot: { scopes },
         });
       } else {
@@ -422,7 +424,7 @@ describe("detached subagent restart recovery", () => {
         expect(source.authority.assertCurrent).toThrow();
       }
       rotateAgentEventLifecycleGeneration();
-      if (humanFollowup) {
+      if (humanFollowup || independent) {
         if (mismatchedFollowup) {
           const interrupted = subagentRuns.get(runId)!;
           await addSubagentRunForTests({
@@ -612,7 +614,7 @@ describe("detached subagent restart recovery", () => {
         replacementOpen = false;
         return;
       }
-      if (humanFollowup) {
+      if (humanFollowup || independent) {
         resumeRunId = successor!.runId;
         await updateChild({
           status: "interrupted",
@@ -640,7 +642,7 @@ describe("detached subagent restart recovery", () => {
         expect(successor).toMatchObject({
           runId: `subagent-restart-recovery:${resumeRunId}`,
           taskRunId: runId,
-          task: "Verify the retained result.",
+          task: humanFollowup ? "Verify the retained result." : predecessor.task,
           operatorRecoverySource: { sourceRunId: runId, sessionKey: childSessionKey },
           execution: { status: "running" },
         });
