@@ -316,7 +316,6 @@
 ["extensions/discord/src/voice/voice-test-mocks.test-support.ts","./audio-worker-thread.js","5380264ffb256051bcb2e4d3b8b9bc29a16dac8bb2571c535c8ee766f55006b8",1]
 ["extensions/elevenlabs/speech-provider.test.ts","./config-api.js","ae8d1475fcd827898542d7e2b699b5d91d9c7cabf55bcdd674a3d621266d33bd",1]
 ["extensions/facetime/index.test.ts","./runtime-api.js","c4758e1b7ae6e483d5eeab64a21e3d1ae4e45653e017113156786340f8009326",1]
-["extensions/facetime/index.test.ts","./src/driver-setup.js","ef776b030536751e38a6228b63834822a0f2cfd47c29690c526860cf1b299cde",1]
 ["extensions/facetime/index.test.ts","./src/plugin-paths.js","05269d631198087d8d1206efe17ea3ce8fb0ca82cdb5352c98902540167cc1ee",1]
 ["extensions/facetime/index.test.ts","./src/setup.js","498a08bd0472ec8a174c113d70932fe22450b0ca2040f7738be2ca6a80df7429",1]
 ["extensions/facetime/index.test.ts","./src/static-status.js","405a6f6889c9b6ccb48e0b8edab21355c0a8ad4c34abd00b37b3e1ecafe1d5ba",1]
