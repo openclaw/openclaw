@@ -70,6 +70,47 @@ export function resolveModelCatalogAccessPrograms(params: {
   return observation ? [...observation.cyber] : undefined;
 }
 
+/** One default selection for catalog presentation and physical runtime requests. */
+export function resolveModelCyberAccessProgramDefault(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId: string;
+  runtimeId: string;
+  route?: ModelAuthAvailabilityEvaluation["selectedRoute"];
+}): CyberAccessProgram | undefined {
+  const { provider, modelId, runtimeId, route } = params;
+  const consumesAccessPrograms =
+    normalizeProviderId(provider) === "openai" &&
+    (runtimeId === "codex" ||
+      (runtimeId === "openclaw" &&
+        route !== undefined &&
+        (route.api === "openai-responses" || route.api === "openai-chatgpt-responses") &&
+        modelMatchesProviderModelRoute({
+          provider,
+          api: route.api,
+          baseUrl: route.baseUrl,
+          route: {
+            ...route,
+            baseUrl:
+              route.api === "openai-responses"
+                ? "https://api.openai.com/v1"
+                : "https://chatgpt.com/backend-api/codex",
+          },
+        })));
+  return consumesAccessPrograms
+    ? resolveConfiguredCyberAccessProgram(
+        {
+          config: params.config,
+          agentId: params.agentId,
+          provider,
+          modelId,
+        },
+        "standard",
+      )
+    : undefined;
+}
+
 /** The application baseline and configured inheritance do not grant Daybreak entitlement. */
 export function projectModelCatalogAccessPrograms(
   params: Parameters<typeof resolveModelCatalogAccessPrograms>[0] & {
@@ -81,34 +122,14 @@ export function projectModelCatalogAccessPrograms(
   cyberAccessProgramDefault?: CyberAccessProgram;
 } {
   const cyber = resolveModelCatalogAccessPrograms(params);
-  const { entry, evaluation, runtimeId } = params;
-  const route = evaluation.selectedRoute;
-  const consumesAccessPrograms =
-    normalizeProviderId(entry.provider) === "openai" &&
-    (runtimeId === "codex" ||
-      (runtimeId === "openclaw" &&
-        route !== undefined &&
-        (route.api === "openai-responses" || route.api === "openai-chatgpt-responses") &&
-        modelMatchesProviderModelRoute({
-          provider: entry.provider,
-          api: route.api,
-          baseUrl: route.baseUrl,
-          route: {
-            ...route,
-            baseUrl:
-              route.api === "openai-responses"
-                ? "https://api.openai.com/v1"
-                : "https://chatgpt.com/backend-api/codex",
-          },
-        })));
-  const cyberAccessProgramDefault = consumesAccessPrograms
-    ? (resolveConfiguredCyberAccessProgram({
-        config: params.config,
-        agentId: params.agentId,
-        provider: entry.provider,
-        modelId: entry.id,
-      }) ?? "standard")
-    : undefined;
+  const cyberAccessProgramDefault = resolveModelCyberAccessProgramDefault({
+    config: params.config,
+    agentId: params.agentId,
+    provider: params.entry.provider,
+    modelId: params.entry.id,
+    runtimeId: params.runtimeId,
+    route: params.evaluation.selectedRoute,
+  });
   return {
     ...(cyber === undefined ? {} : { availableAccessPrograms: { cyber } }),
     ...(cyberAccessProgramDefault === undefined ? {} : { cyberAccessProgramDefault }),

@@ -148,5 +148,11 @@ it.each(["openclaw", "codex"])(
         config: {},
       }),
     ).toEqual({});
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        config: { agents: { defaults: { params: { accessPrograms: {} } } } },
+      }),
+    ).toEqual({});
   },
 );
