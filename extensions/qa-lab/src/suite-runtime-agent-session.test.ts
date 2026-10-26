@@ -196,16 +196,16 @@ describe("qa suite runtime agent session helpers", () => {
   it("seeds QA session metadata and transcript messages in SQLite", async () => {
     const sessionId = "seeded-session";
     const sessionKey = "agent:qa:seeded-session";
-
+    const messages = [
+      { role: "user", text: "What is the codename?", timestamp: 100 },
+      { role: "assistant", text: "The codename is ORBIT-10.", timestamp: 200 },
+    ] as const;
     await seedTranscript(env, {
       sessionId,
       sessionKey,
       updatedAt: 300,
       label: "Seeded QA transcript",
-      messages: [
-        { role: "user", text: "What is the codename?", timestamp: 100 },
-        { role: "assistant", text: "The codename is ORBIT-10.", timestamp: 200 },
-      ],
+      messages,
     });
 
     const sessionStore = await readStore(env);
@@ -222,10 +222,7 @@ describe("qa suite runtime agent session helpers", () => {
         const message = (event as { message?: unknown }).message;
         return message ? [message] : [];
       }),
-    ).toEqual([
-      textMessage("user", "What is the codename?", 100),
-      textMessage("assistant", "The codename is ORBIT-10.", 200),
-    ]);
+    ).toEqual(messages.map(({ role, text, timestamp }) => textMessage(role, text, timestamp)));
 
     await expect(fs.stat(qaPath("agent", "openclaw-agent.sqlite"))).resolves.toBeDefined();
     for (const file of ["sessions.json", `${sessionId}.jsonl`]) {
@@ -271,28 +268,24 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("seeds multi-agent session entries through the canonical accessor", async () => {
-    const parentSessionKey = "agent:qa:main";
+    const parentSessionKey = "agent:qa:main",
+      childKey = "agent:qa:subagent:child",
+      acpKey = "agent:claude:acp:child";
     const entry = (sessionId: string, updatedAt: number) => ({ sessionId, updatedAt });
     const qaEntries = {
       [parentSessionKey]: entry("session-main", 300),
-      "agent:qa:subagent:child": {
+      [childKey]: {
         ...entry("session-child", 200),
         spawnedBy: parentSessionKey,
         status: "done" as const,
         endedAt: 250,
       },
     };
-    const claudeEntries = {
-      "agent:claude:acp:child": { ...entry("session-acp-child", 100), parentSessionKey },
-    };
+    const claudeEntries = { [acpKey]: { ...entry("session-acp-child", 100), parentSessionKey } };
     await seedEntries("qa", qaEntries);
     await seedEntries("claude", claudeEntries);
-    for (const [agentId, entries] of [
-      ["qa", qaEntries],
-      ["claude", claudeEntries],
-    ] as const) {
-      await expect(readStore(env, { agentId })).resolves.toMatchObject(entries);
-    }
+    await expect(readStore(env)).resolves.toMatchObject(qaEntries);
+    await expect(readStore(env, { agentId: "claude" })).resolves.toMatchObject(claudeEntries);
     const updated = {
       [parentSessionKey]: {
         ...entry("session-main", 400),
@@ -304,9 +297,9 @@ describe("qa suite runtime agent session helpers", () => {
     const refreshed = await readStore(env, { agentId: "qa" });
     expect(refreshed).toMatchObject({
       ...updated,
-      "agent:qa:subagent:child": { sessionId: "session-child" },
+      [childKey]: { sessionId: "session-child" },
     });
-    expect(refreshed["agent:claude:acp:child"]).toBeUndefined();
+    expect(refreshed[acpKey]).toBeUndefined();
   });
 
   it("reports bounded persisted compaction summaries", async () => {
@@ -318,25 +311,23 @@ describe("qa suite runtime agent session helpers", () => {
     let parentId: string | null = null;
     for (const [index, summary] of summaries.entries()) {
       const id = `compaction-${index}`;
-      const event = {
-        type: "compaction",
-        id,
-        parentId,
-        timestamp: new Date(index).toISOString(),
-        summary,
-        firstKeptEntryId: id,
-        tokensBefore: 100,
-      };
       await appendSqliteSessionTranscriptEventForTest({
         ...identityFor(sessionId, sessionKey),
-        event,
+        event: {
+          type: "compaction",
+          id,
+          parentId,
+          timestamp: new Date(index).toISOString(),
+          summary,
+          firstKeptEntryId: id,
+          tokensBefore: 100,
+        },
       });
       parentId = id;
     }
     await transcript.append({ role: "assistant", content: "done" });
 
     const result = await transcript.read();
-
     expect(result.compactionSummaries).toEqual(summaries.slice(-16));
     expect(result.finalText).toBe("done");
   });
