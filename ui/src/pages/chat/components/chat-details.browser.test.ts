@@ -318,6 +318,10 @@ describe("chat Details presentation", () => {
       { container: panel },
     );
     flush();
+    // The Environment body loads lazily; capture its controls only after it renders.
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
