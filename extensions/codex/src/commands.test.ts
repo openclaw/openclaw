@@ -1515,17 +1515,7 @@ describe("codex command", () => {
             }),
             mcps: probeOk({ data: [] }),
             skills: probeOk({
-              data: [
-                skillGroup("/repo", [
-                  skillEntry("one", "/repo"),
-                  skillEntry("disabled", "/repo", false),
-                ]),
-                skillGroup(
-                  "/other",
-                  [skillEntry("two", "/other")],
-                  [{ path: "/other/bad", message: "bad skill" }],
-                ),
-              ],
+              data: [skillGroup("/repo", [skillEntry("one"), skillEntry("two")])],
             }),
           }
         : { models: offline, account: offline, limits: offline, mcps: offline, skills: offline },
@@ -2117,28 +2107,15 @@ describe("codex command", () => {
   });
 
   it("consumes diagnostics confirmations before async upload work", async () => {
+    await bindThread("thread-race");
     const firstConfirmUpload = createDeferred<void>();
     const firstConfirmUploadStarted = createDeferred<void>();
-    const readBinding = vi.fn(() => ({
-      threadId: "thread-race",
-      cwd: "/repo",
-      createdAt: "2026-04-28T00:00:00.000Z",
-      updatedAt: "2026-04-28T00:00:00.000Z",
-    }));
     const safeCodexControlRequest = vi.fn(async () => {
       firstConfirmUploadStarted.resolve();
       await firstConfirmUpload.promise;
       return probeOk({ threadId: "thread-race" });
     });
-    const deps = createDeps({
-      bindingStore: {
-        ...testCodexAppServerBindingStore,
-        read: readBinding,
-        readAsync: async () => readBinding(),
-        prepareRead: async () => ({ read: readBinding, release() {} }),
-      },
-      safeCodexControlRequest,
-    });
+    const deps = createDeps({ safeCodexControlRequest });
 
     const request = await runCommand("diagnostics", deps, { senderId: "user-1" });
     const token = readDiagnosticsConfirmationToken(request);

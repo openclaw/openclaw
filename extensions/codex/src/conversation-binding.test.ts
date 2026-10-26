@@ -1313,12 +1313,7 @@ it("refuses legacy custom-provider bindings before connecting", async () => {
 
 it("retires an already-evicted conversation without disturbing its live client siblings", async () => {
   const identity = { kind: "conversation" as const, bindingId: "binding-evicted" };
-  const client = {
-    request: vi.fn(async () => ({})),
-    addCloseHandler: vi.fn(),
-    addNotificationHandler: vi.fn(),
-    addRequestHandler: vi.fn(),
-  } as unknown as CodexAppServerClient;
+  const { client } = conversationClient({ "thread/unsubscribe": {} });
   initializeClient(client, { agentDir: tempDir });
   const releaseEvicted = vi.fn(async (_threadId: string) => undefined);
   await retainThread(client, "thread-evicted", releaseEvicted);
