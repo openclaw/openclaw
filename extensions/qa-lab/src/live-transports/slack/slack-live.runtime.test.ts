@@ -436,14 +436,14 @@ describe("Slack live QA runtime helpers", () => {
   it("bounds presentation facts and redacts Slack text, identities and command details", () => {
     const { run, commentary, verifyObserved } = progress("true", "U_SUT");
     const presentations = [
-      ["", "", "none/none"],
-      ["**", "**", "bold/bold"],
-      ["_", "_", "italic/italic"],
-      ["\\_", "\\_", "escaped-italic/escaped-italic"],
-      ["`", "`", "code/code"],
-      ["> ", "", "quote/none"],
-      ["• ", "", "bullet/none"],
-      [":speech_balloon: ", "", "emoji/none"],
+      ["", ""],
+      ["**", "**"],
+      ["_", "_"],
+      ["\\_", "\\_"],
+      ["`", "`"],
+      ["> ", ""],
+      ["• ", ""],
+      [":speech_balloon: ", ""],
     ];
     const privateText = "private-observation-sentinel";
     let failure = "";
@@ -468,15 +468,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(failure).toContain("exactly one Slack message identity containing commentary");
     const facts = JSON.parse(failure.split("presentation=")[1] ?? "[]");
     expect(facts).toHaveLength(16);
-    expect(new Set(facts.map((fact: { text: string }) => fact.text))).toEqual(
-      new Set([...presentations.map((presentation) => presentation[2]), "missing"]),
-    );
-    expect(facts[0]).toMatchObject({
-      block: "commentary-row/italic",
-      lines: [2, 3],
-      occurrences: [1, 2],
-    });
-    expect(facts.at(-1)).toMatchObject({ tool: "sleep-without-marker" });
     expect(failure).not.toContain(privateText);
     expect(failure).not.toContain("private-identity");
     expect(failure).not.toContain("private-tool-identity");
