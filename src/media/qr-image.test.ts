@@ -5,14 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-const { MOCK_PNG_BASE64, MOCK_PNG_BUFFER, toBuffer } = vi.hoisted(() => {
-  const MOCK_PNG_BUFFERLocal = Buffer.from("fakepng");
-  return {
-    MOCK_PNG_BASE64: MOCK_PNG_BUFFERLocal.toString("base64"),
-    MOCK_PNG_BUFFER: MOCK_PNG_BUFFERLocal,
-    toBuffer: vi.fn(async () => MOCK_PNG_BUFFERLocal),
-  };
-});
+const { toBuffer } = vi.hoisted(() => ({ toBuffer: vi.fn() }));
+const png = Buffer.from("fakepng");
 
 vi.mock("./qr-runtime.ts", () => ({
   loadQrCodeRuntime: async () => ({ toBuffer }),
@@ -29,34 +23,18 @@ beforeAll(async () => {
 
 describe("renderQrPngBase64", () => {
   beforeEach(() => {
-    toBuffer.mockClear();
-    toBuffer.mockResolvedValue(MOCK_PNG_BUFFER);
+    toBuffer.mockReset().mockResolvedValue(png);
   });
 
-  it("delegates PNG rendering to qrcode", async () => {
-    await expect(renderQrPngBase64("openclaw", { scale: 8, marginModules: 2 })).resolves.toBe(
-      MOCK_PNG_BASE64,
-    );
-    expect(toBuffer).toHaveBeenCalledWith("openclaw", {
-      margin: 2,
-      scale: 8,
-    });
-  });
-
-  it("uses the default PNG rendering options", async () => {
-    await renderQrPngBase64("openclaw");
-    expect(toBuffer).toHaveBeenCalledWith("openclaw", {
-      margin: 4,
-      scale: 6,
-    });
-  });
-
-  it("floors finite PNG rendering options before delegating", async () => {
-    await renderQrPngBase64("openclaw", { scale: 8.9, marginModules: 2.9 });
-    expect(toBuffer).toHaveBeenCalledWith("openclaw", {
-      margin: 2,
-      scale: 8,
-    });
+  it.each([
+    [undefined, { margin: 4, scale: 6 }],
+    [
+      { scale: 8.9, marginModules: 2.9 },
+      { margin: 2, scale: 8 },
+    ],
+  ])("renders PNG with normalized options %j", async (options, expected) => {
+    await expect(renderQrPngBase64("openclaw", options)).resolves.toBe(png.toString("base64"));
+    expect(toBuffer).toHaveBeenCalledWith("openclaw", expected);
   });
 
   it.each([
@@ -73,7 +51,7 @@ describe("renderQrPngBase64", () => {
 
   it("formats QR PNG data URLs", async () => {
     await expect(renderQrPngDataUrl("openclaw")).resolves.toBe(
-      `data:image/png;base64,${MOCK_PNG_BASE64}`,
+      `data:image/png;base64,${png.toString("base64")}`,
     );
   });
 
@@ -101,8 +79,7 @@ describe("renderQrPngBase64", () => {
     await expect(
       writeQrPngTempFile("openclaw", {
         tmpRoot: os.tmpdir(),
-        dirPrefix: opts.dirPrefix,
-        fileName: opts.fileName,
+        ...opts,
       }),
     ).rejects.toThrow(`${name} must be a non-empty filename segment.`);
     expect(toBuffer).not.toHaveBeenCalled();

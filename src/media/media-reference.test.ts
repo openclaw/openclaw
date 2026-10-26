@@ -37,41 +37,25 @@ async function createInboundFile(id = makeId()) {
   return { id, file, source: `media://inbound/${id}`, physicalPath: await fs.realpath(file) };
 }
 
-function expectClassification(
-  source: string,
-  overrides: Partial<ReturnType<typeof classifyMediaReferenceSource>>,
-  allowDataUrl = true,
-) {
-  expect(classifyMediaReferenceSource(source, { allowDataUrl })).toStrictEqual({
-    hasUnsupportedScheme: false,
-    isDataUrl: false,
-    isFileUrl: false,
-    isHttpUrl: false,
-    isMediaStoreUrl: false,
-    looksLikeWindowsDrivePath: false,
-    ...overrides,
-  });
-}
-
 describe("media reference helpers", () => {
   it("classifies supported and unsupported media reference schemes", () => {
-    expectClassification("media://inbound/a.png", { isMediaStoreUrl: true });
-    expectClassification("data:image/png;base64,cG5n", { isDataUrl: true });
-    expectClassification(
-      "data:image/png;base64,cG5n",
-      { isDataUrl: true, hasUnsupportedScheme: true },
-      false,
-    );
-    expectClassification("ftp://example.test/a.png", { hasUnsupportedScheme: true });
-    expectClassification("C:\\Users\\pete\\image.png", { looksLikeWindowsDrivePath: true });
-  });
-
-  it("resolves canonical inbound media URIs", async () => {
-    const { id, source, physicalPath } = await createInboundFile();
-    await expect(resolveInbound(source)).resolves.toStrictEqual({
-      id,
-      physicalPath,
-    });
+    for (const [source, allowDataUrl, overrides] of [
+      ["media://inbound/a.png", true, { isMediaStoreUrl: true }],
+      ["data:image/png;base64,cG5n", true, { isDataUrl: true }],
+      ["data:image/png;base64,cG5n", false, { hasUnsupportedScheme: true, isDataUrl: true }],
+      ["ftp://example.test/a.png", true, { hasUnsupportedScheme: true }],
+      ["C:\\Users\\pete\\image.png", true, { looksLikeWindowsDrivePath: true }],
+    ] as const) {
+      expect(classifyMediaReferenceSource(source, { allowDataUrl })).toStrictEqual({
+        hasUnsupportedScheme: false,
+        isDataUrl: false,
+        isFileUrl: false,
+        isHttpUrl: false,
+        isMediaStoreUrl: false,
+        looksLikeWindowsDrivePath: false,
+        ...overrides,
+      });
+    }
   });
 
   it("parses inbound media URIs for sandbox-relative staging", () => {
@@ -89,7 +73,8 @@ describe("media reference helpers", () => {
   });
 
   it("maps canonical inbound media URIs to local paths for direct file readers", async () => {
-    const { source, physicalPath } = await createInboundFile();
+    const { id, source, physicalPath } = await createInboundFile();
+    await expect(resolveInbound(source)).resolves.toStrictEqual({ id, physicalPath });
     await expect(resolveMediaReferenceLocalPath(source)).resolves.toBe(physicalPath);
     await expect(resolveMediaReferenceLocalPathInfo(source)).resolves.toStrictEqual({
       kind: "inbound",
@@ -123,10 +108,6 @@ describe("media reference helpers", () => {
     ] as const) {
       await expectMediaReferenceError(source, code);
     }
-    expect(() => parseInboundMediaUri("media://inbound/nested%2Fa.png")).toThrow(
-      MediaReferenceError,
-    );
-    expect(() => parseInboundMediaUri("media://inbound/%00.png")).toThrow(MediaReferenceError);
     for (const claim of [
       ["media://user", "password@inbound/claim.png"].join(":"),
       "media://inbound/claim.png?signature=private-secret",

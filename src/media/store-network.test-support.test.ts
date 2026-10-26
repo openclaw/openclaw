@@ -63,12 +63,10 @@ it("retires routing for a delayed descendant after the owning operation settles"
   expect(save.mock.lastCall?.[0]).toBe(options);
 });
 
-it.each(["lookup", "policy"] as const)(
-  "rejects existing %s routing before delegation",
-  async (kind) => {
-    const { save, wrapped, options } = captureSave(
-      kind === "lookup" ? { lookupFn: async () => [] } : { ssrfPolicy: { allowedOrigins: [] } },
-    );
+it.each([{ lookupFn: async () => [] }, { ssrfPolicy: { allowedOrigins: [] } }])(
+  "rejects existing routing %j before delegation",
+  async (routing) => {
+    const { save, wrapped, options } = captureSave(routing);
     const matched = vi.fn();
     await withStoreRemoteFixture({ url: options.url, onMatch: matched }, async () => {
       expect(() => wrapped(options)).toThrow(
@@ -83,9 +81,7 @@ it.each(["lookup", "policy"] as const)(
 it("does not route an outside async owner", async ({ onTestFinished }) => {
   const { save, wrapped, options } = captureSave();
   const externalOwner = new AsyncResource("outside-store-fixture");
-  onTestFinished(() => {
-    externalOwner.emitDestroy();
-  });
+  onTestFinished(() => externalOwner.emitDestroy());
   await withStoreRemoteFixture({ url: options.url }, async () => {
     await externalOwner.runInAsyncScope(() => wrapped(options));
   });
