@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -37,12 +37,7 @@ describe("outbound preparation metadata", () => {
         sendText: send,
         sendMedia: send,
         ...(name === "flattened details" ? {} : { preserveMarkdownDetails: () => true }),
-        ...(name.includes("sanitized")
-          ? {
-              sanitizeText: ({ text }: { text: string }) =>
-                name === "unchanged sanitized text" ? text : after,
-            }
-          : {}),
+        ...(name.includes("sanitized") ? { sanitizeText: () => after } : {}),
       },
     });
     const registry = createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]);
@@ -76,9 +71,7 @@ describe("outbound preparation metadata", () => {
       ],
     });
     const entry = batch.entries[0];
-    if (!entry || entry.status !== "accepted") {
-      throw new Error("Expected one accepted payload");
-    }
+    assert(entry?.status === "accepted", "Expected one accepted payload");
     expect(getReplyPayloadMetadata(entry.payload)).toEqual(metadata);
     expect(input).toEqual(payload);
     expect(getReplyPayloadMetadata(input)).toEqual(metadata);
@@ -95,9 +88,7 @@ describe("outbound preparation metadata", () => {
       const result = normalizeEmptyPayloadForDelivery(input);
       if (media) {
         expect(result).toEqual({ text: "", mediaUrl: "https://example.test/image.png" });
-        if (!result) {
-          throw new Error("Expected accepted media payload");
-        }
+        assert(result, "Expected accepted media payload");
         expect(getReplyPayloadMetadata(result)).toEqual(metadata);
       } else {
         expect(result).toBeNull();

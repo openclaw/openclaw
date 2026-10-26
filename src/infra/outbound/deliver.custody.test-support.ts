@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -10,17 +11,13 @@ import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-sup
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 export function createDeliveryBarrier() {
-  const entered = createDeferred();
-  const released = createDeferred();
+  const gate = createEnteredGate();
   return {
-    entered: entered.promise,
-    hold: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-    release: released.resolve,
+    entered: gate.entered,
+    hold: gate.wait,
+    release: gate.release,
     wait: (operation: Promise<unknown>) =>
-      awaitGateBeforeSettlement(entered.promise, operation, "Operation settled before the barrier"),
+      awaitGateBeforeSettlement(gate.entered, operation, "Operation settled before the barrier"),
   };
 }
 
