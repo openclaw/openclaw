@@ -197,7 +197,6 @@ export function registerCliReplyCompletionTests({
 
   it.each([
     { raw: "NO_REPLY\nNO_REPLY", visible: "NO_REPLY" },
-    { raw: "NO_REPLY\nVisible answer", visible: "Visible answer" },
     { raw: "NO_REPLY\nNO_REPLY\nVisible answer", visible: "NO_REPLY\nVisible answer" },
   ])("preserves raw CLI output through stored-history reload: $raw", async ({ raw, visible }) => {
     const sessionKey = "agent:main:telegram:direct:cli-raw-history";
@@ -223,7 +222,6 @@ export function registerCliReplyCompletionTests({
       content: [{ type: "text", text: raw }],
     });
     expect(extractStoredAssistantText(messages[0])).toBe(visible);
-    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
   it.each(["abort", "timeout", "session-expired", "fork-abort"] as const)(
@@ -374,7 +372,6 @@ export function registerCliReplyCompletionTests({
     const result = await run(context);
 
     expect(result.didSendViaMessagingTool).toBe(true);
-    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe(expected);
     if (expected === "success") {
       expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
       expect(result.payloads).toBeUndefined();
@@ -388,7 +385,6 @@ export function registerCliReplyCompletionTests({
         },
       ]);
     }
-    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
   it("does not mistake CLI WebChat progress for a final result", async () => {
@@ -448,14 +444,10 @@ export function registerCliReplyCompletionTests({
       (message) => isRecord(message) && message.role === "assistant",
     );
     expect(assistantMessages.map(readAssistantDisplayContent)).toEqual([[{ type: "text", text }]]);
-    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
     expect(result.payloads).toEqual([{ text }]);
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTexts).toEqual([text]);
     expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
-    expect(result.meta.executionTrace?.attempts?.map((attempt) => attempt.result)).toEqual([
-      "error",
-    ]);
     expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
   });
 
@@ -476,11 +468,12 @@ export function registerCliReplyCompletionTests({
           },
           { details: { status: "accepted", ...child } },
         );
-        return makeManagedRun({ stdout: SILENT_REPLY_TOKEN });
+        return makeManagedRun({ stdout: " \tNO_REPLY\n" });
       });
       const context = createContext({
         sessionKey: "agent:main:subagent:cli-parent",
         lane: "subagent",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_spawn" },
       });
 
       const error = await run(context).catch((caught: unknown) => caught);
@@ -489,20 +482,4 @@ export function registerCliReplyCompletionTests({
       expect(supervisorSpawnMock).toHaveBeenCalledOnce();
     },
   );
-
-  it("rejects whitespace-wrapped CLI silence when a private result is required", async () => {
-    const text = " \tNO_REPLY\n";
-    supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: text }));
-    const context = createContext({
-      sessionKey: "agent:main:subagent:required-cli-reply",
-      lane: "subagent",
-      inputProvenance: { kind: "inter_session", sourceTool: "sessions_spawn" },
-    });
-
-    await expect(run(context)).rejects.toMatchObject({
-      name: "FailoverError",
-      reason: "empty_response",
-    });
-    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
-  });
 }

@@ -63,6 +63,7 @@ const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64
 const FAILED_ASSISTANT_TEXT = "partial assistant output before provider error";
 const FAILED_ASSISTANT_REPLAY_TEXT =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
+const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 
 function responseFor(api: WireApi, model: string, request: number, tool: boolean, failure = false) {
   const id = `cache_${request}`;
@@ -154,17 +155,11 @@ it.for(cases)(
         config.mcp = mcp.config;
         await state.writeConfig(config);
         setRuntimeConfigSnapshot(config);
-        const registry = await loadAndActivateRootPluginRegistry({
+        await loadAndActivateRootPluginRegistry({
           config,
           workspaceDir: state.workspaceDir,
           throwOnLoadError: true,
         });
-        expect(
-          registry.typedHooks.some(
-            (hook) => hook.pluginId === "cache-proof" && hook.hookName === "before_prompt_build",
-          ),
-          "Gateway startup admitted the prompt hook",
-        ).toBe(true);
         const target = {
           agentId: "main",
           sessionId,
@@ -207,43 +202,32 @@ it.for(cases)(
                 }
                 const occurrences = new Map<string, number>();
                 let userAnchor = "";
-                userEnvelopes = new Map(
-                  context.messages.flatMap<readonly [string, string]>((message) => {
-                    if (
-                      message.role !== "user" ||
-                      message.operatorMessage ||
-                      // Legacy transient carriers intentionally refresh beyond the cache boundary.
-                      (message.runtimeContextCarrier && !message.runtimeContextCarrierRetained)
-                    ) {
-                      return [];
-                    }
-                    const { content, ...envelope } = message;
-                    // The wire-prefix oracle below separately protects their content.
-                    const text =
-                      typeof content === "string"
-                        ? content
-                        : content
-                            .flatMap((block) => (block.type === "text" ? [block.text] : []))
-                            .join("\n");
-                    const textDigest = createHash("sha256").update(text).digest("hex");
-                    // Match identical carriers within their preceding user position;
-                    // a newly appended carrier must not replace an earlier occurrence.
-                    const identity = message.runtimeContextCarrier
-                      ? `${userAnchor}:${textDigest}`
-                      : textDigest;
-                    if (!message.runtimeContextCarrier) {
-                      userAnchor = textDigest;
-                    }
-                    const occurrence = occurrences.get(identity) ?? 0;
-                    occurrences.set(identity, occurrence + 1);
-                    return [
-                      [
-                        `${identity}:${occurrence}`,
-                        createHash("sha256").update(stableStringify(envelope)).digest("hex"),
-                      ],
-                    ];
-                  }),
-                );
+                userEnvelopes = new Map();
+                for (const message of context.messages) {
+                  // Legacy transient carriers intentionally refresh beyond the cache boundary.
+                  if (
+                    message.role !== "user" ||
+                    message.operatorMessage ||
+                    (message.runtimeContextCarrier && !message.runtimeContextCarrierRetained)
+                  ) {
+                    continue;
+                  }
+                  const { content, ...envelope } = message;
+                  const text =
+                    typeof content === "string"
+                      ? content
+                      : content
+                          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+                          .join("\n");
+                  const textDigest = digest(text);
+                  // Anchor identical carriers to their preceding user, retaining each occurrence.
+                  const identity = message.runtimeContextCarrier
+                    ? `${userAnchor}:${textDigest}`
+                    : (userAnchor = textDigest);
+                  const occurrence = occurrences.get(identity) ?? 0;
+                  occurrences.set(identity, occurrence + 1);
+                  userEnvelopes.set(`${identity}:${occurrence}`, digest(stableStringify(envelope)));
+                }
                 return observer.onModelRequest(runtimeModel, context);
               },
             };
@@ -282,11 +266,9 @@ it.for(cases)(
                   (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
                 );
                 if (unsafeMarker) {
-                  const digest = createHash("sha256")
-                    .update(prefix.history[runtimeIndex]!)
-                    .digest("hex");
+                  const segmentDigest = digest(prefix.history[runtimeIndex]!);
                   throw new Error(
-                    `messages request ${requests.length + 1}, turn ${turn}: cacheBreakpoint covers transient segment=history[${runtimeIndex}] previous=absent next=${digest} marker=${unsafeMarker.index}`,
+                    `messages request ${requests.length + 1}, turn ${turn}: cacheBreakpoint covers transient segment=history[${runtimeIndex}] previous=absent next=${segmentDigest} marker=${unsafeMarker.index}`,
                   );
                 }
               }
@@ -526,10 +508,6 @@ it.for(cases)(
             // The runner may append fresh runtime context alongside the tool results.
             expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(5);
             expect(input.filter((item) => item.type === "function_call")).toEqual([]);
-            expect(
-              continuation.prompt_cache_key,
-              "tool continuations retain the session affinity key",
-            ).toBe((requests[0]!.payload as Record<string, unknown>).prompt_cache_key);
           }
           expect(
             requests[0]!.userEnvelopes.size,

@@ -451,30 +451,21 @@ it.for(["present", "missing-before-run", "missing-after-run", "missing-cache"] a
   },
 );
 
+const unbound = makeSessionEntry();
 it.for([
-  ["fills an empty binding", makeSessionEntry(), undefined, "stopped-first-session"],
+  ["empty binding", unbound, unbound, "stopped-first-session"],
+  ["bound meanwhile", unbound, boundEntry("bound-meanwhile"), "bound-meanwhile"],
+  ["reset session", unbound, makeSessionEntry({ sessionId: "reset" }), undefined],
   [
-    "keeps a binding bound meanwhile",
-    makeSessionEntry(),
-    boundEntry("bound-meanwhile"),
-    "bound-meanwhile",
-  ],
-  [
-    "skips a reset session",
-    makeSessionEntry(),
-    makeSessionEntry({ sessionId: "openclaw-session-after-reset" }),
-    undefined,
-  ],
-  [
-    "skips a released writer",
-    makeSessionEntry({ activeWriterRunId: "stopped-run" }),
-    makeSessionEntry({ activeWriterRunId: "next-run" }),
+    "released writer",
+    makeSessionEntry({ activeWriterRunId: "old" }),
+    makeSessionEntry({ activeWriterRunId: "new" }),
     undefined,
   ],
 ] as const)(
   "persists a stopped first CLI session: %s",
   async ([_case, working, durable, expected], { f }) => {
-    await f.seed({ ...working }, durable ? { ...durable } : { ...working });
+    await f.seed({ ...working }, { ...durable });
 
     await persistStoppedFirstCliSessionInStore({
       ...f.target,

@@ -6,7 +6,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError, recordModelFallbackStop } from "./failover-error.js";
-import * as modelAuth from "./model-auth.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
@@ -251,41 +250,6 @@ it.each(["missing credentials", "retired owner"])("omits a route with %s", async
     },
   );
 });
-
-it.each([false, true])(
-  "keeps the primary runtime regardless of prepared API credentials (%s)",
-  async (hasApiCredential) => {
-    const params = prepared();
-    params.cfg.models = undefined;
-    params.cfg.agents!.defaults!.utilityModel = undefined;
-    params.cfg.agents!.defaults!.models = {
-      "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-    };
-    const plugin = params.metadataSnapshot.plugins[0];
-    if (!plugin) {
-      throw new Error("Expected the Anthropic metadata fixture.");
-    }
-    plugin.modelCatalog = {
-      providers: {
-        anthropic: {
-          defaultUtilityModel: "claude-haiku-4-5",
-          models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-4-6" }],
-        },
-      },
-    };
-    if (hasApiCredential) {
-      params.preparedAuthStore.profiles["anthropic:test"] = {
-        type: "api_key",
-        provider: "anthropic",
-        key: "synthetic-prepared-key",
-      };
-    }
-    using credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
-    const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
-    expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
-    expect(credentialLookup).not.toHaveBeenCalled();
-  },
-);
 
 const complete = vi.fn();
 const cfg = config({

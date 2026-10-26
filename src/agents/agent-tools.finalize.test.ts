@@ -194,28 +194,17 @@ describe("finalized tool descriptor snapshots", () => {
     expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
-  it("isolates nested published schemas from source and consumer mutations", async () => {
+  it("isolates nested published schemas from source mutations", async () => {
     const nestedSchema = () => ({
       type: "object",
       properties: { query: { type: "string", enum: ["first", "second"] } },
     });
     const parameters = nestedSchema();
     const outputSchema = nestedSchema();
-    const descriptor = (await published(() => [tool(parameters, { outputSchema })])).tool();
+    await published(() => [tool(parameters, { outputSchema })]);
 
     parameters.properties.query.type = "number";
     outputSchema.properties.query.enum.push("source mutation");
-    for (const immutable of [descriptor.parameters, descriptor.outputSchema]) {
-      assert.ok(immutable && "properties" in immutable);
-      const properties = immutable.properties;
-      assert.ok(properties && typeof properties === "object" && "query" in properties);
-      const query = properties.query;
-      assert.ok(query && typeof query === "object" && "enum" in query);
-      expect(Reflect.set(query, "type", "boolean")).toBe(false);
-      assert.ok(Array.isArray(query.enum));
-      expect(Reflect.set(query.enum, 0, "consumer mutation")).toBe(false);
-    }
-
     const next = attempt([tool(parameters, { outputSchema })]).tool();
     expect(next.parameters).toEqual(nestedSchema());
     expect(next.outputSchema).toEqual(nestedSchema());

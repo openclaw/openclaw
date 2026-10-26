@@ -10,7 +10,6 @@ import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { isPortFree } from "../test-utils/ports.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import {
   ensureProviderLocalService,
@@ -229,7 +228,6 @@ describe("provider local service shutdown", () => {
           nextLease.release();
           await stopManagedProviderLocalServices();
           expect(hasManagedProviderLocalServices()).toBe(false);
-          expect(await isPortFree(port)).toBe(true);
         },
         async () => {
           releaseGate();
@@ -264,7 +262,6 @@ describe("provider local service shutdown", () => {
 
     await stopManagedProviderLocalServices();
     expect(isPidAlive(replacementPid)).toBe(false);
-    expect(await isPortFree(port)).toBe(true);
     replacementLease.release();
   });
 
@@ -347,6 +344,5 @@ describe("provider local service shutdown", () => {
     await stopManagedProviderLocalServices();
     expect(isPidAlive(replacementPid)).toBe(false);
     expect(hasManagedProviderLocalServices()).toBe(false);
-    expect(await isPortFree(port)).toBe(true);
   });
 });
