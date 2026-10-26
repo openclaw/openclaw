@@ -48,6 +48,7 @@ function complete(terminal, error) {
   event("turn/completed", { terminal, sourceRange, ...(error ? { error } : {}) });
 }
 const fail = (kind, message) => complete("failed", { kind, message, retryable: false });
+const choice = (choiceId, decision, label) => ({ choiceId, decision, scope: "once", label });
 function answer() {
   const itemId = item("reasoning", "inProgress", { text: "" });
   event("item/delta", { itemId, field: "summary.0", delta: "Considering" });
@@ -140,50 +141,30 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       resumed: sessions.get(params.sessionId),
       reasoningEffort: params.reasoningEffort,
     };
-    accept(id, params, {
-      disposition: "started",
-      startedNewTurn: true,
-      turnId: active.turnId,
-    });
+    accept(id, params, { disposition: "started", startedNewTurn: true, turnId: active.turnId });
     setImmediate(() => {
+      const { prompt, turnId } = active;
       event("turn/started", { commandId: params.commandId, sourceRange });
-      if (active.prompt === "crash") {
+      if (prompt === "crash") {
         process.stderr.write("fixture: provider process crashed\n");
         process.exit(7);
-      } else if (active.prompt === "fail") {
+      } else if (prompt === "fail") {
         fail("providerError", "fixture provider rejected authentication");
-      } else if (active.prompt === "loggedout") {
+      } else if (prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
         fail("authRequired", "not logged in: run /login to add an API key");
-      } else if (
-        active.prompt === "approval" ||
-        active.prompt === "approval-settle" ||
-        active.prompt === "approval-deny-only"
-      ) {
+      } else if (["approval", "approval-settle", "approval-deny-only"].includes(prompt)) {
+        const denyOnly = prompt === "approval-deny-only";
         event("approval/requested", {
           // Real Muse mints one approval id per request; the SDK ignores repeats.
-          approvalId: `approval-${active.turnId}`,
-          currentRequirementId: { approvalId: `approval-${active.turnId}`, sourceIndex: 0 },
+          approvalId: `approval-${turnId}`,
+          currentRequirementId: { approvalId: `approval-${turnId}`, sourceIndex: 0 },
           availableChoices: [
-            ...(active.prompt === "approval-deny-only"
-              ? []
-              : [
-                  {
-                    choiceId: "server-allow-id",
-                    decision: "approved",
-                    scope: "once",
-                    label: "Allow",
-                  },
-                ]),
-            {
-              choiceId: active.prompt === "approval-deny-only" ? "server-only" : "server-deny-id",
-              decision: "denied",
-              scope: "once",
-              label: "Deny",
-            },
+            ...(denyOnly ? [] : [choice("server-allow-id", "approved", "Allow")]),
+            choice(denyOnly ? "server-only" : "server-deny-id", "denied", "Deny"),
           ],
-          itemId: `tool-${active.turnId}`,
-          toolCallId: `call-${active.turnId}`,
+          itemId: `tool-${turnId}`,
+          toolCallId: `call-${turnId}`,
           toolName: "shell",
           rawArgs: '{"command":"pwd"}',
           subject: { kind: "command", command: "pwd" },
@@ -192,7 +173,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           taskId: "task-1",
           sourceRange,
         });
-      } else if (active.prompt !== "wait") {
+      } else if (prompt !== "wait") {
         answer();
       }
     });
