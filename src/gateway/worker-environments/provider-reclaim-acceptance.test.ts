@@ -13,19 +13,13 @@ it("returns reclaim after local cleanup and acceptance, retaining physical destr
   signal,
 }) => {
   const environmentId = "reclaim-accepted";
-  await support.seedReady(environmentId);
-  const attached = await support.testState.store.transition({
-    environmentId,
-    from: "ready",
-    to: "attached",
-    patch: { ...support.attachedPatch(environmentId, "session-reclaim"), sharedHost: false },
-  });
+  const { ownerEpoch } = await support.seedAttachedIdentity(environmentId, "session-reclaim");
   const cleanupStarted = createDeferred();
   const cleanupFinished = createDeferred();
   const releaseFinished = createDeferred();
   const fake = fakeRunner(() => success());
   const tunnelManager = createWorkerTunnelManager({ runner: fake.runner });
-  const handle = await startTestTunnel(tunnelManager, environmentId, attached.ownerEpoch);
+  const handle = await startTestTunnel(tunnelManager, environmentId, ownerEpoch);
   const destroy = vi.fn<WorkerProvider["destroy"]>(async (lease) => {
     expect(tunnelManager.status(environmentId)).toBe("stopped");
     expect(support.testState.store.getCredential(environmentId)).toBeUndefined();

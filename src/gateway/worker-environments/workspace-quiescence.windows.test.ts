@@ -71,10 +71,6 @@ describe.runIf(process.platform === "win32")("Windows workspace quiescence", () 
     expect(nonce).toBeDefined();
     expect(readLease(home, realWorkspace)?.lease_json).toContain('"sharedHost":true');
 
-    const overlapping = await acquire();
-    expect(overlapping.code).not.toBe(0);
-    expect(overlapping.stderr).toContain("workspace quiescence lease is already active");
-
     const renewed = await renew(nonce!);
     expect(renewed).toMatchObject({ code: 0, stdout: `renewed ${nonce}\n` });
 

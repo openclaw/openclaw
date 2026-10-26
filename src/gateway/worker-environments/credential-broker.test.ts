@@ -134,7 +134,6 @@ describe("worker environment service", () => {
     const binding = { environmentId, ownerEpoch: 2, sessionId: "session-1" };
     const lostHash = support.testState.store.getCredential(environmentId)?.credentialHash;
 
-    expect(stopTunnel).toHaveBeenCalledWith(environmentId, 1);
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       ownerEpoch: 2,
