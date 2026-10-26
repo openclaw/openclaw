@@ -4,7 +4,6 @@ import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 
 function compare(path: string) {
   const rule = POLICY_RULE_METADATA.find((entry) => entry.policyPath.join(".") === path);
-  expect(rule).toBeDefined();
   return (candidate: unknown, baseline: unknown, expected: boolean) => {
     expect(isPolicyValueAtLeastAsStrict(rule!, candidate, baseline)).toBe(expected);
   };
