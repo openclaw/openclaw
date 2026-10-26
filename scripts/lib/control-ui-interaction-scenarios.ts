@@ -1562,6 +1562,33 @@ async function searchModels(page: Page) {
   );
 }
 
+async function navigateModels(page: Page) {
+  const search = page.locator("[data-chat-model-search]");
+  const initial = await search.getAttribute("aria-activedescendant");
+  if (!initial) {
+    throw new Error("Expected an initial active model descendant");
+  }
+  await search.press("ArrowDown");
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector("[data-chat-model-search]")?.getAttribute("aria-activedescendant") !==
+      id,
+    initial,
+  );
+  for (let index = 0; index < 9; index++) {
+    await search.press("ArrowDown");
+  }
+  for (let index = 0; index < 10; index++) {
+    await search.press("ArrowUp");
+  }
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector("[data-chat-model-search]")?.getAttribute("aria-activedescendant") ===
+      id,
+    initial,
+  );
+}
+
 async function prepareProviderUsage(page: Page) {
   const summary = page.locator('[data-provider-id="openai"] .provider-row__summary');
   await summary.waitFor();
@@ -2361,34 +2388,28 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await page.locator("[data-chat-model-search]").waitFor();
       await frames(page);
     },
-    run: async (page) => {
-      const search = page.locator("[data-chat-model-search]");
-      const initial = await search.getAttribute("aria-activedescendant");
-      if (!initial) {
-        throw new Error("Expected the selected model to be the initial active descendant");
-      }
-      await search.press("ArrowDown");
+    run: navigateModels,
+  },
+  {
+    id: "model-picker-filtered-navigate",
+    route: controlUiSessionPath(sessionKeys[0]),
+    resourceOnly: true,
+    expected: "Keyboard navigation retains the active descendant across 1,000 filtered models.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").fill("Warm model");
       await page.waitForFunction(
-        (id) =>
-          document
-            .querySelector("[data-chat-model-search]")
-            ?.getAttribute("aria-activedescendant") !== id,
-        initial,
+        () =>
+          Number.parseFloat(
+            document.querySelector<HTMLElement>(
+              "[data-chat-model-filtering] .chat-controls__model-virtual-content",
+            )?.style.height ?? "",
+          ) >= 30_000,
       );
-      for (let index = 0; index < 9; index++) {
-        await search.press("ArrowDown");
-      }
-      for (let index = 0; index < 10; index++) {
-        await search.press("ArrowUp");
-      }
-      await page.waitForFunction(
-        (id) =>
-          document
-            .querySelector("[data-chat-model-search]")
-            ?.getAttribute("aria-activedescendant") === id,
-        initial,
-      );
+      await frames(page);
     },
+    run: navigateModels,
   },
   {
     id: "model-picker-search",

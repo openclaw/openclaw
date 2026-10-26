@@ -7,7 +7,7 @@ import {
   Virtualizer,
   type VirtualItem,
 } from "@tanstack/virtual-core";
-import { createProjection, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createProjection, createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 
 export type ModelPickerRowRenderer = (key: string, render: () => JSX.Element) => JSX.Element;
@@ -19,6 +19,7 @@ export function createModelPickerWindow(
   shortcuts: () => readonly string[],
 ) {
   let viewport: HTMLDivElement;
+  const rowIndexes = createMemo(() => new Map(rows().map((key, index) => [key, index])));
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
     items: [],
     height: 0,
@@ -43,13 +44,21 @@ export function createModelPickerWindow(
     return mountVirtualizer();
   });
   createLayoutMeasurement(
-    () => ({ rows: rows(), highlighted: highlighted(), shortcuts: shortcuts() }),
+    () => ({
+      rows: rows(),
+      indexes: rowIndexes(),
+      highlighted: highlighted(),
+      shortcuts: shortcuts(),
+    }),
     (next) => {
       if (!next) {
         return;
       }
       const pinned = new Set([...next.shortcuts, next.highlighted]);
-      const pinnedIndexes = next.rows.flatMap((key, index) => (pinned.has(key) ? [index] : []));
+      const pinnedIndexes = [...pinned].flatMap((key) => {
+        const index = key === undefined ? undefined : next.indexes.get(key);
+        return index === undefined ? [] : [index];
+      });
       virtualizer.setOptions({
         ...virtualizer.options,
         count: next.rows.length,
@@ -97,8 +106,8 @@ export function createModelPickerWindow(
     has: (key: string) => Boolean(items[key]),
     renderRow,
     reveal(key: string) {
-      const index = rows().indexOf(key);
-      if (index >= 0) {
+      const index = rowIndexes().get(key);
+      if (index !== undefined) {
         virtualizer.scrollToIndex(index, { align: "auto" });
         publish();
       }
