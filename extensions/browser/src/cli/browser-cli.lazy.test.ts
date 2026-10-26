@@ -83,7 +83,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
   it("eagerly registers usable browser commands", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_LAZY_SUBCOMMANDS", "1");
-    const program = new Command().name("openclaw");
+    const program = new Command().name("openclaw").enablePositionalOptions();
     registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
     await vi.dynamicImportSettled();
     await program.parseAsync(

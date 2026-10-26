@@ -203,7 +203,7 @@ describe("browser cli snapshot defaults", () => {
     it.each(["ai", "aria"] as const)(
       "fails instead of printing an empty %s snapshot",
       async (format) => {
-        sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked(format));
+        request.mockResolvedValueOnce(blocked(format));
 
         await expect(runSnapshot(["--format", format])).rejects.toThrow("__exit__:1");
 
@@ -222,7 +222,7 @@ describe("browser cli snapshot defaults", () => {
         const outputPath = path.join(tempDirs.make("openclaw-dialog-out-"), "snapshot.txt");
         fsSync.writeFileSync(outputPath, "previous snapshot\n");
         const priorBytes = fsSync.readFileSync(outputPath);
-        sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+        request.mockResolvedValueOnce(blocked("ai"));
 
         await expect(
           runBrowserInspect(["snapshot", "--out", outputPath], withJson),
@@ -235,7 +235,7 @@ describe("browser cli snapshot defaults", () => {
     );
 
     it("keeps a non-default browser profile in the dismiss command", async () => {
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+      request.mockResolvedValueOnce(blocked("ai"));
 
       await expect(runBrowserInspect(["--browser-profile", "work", "snapshot"])).rejects.toThrow(
         "__exit__:1",
@@ -247,7 +247,7 @@ describe("browser cli snapshot defaults", () => {
     });
 
     it("keeps returning the dialog details in --json mode", async () => {
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce(blocked("ai"));
+      request.mockResolvedValueOnce(blocked("ai"));
 
       await runBrowserInspect(["snapshot"], true);
 
@@ -259,7 +259,7 @@ describe("browser cli snapshot defaults", () => {
     });
 
     it("still prints a genuinely blank page and exits 0", async () => {
-      sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      request.mockResolvedValueOnce({
         ok: true,
         format: "ai",
         targetId: "t1",
