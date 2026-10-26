@@ -207,7 +207,8 @@ export function createProfileSelectionOps({
         // a browser that exited with its last tab also lands here and reports this error.
         throw new BrowserError(
           `Close was requested but tab ${targetId} may still be open: ` +
-            `the tab list could not be read (${formatErrorMessage(error)}).`,
+            `the tab list could not be read (${formatErrorMessage(error)}). ` +
+            "Confirm the tab's state in the browser, or ask the user to, before closing again.",
           500,
           { cause: error },
         );

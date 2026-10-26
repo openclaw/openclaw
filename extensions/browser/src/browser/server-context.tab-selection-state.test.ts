@@ -712,7 +712,9 @@ describe("browser tab selection and ownership", () => {
 
     await expect(openclaw.closeTab("POPUP")).rejects.toMatchObject({
       name: "BrowserError",
-      message: expect.stringMatching(/tab POPUP may still be open.*rate limit/),
+      message: expect.stringMatching(
+        /tab POPUP may still be open.*rate limit.*before closing again/s,
+      ),
     });
     expect(runtime.lastTargetId).toBe("POPUP");
   });
