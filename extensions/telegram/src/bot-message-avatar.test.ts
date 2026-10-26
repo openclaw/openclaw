@@ -59,7 +59,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("coalesces a cold portrait request, applies media policy, and caches the result", async () => {
+it("coalesces portrait requests, applies media policy, and refreshes expired cache entries", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
   const { api, resolve } = account();
   const pending = Promise.withResolvers<typeof profilePhotos>();
   api.getUserProfilePhotos.mockReturnValueOnce(pending.promise);
@@ -69,16 +70,25 @@ it("coalesces a cold portrait request, applies media policy, and caches the resu
   expect(resolve(ctx, {})).toBeUndefined();
   expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
   expect(resolveMedia).not.toHaveBeenCalled();
+  const other = account("another-bot");
+  resolve(context(1000000002), {});
+  other.resolve(ctx, {});
   pending.resolve(profilePhotos);
   await vi.advanceTimersByTimeAsync(0);
   expect(resolve(ctx, {})).toBe("/media/inbound/portrait.png");
-  expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
+  expect(api.getUserProfilePhotos.mock.calls.map(([id]) => id)).toEqual([1000000001, 1000000002]);
+  expect(other.api.getUserProfilePhotos).toHaveBeenCalledOnce();
+  expect(resolveMedia).toHaveBeenCalledTimes(3);
   expect(vi.mocked(resolveMedia).mock.calls[0]?.[0]).toMatchObject({
     token: "test-token",
     maxBytes: 256 * 1024,
     ctx: expect.objectContaining({ message: { photo: [photo] } }),
   });
   expect(ctx.message).toEqual(before);
+  clock.mockReturnValue(5 * 60 * 1000 + 1);
+  api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
+  expect(await load(resolve, ctx, "/media/inbound/portrait.png")).toBe("");
+  expect(api.getUserProfilePhotos).toHaveBeenCalledTimes(3);
 });
 
 it.each([false, true])("removes the abort bridge (failure=%s)", async (fails) => {
@@ -108,30 +118,6 @@ it("forwards native account cancellation to the grammY request", async () => {
   await load(resolve);
   expect(aborted).toHaveBeenCalledTimes(1);
   expect(resolveMedia).not.toHaveBeenCalled();
-});
-
-it("clears a removed photo after the account cache expires", async () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-  const { api, resolve } = account();
-  expect(await load(resolve)).toBe("/media/inbound/portrait.png");
-  clock.mockReturnValue(5 * 60 * 1000 + 1);
-  api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
-  expect(await load(resolve, context(), "/media/inbound/portrait.png")).toBe("");
-  expect(api.getUserProfilePhotos).toHaveBeenCalledTimes(2);
-});
-
-it("never shares native photos between senders or bot accounts", async () => {
-  const first = account();
-  const second = account("another-bot");
-  first.resolve(context(), {});
-  first.resolve(context(1000000002), {});
-  second.resolve(context(), {});
-  await vi.advanceTimersByTimeAsync(0);
-  expect(first.api.getUserProfilePhotos.mock.calls.map(([id]) => id)).toEqual([
-    1000000001, 1000000002,
-  ]);
-  expect(second.api.getUserProfilePhotos).toHaveBeenCalledOnce();
-  expect(resolveMedia).toHaveBeenCalledTimes(3);
 });
 
 it("does not use a group photo, bot photo, or a private chat's different peer", () => {

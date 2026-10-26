@@ -24,6 +24,14 @@ describe("deleteTelegramUpdateOffset", () => {
     botId,
     tokenFingerprint: null,
   });
+  function failStore(method: "register" | "lookup", message: string) {
+    fixture.install({
+      ...fixture.open(),
+      async [method]() {
+        throw new Error(message);
+      },
+    });
+  }
 
   it("only removes the targeted account offset, leaving others intact", async () => {
     await writeOffset(100);
@@ -36,13 +44,7 @@ describe("deleteTelegramUpdateOffset", () => {
   });
 
   it("surfaces plugin-state write failures", async () => {
-    fixture.install({
-      ...fixture.open(),
-      async register() {
-        throw new Error("store write failed");
-      },
-    });
-
+    failStore("register", "store write failed");
     await expect(writeOffset(808)).rejects.toThrow("store write failed");
   });
 
@@ -69,13 +71,7 @@ describe("deleteTelegramUpdateOffset", () => {
   );
 
   it("tolerates read-only lookup failures but refuses account preparation without identity", async () => {
-    fixture.install({
-      ...fixture.open(),
-      async lookup() {
-        throw new Error("store unavailable");
-      },
-    });
-
+    failStore("lookup", "store unavailable");
     expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
     await expect(prepare("primary")).rejects.toThrow(
       /account "primary".*restart.*store unavailable/,

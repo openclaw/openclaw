@@ -117,14 +117,9 @@ function parseRecords(records: ChannelIngressQueueRecord<TelegramSpooledUpdatePa
         payload.version === TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION &&
         resolveTelegramUpdateId({ update_id: payload.updateId }) !== null,
     )
-    .map(({ payload, attempts, lastAttemptAt, lastError }) =>
+    .map(({ payload: { updateId, update, receivedAt }, attempts, lastAttemptAt, lastError }) =>
       Object.assign(
-        {
-          updateId: payload.updateId,
-          update: payload.update,
-          receivedAt: payload.receivedAt,
-          attempts,
-        },
+        { updateId, update, receivedAt, attempts },
         lastAttemptAt === undefined ? {} : { lastAttemptAt },
         lastError === undefined ? {} : { lastError },
       ),

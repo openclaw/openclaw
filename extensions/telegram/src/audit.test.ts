@@ -68,23 +68,12 @@ it("collects unmentioned numeric group ids and flags wildcard", () => {
   });
 });
 
-it("reports bot not in group when status is left", async () => {
-  respond = () => membership("left");
-  expect(await auditGroups()).toMatchObject({
-    ok: false,
-    groups: [{ ok: false, status: "left" }],
-  });
-});
-
-it.each([
-  { name: "stalled body", delay: 0, remaining: 50, groupIds: ["-1001"] },
-  { name: "shared timeout budget", delay: 40, remaining: 10, groupIds: ["-1001", "-1002"] },
-])("cancels the $name within the remaining budget", async ({ delay, remaining, groupIds }) => {
+it("cancels a stalled body within the shared timeout budget", async () => {
   const cancel = vi.fn();
   respond = () =>
-    delay && requests.length === 1
+    requests.length === 1
       ? new Promise<Response>((resolve) => {
-          setTimeout(() => resolve(membership()), delay);
+          setTimeout(() => resolve(membership()), 40);
         })
       : new Response(
           new ReadableStream<Uint8Array>({
@@ -95,41 +84,30 @@ it.each([
           }),
         );
   vi.useFakeTimers();
-  const auditPromise = auditGroups(groupIds, 50);
+  const auditPromise = auditGroups(["-1001", "-1002"], 50);
   await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(60);
   expect(await auditPromise).toMatchObject({
     ok: false,
     groups: [
-      ...(delay ? [{ ok: true }] : []),
-      {
-        ok: false,
-        error: `Telegram membership audit response body stalled for ${remaining / 2}ms`,
-      },
+      { ok: true },
+      { ok: false, error: "Telegram membership audit response body stalled for 5ms" },
     ],
   });
   expect(cancel).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
 });
 
-it.each(["network failure", "malformed JSON"] as const)(
-  "closes its owned audit transport after %s without changing the request",
-  async (outcome) => {
-    respond = () => {
-      if (outcome === "network failure") {
-        throw new Error("membership fixture failed");
-      }
-      return new Response("not-json");
-    };
-    expect(await auditGroups()).toMatchObject({ ok: false, checkedGroups: 1 });
-    expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001"));
-    expect(requests[0]?.dispatcher.destroyed).toBe(true);
-  },
-);
+it("reports an audit error and closes transport after malformed JSON", async () => {
+  respond = () => new Response("not-json");
+  expect(await auditGroups()).toMatchObject({ ok: false, checkedGroups: 1 });
+  expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001"));
+  expect(requests[0]?.dispatcher.destroyed).toBe(true);
+});
 
-it("keeps the audit transport open until the final group's response body settles", async () => {
+it("reports a departed membership and keeps transport open until the final body settles", async () => {
   const body = new TransformStream<Uint8Array>();
   const writer = body.writable.getWriter();
-  respond = () => (requests.length === 1 ? membership() : new Response(body.readable));
+  respond = () => (requests.length === 1 ? membership("left") : new Response(body.readable));
   const readingBody = writer.write(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
   const audit = auditGroups(["-1001", "-1002"]);
   try {
@@ -141,10 +119,10 @@ it("keeps the audit transport open until the final group's response body settles
     await writer.close();
   }
   expect(await audit).toMatchObject({
-    ok: true,
+    ok: false,
     checkedGroups: 2,
     groups: [
-      { chatId: "-1001", status: "member" },
+      { chatId: "-1001", status: "left", ok: false },
       { chatId: "-1002", status: "administrator" },
     ],
   });

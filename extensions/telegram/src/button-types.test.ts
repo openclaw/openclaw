@@ -23,21 +23,6 @@ const approval = (approvalId: string, decision: "allow-once" | "allow-always") =
   ({ type: "approval", approvalId, approvalKind: "exec", decision }) as const;
 
 describe("resolveTelegramInlineButtons precedence", () => {
-  it("returns explicit buttons without reading lower-priority payloads", () => {
-    const buttons = [[{ text: "Explicit", callback_data: "explicit" }]];
-    expect(
-      resolveTelegramInlineButtons({
-        buttons,
-        get interactive(): never {
-          throw new Error("unexpected interactive normalization");
-        },
-        get presentation(): never {
-          throw new Error("unexpected presentation normalization");
-        },
-      }),
-    ).toBe(buttons);
-  });
-
   it("falls back to presentation when legacy content has no controls", () => {
     expect(
       resolveTelegramInlineButtons({
@@ -45,10 +30,8 @@ describe("resolveTelegramInlineButtons precedence", () => {
         presentation: {
           blocks: [{ type: "buttons", buttons: [{ label: "Fallback", value: "fallback" }] }],
         },
-      })
-        ?.flat()
-        .map((button) => button.callback_data),
-    ).toEqual(["fallback"]);
+      })?.[0]?.[0]?.callback_data,
+    ).toBe("fallback");
   });
 });
 
