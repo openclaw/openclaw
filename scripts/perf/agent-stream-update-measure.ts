@@ -12,6 +12,9 @@
  * --mode promises counts Node promise initialization separately from timing.
  * --mode verify replays a fixed multi-turn recording with all update kinds, async
  * fragments and a blocking tool; compare its outputSha256 across revisions.
+ * --layer responses-observer selects an isolated real iterator owner instead.
+ * --layer all --mode promises inventories real layers using the promise-count
+ * slope between 32 and --events reads; see agent-stream-update-measure.md.
  * --profile /path/profile.json saves allocation stacks. Use --no-turbo-inlining
  * for attribution only, and normal optimization for the paired measurements.
  * Accept lower allocation/update with stable CPU and identical delivery counts;
@@ -48,6 +51,7 @@ const { values } = parseArgs({
     snapshots: { type: "string", default: "true" },
     "async-fragments": { type: "string", default: "false" },
     transforms: { type: "string", default: "0" },
+    layer: { type: "string" },
   },
 });
 const events = Number(values.events);
@@ -59,6 +63,18 @@ assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
+if (values.layer) {
+  const { measureStreamLayers } = await import("./agent-stream-update-layers.js");
+  await measureStreamLayers({
+    layer: values.layer,
+    mode: values.mode,
+    events,
+    turns,
+    warmup,
+    profile: values.profile,
+  });
+  process.exit(0);
+}
 assert(values.snapshots === "true" || values.snapshots === "false");
 assert(values["async-fragments"] === "true" || values["async-fragments"] === "false");
 const asyncFragments = values["async-fragments"] === "true";
