@@ -310,6 +310,9 @@ it.each(["chip", "roster"] as const)(
     expect(document.querySelector("script")).toBeNull();
     if (mode === "roster") {
       const [code, stylesheet] = hints();
+      if (!code || !stylesheet) {
+        throw new Error("Expected both roster preload hints");
+      }
       stylesheet.dispatchEvent(new Event("load"));
       expect(stylesheet.rel).toBe("stylesheet");
       expect(stylesheet.hasAttribute("as")).toBe(false);
