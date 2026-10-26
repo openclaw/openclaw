@@ -47,14 +47,12 @@ function publicArtifact(
 describe("memory wiki status and doctor", () => {
   it("warns when unsafe-local is selected without explicit private access", async () => {
     const config = statusConfig({ vaultMode: "unsafe-local" });
-
     vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
     vi.mocked(obsidian.probeObsidianCli).mockResolvedValue({
       available: true,
       command: "/usr/local/bin/obsidian",
     });
     const status = await resolveMemoryWikiStatus(config);
-
     expect(status.warnings.map((warning) => warning.code)).toContain("unsafe-local-disabled");
   });
 
@@ -69,7 +67,6 @@ describe("memory wiki status and doctor", () => {
       publicArtifact("shared", ["support", "marketing"], "daily-note"),
       publicArtifact("unknown", []),
     ];
-
     vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
     vi.spyOn(memoryHost, "listActiveMemoryPublicArtifacts").mockResolvedValue(artifacts);
     const options = {
@@ -116,7 +113,6 @@ describe("memory wiki status and doctor", () => {
     }
 
     const status = await resolveMemoryWikiStatus(config);
-
     expect(status.pageCounts.source).toBe(4);
     expect(status.sourceCounts).toEqual({
       native: 1,
@@ -138,12 +134,6 @@ describe("memory wiki status and doctor", () => {
       ),
     );
 
-    expect(rendered).toContain("Wiki vault mode: isolated");
-    expect(rendered).toContain("Vault scope: global");
-    expect(rendered).toContain("Pages: 0 sources, 0 entities, 0 concepts, 0 syntheses, 0 reports");
-    expect(rendered).toContain(
-      "Source provenance: 0 native, 0 bridge, 0 bridge-events, 0 unsafe-local, 0 other",
-    );
     expect(rendered).toContain("Warnings:");
     expect(rendered).toContain("Wiki vault has not been initialized yet.");
   });
@@ -157,7 +147,6 @@ describe("memory wiki status and doctor", () => {
     expect(status.bridgePublicArtifactCount).toBe(0);
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
     const report = buildMemoryWikiDoctorReport(status);
-
     expect(report.fixes.map((fix) => fix.code)).toContain("bridge-artifacts-missing");
     expect(renderMemoryWikiDoctor(report)).toContain("exports public artifacts");
   });

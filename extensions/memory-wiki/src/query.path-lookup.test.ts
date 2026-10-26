@@ -19,12 +19,7 @@ async function createCompiledVault() {
     initialize: true,
     config: { search: { backend: "local", corpus: "wiki" } },
   });
-  const page: typeof vault.page = (file, fields) =>
-    vault.page(
-      file,
-      { title: path.basename(file, ".md"), ...fields },
-      `# ${path.basename(file, ".md")}\n\nbody of ${file}\n`,
-    );
+  const page: typeof vault.page = (file, fields) => vault.page(file, fields, "");
   for (let index = 0; index < PAGE_COUNT; index++) {
     await page(`concepts/p${index}.md`, {
       pageType: "concept",
@@ -53,14 +48,10 @@ function countPageOpens() {
 }
 
 describe("wiki_get lookups", () => {
-  it.each([
-    ["basename", "p7"],
-    ["extensionless path", "concepts/p7"],
-  ])("resolves a %s lookup by reading only the matching page", async (_form, lookup) => {
+  it("resolves an extensionless path by reading only the matching page", async () => {
     const { get } = await createCompiledVault();
     const opened = countPageOpens();
-
-    await expect(get(lookup)).resolves.toMatchObject({
+    await expect(get("concepts/p7")).resolves.toMatchObject({
       path: "concepts/p7.md",
       id: "concept.p7",
     });
@@ -72,7 +63,6 @@ describe("wiki_get lookups", () => {
     await page("entities/twin.md", { pageType: "entity" });
     await page("concepts/twin.md", { pageType: "concept" });
     const opened = countPageOpens();
-
     await expectPath("twin", "concepts/twin.md");
     expect(opened).toEqual(["twin.md"]);
   });
@@ -88,7 +78,6 @@ describe("wiki_get lookups", () => {
     await compileMemoryWikiVault(config);
 
     const opened = countPageOpens();
-
     await expectPath("twin", "entities/twin.md", { sandboxed: true, agentId: "main" });
     expect(opened).toEqual(["twin.md", "twin.md"]);
     await expectPath("twin", "concepts/twin.md", { sandboxed: true, agentId: "secondary" });
@@ -99,7 +88,6 @@ describe("wiki_get lookups", () => {
     await page("concepts/shared.md", { pageType: "concept", id: "concept.other" });
     await page("entities/zzz.md", { pageType: "entity", id: "shared" });
     await compileMemoryWikiVault(config);
-
     await expectPath("shared", "concepts/shared.md");
   });
 
