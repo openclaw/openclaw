@@ -90,8 +90,9 @@ export function startControlProducer(
   const operation = operationFor({ sessionKey, sessionId, agentId: "main" }, storePath);
   const cancelled = createDeferred();
   const cancel = vi.fn(() => cancelled.resolve());
-  operation.attachBackend({ kind: "embedded", runId, isStreaming: () => true, cancel });
-  const { settled } = ownProducer(
+  const backend = { kind: "embedded" as const, runId, isStreaming: () => true, cancel };
+  operation.attachBackend(backend);
+  const producer = ownProducer(
     async (finished) => {
       if (await Promise.race([cancelled.promise.then(() => true), finished.then(() => false)])) {
         await onCancel();
@@ -99,5 +100,5 @@ export function startControlProducer(
     },
     () => operation.complete(),
   );
-  return { operation, cancel, settled };
+  return { operation, backend, cancel, ...producer };
 }

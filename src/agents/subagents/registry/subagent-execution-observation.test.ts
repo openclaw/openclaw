@@ -5,6 +5,7 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   observeSubagentExecution,
   resolveYieldedLeafPausedForMs,
@@ -13,18 +14,13 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function run(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: runId,
-    createdAt: Date.now(),
-    cleanup: "keep",
     generation: 1,
-    execution: { status: "running", startedAt: Date.now() },
+    startedAt: Date.now(),
     ...overrides,
-  };
+  });
 }
 
 afterEach(() => subagentRuns.clear());
