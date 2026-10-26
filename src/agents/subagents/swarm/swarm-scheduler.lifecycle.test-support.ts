@@ -13,13 +13,14 @@ export function observeSwarmSchedulerWork() {
   const runIds = new Set<string>();
   const owners = new Set<object | undefined>();
   const native = { ...scheduler };
+  const list = native.listSwarmRunReservationIds;
   const spies: Array<{ mockRestore(): void }> = [];
   const trackReservations = <T>(run: () => T): T => {
-    const before = new Set(native.listSwarmRunReservationIds());
+    const before = new Set(list());
     try {
       return run();
     } finally {
-      for (const runId of native.listSwarmRunReservationIds()) {
+      for (const runId of list()) {
         if (!before.has(runId)) {
           runIds.add(runId);
         }
@@ -78,9 +79,7 @@ export function observeSwarmSchedulerWork() {
             native.releaseSwarmRun(runId);
           }
         }
-        expect(native.listSwarmRunReservationIds().filter((runId) => runIds.has(runId))).toEqual(
-          [],
-        );
+        expect(list().filter((runId) => runIds.has(runId))).toEqual([]);
         closed = true;
         observing = false;
       } finally {
