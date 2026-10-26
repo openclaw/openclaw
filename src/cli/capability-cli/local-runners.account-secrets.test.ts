@@ -40,13 +40,13 @@ beforeEach(() => {
     vi.spyOn(media, method).mockImplementation(withEgressAuth({ text: "synthetic-ok" }));
   }
   vi.spyOn(memory, "createEmbeddingProvider").mockImplementation(
-    withEgressAuth({
+    withEgressAuth<Awaited<ReturnType<typeof memory.createEmbeddingProvider>>>({
       requestedProvider: "customacct",
       provider: {
         id: "customacct",
         model: "test-model",
         embed: async () => [0.5],
-        embedBatch: async (texts: string[]) => texts.map(() => [0.5]),
+        embedBatch: async (inputs) => inputs.map(() => [0.5]),
       },
     }),
   );
