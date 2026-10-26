@@ -131,10 +131,11 @@ describe("doctor command", () => {
       await runDoctorNonInteractive();
     });
 
-    requireTerminalNote({
-      title: "State integrity",
-      messageIncludes: "State directory was missing at doctor start",
-    });
+    const stateNote = requireTerminalNote({ title: "State integrity" });
+    // Startup can initialize the directory before integrity inspects it.
+    expect(String(stateNote[0])).toMatch(
+      /- (?:CRITICAL: state directory missing|State directory was missing at doctor start and was initialized during startup checks) \(/,
+    );
   });
 
   it("routes browser readiness through health contributions", async () => {
