@@ -3,8 +3,38 @@ import {
   type StringCharBudgetOptions,
 } from "@openclaw/normalization-core/cjk-chars";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { memoizeFrozenPlainDataProjection } from "../../shared/immutable-data.js";
+import type { AgentMessage } from "../runtime/index.js";
 
 export { estimateToolResultTextChars };
+
+const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) =>
+  content.reduce<number>(
+    (total, block) =>
+      total + (isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0),
+    0,
+  ),
+);
+
+export function getToolResultTextBudget(msg: AgentMessage): number {
+  if (!msg || msg.role !== "toolResult") {
+    return 0;
+  }
+  const content = msg.content;
+  return Array.isArray(content) ? getToolResultContentBudget(content) : 0;
+}
+
+export function getToolResultHistoryTextBudget(messages: AgentMessage[]) {
+  let totalChars = 0;
+  let largestChars = 0;
+  const textLengths = messages.map((message) => {
+    const chars = getToolResultTextBudget(message);
+    totalChars += chars;
+    largestChars = Math.max(largestChars, chars);
+    return chars;
+  });
+  return { textLengths, totalChars, largestChars };
+}
 
 // Reuse scans across guard passes; the block owns the lifetime and text is its revision.
 const toolResultTextEstimates = new WeakMap<

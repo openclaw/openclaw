@@ -11,6 +11,7 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
+import { setGatewayDedupeEntry, waitForAgentJob } from "../../../gateway/agent-turn/agent-job.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import {
@@ -23,6 +24,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { prepareCommandSessionRecoveryEntry } from "../../command/session-preparation.js";
 import { buildMainSessionRecoverySettlementPatch } from "../../main-session-recovery/main-session-recovery-clear.js";
 import { createRecoveryRuntimeFixture } from "../../main-session-recovery/main-session-recovery-runtime.test-support.js";
@@ -38,6 +40,7 @@ import {
 } from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
+  initSubagentRegistry,
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
@@ -45,6 +48,278 @@ import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-id
 
 describe("nested requester wake crash recovery", () => {
   const fixture = useSubagentRestartRecoveryFixture();
+
+  it.each(["registered", "recovered"] as const)(
+    "settles a %s run from its persisted final after a restart",
+    async (kind) => {
+      const now = Date.now();
+      const sessionKey = `agent:main:subagent:previous-boot-${kind}`;
+      const sessionId = `previous-boot-${kind}`;
+      const lifecycleRevision = `previous-boot-revision-${kind}`;
+      const runId =
+        kind === "recovered"
+          ? "announce:requester-settle:previous-boot"
+          : "previous-boot-registered";
+      const executionRunId = kind === "recovered" ? "previous-boot-recovered" : runId;
+      const startedAt = now - 2 * 60_000;
+      const endedAt = now - 5_000;
+      const finalText = "The previous boot finished the assigned work successfully.";
+      const run = makeRestartRecoveryRun({
+        runId,
+        childSessionKey: sessionKey,
+        childAgentId: "main",
+        childSessionIdentity: { sessionId, lifecycleRevision },
+        requesterSessionKey: "agent:main:director",
+        expectsCompletionMessage: true,
+        createdAt: startedAt,
+        execution: { status: "running", startedAt },
+      });
+      await prepareSubagentRecoveryFixture(run, { stateDir: fixture.stateDir });
+      await addSubagentRunForTests(run);
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey,
+        defaultSessionId: sessionId,
+        lifecycleRevision,
+      });
+      const target = { agentId: "main", storePath, sessionKey };
+      await appendTranscriptMessage(
+        { ...target, sessionId },
+        {
+          message: {
+            role: "assistant",
+            content: finalText,
+            stopReason: "stop",
+            __openclaw: { runId: executionRunId },
+          },
+        },
+      );
+      if (kind === "recovered") {
+        await replaceSessionEntry(target, {
+          ...loadSessionEntryReadOnly(target)!,
+          restartRecoveryTerminalDeliveryEvidence: [
+            {
+              runId,
+              transcriptRunId: executionRunId,
+              captured: true,
+              payloads: [{ visible: true }],
+            },
+          ],
+        });
+      }
+      for (const [phase, ts] of [
+        ["start", startedAt],
+        ["end", endedAt],
+      ] as const) {
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey,
+          event: {
+            runId: executionRunId,
+            sessionId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            ts,
+            data: {
+              phase,
+              startedAt,
+              ...(phase === "end" ? { endedAt, executionSettled: true } : {}),
+            },
+          },
+        });
+      }
+      expect(loadSessionEntryReadOnly(target)).toMatchObject({
+        status: "done",
+        lastRunId: executionRunId,
+      });
+      expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.status).toBe("running");
+
+      await fixture.settle();
+      await resetSubagentRegistryForTests({ persist: false });
+      await cleanupSessionStateForTest({ stateDir: fixture.stateDir });
+      rotateAgentEventLifecycleGeneration();
+      expect(await waitForAgentJob({ runId: executionRunId, timeoutMs: 0 })).toBeNull();
+      await initSubagentRegistry();
+      await fixture.activateGatewayRuntime();
+      await fixture.settle();
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+
+      expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+        execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
+        completion: {
+          resultText: finalText,
+          terminalReply: { disposition: "visible", text: finalText },
+        },
+        delivery: { status: "delivered" },
+      });
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(
+        vi.mocked(runSubagentAnnounceFlow).mock.calls.filter(([call]) => call.childRunId === runId),
+      ).toEqual([
+        [
+          expect.objectContaining({
+            childRunId: runId,
+            outcome: expect.objectContaining({ status: "ok" }),
+            terminalReply: { disposition: "visible", text: finalText },
+          }),
+        ],
+      ]);
+    },
+  );
+
+  async function prepareStaleWake(mapping: "claim" | "receipt" | "unmapped") {
+    await resetSubagentRegistryForTests({ persist: false });
+    vi.mocked(onAgentEvent).mockReset();
+    await fixture.activateGatewayRuntime();
+    vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = Date.UTC(2026, 0, 1);
+    vi.setSystemTime(now);
+    const sessionKey = "agent:main:subagent:sweep-lead";
+    const sessionId = "sweep-lead-session";
+    const lifecycleRevision = "sweep-lead-revision";
+    const runId = "announce:requester-settle:sweep-pause-wake";
+    const executionRunId = `sweep-recovered-${mapping}`;
+    const finalText = "Worker results are already pending; the lead is still blocked.";
+    const startedAt = now - 10_000;
+    const endedAt = now - 5_000;
+    const wake = makeRestartRecoveryRun({
+      runId,
+      childSessionKey: sessionKey,
+      childAgentId: "main",
+      childSessionIdentity: { sessionId, lifecycleRevision },
+      requesterSessionKey: "agent:main:director",
+      expectsCompletionMessage: true,
+      createdAt: now - 60_000,
+      execution: { status: "running", startedAt: now - 60_000 },
+    });
+    await prepareSubagentRecoveryFixture(wake, { stateDir: fixture.stateDir });
+    await addSubagentRunForTests(wake);
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey,
+      defaultSessionId: sessionId,
+      lifecycleRevision,
+    });
+    const target = { agentId: "main", storePath, sessionKey };
+    await replaceSessionEntry(target, {
+      ...loadSessionEntryReadOnly(target)!,
+      status: "done",
+      lifecycleRunId: "later-parent-followup",
+      startedAt: now - 2_000,
+      endedAt: now - 1_000,
+      updatedAt: now - 1_000,
+      ...(mapping === "claim"
+        ? {
+            restartRecoveryDeliveryRunId: executionRunId,
+            restartRecoveryDeliverySourceRunId: runId,
+          }
+        : {
+            restartRecoveryTerminalDeliveryEvidence: [
+              {
+                runId: mapping === "receipt" ? runId : "another-registered-wake",
+                transcriptRunId: executionRunId,
+                captured: true as const,
+                payloads: [{ visible: true }],
+              },
+            ],
+          }),
+    });
+    setGatewayDedupeEntry({
+      dedupe: new Map(),
+      key: `agent:${executionRunId}`,
+      entry: {
+        ts: endedAt,
+        ok: true,
+        payload: {
+          status: "completed",
+          startedAt,
+          endedAt,
+          terminalReply: { disposition: "visible", text: finalText },
+        },
+      },
+      session: {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      },
+    });
+    return { runId, executionRunId, sessionKey, sessionId, finalText, startedAt, endedAt, now };
+  }
+
+  it.each(["claim", "receipt"] as const)(
+    "sweeps a stale pause wake using its own recovered execution (%s)",
+    async (mapping) => {
+      try {
+        const run = await prepareStaleWake(mapping);
+        await testing.sweepOnceForTests();
+        await fixture.settle();
+        expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+          execution: {
+            status: "terminal",
+            startedAt: run.startedAt,
+            endedAt: run.endedAt,
+            outcome: { status: "ok" },
+          },
+          completion: { resultText: run.finalText },
+          delivery: { status: "delivered" },
+        });
+        emitAgentEvent({
+          runId: run.executionRunId,
+          sessionKey: run.sessionKey,
+          sessionId: run.sessionId,
+          agentId: "main",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            startedAt: run.startedAt,
+            endedAt: run.endedAt,
+            terminalReply: { disposition: "visible", text: run.finalText },
+            executionSettled: true,
+          },
+        });
+        await fixture.settle();
+        await testing.sweepOnceForTests();
+        await fixture.settle();
+        expect(
+          vi
+            .mocked(runSubagentAnnounceFlow)
+            .mock.calls.filter(([call]) => call.childRunId === run.runId),
+        ).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("leaves an unmapped stale wake pending until its own stale-run cutoff", async () => {
+    try {
+      const run = await prepareStaleWake("unmapped");
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+        execution: { status: "running", startedAt: run.now - 60_000 },
+      });
+      expect(vi.mocked(runSubagentAnnounceFlow)).not.toHaveBeenCalled();
+      vi.setSystemTime(run.now + 2 * 60 * 60 * 1_000);
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)).toMatchObject({
+        execution: {
+          status: "terminal",
+          endedAt: run.now + 2 * 60 * 60 * 1_000,
+          outcome: { status: "error", error: "subagent run lost active execution context" },
+        },
+        delivery: { status: "delivered" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["visible", "missing"] as const)(
     "settles an admitted wake from its recovered %s final",

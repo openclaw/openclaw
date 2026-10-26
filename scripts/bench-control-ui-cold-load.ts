@@ -19,6 +19,7 @@
 // --boot-route chat|new|sessions|settings selects the measured reload destination.
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
+// --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
@@ -53,6 +54,9 @@ import {
 import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";
+import { installTeamScaleSidebarPresentation } from "../ui/src/test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import { revealSidebarTarget } from "../ui/src/test-helpers/control-ui-sidebar-window.ts";
 import {
   createControlUiStreamingReply,
   createStreamingReplyProbeInitScript,
@@ -294,6 +298,8 @@ const { values } = parseArgs({
     "sidebar-live-churn": { type: "boolean", default: false },
     "sidebar-avatars": { type: "boolean", default: false },
     "transcript-avatars": { type: "boolean", default: false },
+    "sidebar-presentation": { type: "boolean", default: false },
+    "sidebar-presentation-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -345,6 +351,9 @@ if (values["streaming-reply"] && values["live-events"]) {
 }
 if (values["streaming-allocations"] && !values["streaming-reply"]) {
   throw new Error("streaming-allocations requires streaming-reply");
+}
+if (values["sidebar-presentation-probe"] && !values["sidebar-presentation"]) {
+  throw new Error("sidebar-presentation-probe requires sidebar-presentation");
 }
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
@@ -755,6 +764,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarLiveChurn: values["sidebar-live-churn"],
   sidebarAvatars: values["sidebar-avatars"],
   transcriptAvatars: values["transcript-avatars"],
+  sidebarPresentation: values["sidebar-presentation"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -1174,6 +1184,7 @@ try {
     if (
       values["sidebar-live-churn"] ||
       values["sidebar-avatars"] ||
+      values["sidebar-presentation"] ||
       values["closed-menu-members"]
     ) {
       await page.route("**/api/users/*/avatar?*", async (route) => {
@@ -1189,6 +1200,12 @@ try {
         }
         return route.fulfill(response);
       });
+      if (values["sidebar-presentation"]) {
+        await page.route("**/avatar/*", (route) => {
+          const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+          return asset ? route.fulfill(asset) : route.fallback();
+        });
+      }
     }
   }
   await page.addInitScript(
@@ -1254,11 +1271,14 @@ try {
     values["warm-reload"] || firstLoad
       ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
+  const presentationProbes = fixture.sidebarPresentation
+    ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes}${presentationProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1447,16 +1467,37 @@ try {
     }
     if (fixture.sidebarPersistentChildren) {
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren;
-      const toggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
+      const reveal = async (selector: string) => {
+        const target = page.locator(selector);
+        await revealSidebarTarget(page.locator(".sidebar-shell__body"), target, 30_000);
+        return target;
+      };
+      const toggle = await reveal(`[data-child-session-toggle="${parentKey}"]`);
       if ((await toggle.getAttribute("aria-expanded")) !== "true") {
         await toggle.click();
       }
+      await page.waitForFunction(
+        (expectedParent) =>
+          Reflect.get(window, "__coldLoad")
+            .read()
+            .rpcs.some(
+              (rpc: { method: string; params: { spawnedBy?: string } }) =>
+                rpc.method === "sessions.list" && rpc.params.spawnedBy === expectedParent,
+            ),
+        parentKey,
+      );
       for (const key of childKeys) {
-        await page.locator(`.sidebar-session-content [data-session-key="${key}"]`).waitFor();
+        await reveal(`.sidebar-session-content [data-session-key="${key}"]`);
       }
     }
-    const expansionSaved = async (expanded: boolean) => {
-      type SavedRow = { key: string; children?: SavedRow[] };
+    const expansionSaved = async ({
+      expanded,
+      persistentChildren,
+    }: {
+      expanded: boolean;
+      persistentChildren?: { parentKey: string; childKeys: string[] };
+    }) => {
+      type SavedRow = { key: string; children?: SavedRow[]; childrenDisplayMode?: string };
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open("openclaw-chat-snapshots");
         request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -1469,7 +1510,10 @@ try {
       try {
         const records = await new Promise<
           Array<{
-            model: { sections: Array<{ visibleLimit: number; rows: SavedRow[] }> };
+            model: {
+              pinnedSessions: SavedRow[];
+              sections: Array<{ visibleLimit: number; rows: SavedRow[] }>;
+            };
           }>
         >((resolve, reject) => {
           const request = database
@@ -1488,15 +1532,24 @@ try {
         ].map((row) => row.getAttribute("data-session-key"));
         return records.some(({ model }) => {
           const savedKeys = new Set<string>();
+          let parentExpanded = !persistentChildren;
           const collect = (rows: SavedRow[]) => {
             for (const row of rows) {
               savedKeys.add(row.key);
+              if (row.key === persistentChildren?.parentKey) {
+                parentExpanded =
+                  row.childrenDisplayMode === "expanded" ||
+                  row.childrenDisplayMode === "expanded-fully";
+              }
               collect(row.children ?? []);
             }
           };
+          collect(model.pinnedSessions);
           collect(model.sections.flatMap((section) => section.rows));
           return (
             (!expanded || model.sections.some(({ visibleLimit }) => visibleLimit > 10)) &&
+            parentExpanded &&
+            (persistentChildren?.childKeys.every((key) => savedKeys.has(key)) ?? true) &&
             visibleKeys.every((key) => key !== null && savedKeys.has(key))
           );
         });
@@ -1505,7 +1558,7 @@ try {
       }
     };
     // Sticky live rows can exceed ten without an explicit Show more selection.
-    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, true))) {
+    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, { expanded: true }))) {
       await page
         .locator(".sidebar-session-content .sidebar-session-pagination__button")
         .filter({ hasText: "Show more" })
@@ -1514,12 +1567,23 @@ try {
     }
     // waitForFunction treats an async predicate's Promise as truthy.
     const deadline = Date.now() + 30_000;
-    while (!(await page.evaluate(expansionSaved, values["sidebar-expanded"]))) {
+    while (
+      !(await page.evaluate(expansionSaved, {
+        expanded: values["sidebar-expanded"],
+        persistentChildren: fixture.sidebarPersistentChildren,
+      }))
+    ) {
       if (Date.now() >= deadline) {
         throw new Error("Expanded sidebar membership was not persisted");
       }
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
+    await page.locator(".sidebar-shell__body").evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page
+      .locator(`.sidebar-session-content [data-session-key="${fixture.pinnedKeys[1]}"]`)
+      .waitFor();
   }
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
   const snapshotSaves: Array<
@@ -1533,6 +1597,11 @@ try {
   };
   if (!firstLoad) {
     await page.goto(chatUrl);
+    const ownerFilter = values["session-event-ancestor-refs"]
+      ? "all"
+      : fixture.sidebarPersistentChildren
+        ? `owner:${fixture.sidebarListInput.viewerProfileId}`
+        : "involving-me";
     try {
       if (viewportName === "mobile") {
         await navigationDrawerToggle(page).click();
@@ -1540,9 +1609,7 @@ try {
       }
       await page.locator("#sidebar-session-owner-title").click();
       await page
-        .locator(
-          `.sidebar-session-owner-filter [role="option"][data-value="${values["session-event-ancestor-refs"] ? "all" : "involving-me"}"]`,
-        )
+        .locator(`.sidebar-session-owner-filter [role="option"][data-value="${ownerFilter}"]`)
         .click();
     } catch (error) {
       await writeFile(
@@ -1625,6 +1692,14 @@ try {
       }
     }
     await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
+    if (values["sidebar-presentation-probe"]) {
+      for (const [index, storage] of warmStates.entries()) {
+        await writeFile(
+          path.join(artifactDir, `warm-sidebar-${index}.json`),
+          JSON.stringify({ records: storage.records.sidebarSnapshots }),
+        );
+      }
+    }
   }
   let historyValidatorRequests = 0;
   if (historyValidatorDelayMs > 0) {
@@ -2052,6 +2127,9 @@ try {
             ),
           ),
         }
+      : undefined;
+    const sidebarPresentation = values["sidebar-presentation-probe"]
+      ? await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").read())
       : undefined;
     if (cpuProfile) {
       await writeFile(
@@ -2966,6 +3044,7 @@ try {
       criticalPath,
       warmReload,
       paneChrome,
+      sidebarPresentation,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,
@@ -3067,6 +3146,8 @@ try {
         fixture: fixture.counts,
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
+        sidebarPresentation: values["sidebar-presentation"],
+        sidebarPresentationProbe: values["sidebar-presentation-probe"],
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],

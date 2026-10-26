@@ -289,6 +289,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-command.ingress-diagnostics.test.ts",
   "src/agents/agent-command.live-model-switch.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  "src/agents/agent-command.operator-direct-root.test.ts",
   "src/agents/agent-command.restart-settlement.test.ts",
   "src/agents/agent-command.settled-recovery.test.ts",
   "src/agents/internal-session-effects.test.ts",

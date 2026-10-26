@@ -216,8 +216,7 @@
     .nav-item__icon > svg,
     .session-glyph__content,
     .session-glyph__icon,
-    .session-glyph__icon > svg,
-    .session-glyph__icon > img
+    .session-glyph__icon > *
   ) {
   width: var(--sidebar-rail-glyph-size);
   height: var(--sidebar-rail-glyph-size);
@@ -341,7 +340,7 @@
   background: var(--sidebar-rail-control-surface);
 }
 
-.sidebar-footer-bar__home .session-row-badge svg {
+.sidebar-footer-bar__home .session-row-badge > i {
   width: 10px;
   height: 10px;
 }

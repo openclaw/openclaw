@@ -159,6 +159,41 @@ describe("sidebar projection memo", () => {
     expect(enumerate).not.toHaveBeenCalled();
   });
 
+  it("shares one cached row graph between navigation, geometry and badge consumers", async () => {
+    const target = session("shared-cached-row", { unread: true });
+    const { sidebar, sessions } = await mount([target]);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+    const rows = snapshotSessions([sidebar.getSessionNavigationState().toSidebarSession(target)]);
+    owner.restoreSidebarSnapshot({
+      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+      mode: "chip",
+      sections: [
+        {
+          id: "ungrouped",
+          rows,
+          totalRowCount: 1,
+          visibleRowCount: 1,
+          visibleLimit: 10,
+          collapsedVisibleRowCount: 1,
+          renderHeader: false,
+        },
+      ],
+    });
+    owner.invalidate();
+    await settleLitElement(sidebar);
+    const navigationRow = owner.findSidebarMenuSessionByKey(target.key);
+    const badgeRow = () => owner.readSessionPullRequestRows().find((row) => row.key === target.key);
+    expect(navigationRow).toBeDefined();
+    expect(badgeRow()).toBe(navigationRow);
+    expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(navigationRow);
+    await update(sidebar, { activeRouteId: "chat", sessionKey: target.key });
+    const selected = owner.findSidebarMenuSessionByKey(target.key);
+    expect(selected?.visuallyActive).toBe(true);
+    expect(badgeRow()).toBe(selected);
+    expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(selected);
+  });
+
   it.each([10, 30])("keeps newer pagination at %s rows through cached handoff", async (limit) => {
     const sessionsToShow = Array.from({ length: 40 }, (_, index) => session(`row-${index}`));
     const { sidebar, sessions } = await mount(sessionsToShow);
@@ -174,7 +209,6 @@ describe("sidebar projection memo", () => {
     owner.restoreSidebarSnapshot({
       ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
       mode: "chip",
-      sessions: rows,
       entries: [],
       sections: [
         {

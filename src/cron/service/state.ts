@@ -10,6 +10,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
@@ -328,6 +329,7 @@ export type CronServiceDeps = {
    */
   runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
+  onDefinitionChange?: (previous: CronJob | undefined, next: CronJob | undefined) => void;
   onProvisionedJobsReloaded?: () => Promise<void>;
 };
 
@@ -521,6 +523,38 @@ export function emit(state: CronServiceState, evt: CronEvent, context?: CronEven
     }
   } catch {
     /* ignore */
+  }
+}
+
+/** Publish committed membership/configuration changes independently of runtime events. */
+export function emitCronDefinitionChanges(
+  state: CronServiceState,
+  previousJobs: readonly CronJob[],
+  nextJobs: readonly CronJob[],
+) {
+  if (!state.deps.onDefinitionChange) {
+    return;
+  }
+  const previousById = new Map(previousJobs.map((job) => [job.id, job]));
+  const publish = (previous: CronJob | undefined, next: CronJob | undefined) => {
+    try {
+      state.deps.onDefinitionChange?.(previous, next);
+    } catch {
+      /* Observers cannot undo committed jobs. */
+    }
+  };
+  for (const next of nextJobs) {
+    const previous = previousById.get(next.id);
+    previousById.delete(next.id);
+    if (
+      previous !== next &&
+      (!previous || resolveCronJobConfigRevision(previous) !== resolveCronJobConfigRevision(next))
+    ) {
+      publish(previous, next);
+    }
+  }
+  for (const previous of previousById.values()) {
+    publish(previous, undefined);
   }
 }
 

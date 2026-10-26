@@ -1269,8 +1269,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   opacity: 0.7;
 }
 
-.sidebar-session-group-count--error svg,
-.sidebar-child-session__status svg {
+.sidebar-session-group-count--error svg {
   width: 12px;
   height: 12px;
   stroke-width: 1.8px;
@@ -1366,9 +1365,12 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-group-actions:is(:hover, :focus-visible),
 .sidebar-session-group-actions[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
+
+  &:not(.sidebar-new-session) {
+    background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  }
 }
 
 /* Trailing header actions read as one cluster: 2px apart, not the 8px header gap.
@@ -2041,7 +2043,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   :is(
     .session-row-badge--pull-request,
-    .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
+    .session-row-badges:has(> .session-row-badge--pull-request:only-child)
   ) {
   display: none;
 }
@@ -3787,12 +3789,6 @@ html.openclaw-native-web-chrome
 
 .sidebar-session-attention__icon--error {
   color: var(--danger);
-}
-
-.sidebar-session-attention__icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session.sidebar-recent-session--attention-amber .sidebar-recent-session__name,

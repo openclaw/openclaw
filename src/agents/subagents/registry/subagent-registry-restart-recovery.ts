@@ -570,10 +570,21 @@ export async function recoverInterruptedSubagentRow(
         }
       }
     }
+    // A later session turn cannot keep an execution from a dead Gateway alive.
+    // Settle only the old registry row; the newer session retains its own state.
+    const retiredBeforeLaterTurn =
+      isRetiredSubagentExecution(entry) &&
+      entry.execution.transcriptTarget === undefined &&
+      (entry.taskRunId === undefined || entry.taskRunId === runId) &&
+      sessionEntry !== undefined &&
+      !ownsSubagentSessionExecution(entry, sessionEntry) &&
+      (sessionEntry.lifecycleRunId !== undefined ||
+        (sessionEntry.lastRunId !== undefined && sessionEntry.lastRunId !== runId));
     if (
       !legacy &&
       !replayTerminal &&
       !receipt &&
+      !retiredBeforeLaterTurn &&
       sessionEntry?.abortedLastRun !== true &&
       entry.execution.status !== "interrupted"
     ) {
@@ -583,6 +594,7 @@ export async function recoverInterruptedSubagentRow(
     // to replay a child. The requester decides whether to continue its history.
     const suppressSessionEffects =
       legacy ||
+      retiredBeforeLaterTurn ||
       currentRead?.kind === "missing" ||
       (receipt !== undefined && !isRestartRecoveryLifecycleCurrent(receipt)) ||
       (sessionEntry?.lifecycleRunId !== undefined &&

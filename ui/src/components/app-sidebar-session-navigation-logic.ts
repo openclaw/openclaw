@@ -331,29 +331,35 @@ export function buildSidebarSessionNavigationState(input: {
   };
 }
 
-export function buildReconciledSidebarZone(input: {
-  sidebarEntries: readonly string[];
-  rows: SidebarRecentSession[];
-  pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
-  pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
-  snapshot?: { model: SidebarSnapshotModel; selectedKey: string };
-  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
-}) {
-  if (input.snapshot) {
-    const { model, selectedKey } = input.snapshot;
-    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
-      restoreSnapshotSession(row, selectedKey),
-    );
-    return {
+export function restoreSnapshotNavigation(model: SidebarSnapshotModel, selectedKey: string) {
+  const sections = model.sections.map((section) => ({
+    ...section,
+    rows: section.rows.map((row) => restoreSnapshotSession(row, selectedKey)),
+  }));
+  const visibleRows = sections.flatMap((section) => section.rows);
+  const pins = model.pinnedSessions.map((row) => restoreSnapshotSession(row, selectedKey));
+  return {
+    sections,
+    visibleRows,
+    zone: {
       entries: model.entries.flatMap((entry) => {
         const parsed = parseSidebarEntry(entry);
         return parsed ? [parsed] : [];
       }),
       sidebarEntries: model.entries,
-      sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
+      sessionRows: new Map([...visibleRows, ...pins].map((row) => [row.key, row])),
       pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
-    };
-  }
+    },
+  };
+}
+
+export function buildReconciledSidebarZone(input: {
+  sidebarEntries: readonly string[];
+  rows: SidebarRecentSession[];
+  pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
+  pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
+}) {
   const navigation = input.pluginNavigation;
   const occupiedPlacements = new Set(SIDEBAR_NAV_ROUTES.map((route) => `route:${route}`));
   const pluginTabs = new Map(

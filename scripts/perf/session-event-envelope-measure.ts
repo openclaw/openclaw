@@ -24,6 +24,7 @@
  * The baseline encoder mirrors the broadcaster's plain-envelope path; the candidate
  * uses its prepared encoder when present. This excludes transport/authorization;
  * session-event-field-order.ts separately compares complete real-broadcaster frames.
+ * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -47,6 +48,7 @@ const { values } = parseArgs({
   options: {
     owner: { type: "string", default: "src/gateway/session-event-projection.ts" },
     "delivery-owner": { type: "string", default: "src/gateway/session-ancestor-references.ts" },
+    "fields-owner": { type: "string", default: "src/gateway/session-row-delta-fields.ts" },
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     audiences: { type: "string", default: "2" },
@@ -68,6 +70,16 @@ assert(Number.isSafeInteger(sessions) && sessions > 0);
 assert(Number.isSafeInteger(audiences) && audiences > 0 && audiences <= clients);
 const owner = path.resolve(values.owner);
 const ownerSha256 = createHash("sha256").update(readFileSync(owner)).digest("hex");
+const fieldsOwner = path.resolve(values["fields-owner"]);
+const fieldsUrl = new URL("../../src/gateway/session-row-delta-fields.ts", import.meta.url).href;
+const fieldsSource = readFileSync(fieldsOwner, "utf8");
+const fieldsHook = registerHooks({
+  load(url, context, nextLoad) {
+    return url === fieldsUrl
+      ? { format: "module-typescript", source: fieldsSource, shortCircuit: true }
+      : nextLoad(url, context);
+  },
+});
 let key = "agent:main:stream-envelope";
 let row: GatewaySessionRow;
 let audienceRows: GatewaySessionRow[];
@@ -118,6 +130,7 @@ ownerHook?.deregister();
 const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
   await import(pathToFileURL(deliveryOwner).href);
+fieldsHook.deregister();
 const fields = Object.fromEntries(
   `createdActor owner participants participantCount visibility channel subject groupChannel space
    chatType origin archived archivedAt archivedBy archiveReason pinned sidebarRoot pinnedAt
@@ -392,6 +405,7 @@ console.log(
   JSON.stringify({
     owner,
     ownerSha256,
+    fieldsOwnerSha256: createHash("sha256").update(fieldsSource).digest("hex"),
     deliveryOwnerSha256: createHash("sha256").update(readFileSync(deliveryOwner)).digest("hex"),
     node: process.version,
     events,

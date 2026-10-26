@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../app/operator-access.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../lib/gateway-page-binding.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
@@ -31,6 +32,7 @@ import {
 import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
+  SESSION_SEARCH_SCOPE,
 } from "./command-palette-session-search.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.tsx";
 
@@ -38,15 +40,6 @@ const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
 const PROMPT_ENTER_CHARS = 60;
 const PROMPT_EXIT_CHARS = 50;
-const SESSION_SEARCH_SCOPE = {
-  includeGlobal: false,
-  includeUnknown: false,
-  configuredAgentsOnly: true,
-  excludeSubagents: true,
-  excludeCron: true,
-  excludeSystem: true,
-  excludeDock: true,
-} as const;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
 export type PaletteFilter = "all" | "sessions" | "messages";
@@ -209,6 +202,7 @@ export class CommandPaletteState {
       },
       onSnapshot: () => this.synchronizePresentationScope(),
       ensureInitialData: () => this.scheduleSessionSearch(this.draft.message),
+      onPageActivation: () => void this.ensureCatalogItems(),
     });
   }
 
@@ -216,15 +210,17 @@ export class CommandPaletteState {
     event,
   ) => {
     const invalidation = modelCatalogEventInvalidation(event);
+    const snapshot = this.context?.gateway.snapshot;
+    const cron = snapshot && isCronInventoryInvalidation(event, snapshot);
     // Palette search includes skills even when the model cache remains current.
-    if (event.event === "cron" || event.event === "chat.metadata.changed" || invalidation) {
+    if (cron || event.event === "chat.metadata.changed" || invalidation) {
       if (invalidation === "clear") {
         this.catalogLoad = undefined;
         this.catalogItems = [];
         this.settledModels = this.modelReader.snapshot;
         this.modelItems = getCommandPaletteModelItems(this.settledModels);
       }
-      if (this.open) {
+      if (this.open && document.visibilityState !== "hidden") {
         void this.ensureCatalogItems(true);
       } else {
         this.clearCatalogSearch();
@@ -430,6 +426,7 @@ export class CommandPaletteState {
     const client = gateway?.snapshot.client;
     if (
       !this.open ||
+      document.visibilityState === "hidden" ||
       this.promptMode ||
       this.mentionMenu.open ||
       this.draft.mentions.length > 0 ||

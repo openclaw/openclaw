@@ -106,6 +106,8 @@ If the New Session page fails during its initial render, the UI attempts one aut
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
+The saved sidebar also retains unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
+
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
