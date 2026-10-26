@@ -2,6 +2,9 @@
 // node --import ./scripts/tsx.mjs scripts/perf/transcript-model-context-measure.ts \
 //   --output .local/context-candidate --mode timing --iterations 2000
 // Add --owner-file .local/context-base.ts to substitute the exact baseline owner.
+// --navigation-owner-file substitutes only the navigation owner for cache comparisons.
+// --mode navigation counts actual SQLite navigation work and samples retained process heap.
+// Use --sessions 2 for alternating hits and --sessions 16 for bounded-eviction evidence.
 // Run timing and allocation separately, counterbalancing base/candidate order.
 // --sessions 1 measures a warm navigation cache; the default 16 rotates transcripts.
 // Acceptance: identical event bytes/counts, less allocation, no material CPU regression.
@@ -14,6 +17,7 @@ import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
+import type { SQLInputValue } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -23,6 +27,7 @@ const { values } = parseArgs({
   options: {
     output: { type: "string" },
     "owner-file": { type: "string" },
+    "navigation-owner-file": { type: "string" },
     mode: { type: "string", default: "timing" },
     iterations: { type: "string", default: "2000" },
     sessions: { type: "string", default: "16" },
@@ -30,7 +35,7 @@ const { values } = parseArgs({
   },
 });
 assert(values.output, "--output is required and must be a new directory");
-assert(values.mode === "timing" || values.mode === "allocation", "Invalid --mode");
+assert(["timing", "allocation", "navigation"].includes(values.mode), "Invalid --mode");
 const iterations = Number(values.iterations);
 const sessions = Number(values.sessions);
 const turns = Number(values.turns);
@@ -59,13 +64,26 @@ const ownerUrl = new URL(
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
+const navigationUrl = new URL(
+  "../../src/config/sessions/session-model-context-pages.ts",
+  import.meta.url,
+);
+const navigationSourceUrl = values["navigation-owner-file"]
+  ? pathToFileURL(path.resolve(values["navigation-owner-file"]))
+  : navigationUrl;
 let ownerLoaded = false;
-if (values["owner-file"]) {
+let navigationLoaded = false;
+if (values["owner-file"] || values["navigation-owner-file"]) {
   registerHooks({
     load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
+      if (values["owner-file"] && url === ownerUrl.href) {
         ownerLoaded = true;
         const loaded = nextLoad(sourceUrl.href, context);
+        return { format: loaded.format, source: loaded.source, shortCircuit: true };
+      }
+      if (values["navigation-owner-file"] && url === navigationUrl.href) {
+        navigationLoaded = true;
+        const loaded = nextLoad(navigationSourceUrl.href, context);
         return { format: loaded.format, source: loaded.source, shortCircuit: true };
       }
       return nextLoad(url, context);
@@ -75,6 +93,10 @@ if (values["owner-file"]) {
 const { readSessionTranscriptModelContext: read } =
   await import("../../src/config/sessions/session-accessor.sqlite-model-context.js");
 assert(!values["owner-file"] || ownerLoaded, "Baseline owner substitution was not loaded");
+assert(
+  !values["navigation-owner-file"] || navigationLoaded,
+  "Baseline navigation substitution was not loaded",
+);
 const { importSqliteSessionRowsBatch } =
   await import("../../src/config/sessions/session-accessor.sqlite-import.js");
 const { resolveOpenClawAgentSqlitePath, closeOpenClawAgentDatabasesAsync } =
@@ -138,6 +160,15 @@ function events(sessionId: string): TranscriptEvent[] {
 }
 const limits = { maxBytes: 1024 * 1024, maxEvents: 128 };
 const inspector = new Session();
+const navigation = { queries: 0, fullQueries: 0, rows: 0 };
+let restoreSqlObserver: (() => void) | undefined;
+async function retainedMemory() {
+  if (values.mode !== "navigation") {
+    return undefined;
+  }
+  await inspector.post("HeapProfiler.collectGarbage");
+  return process.memoryUsage();
+}
 const pauses: number[] = [];
 const observer = new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
@@ -160,11 +191,54 @@ try {
       },
     })),
   );
+  if (values.mode === "navigation") {
+    inspector.connect();
+    const { DatabaseSync } = await import("node:sqlite");
+    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards each call with its original database receiver.
+    const prepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function (sql) {
+      const statement = prepare.call(this, sql);
+      if (/as "navigation_json"/i.test(sql) && /from "transcript_events"/i.test(sql)) {
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = function* (
+          first?: SQLInputValue | Record<string, SQLInputValue>,
+          ...parameters: SQLInputValue[]
+        ) {
+          navigation.queries++;
+          navigation.fullQueries += first === -1 || parameters.includes(-1) ? 1 : 0;
+          // Preserve both native overloads: named bindings and positional bindings.
+          const rows = (() => {
+            if (first === undefined) {
+              return iterate(...parameters);
+            }
+            if (typeof first === "object" && first !== null && !ArrayBuffer.isView(first)) {
+              return iterate(first, ...parameters);
+            }
+            return iterate(first, ...parameters);
+          })();
+          for (const row of rows) {
+            navigation.rows++;
+            yield row;
+          }
+          return undefined;
+        };
+      }
+      return statement;
+    };
+    restoreSqlObserver = () => {
+      DatabaseSync.prototype.prepare = prepare;
+    };
+  }
+  const memoryBeforeCold = await retainedMemory();
   let latest = read(scopes[0]!, undefined, limits);
   const golden = JSON.stringify(latest.events);
+  const coldNavigation = values.mode === "navigation" ? { ...navigation } : undefined;
+  const memoryAfterCold = await retainedMemory();
   for (let index = 0; index < 32; index++) {
     read(scopes[index % sessions]!, undefined, limits);
   }
+  const memoryAfterWarmup = await retainedMemory();
+  const warmNavigation = { ...navigation };
   await setImmediate();
   observer.observe({ entryTypes: ["gc"] });
   if (values.mode === "allocation") {
@@ -190,7 +264,16 @@ try {
   await setImmediate();
   await setImmediate();
   observer.disconnect();
+  const measuredNavigation =
+    values.mode === "navigation"
+      ? {
+          queries: navigation.queries - warmNavigation.queries,
+          fullQueries: navigation.fullQueries - warmNavigation.fullQueries,
+          rows: navigation.rows - warmNavigation.rows,
+        }
+      : undefined;
   assert.equal(JSON.stringify(read(scopes[0]!, undefined, limits).events), golden);
+  const memoryAfterReads = await retainedMemory();
   const result = {
     mode: values.mode,
     node: process.version,
@@ -199,6 +282,7 @@ try {
     turns,
     limits,
     ownerSha256: hash("sha256", readFileSync(sourceUrl)),
+    navigationOwnerSha256: hash("sha256", readFileSync(navigationSourceUrl)),
     eventCount,
     eventsPerRead: latest.events.length,
     firstSessionEventBytes: Buffer.byteLength(golden),
@@ -212,6 +296,19 @@ try {
     gcCount: values.mode === "timing" ? pauses.length : undefined,
     gcMaxMs: values.mode === "timing" ? Math.max(0, ...pauses) : undefined,
     memory: process.memoryUsage(),
+    navigation:
+      values.mode === "navigation"
+        ? { cold: coldNavigation, measured: measuredNavigation }
+        : undefined,
+    retainedMemory:
+      values.mode === "navigation"
+        ? {
+            beforeCold: memoryBeforeCold,
+            afterCold: memoryAfterCold,
+            afterWarmup: memoryAfterWarmup,
+            afterReads: memoryAfterReads,
+          }
+        : undefined,
     loadBefore,
     loadAfter: os.loadavg(),
   };
@@ -221,6 +318,7 @@ try {
   }
   console.log(JSON.stringify(result));
 } finally {
+  restoreSqlObserver?.();
   observer.disconnect();
   inspector.disconnect();
   await closeOpenClawAgentDatabasesAsync();

@@ -38,6 +38,30 @@ async function readModelAsync(...args: Parameters<typeof SessionManager.openMode
   return (await SessionManager.openModelContextAsync(...args)).buildSessionContext();
 }
 
+function observeModelNavigationReads(scope: Parameters<typeof readModel>[0]) {
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+  const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
+  // oxlint-disable-next-line typescript/unbound-method -- Forward each observation with the original native statement receiver.
+  const originalIterate = prototype.iterate;
+  let reads = 0;
+  const iterate = vi.spyOn(prototype, "iterate").mockImplementation(function (
+    this: StatementSync,
+    ...parameters
+  ) {
+    if (this.sourceSQL.includes(' as "navigation_json"')) {
+      reads++;
+    }
+    return originalIterate.apply(this, parameters);
+  });
+  return {
+    restore: () => iterate.mockRestore(),
+    reset: () => {
+      reads = 0;
+    },
+    navigationReads: () => reads,
+  };
+}
+
 function withoutPayload<T>(markers: string[], read: () => T): T {
   const parse = JSON.parse;
   let bytes = 0;
@@ -666,6 +690,90 @@ it("refills warmed context when a prompt restart retires a suffix entry", async 
     expect(expected.messages[0]).toMatchObject({ content: "question-1" });
     expect(await read()).toEqual(expected);
     expect(await read()).toEqual(expected);
+  });
+});
+
+it("reuses bounded navigation across sessions and refreshes only an appended session", async () => {
+  await withSessionState("model-cache-a", async ({ scope }) => {
+    const other = sessionScope(scope.storePath, "model-cache-b");
+    await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 1 });
+    const first = SessionManager.open(scope);
+    const second = SessionManager.open(other);
+    await first.appendMessageAsync(makeUserMessage("first conversation", 1));
+    await second.appendMessageAsync(makeUserMessage("second conversation", 1));
+    await waitForSessionTranscriptProjection(scope);
+    await waitForSessionTranscriptProjection(other);
+    const limits = { maxBytes: 8192, maxEvents: 4 };
+    const { restore, reset, navigationReads } = observeModelNavigationReads(scope);
+    try {
+      for (const [target, content] of [
+        [scope, "first conversation"],
+        [other, "second conversation"],
+      ] as const) {
+        const before = navigationReads();
+        expect(readModel(target, { limits }).messages).toMatchObject([{ role: "user", content }]);
+        expect(navigationReads() - before).toBe(1);
+      }
+      reset();
+      for (const [target, content] of [
+        [scope, "first conversation"],
+        [other, "second conversation"],
+        [scope, "first conversation"],
+      ] as const) {
+        expect(readModel(target, { limits }).messages).toMatchObject([{ role: "user", content }]);
+      }
+      expect(navigationReads()).toBe(0);
+
+      await first.appendMessageAsync(makeUserMessage("first conversation continues", 2));
+      await waitForSessionTranscriptProjection(scope);
+      reset();
+      expect(readModel(other, { limits }).messages).toMatchObject([
+        { role: "user", content: "second conversation" },
+      ]);
+      expect(navigationReads()).toBe(0);
+      expect(readModel(scope, { limits }).messages).toMatchObject([
+        { role: "user", content: "first conversation" },
+        { role: "user", content: "first conversation continues" },
+      ]);
+      expect(navigationReads()).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+it("bounds resident navigation while retaining the most recently read sessions", async () => {
+  await withOpenClawTestState({ label: "model-cache-eviction" }, async (state) => {
+    const scopes = Array.from({ length: 9 }, (_, index) =>
+      sessionScope(state.statePath("transcript.sqlite"), `model-cache-${index}`),
+    );
+    for (const [index, scope] of scopes.entries()) {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await SessionManager.open(scope).appendMessageAsync(
+        makeUserMessage(`conversation ${index}`, 1),
+      );
+      await waitForSessionTranscriptProjection(scope);
+    }
+    const { restore, navigationReads } = observeModelNavigationReads(scopes[0]!);
+    const read = (index: number) => {
+      const before = navigationReads();
+      expect(
+        readModel(scopes[index]!, { limits: { maxBytes: 8192, maxEvents: 4 } }).messages,
+      ).toMatchObject([{ role: "user", content: `conversation ${index}` }]);
+      return navigationReads() - before;
+    };
+    try {
+      for (let index = 0; index < 8; index++) {
+        expect(read(index)).toBe(1);
+      }
+      expect(read(0)).toBe(0);
+      expect(read(8)).toBe(1);
+      expect(read(0)).toBe(0);
+      expect(read(1)).toBe(1);
+      expect(read(8)).toBe(0);
+    } finally {
+      restore();
+    }
   });
 });
 

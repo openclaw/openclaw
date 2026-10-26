@@ -564,6 +564,12 @@ displaced results rebuild canonical navigation once and reseed the compact state
 reads scan transiently and retain no full-history navigation cache. Payload-size
 projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
+Each reader connection retains up to eight session snapshots, evicting the least
+recently read when their combined retained rows and pages exceed 16,384. A single
+oversized snapshot remains alone to preserve its warm reads. These are structural
+limits, not a byte budget; connection disposal clears all snapshots. Page-receipt
+ownership and its separate retention limit remain unchanged.
+
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
 command; prepared, explicit, and warm replica expectations remain fixed across
