@@ -58,6 +58,15 @@ const run = LedgerRecordSchema.parse({
   downtimeMs: 25,
 });
 
+function expectWireRecord(record: unknown) {
+  expect(validateUpdateRunRecord(record)).toBe(true);
+  expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+  expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+  expect(
+    validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+  ).toBe(true);
+}
+
 describe("update run wire contract", () => {
   it.each([true, false, undefined])("projects optional core readiness (%s)", (coreReady) => {
     const record = toPublicUpdateRun(
@@ -67,12 +76,7 @@ describe("update run wire contract", () => {
       }),
     );
     expect(record.verification.coreReady).toBe(coreReady);
-    expect(validateUpdateRunRecord(record)).toBe(true);
-    expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
-    expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
-    expect(
-      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
-    ).toBe(true);
+    expectWireRecord(record);
   });
 
   it("carries snapshot capacity evidence through the wire projection", () => {
@@ -91,11 +95,6 @@ describe("update run wire contract", () => {
       steps: [{ ...run.steps[0], ...evidence }],
     });
     expect(record.steps[0]).toMatchObject(evidence);
-    expect(validateUpdateRunRecord(record)).toBe(true);
-    expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
-    expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
-    expect(
-      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
-    ).toBe(true);
+    expectWireRecord(record);
   });
 });

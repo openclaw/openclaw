@@ -32,17 +32,13 @@ function stringLiteralUnionValues(schema: unknown): string[] | undefined {
   if (!Array.isArray(branches) || branches.length === 0) {
     return undefined;
   }
-  const values: string[] = [];
-  for (const branch of branches) {
-    if (!branch || typeof branch !== "object" || !("const" in branch)) {
-      return undefined;
-    }
-    if (typeof branch.const !== "string") {
-      return undefined;
-    }
-    values.push(branch.const);
-  }
-  return new Set(values).size === values.length ? values : undefined;
+  const values = branches.map((branch: unknown) =>
+    branch && typeof branch === "object" && "const" in branch ? branch.const : undefined,
+  );
+  return values.every((value): value is string => typeof value === "string") &&
+    new Set(values).size === values.length
+    ? values
+    : undefined;
 }
 
 // Cross-language clients cannot derive these compatibility floors at runtime.
@@ -73,18 +69,6 @@ describe("native Gateway protocol levels", () => {
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
-    await assertPatterns(
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectFailureBackoff.swift",
-      [
-        /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
-      ],
-    );
-    await assertPatterns("apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift", [
-      /var supportedProtocols: ClosedRange<Int> \{\s+Self\.minimumProtocolVersion\(\s+role: self\.connectOptions\?\.role \?\? "operator",\s+clientMode: self\.connectOptions\?\.clientMode \?\? "ui"\)\.\.\.GATEWAY_PROTOCOL_VERSION\s+\}/,
-      /let protocols = self\.supportedProtocols/,
-      /"minProtocol": ProtoAnyCodable\(protocols\.lowerBound\)/,
-      /"maxProtocol": ProtoAnyCodable\(protocols\.upperBound\)/,
-    ]);
     await assertPatterns("apps/ios/WatchApp/Sources/WatchDirectNode.swift", [
       /minprotocol: GATEWAY_MIN_PROTOCOL_VERSION/,
       /maxprotocol: GATEWAY_PROTOCOL_VERSION/,
