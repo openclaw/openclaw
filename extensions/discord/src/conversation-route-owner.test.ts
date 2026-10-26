@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
-  type SessionBindingAdapter,
+  type SessionBindingAdapter as Adapter,
   testing as sessionBindingTesting,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -11,24 +11,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectDiscordConversationRouteOwner } from "./conversation-route-owner.test-support.js";
+import { inspectDiscordConversationRouteOwner as inspectOwner } from "./conversation-route-owner.test-support.js";
 
-function registerAdapter(overrides: Partial<SessionBindingAdapter> = {}) {
-  const adapter: SessionBindingAdapter = {
-    channel: "discord",
-    accountId: "default",
-    listBySession: () => [],
-    resolveByConversation: () => null,
-    ...overrides,
-  };
-  registerSessionBindingAdapter(adapter);
-  return adapter;
-}
-
-function inspect(
-  overrides: Partial<Parameters<typeof inspectDiscordConversationRouteOwner>[0]> = {},
-) {
-  return inspectDiscordConversationRouteOwner({
+function inspect(overrides: Partial<Parameters<typeof inspectOwner>[0]> = {}) {
+  return inspectOwner({
     cfg: {},
     accountId: "default",
     conversation: { kind: "channel", peerId: "channel-1" },
@@ -37,7 +23,7 @@ function inspect(
 }
 
 function binding(
-  conversation: Parameters<SessionBindingAdapter["resolveByConversation"]>[0],
+  conversation: Parameters<Adapter["resolveByConversation"]>[0],
   targetSessionKey: string,
   metadata?: Record<string, string>,
 ) {
@@ -53,7 +39,7 @@ function binding(
 }
 
 describe("inspectDiscordConversationRouteOwner", () => {
-  let adapter: SessionBindingAdapter;
+  let adapter: Adapter;
 
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
@@ -67,7 +53,13 @@ describe("inspectDiscordConversationRouteOwner", () => {
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    adapter = registerAdapter();
+    adapter = {
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => null,
+    };
+    registerSessionBindingAdapter(adapter);
   });
 
   afterEach(() => {
@@ -86,7 +78,7 @@ describe("inspectDiscordConversationRouteOwner", () => {
       const resolveByConversation = vi.fn((conversation) =>
         kind === "direct" ? binding(conversation, "agent:finance:bound") : null,
       );
-      registerAdapter({ resolveByConversation, touch });
+      Object.assign(adapter, { resolveByConversation, touch });
       expect(await inspect({ conversation: { kind, peerId, nativeChannelId } })).toEqual({
         kind: "agent",
         agentId,
@@ -121,14 +113,12 @@ describe("inspectDiscordConversationRouteOwner", () => {
   );
 
   it("preserves explicit plugin ownership independently of the target session key", async () => {
-    registerAdapter({
-      resolveByConversation: (conversation) =>
-        binding(conversation, "agent:review:looks-owned", {
-          pluginBindingOwner: "plugin",
-          pluginId: "review-plugin",
-          pluginRoot: "/plugins/review",
-        }),
-    });
+    adapter.resolveByConversation = (conversation) =>
+      binding(conversation, "agent:review:looks-owned", {
+        pluginBindingOwner: "plugin",
+        pluginId: "review-plugin",
+        pluginRoot: "/plugins/review",
+      });
 
     expect(await inspect()).toEqual({
       kind: "plugin",

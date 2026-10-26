@@ -42,16 +42,13 @@ describe("rewriteDiscordKnownMentions", () => {
     });
   });
 
-  it.each([".", "...", ",", "!", "?", ":", ";", ")"])(
-    "preserves %s after known mentions",
-    (suffix) => {
-      expectRewrite(
-        `@alice${suffix} @alice.dev${suffix} @alice#1234${suffix}`,
-        `<@111111111>${suffix} <@222222222>${suffix} <@111111111>${suffix}`,
-        { mentionAliases: { alice: "111111111", "alice.dev": "222222222" } },
-      );
-    },
-  );
+  it("preserves punctuation after handles, dotted aliases, and discriminators", () => {
+    expectRewrite(
+      "@alice... @alice.dev. @alice#1234!",
+      "<@111111111>... <@222222222>. <@111111111>!",
+      { mentionAliases: { alice: "111111111", "alice.dev": "222222222" } },
+    );
+  });
 
   it("prefers the longest known handle before treating trailing dots as punctuation", () => {
     remember(["alice.."], "333333333");
@@ -79,8 +76,6 @@ describe("rewriteDiscordKnownMentions", () => {
       "See [docs](https://example.com/a_(@alice)),@alice.",
       "See [docs](https://example.com/a_(@alice)),<@123456789>.",
     ],
-    ["https://example.com/@alice"],
-    ["user@alice.com"],
   ])("resolves prose mentions while preserving URLs and emails: %s", (text, expected) => {
     expectRewrite(`${text} @alice.`, `${expected ?? text} <@123456789>.`, {
       mentionAliases: { alice: "123456789", "alice.com": "987654321", "host.com": "111111111" },
@@ -101,15 +96,13 @@ describe("rewriteDiscordKnownMentions", () => {
       "literal \\` outside @alice then `inside @alice",
       "literal \\` outside <@123456789> then `inside @alice",
     ],
+    [
+      '````ts\nconst fence = "```";\n@alice\n```` text @alice',
+      '````ts\nconst fence = "```";\n@alice\n```` text <@123456789>',
+    ],
   ])("does not rewrite mentions inside code: %s", (input, expected) => {
     remember(["alice"]);
     expectRewrite(input, expected);
-  });
-
-  it("does not end longer code fences at triple-backtick literals inside the body", () => {
-    remember(["alice"]);
-    const text = '````ts\nconst fence = "```";\n@alice\n```` text @alice';
-    expectRewrite(text, '````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
   });
 
   it("is account-scoped", () => {

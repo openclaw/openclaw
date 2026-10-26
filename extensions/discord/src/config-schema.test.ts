@@ -65,9 +65,7 @@ describe("discord config schema", () => {
           ...workAccess,
           dm: { groupEnabled: true, policy: "disabled", allowFrom: ["legacy-account"] },
         },
-        personal: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        },
+        personal: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
       },
     });
 
@@ -87,13 +85,11 @@ describe("discord config schema", () => {
   });
 
   it("accepts Discord application IDs at top-level and account scope", () => {
-    const cfg = schema.parse({
-      applicationId: "123456789012345678",
-      accounts: { work: { applicationId: 234567890123456 } },
-    });
-
-    expect(cfg).toMatchObject({
-      applicationId: "123456789012345678",
+    const applicationId = "123456789012345678";
+    expect(
+      schema.parse({ applicationId, accounts: { work: { applicationId: 234567890123456 } } }),
+    ).toMatchObject({
+      applicationId,
       accounts: { work: { applicationId: "234567890123456" } },
     });
   });
