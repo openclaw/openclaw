@@ -356,6 +356,7 @@ const repositoryScriptEntries = [
   "scripts/perf/board-layout-measure.mjs!",
   "scripts/perf/channel-run-admission-measure.mjs!",
   "scripts/perf/chat-history-param-validation-measure.mjs!",
+  "scripts/perf/claude-session-catalog-measure.ts!",
   "scripts/perf/codex-catalog-hydrate-measure.ts!",
   "scripts/perf/cron-continuation-snapshot-measure.ts!",
   "scripts/perf/cron-history-plan-measure.ts!",
