@@ -155,6 +155,30 @@ function expectRecoveredRun(run: UpdateRunRecord | undefined): void {
   });
 }
 
+function lifecycleEvents(lane: Lane, doctor = true, ready = true): string[] {
+  return [
+    ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+    ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
+    ...(doctor ? ["post-attempt", "post-acquired"] : []),
+    "validate",
+    ...(ready ? ["readiness"] : []),
+  ];
+}
+
+function expectPluginInputs(
+  port: number,
+  pluginInstallRecords: Record<string, PluginInstallRecord>,
+) {
+  expect(mocks.plugins).toHaveBeenCalledWith(
+    expect.objectContaining({
+      configSnapshot: expect.objectContaining({
+        config: expect.objectContaining({ gateway: expect.objectContaining({ port }) }),
+      }),
+      pluginInstallRecords,
+    }),
+  );
+}
+
 async function prepareIncompleteSourceRuntime() {
   await runExec("git", ["init", "--quiet", state.root], { timeoutMs: 15_000 });
   await fs.symlink(
@@ -384,14 +408,7 @@ describe("update orchestration lifecycle ownership", () => {
       expect(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe(
         lane === "current-process" ? "1" : undefined,
       );
-      expect(await events()).toEqual([
-        ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-        ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
-        "post-attempt",
-        "post-acquired",
-        "validate",
-        "readiness",
-      ]);
+      expect(await events()).toEqual(lifecycleEvents(lane));
       if (lane === "current-process") {
         expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
         expect(mocks.restart).toHaveBeenCalledWith(
@@ -474,16 +491,7 @@ describe("update orchestration lifecycle ownership", () => {
         await completed.promise;
         await update;
         expectSuccess(lane);
-        expect(mocks.plugins).toHaveBeenCalledWith(
-          expect.objectContaining({
-            configSnapshot: expect.objectContaining({
-              config: expect.objectContaining({
-                gateway: expect.objectContaining({ port: 19002 }),
-              }),
-            }),
-            pluginInstallRecords: writerRecords,
-          }),
-        );
+        expectPluginInputs(19002, writerRecords);
       } finally {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill("SIGKILL");
@@ -526,17 +534,8 @@ describe("update orchestration lifecycle ownership", () => {
       await writeScenario(lane);
       await invoke(lane, [], startedAt);
       expectSuccess(lane, lane !== "resume");
-      expect(mocks.plugins).toHaveBeenCalledWith(
-        expect.objectContaining({
-          configSnapshot: expect.objectContaining({
-            config: expect.objectContaining({ gateway: expect.objectContaining({ port: 19003 }) }),
-          }),
-          pluginInstallRecords: current,
-        }),
-      );
-      expect(await events()).toEqual(
-        lane === "resume" ? [] : ["post-attempt", "post-acquired", "validate", "readiness"],
-      );
+      expectPluginInputs(19003, current);
+      expect(await events()).toEqual(lane === "resume" ? [] : lifecycleEvents(lane));
     },
   );
 
@@ -550,7 +549,7 @@ describe("update orchestration lifecycle ownership", () => {
         pluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
       }),
     );
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
+    expect(await events()).toEqual(lifecycleEvents("candidate-runtime"));
   });
 
   it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
@@ -560,12 +559,7 @@ describe("update orchestration lifecycle ownership", () => {
       mocks.plugins.mockResolvedValueOnce({ ...pluginResult, changed: false });
       await invoke(lane);
       expectSuccess(lane, lane === "repair");
-      expect(await events()).toEqual([
-        ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-        ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
-        "validate",
-        "readiness",
-      ]);
+      expect(await events()).toEqual(lifecycleEvents(lane, false));
     },
   );
 
@@ -741,14 +735,7 @@ describe("update orchestration lifecycle ownership", () => {
     expect(mocks.restart).toHaveBeenCalledTimes(
       failure === "execution" && lane !== "repair" ? 1 : 0,
     );
-    expect(await events()).toEqual([
-      ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-      ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
-      "post-attempt",
-      "post-acquired",
-      "validate",
-      "readiness",
-    ]);
+    expect(await events()).toEqual(lifecycleEvents(lane));
   });
 
   it.each(
@@ -809,16 +796,7 @@ describe("update orchestration lifecycle ownership", () => {
     });
     expect(startupBlock === null).toBe(valid);
     expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual(
-      lane === "resume"
-        ? []
-        : [
-            ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-            ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
-            "post-attempt",
-            "post-acquired",
-            "validate",
-            ...(valid ? ["readiness"] : []),
-          ],
+      lane === "resume" ? [] : lifecycleEvents(lane, true, valid),
     );
   });
 });
