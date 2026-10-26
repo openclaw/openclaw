@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import {
@@ -302,7 +302,7 @@ it("plays Ultra feedback only when entering Ultra, including an uncommitted drag
   input.dispatchEvent(new PointerEvent("pointermove", { buttons: 1 }));
   preview("2");
   const first = feedback();
-  expect(first).toBeDefined();
+  assert.isDefined(first);
   expect(onThinkingSelect).not.toHaveBeenCalled();
   preview("2");
   expect(feedback()).toBe(first);
@@ -311,7 +311,7 @@ it("plays Ultra feedback only when entering Ultra, including an uncommitted drag
   preview("1");
   expect(first.playState).toBe("idle");
   const fading = feedback();
-  expect(fading).toBeDefined();
+  assert.isDefined(fading);
   expect(fading).not.toBe(first);
   preview("2");
   expect(fading.playState).toBe("idle");
@@ -333,11 +333,11 @@ it("plays Ultra feedback only when entering Ultra, including an uncommitted drag
 it("keeps keyboard changes on real effort levels when pointer input is continuous", async () => {
   const levels = ["low", "high", "ultra"];
   let committed = "high";
-  for (const [key, expected] of [
-    ["ArrowRight", "ultra"],
-    ["ArrowLeft", "high"],
-    ["Home", "low"],
-    ["End", "ultra"],
+  for (const { key, expected } of [
+    { key: "ArrowRight", expected: "ultra" },
+    { key: "ArrowLeft", expected: "high" },
+    { key: "Home", expected: "low" },
+    { key: "End", expected: "ultra" },
   ]) {
     const { input, onThinkingSelect } = await fixture(levels, committed);
     input.focus();

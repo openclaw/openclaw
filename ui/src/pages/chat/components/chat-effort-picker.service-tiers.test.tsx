@@ -93,7 +93,9 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", asy
   const media = window.matchMedia("(prefers-reduced-motion: reduce)");
   Object.defineProperty(media, "matches", { value: true });
   vi.spyOn(window, "matchMedia").mockReturnValue(media);
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   const onThinkingSelect = vi.fn(async () => undefined);
   const options = (active: boolean): Parameters<typeof ChatEffortPicker>[0] => ({
     disabled: false,
