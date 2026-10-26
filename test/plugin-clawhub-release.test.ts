@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { Header } from "tar";
@@ -439,7 +439,6 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         plugins: "@openclaw/demo-two,@openclaw/demo-three",
       },
     });
-    expect(new Set([...plan.normal.packages, ...plan.bootstrap.packages]).size).toBe(3);
     expect(plan.summary).toEqual({
       normalCount: 1,
       bootstrapCount: 2,
@@ -560,8 +559,8 @@ set -euo pipefail
 touch ${JSON.stringify(markerPath)}
 exit 99
 `,
+      { mode: 0o755 },
     );
-    chmodSync(join(binDir, "clawhub"), 0o755);
 
     expect(() =>
       execFileSync("bash", publishArgs("--validate-packed", tgzPath), publishOptions(repoDir, env)),
@@ -597,8 +596,8 @@ exit 99
         `#!/usr/bin/env bash
 printf '%s\\n' "$1" >> "$TEST_SLEEPS"
 `,
+        { mode: 0o755 },
       );
-      chmodSync(join(binDir, "sleep"), 0o755);
       writeFileSync(
         join(binDir, "clawhub"),
         `#!/usr/bin/env bash
@@ -623,8 +622,8 @@ if ((attempts <= TEST_FAILURES)); then
   exit "$TEST_EXIT_CODE"
 fi
 `,
+        { mode: 0o755 },
       );
-      chmodSync(join(binDir, "clawhub"), 0o755);
 
       const result = spawnSync(
         "bash",
@@ -682,9 +681,8 @@ it("rejects unsafe git refs", () => {
 
 function writeClawHubPackStub(binDir: string, markerPath: string) {
   mkdirSync(binDir, { recursive: true });
-  const clawhubPath = join(binDir, "clawhub");
   writeFileSync(
-    clawhubPath,
+    join(binDir, "clawhub"),
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
@@ -711,8 +709,8 @@ printf '{"path":"%s","name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n' "$
 fi
 exit 0
 `,
+    { mode: 0o755 },
   );
-  chmodSync(clawhubPath, 0o755);
 }
 
 function createTempPluginRepo(

@@ -437,28 +437,6 @@ function makeCompanionImportFixture(params: {
   return packageRoot;
 }
 
-it("accepts Bun built-in modules without npm dependency declarations", () => {
-  const packageRoot = makeInstalledPackageRoot({ dependencies: {} });
-  writeInstalledFile(
-    packageRoot,
-    "dist/bun-sqlite-library.js",
-    'import { Database } from "bun:sqlite";\nconst { dlopen } = require("bun:ffi");\nexport { Database, dlopen };\n',
-  );
-
-  expect(dependencyErrors(packageRoot)).toStrictEqual([]);
-});
-
-it("accepts the optional A2UI renderer import shipped by supported release lines", () => {
-  const packageRoot = makeInstalledPackageRoot({ dependencies: {} });
-  writeInstalledFile(
-    packageRoot,
-    "dist/canvas-host/a2ui/a2ui.bundle.js",
-    'export const load = () => import("@a2ui/markdown-it").catch(() => null);\n',
-  );
-
-  expect(dependencyErrors(packageRoot)).toStrictEqual([]);
-});
-
 const companionSource = 'const voice = require("@discordjs/voice");\nexport { voice };\n';
 const discordManifest = {
   name: "@openclaw/discord",
@@ -537,21 +515,33 @@ it("rejects legacy ownership for a loader used outside its plugin region", () =>
   expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
 });
 
-it("does not authorize changed chunk bytes", () => {
-  const packageRoot = makeCompanionImportFixture({
+it.each([
+  {
+    name: "Bun built-in modules",
+    fileName: "bun-sqlite-library.js",
+    source:
+      'import { Database } from "bun:sqlite";\nconst { dlopen } = require("bun:ffi");\nexport { Database, dlopen };\n',
+    errors: [],
+  },
+  {
+    name: "the optional A2UI renderer",
+    fileName: "canvas-host/a2ui/a2ui.bundle.js",
+    source: 'export const load = () => import("@a2ui/markdown-it").catch(() => null);\n',
+    errors: [],
+  },
+  {
+    name: "changed chunk bytes",
     ownership: companionOwnership(),
     source: `${companionSource}export const changed = true;\n`,
-  });
-
-  expectDependencyErrors(packageRoot, "companion-runtime.js");
-});
-
-it("rejects malformed emitted ownership metadata", () => {
-  const packageRoot = makeCompanionImportFixture({
+    errors: ["companion-runtime.js"],
+  },
+  {
+    name: "malformed emitted ownership metadata",
     ownership: companionOwnership(["discord", "discord"]),
-  });
-
-  expectDependencyErrors(packageRoot, "installed package runtime dependency ownership is invalid");
+    errors: ["installed package runtime dependency ownership is invalid"],
+  },
+])("checks dependency ownership for $name", ({ errors, ...fixture }) => {
+  expectDependencyErrors(makeCompanionImportFixture(fixture), ...errors);
 });
 
 it.each([
