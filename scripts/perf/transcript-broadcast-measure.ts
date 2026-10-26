@@ -6460,7 +6460,7 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        if (values["dashboard-rpc"] || pollBetweenRounds) {
+        if ((values["dashboard-rpc"] || pollBetweenRounds) && !values["turn-start-phases"]) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
             roundStartedAt + roundIntervalMs,

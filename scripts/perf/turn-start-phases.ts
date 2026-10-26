@@ -59,6 +59,8 @@ const identity = {
     runs: 4,
     coldRounds,
     warmRounds,
+    freshRoundGapMs: 31000,
+    warmRoundGapMs: 0,
     files: 3000,
     fileBytes: 256,
     providerDelayMs: 200,
