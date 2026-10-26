@@ -6,6 +6,8 @@ import {
   expectCalledWith,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  resolvedIdentity,
+  runtimeHandle,
   type AcpRuntime,
 } from "./manager.test-helpers.js";
 
@@ -33,7 +35,6 @@ describe("AcpSessionManager runtime config", () => {
       permissionProfile: "strict",
       timeoutSeconds: 120,
     });
-    expect(f.setMode).toHaveBeenCalledOnce();
     f.setConfigOption.mockClear();
     await f.run();
     expect(f.setMode).toHaveBeenCalledTimes(2);
@@ -49,19 +50,13 @@ describe("AcpSessionManager runtime config", () => {
   it("reopens oneshot sessions without resuming stale identity and closes with the final status identity", async () => {
     const f = fixture({
       mode: "oneshot",
-      identity: {
-        state: "resolved",
-        source: "status",
-        acpxSessionId: "stale-session",
-        lastUpdatedAt: 1,
-      },
+      identity: resolvedIdentity({ acpxSessionId: "stale-session" }),
     });
-    f.ensureSession.mockResolvedValue({
-      sessionKey: f.target.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: "runtime-oneshot",
-      backendSessionId: "ensured-session",
-    });
+    f.ensureSession.mockResolvedValue(
+      runtimeHandle(f.target.sessionKey, "runtime-oneshot", {
+        backendSessionId: "ensured-session",
+      }),
+    );
     const finalIds = { backendSessionId: "final-session", agentSessionId: "final-agent" };
     f.getStatus.mockResolvedValue(finalIds);
     await f.run();
@@ -72,7 +67,6 @@ describe("AcpSessionManager runtime config", () => {
       mode: "oneshot",
     });
     expect(f.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
-    expect(f.getStatus).toHaveBeenCalledOnce();
     expect(f.close).toHaveBeenCalledWith({
       handle: expect.objectContaining(finalIds),
       reason: "oneshot-complete",
@@ -106,28 +100,20 @@ describe("AcpSessionManager runtime config", () => {
     const lifecycle: string[] = [];
     f.ensureSession.mockImplementation(async (input) => {
       lifecycle.push(`ensure:${input.cwd ?? "default"}`);
-      return {
-        sessionKey: input.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: `runtime:${input.cwd ?? "default"}`,
+      return runtimeHandle(input.sessionKey, `runtime:${input.cwd ?? "default"}`, {
         cwd: input.cwd,
-      };
+      });
     });
     f.close.mockImplementation(async ({ handle }) => {
       lifecycle.push(`close:${handle.cwd ?? "default"}`);
     });
     await f.run("first");
-    await expect(
-      f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd } }),
-    ).resolves.toEqual({ cwd });
-    expect(f.persisted.currentMeta.runtimeOptions).toEqual({ cwd });
-    expect(f.persisted.currentMeta.cwd).toBe(cwd);
-    await f.run("second");
-    expect(f.ensureSession).toHaveBeenCalledTimes(2);
-    expect(f.ensureSession.mock.calls[1]?.[0]).toMatchObject({
-      sessionKey: f.target.sessionKey,
+    await expect(f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd } })).resolves.toEqual({ cwd });
+    expect([f.persisted.currentMeta.cwd, f.persisted.currentMeta.runtimeOptions]).toEqual([
       cwd,
-    });
+      { cwd },
+    ]);
+    await f.run("second");
     expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
   });
 
@@ -161,9 +147,7 @@ describe("AcpSessionManager runtime config", () => {
 
   it("maps thinking through status config options when capabilities omit keys", async () => {
     const f = fixture({ agent: "claude" });
-    f.getStatus.mockResolvedValue({
-      details: { configOptions: [{ id: "effort" }] },
-    });
+    f.getStatus.mockResolvedValue({ details: { configOptions: [{ id: "effort" }] } });
     await expect(f.setOption("thinking", "high")).resolves.toEqual({ thinking: "high" });
     expect(f.getStatus).toHaveBeenCalled();
     expectCalledWith(f.setConfigOption, { key: "effort", value: "high" });

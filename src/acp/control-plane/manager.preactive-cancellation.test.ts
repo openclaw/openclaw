@@ -1,6 +1,5 @@
-/** Cancellation must own accepted work before provider submission. */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
@@ -12,6 +11,7 @@ import {
   disposeAcpSessionManagerInstance,
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
+  runtimeHandle,
 } from "./manager.test-helpers.js";
 
 installAcpSessionManagerTestLifecycle();
@@ -22,7 +22,7 @@ describe("ACP accepted-turn cancellation", () => {
     async (phase) => {
       const state = createAcceptedFixture({ sessionKey: "agent:codex:acp:preactive" });
       const paused = gate();
-      const lifecycle: unknown[] = [];
+      const onLifecycle = vi.fn();
       if (phase === "controls") {
         state.getCapabilities.mockImplementationOnce(async () => {
           await paused.wait();
@@ -31,12 +31,10 @@ describe("ACP accepted-turn cancellation", () => {
       }
       const { turn, events } = state.startTurn("preactive-turn", {
         text: "must not submit",
-        onLifecycle: (event) => {
-          lifecycle.push(event);
-        },
+        onLifecycle,
         ...(phase === "submission" ? { onBeforePrompt: paused.wait } : {}),
       });
-      // Observe rejection immediately so the baseline cannot leak an unhandled rejection.
+      // Observe rejection before releasing the paused producer.
       const settlement = Promise.allSettled([turn]);
       await paused.entered;
       const cancel = stopAcpControllerTurns({
@@ -48,7 +46,7 @@ describe("ACP accepted-turn cancellation", () => {
       const [turnResults, cancelResults] = await Promise.all([settlement, cancellation]);
       expect([turnResults[0].status, cancelResults[0].status]).toEqual(["fulfilled", "fulfilled"]);
       expect(state.runTurn).not.toHaveBeenCalled();
-      expect(lifecycle).toEqual([]);
+      expect(onLifecycle).not.toHaveBeenCalled();
       expect(events).toEqual([cancelledEvent]);
       expect(state.manager.getObservabilitySnapshot().turns.active).toBe(0);
     },
@@ -60,7 +58,7 @@ describe("ACP accepted-turn cancellation", () => {
     const paused = gate();
     state.ensureSession.mockImplementationOnce(async () => {
       await paused.wait();
-      return { sessionKey, backend: "acpx", runtimeSessionName: "dispose-late" };
+      return runtimeHandle(sessionKey, "dispose-late");
     });
     const { turn, events } = state.startTurn("dispose-turn", { text: "must not submit" });
     const settlement = Promise.allSettled([turn]);
@@ -84,17 +82,11 @@ it("retains a silent successor after the retired predecessor settles", async () 
     const oldGate = gate();
     const freshGate = gate();
     let ensureCount = 0;
-    state.ensureSession.mockImplementation(async (input) => ({
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `runtime-${++ensureCount}`,
-    }));
+    state.ensureSession.mockImplementation(async (input) =>
+      runtimeHandle(input.sessionKey, `runtime-${++ensureCount}`),
+    );
     state.runTurn.mockImplementation(async function* (input) {
-      if (input.text === "old turn") {
-        await oldGate.wait();
-      } else {
-        await freshGate.wait();
-      }
+      await (input.text === "old turn" ? oldGate : freshGate).wait();
       yield { type: "done" as const };
     });
     mockParentedAcpSessionEntries({
@@ -146,9 +138,7 @@ it("builds a fresh manager that submits prompts after shutdown disposal", async 
     mode: "prompt",
     requestId: "after-restart-turn",
     admittedRunContext: createTestAdmittedRunContext("after-restart-turn"),
-    onEvent: (event) => {
-      events.push(event);
-    },
+    onEvent: (event) => void events.push(event),
   });
   expect(events).not.toContainEqual(cancelledEvent);
   expect(state.runTurn).toHaveBeenCalledOnce();

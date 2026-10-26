@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { AcpSessionRuntimeOptions } from "../../config/sessions/types.js";
 import {
   buildRuntimeConfigOptionPairs,
   mergeRuntimeOptions,
@@ -23,17 +22,13 @@ describe("validateRuntimeOptionPatch", () => {
   });
 
   it.each([
-    {
-      key: "thinking",
-      invalid: "x".repeat(33),
-      message: "Thinking level must be at most 32 characters.",
-    },
-    {
-      key: "cwd",
-      invalid: "relative/project",
-      message: 'Working directory must be an absolute path. Received "relative/project".',
-    },
-  ])("preserves the $key validation error", ({ key, invalid, message }) => {
+    ["thinking", "x".repeat(33), "Thinking level must be at most 32 characters."],
+    [
+      "cwd",
+      "relative/project",
+      'Working directory must be an absolute path. Received "relative/project".',
+    ],
+  ])("preserves the %s validation error", (key, invalid, message) => {
     expect(() => validateRuntimeOptionPatch({ [key]: invalid })).toThrow(
       expect.objectContaining({ code: "ACP_INVALID_RUNTIME_OPTION", message }),
     );
@@ -42,21 +37,24 @@ describe("validateRuntimeOptionPatch", () => {
   it("distinguishes omitted, inherited and own undefined timeoutSeconds", () => {
     expect(validateRuntimeOptionPatch({})).toStrictEqual({});
     expect(validateRuntimeOptionPatch(Object.create({ timeoutSeconds: 60.6 }))).toStrictEqual({});
-    const cleared = validateRuntimeOptionPatch({ timeoutSeconds: undefined });
-    expect(Object.hasOwn(cleared, "timeoutSeconds")).toBe(true);
-    expect(cleared).toStrictEqual({ timeoutSeconds: undefined });
+    expect(validateRuntimeOptionPatch({ timeoutSeconds: undefined })).toStrictEqual({
+      timeoutSeconds: undefined,
+    });
   });
 
   it("rejects unknown keys before validating scalar values", () => {
-    const patch = { runtimeMode: "", unknown: true } as Partial<AcpSessionRuntimeOptions>;
+    const patch = { runtimeMode: "", unknown: true };
     expect(() => validateRuntimeOptionPatch(patch)).toThrow('Unknown runtime option "unknown".');
   });
 
   it("validates scalars in their fixed order before backend extras", () => {
-    const keys = Object.keys(emptyMessages).toReversed();
     const patch: Record<string, unknown> = {
       backendExtras: [],
-      ...Object.fromEntries(keys.map((key) => [key, null])),
+      ...Object.fromEntries(
+        Object.keys(emptyMessages)
+          .toReversed()
+          .map((key) => [key, null]),
+      ),
     };
     for (const [key, emptyMessage] of Object.entries(emptyMessages)) {
       expect(() => validateRuntimeOptionPatch(patch)).toThrow(emptyMessage);
@@ -80,21 +78,17 @@ describe("validateRuntimeOptionPatch", () => {
   });
 });
 
-describe("mergeRuntimeOptions", () => {
-  const current = { model: "claude-sonnet-4.6", backendExtras: { provider: "anthropic" } };
-  it.each([
-    ["clears", undefined, { model: "claude-sonnet-4.6" }],
-    [
-      "merges",
-      { profile: "work" },
-      { model: "claude-sonnet-4.6", backendExtras: { provider: "anthropic", profile: "work" } },
-    ],
-  ] as const)(
-    "%s backend extras without changing the model",
-    (_action, backendExtras, expected) => {
-      expect(mergeRuntimeOptions({ current, patch: { backendExtras } })).toEqual(expected);
-    },
-  );
+it.each([
+  ["clears", undefined, undefined],
+  ["merges", { profile: "work" }, { provider: "anthropic", profile: "work" }],
+] as const)("%s backend extras without changing the model", (_action, backendExtras, expected) => {
+  const model = "claude-sonnet-4.6";
+  expect(
+    mergeRuntimeOptions({
+      current: { model, backendExtras: { provider: "anthropic" } },
+      patch: { backendExtras },
+    }),
+  ).toEqual(expected ? { model, backendExtras: expected } : { model });
 });
 
 describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
