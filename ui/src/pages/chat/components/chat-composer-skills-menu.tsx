@@ -45,7 +45,9 @@ function skillRows(
     const group = filtered.filter(
       (skill) => Boolean(skill.missingDeps || skill.blocked) === unavailable,
     );
-    if (!group.length) continue;
+    if (!group.length) {
+      continue;
+    }
     const id = unavailable ? "unavailable" : "agent";
     const groupRows: MenuEntry[] = [
       ...(entries.length || hasLibrary ? [menuDivider(`${id}-divider`)] : []),
@@ -54,7 +56,7 @@ function skillRows(
         t(unavailable ? "chat.composer.menu.unavailable" : "chat.composer.menu.agentWorkspace"),
       ),
     ];
-    for (const skill of group)
+    for (const skill of group) {
       groupRows.push({
         ...renderCapabilityToggleRow({
           value: `skill:${skill.key}`,
@@ -71,6 +73,7 @@ function skillRows(
         }),
         ...(unavailable ? { type: undefined, checked: undefined, details: undefined } : {}),
       });
+    }
     entries.push({ kind: "group", id: `${id}-skills`, items: groupRows });
   }
 

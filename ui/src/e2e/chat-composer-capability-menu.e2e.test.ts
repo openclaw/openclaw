@@ -834,7 +834,7 @@ suite.define(() => {
 
   it("shows empty skills and connector states", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "config.get": configResponse({}, false),
           "sessions.list": sessionsList(),
@@ -851,7 +851,18 @@ suite.define(() => {
       const menu = composer.locator(".agent-chat__capability-menu");
       await expect.poll(() => webSearchItem(menu).count()).toBe(1);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
-      await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
+      await gateway.waitForRequest("skills.status");
+      await expect
+        .poll(() =>
+          menu.getByRole("menuitem", { name: "Add from libraries", exact: true }).isEnabled(),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => menu.locator(".agent-chat__capability-menu-skeleton").count())
+        .toBe(0);
+      expect(
+        await menu.locator('[data-value^="skill:"], [data-value^="library-selected:"]').count(),
+      ).toBe(0);
       await menu.locator('[data-value="back"]').click();
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect

@@ -107,7 +107,7 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
           text: expect.stringContaining("Renamed skill"),
         });
         break;
-      case "connectors":
+      case "connectors": {
         capability.mcpServers[0]!.enabled = false;
         refresh();
         expect(
@@ -124,6 +124,7 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
         mounted.getByRole("button", { name: "Retry", hidden: true }).click();
         expect(retry).toHaveBeenCalledExactlyOnceWith("docs");
         break;
+      }
       case "libraries":
       case "library:missing":
         capability.library!.error = "Refreshed library";

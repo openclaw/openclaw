@@ -183,7 +183,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}new`);
     const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
     const attach = button(page, "Add attachment");
-    const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
+    const camera = page.getByRole("menuitem", { name: "Camera", exact: true });
     const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
     const incognito = page.getByRole("switch", { name: "Incognito" });
     const model = page.locator(".new-session-page__composer .chat-composer-model-control");
@@ -226,7 +226,7 @@ suite.define(() => {
     );
     expect(controlsOverflow).toBe(0);
     await attach.click();
-    await expect.poll(() => takePhoto.isVisible()).toBe(true);
+    await expect.poll(() => camera.isVisible()).toBe(true);
     const attachGlyphSine = () =>
       attach.evaluate((element) => {
         const { transform } = getComputedStyle(element.querySelector("svg") as SVGElement);

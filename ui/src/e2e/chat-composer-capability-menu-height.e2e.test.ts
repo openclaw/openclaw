@@ -136,7 +136,9 @@ suite.define(() => {
           .poll(() =>
             target.evaluate((node) => {
               const menu = node.closest<HTMLElement>(".oc-menu");
-              if (!menu || document.activeElement !== node) return false;
+              if (!menu || document.activeElement !== node) {
+                return false;
+              }
               const bounds = menu.getBoundingClientRect();
               const row = node.getBoundingClientRect();
               return (
@@ -169,7 +171,9 @@ suite.define(() => {
 
       await expectScrollable();
       await dropdown.locator('[data-value="skill:skill-01"]').focus();
-      for (let index = 1; index < 36; index += 1) await page.keyboard.press("ArrowDown");
+      for (let index = 1; index < 36; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
       await expectVisibleFocus(dropdown.locator('[data-value="skill:skill-36"]'));
 
       await dropdown.locator('[data-value="back"]').click();
@@ -177,7 +181,9 @@ suite.define(() => {
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("connectors");
       await expectScrollable();
       await dropdown.locator('[data-value="server:connector-00"]').focus();
-      for (let index = 1; index < 24; index += 1) await page.keyboard.press("ArrowDown");
+      for (let index = 1; index < 24; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
       await expectVisibleFocus(dropdown.locator('[data-value="server:connector-23"]'));
 
       await dropdown.locator('[data-value="server:connector-00"]').click();
@@ -185,7 +191,9 @@ suite.define(() => {
       await expect.poll(() => tools.count()).toBe(28);
       await expectScrollable();
       await tools.first().focus();
-      for (let index = 1; index < 28; index += 1) await page.keyboard.press("ArrowDown");
+      for (let index = 1; index < 28; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
       await expectVisibleFocus(dropdown.locator('[data-value="mcp-tool:project-tool-28"]'));
     });
   });

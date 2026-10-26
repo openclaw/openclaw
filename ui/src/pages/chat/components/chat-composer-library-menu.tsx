@@ -17,7 +17,7 @@ registerEnglishCatalog(registerChatComposerEnglish);
 type LibraryMenuEntry = MenuItem | ReturnType<typeof renderCapabilityMenuState>;
 
 function libraryStatus(library: ComposerLibraryProps): LibraryMenuEntry[] {
-  if (library.error)
+  if (library.error) {
     return [
       renderCapabilityMenuState("library-error", library.error, "alert"),
       {
@@ -28,6 +28,7 @@ function libraryStatus(library: ComposerLibraryProps): LibraryMenuEntry[] {
         closeOnSelect: false,
       },
     ];
+  }
   return library.loading
     ? [renderCapabilityMenuState("library-loading", t("common.loading"), "status")]
     : [];
@@ -37,7 +38,9 @@ export function composerLibraryMenuItems(
   library: ComposerLibraryProps | undefined,
   skillId?: string,
 ): LibraryMenuEntry[] {
-  if (!library) return [];
+  if (!library) {
+    return [];
+  }
   const busy = library.busy || library.loading;
   const session = library.result?.session;
   if (skillId) {
@@ -48,7 +51,9 @@ export function composerLibraryMenuItems(
       menuDivider("library-header-divider"),
       ...libraryStatus(library),
     ];
-    if (!pin) return entries;
+    if (!pin) {
+      return entries;
+    }
     entries.push(
       renderCapabilityMenuState(
         "library-description",
@@ -68,7 +73,7 @@ export function composerLibraryMenuItems(
         closeOnSelect: false,
       },
     );
-    if (library.canWrite)
+    if (library.canWrite) {
       entries.push(
         {
           id: `library-refresh:${pin.skillId}`,
@@ -95,6 +100,7 @@ export function composerLibraryMenuItems(
           closeOnSelect: false,
         },
       );
+    }
     return entries;
   }
   return [
@@ -137,7 +143,9 @@ export function composerLibraryAddItems(
     renderBackRow(t("chat.composer.menu.addFromLibraries")),
     menuDivider("library-add-header"),
   ];
-  if (!library) return entries;
+  if (!library) {
+    return entries;
+  }
   entries.push(...libraryStatus(library));
   const session = library.result?.session;
   const selected = new Set(session?.selections.map((pin) => pin.skillId));
@@ -149,7 +157,7 @@ export function composerLibraryAddItems(
         selected.has(entry.skillId) && !attachable.some((pin) => pin.skillId === entry.skillId),
     ),
   ];
-  for (const pin of rows)
+  for (const pin of rows) {
     entries.push({
       id: `library-attach:${pin.skillId}`,
       label: pin.name || pin.slug,
@@ -172,6 +180,7 @@ export function composerLibraryAddItems(
         </span>
       ),
     });
+  }
   return entries;
 }
 
@@ -180,25 +189,34 @@ export function handleComposerLibrarySelection(
   library: ComposerLibraryProps | undefined,
   changeView: (view: ChatComposerPlusMenuView) => void,
 ): boolean {
-  if (!value.startsWith("library-")) return false;
-  if (value === "library-add") changeView("libraries");
-  else if (value === "library-reload") library?.onReload();
-  else if (library && !library.loading && !library.busy) {
+  if (!value.startsWith("library-")) {
+    return false;
+  }
+  if (value === "library-add") {
+    changeView("libraries");
+  } else if (value === "library-reload") {
+    library?.onReload();
+  } else if (library && !library.loading && !library.busy) {
     const skillId = value.slice(value.indexOf(":") + 1);
     const pin = library.result?.session?.selections.find((entry) => entry.skillId === skillId);
-    if (value.startsWith("library-selected:") && pin) changeView(`library:${pin.skillId}`);
-    else if (value.startsWith("library-read:") && pin) library.onRead(pin.skillId, pin.revision);
-    else if (library.canWrite) {
+    if (value.startsWith("library-selected:") && pin) {
+      changeView(`library:${pin.skillId}`);
+    } else if (value.startsWith("library-read:") && pin) {
+      library.onRead(pin.skillId, pin.revision);
+    } else if (library.canWrite) {
       if (value.startsWith("library-attach:")) {
         const attachable = library.result?.session?.attachable.find(
           (entry) => entry.skillId === skillId,
         );
-        if (attachable) library.onActivate("attach", attachable.skillId, attachable.revision);
+        if (attachable) {
+          library.onActivate("attach", attachable.skillId, attachable.revision);
+        }
       } else if (pin && value.startsWith("library-detach:")) {
         library.onActivate("detach", pin.skillId);
         changeView("skills");
-      } else if (pin && value.startsWith("library-refresh:"))
+      } else if (pin && value.startsWith("library-refresh:")) {
         library.onActivate("refresh", pin.skillId);
+      }
     }
   }
   return true;
