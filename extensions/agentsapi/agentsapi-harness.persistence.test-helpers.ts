@@ -77,10 +77,12 @@ export async function externalSessionFixture(state: { stateDir: string; env: Nod
 function createHarnessFixture(runtime: PluginRuntime) {
   const harness = createAgentsApiHarness(runtime);
   assert(
-    harness.reset &&
-      harness.withSessionDeletion &&
-      harness.withSessionContextReset &&
-      harness.dispose,
+    typeof harness.runAttempt === "function" &&
+      typeof harness.reset === "function" &&
+      typeof harness.withSessionDeletion === "function" &&
+      typeof harness.withSessionContextReset === "function" &&
+      typeof harness.dispose === "function",
+    "The Agents API harness requires run, reset, deletion, context reset, and disposal",
   );
   type Mutation = Parameters<typeof withNativeSessionMutationForTest>[0];
   const mutationHook =
