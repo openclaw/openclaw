@@ -1,7 +1,11 @@
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import {
+  type CronInferenceBinding,
+  describeCronInferenceBinding,
+  resolveCronRuntimeSessionEntry,
+} from "./inference-binding.js";
 
 export type CronRunInference = {
   runParams: Pick<
@@ -12,6 +16,10 @@ export type CronRunInference = {
     | "onSuccessfulAuthProfile"
     | "authProfileIdSource"
   >;
+  /** The session entry candidates resolve their runtime from: the captured runtime, if any. */
+  runtimeSessionEntry: <T extends { agentRuntimeOverride?: string; agentHarnessId?: string }>(
+    entry: T,
+  ) => T | { agentRuntimeOverride: string };
   /** The drift guard: one refusal for every embedded and CLI candidate. */
   assertCandidate: (provider: string, cliExecution: boolean, runtime?: string) => void;
   /**
@@ -84,6 +92,7 @@ export async function prepareCronRunInference(params: {
       },
       authProfileIdSource: binding.source,
     },
+    runtimeSessionEntry: (entry) => resolveCronRuntimeSessionEntry(binding, entry),
     assertCandidate(provider, cliExecution, runtime) {
       // A binding without a captured runtime keeps the runtime its run derives.
       if (

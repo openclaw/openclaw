@@ -57,6 +57,38 @@ import { preparePersonalModelAccountSelection } from "./users-model-account-acce
 
 type InferenceCaller = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
 
+/**
+ * The entry a job's cron session takes its runtime override from: the target row of a
+ * `session:` job, or what a `current` job carries from its creating conversation.
+ */
+async function loadCronRuntimeSessionEntry(params: {
+  cfg: OpenClawConfig;
+  job: Pick<CronJob, "sessionTarget" | "sessionKey">;
+  agentId: string;
+  executionEntry?: SessionEntry;
+  loaded?: { key: string; entry?: SessionEntry };
+}): Promise<Pick<SessionEntry, "agentRuntimeOverride"> | undefined> {
+  if (params.executionEntry) {
+    return params.executionEntry;
+  }
+  const sourceKey =
+    params.job.sessionTarget === "current" ? params.job.sessionKey?.trim() : undefined;
+  if (!sourceKey) {
+    return undefined;
+  }
+  const source =
+    params.loaded?.key === sourceKey
+      ? params.loaded.entry
+      : (
+          await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg: params.cfg,
+            key: sourceKey,
+            agentId: params.agentId,
+          })
+        )?.entry;
+  return source ? resolveCarriedCronModelSelection(source) : undefined;
+}
+
 async function captureCronInferenceForCaller(
   params: Parameters<typeof captureCronInferenceBinding>[0],
   caller: InferenceCaller,
@@ -340,13 +372,15 @@ export async function captureCronCreatorSession(
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
       ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
       : undefined;
-  // A `current` run copies its runtime from the creating conversation each time.
-  const currentSourceKey = job.sessionTarget === "current" ? job.sessionKey?.trim() : undefined;
-  const currentSource =
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && currentSourceKey
-      ? currentSourceKey === sessionKey
-        ? loaded
-        : await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: currentSourceKey, agentId })
+  const runtimeSessionEntry =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn"
+      ? await loadCronRuntimeSessionEntry({
+          cfg,
+          job,
+          agentId,
+          executionEntry: executionSession?.entry,
+          loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
+        })
       : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
@@ -363,11 +397,7 @@ export async function captureCronCreatorSession(
                 )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
             executionSessionEntry: executionSession?.entry,
-            runtimeSessionEntry:
-              executionSession?.entry ??
-              (currentSource?.entry
-                ? resolveCarriedCronModelSelection(currentSource.entry)
-                : undefined),
+            runtimeSessionEntry,
           },
           caller,
         )
@@ -427,12 +457,22 @@ export async function captureCronUpdatedInferenceBinding(
     }
     return undefined;
   }
+  // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
+  const recordedRuntime = nextJob.inferenceBinding?.runtime;
+  const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const runtimeSessionEntry = recordedRuntime
+    ? { agentRuntimeOverride: recordedRuntime }
+    : await loadCronRuntimeSessionEntry({
+        cfg,
+        job: nextJob,
+        agentId,
+        executionEntry: executionKey
+          ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))
+              ?.entry
+          : undefined,
+      });
   const inference = await captureCronInferenceForCaller(
-    {
-      cfg,
-      agentId: nextJob.agentId ?? resolveDefaultAgentId(cfg),
-      model,
-    },
+    { cfg, agentId, model, runtimeSessionEntry },
     caller,
   );
   if (!inference.inferenceBinding) {
