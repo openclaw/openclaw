@@ -168,15 +168,23 @@ async function assertCatalog(rpc, startNode, sessions) {
     });
     catalog = result.catalogs.find(({ id }) => id === "openclaw");
     assert(catalog, "Receiver omitted OpenClaw catalog");
-    assert.equal(catalog.error, undefined);
+    // The shipped baseline reports its first snapshot as CATALOG_LOADING.
+    if (catalog.error?.code !== "CATALOG_LOADING") {
+      assert.equal(catalog.error, undefined);
+    }
     host = catalog.hosts.find((row) => row.hostId === hostId);
-    assert.equal(host?.error, undefined);
-    if (!catalog.pending && !host?.pending) {
+    if (host?.error?.code !== "CATALOG_LOADING") {
+      assert.equal(host?.error, undefined);
+    }
+    if (!catalog.error && !host?.error && !catalog.pending && !host?.pending) {
       break;
     }
     await delay(100);
   } while (Date.now() < deadline);
-  assert(catalog && !catalog.pending && host && !host.pending, "Receiver catalog did not settle");
+  assert(
+    catalog && !catalog.error && !catalog.pending && host && !host.error && !host.pending,
+    "Receiver catalog did not settle",
+  );
   assert.deepEqual(
     host.sessions.map(({ threadId }) => threadId),
     [fixtures[0].key],
