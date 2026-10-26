@@ -3,19 +3,24 @@ import { createInMemorySessionStore } from "./session.js";
 
 describe("acp session manager", () => {
   let nowMs = 0;
+  let removed: string[] = [];
   let store = createInMemorySessionStore();
-  const createSession = (sessionId?: string, target = store) =>
-    target.createSession({ sessionId, sessionKey: `acp:${sessionId}`, cwd: "/tmp" });
-  const startRun = (sessionId: string, runId = "run-1", target = store) => {
+  const createSession = (sessionId?: string) =>
+    store.createSession({ sessionId, sessionKey: `acp:${sessionId}`, cwd: "/tmp" });
+  const startRun = (sessionId: string, runId = "run-1") => {
     const controller = new AbortController();
-    target.setActiveRun(sessionId, runId, controller);
+    store.setActiveRun(sessionId, runId, controller);
     return controller;
   };
 
   beforeEach(() => {
     nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    store = createInMemorySessionStore();
+    removed = [];
+    store = createInMemorySessionStore({
+      maxSessions: 2,
+      onSessionRemoved: (id) => removed.push(id),
+    });
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -51,6 +56,7 @@ describe("acp session manager", () => {
     expect(store.deleteSession(session.sessionId)).toBe(true);
     expect(controller.signal.aborted).toBe(true);
     expect(store.hasSession(session.sessionId)).toBe(false);
+    expect(removed).toEqual(["close-me"]);
   });
 
   it("reports false when deleting a missing session", () => {
@@ -68,44 +74,29 @@ describe("acp session manager", () => {
   });
 
   it("uses soft-cap eviction for the oldest idle session when full", () => {
-    const boundedStore = createInMemorySessionStore({ maxSessions: 2 });
-    const first = createSession("first", boundedStore);
+    createSession("first");
     nowMs += 100;
-    const second = createSession("second", boundedStore);
-    startRun(second.sessionId, "run-2", boundedStore);
+    startRun(createSession("second").sessionId);
     nowMs += 100;
-    expect(createSession("third", boundedStore).sessionId).toBe("third");
-    expect(boundedStore.getSession(first.sessionId)).toBeUndefined();
-    expect(boundedStore.getSession(second.sessionId)?.sessionId).toBe("second");
+    expect(createSession("third").sessionId).toBe("third");
+    expect(store.getSession("first")).toBeUndefined();
+    expect(store.getSession("second")?.sessionId).toBe("second");
+    expect(removed).toEqual(["first"]);
   });
 
   it("rejects when full and no session is evictable", () => {
-    const boundedStore = createInMemorySessionStore({ maxSessions: 1 });
-    const only = createSession("only", boundedStore);
-    startRun(only.sessionId, "run-only", boundedStore);
-    expect(() => createSession("next", boundedStore)).toThrow(/session limit reached/i);
+    store = createInMemorySessionStore({ maxSessions: 1 });
+    startRun(createSession("only").sessionId);
+    expect(() => createSession("next")).toThrow(/session limit reached/i);
   });
 
-  it("reports every removal path through onSessionRemoved", () => {
-    const removed: string[] = [];
-    const reportingStore = createInMemorySessionStore({
-      maxSessions: 2,
-      onSessionRemoved: (sessionId) => removed.push(sessionId),
-    });
-    createSession("deleted", reportingStore);
-    expect(reportingStore.deleteSession("deleted")).toBe(true);
-    expect(removed).toEqual(["deleted"]);
-
-    createSession("stale", reportingStore);
+  it("reports idle reaping and disposal through onSessionRemoved", () => {
+    createSession("stale");
     nowMs += 24 * 60 * 60 * 1_000 + 1;
-    createSession("fresh", reportingStore);
-    expect(removed).toEqual(["deleted", "stale"]);
-
-    createSession("second", reportingStore);
-    createSession("third", reportingStore);
-    expect(removed).toEqual(["deleted", "stale", "fresh"]);
-
-    reportingStore.dispose();
-    expect(removed).toEqual(["deleted", "stale", "fresh", "second", "third"]);
+    createSession("fresh");
+    expect(removed).toEqual(["stale"]);
+    createSession("second");
+    store.dispose();
+    expect(removed).toEqual(["stale", "fresh", "second"]);
   });
 });
