@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,6 +19,11 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./types.js";
+
+export {
+  expectRpcError as expectCutFailure,
+  expectRpcResult as expectCutReply,
+} from "./rpc-response.test-support.js";
 
 export const sessionKey = "agent:main:rewind-handler";
 export const sourceSessionId = "rewind-handler-source";
@@ -114,17 +119,6 @@ export async function invokeHandler(
     ...options,
   });
   return respond;
-}
-
-export function expectCutFailure(
-  respond: ReturnType<typeof vi.fn>,
-  error: Record<string, unknown>,
-) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-}
-
-export function expectCutReply(respond: ReturnType<typeof vi.fn>, result: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, result, undefined);
 }
 
 export async function restrictedOperator(
