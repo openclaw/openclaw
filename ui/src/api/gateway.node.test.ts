@@ -248,10 +248,6 @@ async function startConnect(client: InstanceType<typeof GatewayBrowserClient>, n
   return await continueConnect(getLatestWebSocket(), nonce);
 }
 
-function readRecovery(scope: string, recovery: { sessionKey: string }) {
-  return readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, scope, recovery.sessionKey);
-}
-
 function emitAuthFailure(
   ws: MockWebSocket,
   id: string,
@@ -423,23 +419,34 @@ describe("GatewayBrowserClient", () => {
   });
 
   it.each([
-    ["Mozilla/5.0 (Macintosh)", 0, "Mac", {}],
-    ["Mozilla/5.0 (Macintosh)", 5, "iPad", {}],
-    ["Mozilla/5.0 (iPad)", 0, "iPad", {}],
-    ["Macintosh", 5, undefined, { platform: "MacIntel" }],
-  ] as const)(
-    "reports browser family for %s with %d touch points",
-    async (userAgent, maxTouchPoints, family, options) => {
-      vi.stubGlobal("navigator", {
-        platform: "MacIntel",
-        userAgent,
-        maxTouchPoints,
-        language: "en-US",
-      });
-      const client = createClient(options);
+    {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh)",
+      maxTouchPoints: 0,
+      family: "Mac",
+    },
+    {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh)",
+      maxTouchPoints: 5,
+      family: "iPad",
+    },
+    { platform: "MacIntel", userAgent: "Mozilla/5.0 (iPad)", maxTouchPoints: 0, family: "iPad" },
+    {
+      platform: "MacIntel",
+      userAgent: "Macintosh",
+      maxTouchPoints: 5,
+      family: undefined,
+      options: { platform: "MacIntel" },
+    },
+  ])(
+    "reports browser family $family without changing $platform",
+    async ({ family, options, ...browser }) => {
+      vi.stubGlobal("navigator", { ...browser, language: "en-US" });
+      const client = createClient({ ...options });
       const { connectFrame } = await startConnect(client);
-      expect(connectFrame.params.client.platform).toBe("MacIntel");
-      expect(connectFrame.params.client.deviceFamily).toBe(family);
+      expect(connectFrame.params?.client.platform).toBe(browser.platform);
+      expect(connectFrame.params?.client.deviceFamily).toBe(family);
     },
   );
 
@@ -850,8 +857,12 @@ describe("GatewayBrowserClient", () => {
     expect(onRecoveryScopeChange).not.toHaveBeenCalled();
     expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
     expect(client.recoveryScopeReady).toBe(false);
-    expect(readRecovery(legacyScope, recovery)).toEqual(recovery);
-    expect(readRecovery("server-stale", recovery)).toBeNull();
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toEqual(recovery);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
 
     secondWs.emitConnectChallenge({ nonce: "nonce-current", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
@@ -869,12 +880,15 @@ describe("GatewayBrowserClient", () => {
     );
     expect(client.recoveryScopeReady).toBe(true);
     expect(client.recoveryScope).toBe("server-current");
-    expect(readRecovery(legacyScope, recovery)).toBeNull();
-    expect(readRecovery("server-stale", recovery)).toBeNull();
-    expect(readRecovery("server-current", recovery)).toEqual({
-      ...recovery,
-      recoveryScope: "server-current",
-    });
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
+    ).toEqual({ ...recovery, recoveryScope: "server-current" });
     const connectedGeneration = client.connectionGeneration;
     client.stop();
     expect(client.connectionGeneration).toBeGreaterThan(connectedGeneration);
@@ -936,8 +950,12 @@ describe("GatewayBrowserClient", () => {
     });
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScope).toBe(principalScope);
-    expect(readRecovery(legacyScope, recovery)).toEqual(recovery);
-    expect(readRecovery(principalScope, recovery)).toBeNull();
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toEqual(recovery);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, principalScope, recovery.sessionKey),
+    ).toBeNull();
   });
 
   it("uses a Gateway-owned recovery scope without shared credentials on an insecure context", async () => {
@@ -1042,7 +1060,7 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBeUndefined();
     expect(connectFrame.params?.auth?.password).toBeUndefined();
-    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
     expect(connectFrame.params?.scopes).toEqual(stored.scopes);
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
     expect(signDevicePayloadMock.mock.calls[0]?.[0]).toBe("private-key");
