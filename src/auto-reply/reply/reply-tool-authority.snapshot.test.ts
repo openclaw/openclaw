@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import * as requesterOrigin from "../../agents/requester-origin.js";
 import { withPreparedToolConstruction } from "../../agents/tool-construction-preparation.js";
+import * as channelRegistry from "../../channels/plugins/registry.js";
 import * as facts from "../../config/resolution-facts.js";
 import * as snapshots from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
@@ -78,6 +79,36 @@ it("keeps captured policy isolated and checks revocation after preparation", asy
   revocation.abort(new Error("synthetic authority revoked"));
   expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
   await expect(authority.fingerprintAsync(route)).rejects.toThrow("synthetic authority revoked");
+});
+
+it("evaluates interleaved reply policies without resolving question UI metadata", async () => {
+  const channelLookup = vi.spyOn(channelRegistry, "getChannelPlugin");
+  const revocation = new AbortController();
+  const operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "synthetic-operator",
+    scopes: ["operator.write"],
+    assertCurrent: () => revocation.signal.throwIfAborted(),
+  });
+  const authority = prepareReplyToolAuthority({
+    operatorAuthority,
+    run: { ...run, sessionId: "policy-only" },
+  });
+  authorities.push(authority);
+  const first = await authority.fingerprintAsync(route);
+  const fallback = { ...route, model: "fallback-model" };
+  const second = await authority.fingerprintAsync(fallback);
+  expect(second).not.toBe(first);
+  const caller = { ...overlay, operatorAuthority };
+  expect(await authority.projectAsync(caller, route)).toBe(first);
+  expect(await authority.projectAsync({ ...caller, disableTools: true }, route)).not.toBe(first);
+  expect(authority.project(caller, fallback)).toBe(second);
+  expect(authority.fingerprint(route)).toBe(first);
+  expect(channelLookup).not.toHaveBeenCalled();
+  revocation.abort(new Error("synthetic authority revoked"));
+  expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
+  await expect(authority.projectAsync(caller, route)).rejects.toThrow(
+    "synthetic authority revoked",
+  );
 });
 
 it("pins active turns across policy publication and reset", async () => {
