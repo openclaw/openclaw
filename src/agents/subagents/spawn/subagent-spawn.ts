@@ -190,6 +190,7 @@ export async function spawnSubagentDirect(
     const initialSession = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       createInitialSubagentSession({
         assertActive,
+        signal: ctx.signal,
         cfg,
         requesterAgentId,
         targetAgentId,

@@ -72,6 +72,8 @@ export type SpawnSubagentContext = SpawnedToolContext &
     requesterRunId?: string;
     /** Private invocation fence, consumed only before registration transfers ownership. */
     assertActive?: SessionSourceAssertion;
+    /** Cancels initial preparation; never becomes the accepted child's run signal. */
+    signal?: AbortSignal;
   };
 
 export type SpawnSubagentResult = {

@@ -66,6 +66,7 @@ export async function createInitialSubagentSession(input: {
   gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
+  signal?: AbortSignal;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
@@ -251,6 +252,7 @@ export async function createInitialSubagentSession(input: {
               titleSource: buildDashboardSessionTitleSource({ message: params.worktree.task }),
               useRequestedTitleSelection: false,
               runSetupScript: false,
+              signal: params.signal,
               commitGuard: composeSessionSourceAssertion([params.assertActive]),
               onTitleError: (error) => console.warn("subagent worktree title failed", error),
               onTitleStateChanged: () =>
