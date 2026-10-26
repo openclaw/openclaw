@@ -18,7 +18,9 @@ it("composes existing and replacement render lifecycle instrumentation", ({ gate
   execute(createControlUiMockGatewayInitScript());
   expect(scope.openclawRenderLifecycleTestHook).toBe(adapter);
   const owner = { element: window.document.createElement("openclaw-chat-pane") };
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   vi.stubGlobal("openclawRenderLifecycleTestHook", scope.openclawRenderLifecycleTestHook);
 
   notifyRenderLifecycleForTest(owner, "commit");

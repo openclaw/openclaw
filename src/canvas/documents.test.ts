@@ -87,7 +87,13 @@ async function capture(url: string, method = "GET") {
     response,
   );
   const body = Buffer.from(response.body ?? "");
-  return { ...response, handled, body, text: body.toString("utf8") };
+  return {
+    handled,
+    statusCode: response.statusCode,
+    getHeader: (name: string) => response.getHeader(name),
+    body,
+    text: body.toString("utf8"),
+  };
 }
 
 async function expectHead(url: string) {

@@ -11,7 +11,13 @@ vi.mock("./directory-live.js", () => ({
 
 const resolveTargets = expectDefined(matrixPlugin.resolver?.resolveTargets, "Matrix resolver");
 function resolve(kind: "user" | "group", inputs: string[], accountId?: string) {
-  return resolveTargets({ cfg: {}, inputs, kind, accountId });
+  return resolveTargets({
+    cfg: {},
+    inputs,
+    kind,
+    accountId,
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  });
 }
 const user: ChannelDirectoryEntry = { kind: "user", id: "@alice:example.org", name: "Alice" };
 const group: ChannelDirectoryEntry = {
