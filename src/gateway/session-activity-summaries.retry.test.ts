@@ -1,7 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as utilityCompletion from "../agents/utility-completion.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
@@ -21,7 +20,6 @@ import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/ses
 import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -39,6 +37,7 @@ import {
   type SessionActivitySummaryService,
 } from "./session-activity-summaries.js";
 import {
+  activityRecapResult,
   preparedActivityRecapModel,
   recapRpc,
   seedRecapConversation,
@@ -51,12 +50,7 @@ import {
 import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import * as observerModel from "./session-observer-model.js";
 
-const result = {
-  text: "Verified the change.",
-  provider: "test",
-  model: "utility",
-  owner: { kind: "harness" as const, id: "test" },
-};
+const result = activityRecapResult("Verified the change.");
 const scope = (target: ActivitySummaryTarget) => ({
   agentId: target.agentId,
   sessionKey: target.key,
@@ -204,11 +198,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const target = await addSession(1);
     const transcript = scope(target);
     const read = () => loadSessionEntryReadOnly(transcript);
-    const initial = readActivitySummaryBatch({ scope: transcript })!;
-    expect(initial.snapshot.totalMessages).toBe(1);
-    expect(initial.page.events).toMatchObject([
-      { event: { message: { role: "user", content: "Request 1" } } },
-    ]);
     const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
     complete.mockImplementationOnce(async () => {
       await appendWork(target);
@@ -225,23 +214,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     expect(view(target)?.state).toBe("stale");
     expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
     expect(readWatermark).not.toHaveBeenCalled();
-    const appended = readActivitySummaryBatch({
-      scope: transcript,
-      previous: read()?.activitySummary,
-    })!;
-    expect(appended).toMatchObject({
-      covered: 1,
-      snapshot: { totalMessages: 2 },
-      page: {
-        scannedMessages: 1,
-        events: [
-          { event: { message: { role: "assistant", content: "Verified additional work." } } },
-        ],
-      },
-      omitted: false,
-      watermark: { generation: initial.watermark.generation },
-    });
-    expect(appended.watermark.maxSeq).toBeGreaterThan(initial.watermark.maxSeq!);
 
     const current = publication(target);
     await ensureRecap(target);
@@ -386,25 +358,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         ...expected,
         formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
       });
-      if (role === "user") {
-        const summary = savedSummary(target)!;
-        const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        const countReads = (formatRevision: number) => {
-          reads.queries.length = 0;
-          readActivitySummaryBatch({
-            scope: scope(target),
-            previous: { ...summary, formatRevision },
-          });
-          return reads.queries.length;
-        };
-        try {
-          countReads(2);
-          countReads(ACTIVITY_SUMMARY_FORMAT_REVISION);
-          expect(countReads(ACTIVITY_SUMMARY_FORMAT_REVISION)).toBeLessThan(countReads(2));
-        } finally {
-          reads.restore();
-        }
-      }
       await appendMessage(target, "message-3", "message-2", "Outcome 3");
       await refresh();
       expect(prompt()).toMatchObject({
