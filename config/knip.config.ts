@@ -208,6 +208,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sqlite-wal-scan-measure.mjs!",
   "scripts/perf/state-engine-schema-bench.ts!",
   "scripts/perf/state-read-boot-bench.ts!",
+  "scripts/perf/state-read-import-bench.mjs!",
   // Knip follows the private Gateway boot preload through this parent's literal URL edge.
   "scripts/perf/state-read-gateway-boot.ts!",
   "scripts/perf/worktree-snapshot-measure.ts!",
