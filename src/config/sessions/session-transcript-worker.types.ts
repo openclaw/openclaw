@@ -166,6 +166,7 @@ import type {
   SessionTranscriptWatermarkWorkerInput,
   SessionTranscriptStatsWorkerInput,
   SessionTranscriptMessagePresenceWorkerInput,
+  SessionTranscriptInactiveIdentityWorkerInput,
   SessionTranscriptDeltaWorkerInput,
   SessionTranscriptLatestAssistantWorkerInput,
   SessionMemoryCaptureWorkerInput,
@@ -310,6 +311,7 @@ export type SessionHistoryWorkerInput =
   | SessionTranscriptWatermarkWorkerInput
   | SessionTranscriptStatsWorkerInput
   | SessionTranscriptMessagePresenceWorkerInput
+  | SessionTranscriptInactiveIdentityWorkerInput
   | SessionTranscriptDeltaWorkerInput
   | SessionTranscriptLatestAssistantWorkerInput
   | SessionMemoryCaptureWorkerInput
@@ -437,6 +439,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
     "transcript-stats": { kind: "transcript-stats"; stats: SessionTranscriptStats };
     "transcript-message-presence": { kind: "transcript-message-presence"; present: boolean };
+    "transcript-inactive-identity": { kind: "transcript-inactive-identity"; inactive: boolean };
     "transcript-anchors": { kind: "transcript-anchors"; facts: SessionTranscriptAnchorFacts };
     "session-activity-summary-source": {
       kind: "session-activity-summary-source";
@@ -560,6 +563,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readBoardWidgetDocument: SessionHistoryReader<"board-widget-document", "value">;
     readBranchSummaries: CancellableSessionHistoryReader<"branch-summaries", "result">;
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
+    readInactiveIdentity: CancellableSessionHistoryReader<
+      "transcript-inactive-identity",
+      "inactive"
+    >;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
     readConversationBindings: SessionHistoryReader<"conversation-bindings", "snapshot">;
