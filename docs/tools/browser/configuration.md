@@ -230,7 +230,10 @@ main model can read the screenshot directly.
 - OpenClaw-managed local CDP readiness checks and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - When `browser.ssrfPolicy` is absent, unrestricted same-host agents may open any loopback port in OpenClaw-owned local Chrome. Any explicit policy, including `{}`, disables this automatic exception. See [Local preview access](/tools/browser/security#local-preview-access).
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` has three distinct states, and an explicit `false` is not the same as leaving it unset:
+  - Unset (default): private and internal destinations stay blocked, and public hostnames such as `https://example.com/` open normally. Leave the key unset to keep private destinations blocked.
+  - `false`: strict mode. Navigation additionally accepts only IP-literal URLs, because Chromium resolves hostnames itself and OpenClaw cannot pin the address that passed the policy check. Hosts listed in `allowedHostnames` still open by name. Other hostnames fail with `strict browser SSRF policy requires an IP-literal URL`.
+  - `true`: private-network destinations are allowed. Enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
 
