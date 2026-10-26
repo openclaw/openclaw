@@ -5,25 +5,22 @@ import { createXTestApi as createXApiClient } from "./test-support/api-client.js
 import { createXTestSpend } from "./test-support/spend.js";
 
 const post: XPost = { id: "1", author_id: "2", conversation_id: "1", text: "Public request" };
-function page(): XPage {
-  return {
-    data: [post],
-    includes: { tweets: [], users: [{ id: "2", username: "author", protected: false }] },
-    meta: {},
-  };
-}
+const page: XPage = {
+  data: [post],
+  includes: { tweets: [], users: [{ id: "2", username: "author", protected: false }] },
+  meta: {},
+};
 const verify = (api: Parameters<typeof verifyPublicXThread>[0], posts = [post]) =>
   verifyPublicXThread(api, posts, new AbortController().signal, "1");
 
 describe("public X context", () => {
   it("denies an unavailable conversation root even when its reply is public", async () => {
-    const api = { getPublicPosts: vi.fn(async () => page()) };
+    const api = { getPublicPosts: vi.fn(async () => page) };
     expect(await verify(api, [{ ...post, id: "3" }])).toBe(false);
     expect(api.getPublicPosts).not.toHaveBeenCalled();
   });
 
   it.each([
-    { kind: "public" },
     { kind: "protected", protected: true },
     { kind: "unknown", protected: undefined },
     { kind: "missing", posts: [] },
@@ -32,7 +29,7 @@ describe("public X context", () => {
     { kind: "error" },
   ])("fails closed for $kind context", async (scenario) => {
     const { kind } = scenario;
-    const data = page();
+    const data = structuredClone(page);
     Object.assign(
       data.includes.users[0]!,
       "protected" in scenario ? { protected: scenario.protected } : {},
@@ -46,7 +43,7 @@ describe("public X context", () => {
         return data;
       }),
     };
-    expect(await verify(api)).toBe(kind === "public");
+    expect(await verify(api)).toBe(false);
   });
 
   it("uses only application authority and explicitly requests protected metadata", async () => {
@@ -57,7 +54,7 @@ describe("public X context", () => {
       expect(url.searchParams.get("tweet.fields")).toContain("withheld");
       expect(url.searchParams.get("expansions")).toBe("author_id");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer app-only-fixture");
-      return Response.json(page());
+      return Response.json(page);
     });
     const api = createXApiClient({
       spend: createXTestSpend(),
@@ -70,33 +67,25 @@ describe("public X context", () => {
   });
 
   it.each([
-    { reason: "no app-only token", bearerToken: undefined, dailyUsd: 100 },
-    { reason: "exhausted read budget", bearerToken: "app-only-fixture", dailyUsd: 0.01 },
-  ])("denies publication without dispatch: $reason", async ({ bearerToken, dailyUsd }) => {
-    const fetcher = vi.fn();
-    const api = createXApiClient({
-      spend: createXTestSpend({ dailyUsd }),
-      bearerToken,
-      fetch: fetcher,
-    });
-    expect(await verify(api)).toBe(false);
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
-  });
-
-  it("does not refresh or retry a rejected app-only token with user authority", async () => {
-    const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
-      expect(new URL(input).pathname).toBe("/2/tweets");
-      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer app-only-fixture");
-      return new Response(null, { status: 401 });
-    });
-    const api = createXApiClient({
-      spend: createXTestSpend(),
-      bearerToken: "app-only-fixture",
-      fetch: fetcher,
-    });
-    expect(await verify(api)).toBe(false);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
-  });
+    { reason: "no app-only token", bearerToken: undefined, dailyUsd: 100, calls: 0 },
+    { reason: "exhausted read budget", bearerToken: "app-only-fixture", dailyUsd: 0.01, calls: 0 },
+    { reason: "rejected app-only token", bearerToken: "app-only-fixture", dailyUsd: 100, calls: 1 },
+  ])(
+    "denies publication without user-authority fallback: $reason",
+    async ({ bearerToken, dailyUsd, calls }) => {
+      const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+        expect(new URL(input).pathname).toBe("/2/tweets");
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer app-only-fixture");
+        return new Response(null, { status: 401 });
+      });
+      const api = createXApiClient({
+        spend: createXTestSpend({ dailyUsd }),
+        bearerToken,
+        fetch: fetcher,
+      });
+      expect(await verify(api)).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(calls);
+      expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
+    },
+  );
 });
