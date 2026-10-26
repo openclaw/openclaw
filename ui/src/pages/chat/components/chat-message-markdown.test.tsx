@@ -20,43 +20,9 @@ import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
-import { MessageMarkdown, type MessageMarkdownProps } from "./chat-message-text-view.tsx";
+import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
-
-function renderMarkdown(markdown: string, props: Partial<MessageMarkdownProps> = {}) {
-  const container = document.createElement("div");
-  const initial = {
-    markdown,
-    messageKey: "message",
-    options: { role: "assistant", isStreaming: false },
-    markdownOptions: {},
-    ...props,
-  };
-  const view = mountSolid(MessageMarkdown, initial, container);
-  return {
-    container,
-    update: (changes: Partial<MessageMarkdownProps>) => view.update({ ...initial, ...changes }),
-  };
-}
-
-function renderGroup(
-  message: unknown,
-  options: Partial<Parameters<typeof GroupedMessage>[0]["options"]> = {},
-  messageKey = "message",
-) {
-  const container = document.createElement("div");
-  const view = mountSolid(
-    GroupedMessage,
-    {
-      preparation: prepareChatMessageRender(message),
-      messageKey,
-      options: { isStreaming: false, showReasoning: false, ...options },
-    },
-    container,
-  );
-  return { container, dispose: view.dispose };
-}
 
 describe("message action projections", () => {
   it("reuses prepared assistant text but sanitizes newly loaded action text", () => {
@@ -111,12 +77,20 @@ describe("message action projections", () => {
     expect(preview).not.toHaveBeenCalled();
     prepare("toolResult", "First line\nSecond line");
     expect(preview).not.toHaveBeenCalled();
-    const { container, dispose } = renderGroup(
-      { role: "toolResult", content: "First line\nSecond line" },
-      { isStreaming: true },
-      "tool-preview",
+    const container = document.createElement("div");
+    const view = mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({
+          role: "toolResult",
+          content: "First line\nSecond line",
+        }),
+        messageKey: "tool-preview",
+        options: { isStreaming: true, showReasoning: false },
+      },
+      container,
     );
-    onTestFinished(dispose);
+    onTestFinished(view.dispose);
     await waitForSolid(() =>
       expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
     );
@@ -124,6 +98,7 @@ describe("message action projections", () => {
   });
 
   const indented = "    *literal*";
+  const oversized = "This message is too large to display here.";
   it.each<
     [
       name: string,
@@ -159,6 +134,19 @@ describe("message action projections", () => {
       "assistant",
       "Quoting a log line:\n...(truncated)...\nand continuing normally.",
       { id: "msg-3" },
+    ],
+    [
+      "oversized recovery",
+      "assistant",
+      "[chat.history omitted: message too large]",
+      { id: "msg-oversized", truncated: true, reason: "oversized" },
+      {
+        fullId: "msg-oversized",
+        markdown: oversized,
+        reply: oversized,
+        expanded: "Recovered full assistant content.",
+        onReply: true,
+      },
     ],
     [
       "omitted image reply",
@@ -204,6 +192,8 @@ describe("message action projections", () => {
         if (entry.role === "user") {
           expect(loaded?.replyTarget).toBeUndefined();
           expect(persistedMessageEntryId(message)).toBeNull();
+        } else if (entry.onReply) {
+          expect(loaded?.replyTarget?.text).toBe(markdown);
         }
       }
     },
@@ -356,9 +346,18 @@ describe("user message disclosure", () => {
     { name: "exactly 1200 UTF-16 code units", markdown: "a".repeat(1_200) },
     { name: "forty short lines", markdown: Array(40).fill("a").join("\n") },
   ])("keeps $name fully visible", ({ markdown }) => {
-    const { container } = renderMarkdown(markdown, {
-      options: { role: "user", isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
-    });
+    const container = document.createElement("div");
+
+    mountSolid(
+      MessageMarkdown,
+      {
+        markdown,
+        messageKey: "message",
+        options: { role: "user", isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
+        markdownOptions: {},
+      },
+      container,
+    );
 
     expect(container.querySelector(".chat-message-disclosure")).toBeNull();
     for (const line of markdown.split("\n").filter(Boolean)) {
@@ -373,17 +372,28 @@ describe("streaming message Markdown", () => {
     { markdown: "Intro\n\n", owner: ".chat-text > p" },
     { markdown: "Intro\n\n```ts\nconst answer = 42;\n```", owner: ".chat-text" },
   ])("keeps the duplicate count on the terminal owner for $markdown", ({ markdown, owner }) => {
-    const { container, update } = renderMarkdown(markdown, {
-      options: { role: "assistant", isStreaming: true },
-      duplicateSuffix: { count: 3, label: "Three identical messages" },
-    });
+    const container = document.createElement("div");
+    const view = mountSolid(
+      MessageMarkdown,
+      {
+        markdown,
+        messageKey: "streaming-duplicate",
+        options: { role: "assistant", isStreaming: true },
+        markdownOptions: {},
+        duplicateSuffix: { count: 3, label: "Three identical messages" },
+      },
+      container,
+    );
 
     expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
     expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
     expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
 
-    update({
+    view.update({
       markdown: `${markdown}\n\nMore`,
+      messageKey: "streaming-duplicate",
+      options: { role: "assistant", isStreaming: true },
+      markdownOptions: {},
       duplicateSuffix: { count: 4, label: "Four identical messages" },
     });
     expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
@@ -400,7 +410,12 @@ describe("message Markdown source preservation", () => {
       const message = { role, content: [{ type: "text", text: source }] };
       const markdown = resolveMessageDisplayMarkdown(message, normalizeMessage(message));
       for (const isStreaming of [false, true]) {
-        const { container } = renderMarkdown(markdown, { options: { role, isStreaming } });
+        const container = document.createElement("div");
+        mountSolid(
+          MessageMarkdown,
+          { markdown, messageKey: "indent", options: { role, isStreaming }, markdownOptions: {} },
+          container,
+        );
         expect(container.querySelector("pre code")?.textContent).toBe("*literal*\n");
         expect(container.querySelector("em")).toBeNull();
       }
@@ -434,19 +449,34 @@ describe("persisted human mentions in message bubbles", () => {
   ])(
     "attaches identities only to unchanged selected message spans: %s",
     (_name, role, content, metadata, selected, replacement) => {
-      const { container: host } = renderGroup(
-        { role, content, __openclaw: metadata },
-        { messageActions: replacement ? { markdown: replacement } : undefined },
+      const entry = { role, content, metadata, selected, replacement };
+      const host = document.createElement("div");
+      mountSolid(
+        GroupedMessage,
+        {
+          preparation: prepareChatMessageRender({
+            role: entry.role,
+            content: entry.content,
+            __openclaw: entry.metadata,
+          }),
+          messageKey: "message",
+          options: {
+            isStreaming: false,
+            showReasoning: false,
+            messageActions: entry.replacement ? { markdown: entry.replacement } : undefined,
+          },
+        },
+        host,
       );
       const references = host.querySelectorAll("openclaw-person-reference");
-      expect(references).toHaveLength(selected ? 1 : 0);
-      if (selected) {
+      expect(references).toHaveLength(entry.selected ? 1 : 0);
+      if (entry.selected) {
         expect(references[0]?.getAttribute("profile-id")).toBe("profile-ada");
         expect(references[0]?.getAttribute("label")).toBe("@Ada Lovelace");
         expect(host.querySelector(".chat-bubble")?.getAttribute("data-message-text")).toBe(text);
       }
-      if (replacement) {
-        expect(host.textContent).toContain(replacement);
+      if (entry.replacement) {
+        expect(host.textContent).toContain(entry.replacement);
       }
     },
   );
@@ -457,23 +487,41 @@ it.each(["annotation only", "additional prompt", "additional file"])(
   async (scenario) => {
     const quote = "<strong>Selected text</strong>\nSecond selected line.";
     const payload = `Selected text:\n${quote}\n\nUser comment:\nKeep the full context.\n\nSource session: agent:main:fixture\nSelected text UTF-16 length: ${quote.length}\nDOM text UTF-16 range: [0, ${quote.length})`;
-    const attachment = (label: string, text: string) => ({
-      type: "attachment",
-      attachment: {
-        kind: "document",
-        label,
-        mimeType: "text/plain",
-        url: `data:text/plain;base64,${btoa(text)}`,
+    const content: unknown[] = [
+      {
+        type: "attachment",
+        attachment: {
+          kind: "document",
+          label: "selection-comment.txt",
+          mimeType: "text/plain",
+          url: `data:text/plain;base64,${btoa(payload)}`,
+        },
       },
-    });
-    const content: unknown[] = [attachment("selection-comment.txt", payload)];
+    ];
     if (scenario === "additional prompt") {
       content.push({ type: "text", text: "Please explain this." });
     }
     if (scenario === "additional file") {
-      content.push(attachment("notes.txt", "File contents"));
+      content.push({
+        type: "attachment",
+        attachment: {
+          kind: "document",
+          label: "notes.txt",
+          mimeType: "text/plain",
+          url: `data:text/plain;base64,${btoa("File contents")}`,
+        },
+      });
     }
-    const { container: host } = renderGroup({ role: "user", content });
+    const host = document.createElement("div");
+    mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({ role: "user", content }),
+        messageKey: "annotation-message",
+        options: { isStreaming: false, showReasoning: false },
+      },
+      host,
+    );
     if (scenario === "annotation only") {
       await waitForSolid(() =>
         expect(host.querySelector("blockquote button")?.textContent).toBe(quote),

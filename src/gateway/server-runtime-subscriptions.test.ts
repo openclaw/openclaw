@@ -48,6 +48,7 @@ import {
 import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
   createSubscriptionTestFixture,
+  lifecycleState,
   readLifecycleState,
   registerSubscriptionChatRun,
   registerSubscriptionRegistrationTests,
@@ -113,12 +114,6 @@ vi.mock("../config/io.js", async (importOriginal) => ({
 
 vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
-  const count =
-    (field: keyof typeof auditTestState, increment = 1) =>
-    () => {
-      auditTestState[field] += increment;
-      return true;
-    };
   return {
     ...actual,
     createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
@@ -131,9 +126,18 @@ vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
             auditTestState[event.kind === "message" ? "messages" : "recorded"] += 1;
             return true;
           },
-          recordRun: count("recorded", 2),
-          recordExecutionIdentity: count("identityRecorded"),
-          recordExecutionDecision: count("decisionRecorded"),
+          recordRun: () => {
+            auditTestState.recorded += 2;
+            return true;
+          },
+          recordExecutionIdentity: () => {
+            auditTestState.identityRecorded += 1;
+            return true;
+          },
+          recordExecutionDecision: () => {
+            auditTestState.decisionRecorded += 1;
+            return true;
+          },
           recordExecutionDecisionWork: () => true,
           stop: async () => {
             auditTestState.stopped += 1;
@@ -192,24 +196,10 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
 
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
 
+type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
+
 describe("startGatewayEventSubscriptions", () => {
   let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
-  const start: typeof startGatewayEventSubscriptions = (params) =>
-    (unsubs = startGatewayEventSubscriptions(params));
-  const emptyHandler = () => Object.assign(vi.fn(), { dispose: vi.fn() });
-
-  function observeSettlement(promise: Promise<void>, settled: () => void) {
-    return promise.then(
-      () => {
-        settled();
-        return { ok: true as const };
-      },
-      (error: unknown) => {
-        settled();
-        return { ok: false as const, error };
-      },
-    );
-  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -243,12 +233,12 @@ describe("startGatewayEventSubscriptions", () => {
     "stops observer events %s while chat events continue draining",
     async (phase) => {
       const connectionWork = new GatewayConnectionWork();
-      const dispatch = emptyHandler();
-      agentEventHandlerMocks.create.mockReturnValue(dispatch);
+      const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
+      agentEventHandlerMocks.create.mockReturnValue(handler);
       if (phase === "before startup") {
         connectionWork.beginClose();
       }
-      unsubs = start({
+      unsubs = startGatewayEventSubscriptions({
         ...createParams(),
         signal: connectionWork.signal,
       });
@@ -266,9 +256,9 @@ describe("startGatewayEventSubscriptions", () => {
 
       expect(warn).not.toHaveBeenCalled();
       expect(observe).toHaveBeenCalledTimes(phase === "during close" ? 1 : 0);
-      expect(dispatch).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
       emit();
-      expect(dispatch).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
       observe.mockRestore();
     },
   );
@@ -458,6 +448,17 @@ describe("startGatewayEventSubscriptions", () => {
     );
 
     await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
+    expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "research",
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
+    expect(agentEventHandlerMocks.resolveSession).toHaveBeenCalledWith(runId, {
+      agentId: undefined,
+      projection: undefined,
+    });
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
       expect.objectContaining({ runId, stream: "lifecycle" }),
@@ -505,8 +506,15 @@ describe("startGatewayEventSubscriptions", () => {
         try {
           emitAgentEvent({ runId: "load-handler", stream: "lifecycle", data: { phase: "error" } });
           await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
-          const options: AgentEventHandlerOptions =
-            agentEventHandlerMocks.create.mock.calls[0]?.[0];
+          const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as {
+            resolveSessionActiveRunState?: (session: {
+              requestedKey: string;
+              canonicalKey: string;
+              storePath?: string;
+              sessionId?: string;
+              agentId?: string;
+            }) => { active: boolean; runIds: string[] };
+          };
 
           expect(
             options.resolveSessionActiveRunState?.({
@@ -527,12 +535,20 @@ describe("startGatewayEventSubscriptions", () => {
     },
   );
 
-  registerSubscriptionRegistrationTests(start, (terminal) => {
-    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminal);
-    agentEventHandlerMocks.create.mockReturnValue(Object.assign(async () => {}, { dispose() {} }));
-  });
+  registerSubscriptionRegistrationTests(
+    (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+      return unsubs;
+    },
+    (terminal) => {
+      agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminal);
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(async () => {}, { dispose() {} }),
+      );
+    },
+  );
 
-  it("keeps retryable lifecycle errors nonterminal when the run resumes", async () => {
+  it("drives a registered chat run through the terminal persistence transition table", async () => {
     const runId = "run-lifecycle-table";
     const sessionKey = "agent:main:main";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -543,20 +559,54 @@ describe("startGatewayEventSubscriptions", () => {
       sessionKey,
       lifecycleGeneration,
     });
+    const entry = registration.entry;
     const emit = (data: AgentEventPayload["data"]) =>
       emitAgentEvent({ runId, lifecycleGeneration, stream: "lifecycle", data });
-    agentEventHandlerMocks.create.mockReturnValue(emptyHandler());
-    start(params);
+    const transitions: LifecycleTransition[] = [
+      { state: "Registered", lifecycle: readLifecycleState(entry) },
+    ];
+    agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
+    unsubs = startGatewayEventSubscriptions(params);
 
     emit({ phase: "start", startedAt: 1_000 });
+    transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
 
     emit({ phase: "error", error: "retryable provider failure", endedAt: 2_000 });
     emit({ phase: "start", startedAt: 2_500 });
     expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
 
+    const terminalPersistence = createDeferred();
+    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
+
+    emit({ phase: "end", endedAt: 3_000 });
+    const ownedPersistence = entry.adapter.projectSessionTerminalPersistence;
+    transitions.push({ state: "Persisting", lifecycle: readLifecycleState(entry) });
+
+    try {
+      expect(ownedPersistence).toBeInstanceOf(Promise);
+      terminalPersistence.resolve();
+      await waitForChatAbortTerminalPersistence(entry);
+      expect(entry.adapter.projectSessionTerminalPersisted).toBe(true);
+    } finally {
+      terminalPersistence.resolve();
+      await waitForChatAbortTerminalPersistence(entry);
+    }
+    transitions.push({ state: "Persisted", lifecycle: readLifecycleState(entry) });
+
     registration.cleanup();
+    transitions.push({ state: "Removed" });
     expect(rpcSourceTesting.has(runId)).toBe(false);
+    expect(transitions).toEqual([
+      { state: "Registered", lifecycle: lifecycleState(undefined) },
+      { state: "Start-normalized", lifecycle: lifecycleState(undefined, false) },
+      {
+        state: "Persisting",
+        lifecycle: lifecycleState(false, true, 3_000, ownedPersistence, false),
+      },
+      { state: "Persisted", lifecycle: lifecycleState(false, false, 3_000, undefined, true) },
+      { state: "Removed" },
+    ]);
   });
 
   it.each(
@@ -619,15 +669,19 @@ describe("startGatewayEventSubscriptions", () => {
       let firstDrain: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
       try {
         emitTerminal(2_000);
-        expect(entry.adapter).toMatchObject({
-          projectSessionTerminalPending: true,
-          projectSessionTerminalPersisted: false,
-          projectSessionTerminalObservedAt: 2_000,
-        });
+        expect(entry.adapter.projectSessionTerminalPending).toBe(true);
+        expect(entry.adapter.projectSessionTerminalPersisted).toBe(false);
         expect(entry.adapter.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
-        firstDrain = observeSettlement(waitForChatAbortTerminalPersistence(entry), () => {
-          firstSettled = true;
-        });
+        firstDrain = waitForChatAbortTerminalPersistence(entry).then(
+          () => {
+            firstSettled = true;
+            return { ok: true as const };
+          },
+          (error: unknown) => {
+            firstSettled = true;
+            return { ok: false as const, error };
+          },
+        );
         await awaitGateBeforeSettlement(
           firstDispatchEntered.promise,
           firstDrain,
@@ -843,9 +897,16 @@ describe("startGatewayEventSubscriptions", () => {
         ),
       ).toEqual({ aborted: true });
       let settled = false;
-      const waiter = observeSettlement(waitForChatAbortTerminalPersistence(entry), () => {
-        settled = true;
-      });
+      const waiter = waitForChatAbortTerminalPersistence(entry).then(
+        () => {
+          settled = true;
+          return { ok: true as const };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { ok: false as const, error };
+        },
+      );
       try {
         await dispatchEntered.promise;
         releaseEntry();
@@ -917,7 +978,10 @@ describe("startGatewayEventSubscriptions", () => {
   } = {
     createParams,
     installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
-    start,
+    start: (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+      return unsubs;
+    },
     transcriptBroadcastMocks,
     runtimeConfigState,
     warn,

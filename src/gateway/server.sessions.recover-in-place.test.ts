@@ -44,43 +44,12 @@ beforeEach(async () => {
 });
 let requestSequence = 0;
 
-function installCliBackend() {
-  const previous = { ...getTestPluginRegistry() };
-  setTestPluginRegistry({
-    ...previous,
-    cliBackends: [
-      ...previous.cliBackends,
-      {
-        pluginId: "anthropic",
-        source: "test",
-        backend: {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          config: { command: "unused-fixture" },
-        },
-      },
-    ],
-  });
-  return () => setTestPluginRegistry(previous);
-}
-
-function pendingRecovery(cycleId: string) {
-  return {
-    status: "interrupted" as const,
-    abortedLastRun: true,
-    mainRestartRecovery: { cycleId, revision: 4, chargedAttempts: 0 },
-  };
-}
-
 async function fixture(
   name: string,
   runtime?: "codex" | "claude-cli",
   restricted = runtime === "claude-cli",
   deliveryConstraint?: "media" | "message" | "text",
 ) {
-  if (runtime === "claude-cli") {
-    onTestFinished(installCliBackend());
-  }
   const { storePath } = await createSessionStoreDir();
   const key = `agent:main:dashboard:${name}`;
   const sessionId = `${name}-session`;
@@ -232,11 +201,37 @@ async function recover(
   return { ok, payload: payload as SessionsRecoverResult | undefined, error };
 }
 
-test.for(["interrupted", "cancelled", "replacement", "cli-full", "cli-restricted"] as const)(
+test.for([
+  "interrupted",
+  "settled",
+  "cancelled",
+  "replacement",
+  "cli-full",
+  "cli-restricted",
+] as const)(
   "sessions.recover resumes only the original restart-interrupted native child (%s)",
   async (scenario, { signal }) => {
     const cli = scenario === "cli-full" || scenario === "cli-restricted";
     const current = await fixture(`child-recovery-${scenario}`, cli ? "claude-cli" : undefined);
+    if (cli) {
+      const previousRegistry = { ...getTestPluginRegistry() };
+      setTestPluginRegistry({
+        ...previousRegistry,
+        cliBackends: [
+          ...previousRegistry.cliBackends,
+          {
+            pluginId: "anthropic",
+            source: "test",
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "unused-fixture" },
+            },
+          },
+        ],
+      });
+      onTestFinished(() => setTestPluginRegistry(previousRegistry));
+    }
     const runId = `child-run-${scenario}`;
     const lifecycleRevision = `child-revision-${scenario}`;
     await patchSessionEntryCore(current.scope, () => ({
@@ -266,20 +261,28 @@ test.for(["interrupted", "cancelled", "replacement", "cli-full", "cli-restricted
       },
       requesterAgentId: "main",
       execution: {
-        status: "interrupted",
+        status: scenario === "settled" ? "terminal" : "interrupted",
         startedAt: 1,
         interruptionReason: "gateway-restart",
+        ...(scenario === "settled"
+          ? { endedAt: 2, outcome: { status: "error", error: "Interrupted by Gateway restart" } }
+          : {}),
       },
+      ...(scenario === "settled"
+        ? { endedReason: "subagent-error", terminalOwner: "interrupted-recovery" }
+        : {}),
     });
     await mutateSubagentRuns([runId], () => ({
       value: undefined,
       postimages: new Map([[runId, interrupted]]),
     }));
-    const expectUnchanged = await current.expectUnchangedAfter();
+    const before = await current.transcript();
+    const entryBefore = current.entry();
     const response = await recover(current, { automaticIdentity: true });
     if (scenario === "cancelled" || scenario === "replacement") {
       expect(response).toMatchObject({ ok: false });
-      await expectUnchanged();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(await current.transcript()).toEqual(before);
       return;
     }
     if (scenario === "cli-restricted") {
@@ -287,7 +290,10 @@ test.for(["interrupted", "cancelled", "replacement", "cli-full", "cli-restricted
         status: "rejected",
         error: { details: { reason: "restart-safe-tools-unavailable" } },
       });
-      await expectUnchanged();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(current.entry()).toEqual(entryBefore);
+      expect(await current.transcript()).toEqual(before);
+      expect((await listSessionPendingInputs(current.scope)).items).toEqual([]);
       return;
     }
     expectContinuation(current, response, { status: "started", runId: expect.any(String) });
@@ -329,7 +335,13 @@ test.for(["builtin", "native", "pending", "pending-child"] as const)(
               parentSessionKey: "agent:requester:discord:group:synthetic",
             }
           : {}),
-        ...pendingRecovery(current.recoveryCycleId),
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+          chargedAttempts: 0,
+        },
       }));
     }
     const before = await current.transcript();
@@ -369,6 +381,7 @@ test.for(["builtin", "native", "pending", "pending-child"] as const)(
       await withinTest(dispatched.promise, signal);
       const repeated = await recover(current);
       expect(repeated, JSON.stringify(repeated)).toMatchObject({ ok: false });
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect((await listSessionPendingInputs(current.scope)).items).toHaveLength(1);
       expect(current.entry()?.archivedAt).toBeUndefined();
     } catch (error) {
@@ -410,10 +423,46 @@ test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] a
       deliveryConstraint,
     );
     if (pending) {
-      await patchSessionEntryCore(current.scope, () => pendingRecovery(current.recoveryCycleId));
+      await patchSessionEntryCore(current.scope, () => ({
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+          chargedAttempts: 0,
+        },
+      }));
     }
+    const previousRegistry = { ...getTestPluginRegistry() };
+    setTestPluginRegistry({
+      ...previousRegistry,
+      cliBackends: [
+        ...previousRegistry.cliBackends,
+        {
+          pluginId: "anthropic",
+          source: "test",
+          backend: {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            config: { command: "unused-fixture" },
+          },
+        },
+      ],
+    });
     try {
-      const expectUnchanged = await current.expectUnchangedAfter();
+      const before = current.entry();
+      if (!before) {
+        throw new Error("CLI fixture session is missing");
+      }
+      expect(
+        await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
+          cfg: current.context.getRuntimeConfig(),
+          entry: before,
+          agentId: "main",
+          sessionKey: current.key,
+        }),
+      ).toBe("claude-cli");
+      const expectUnchanged = await current.expectUnchangedAfter(before);
       if (scenario === "pending-revoked") {
         let authorized = true;
         const resolveRuntime = sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync;
@@ -456,7 +505,11 @@ test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] a
         await expectUnchanged();
       }
     } finally {
-      await current.drain();
+      try {
+        await current.drain();
+      } finally {
+        setTestPluginRegistry(previousRegistry);
+      }
     }
   },
 );
@@ -471,6 +524,21 @@ test.for(["sessionId", "recoveryCycleId"] as const)(
     await expectUnchanged();
   },
 );
+
+test("operator resume rejects a foreign read-only caller without clearing the tombstone", async () => {
+  const current = await fixture("denied-resume");
+  const reader = roleClient("view", "resume-foreign-reader");
+  const expectUnchanged = await current.expectUnchangedAfter();
+  const denied = await recover(current, { client: reader });
+  expect(denied).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+    },
+  });
+  await expectUnchanged();
+});
 
 test("operator revocation while resume waits for admission preserves the tombstone", async ({
   signal,

@@ -276,6 +276,27 @@ it("retires the unowned mirrored prompt only after its canonical restart recover
   );
 });
 
+it("reopens the archived question with its draft until another later completion", () => {
+  document.body.append(container);
+  const old = question("old", "run-1");
+  const state = presentationState();
+  present([old], state);
+  const draft = { answers: new Map([["0", { selected: new Set<string>(), freeText: "My team" }]]) };
+  state.asyncQuestionDrafts.set("old", draft);
+  const messages = [old, terminal("run-1"), terminal("run-2")];
+  let presentation = present(messages, state);
+  drawSummary(readAsyncQuestions(old)!, presentation);
+  expectSummary(["Which audience?", "No longer pending"], ["Answer above the message box."]);
+  const answer = container.querySelector<HTMLButtonElement>("button")!;
+  expect(answer.textContent?.trim()).toBe("Answer");
+  answer.click();
+  presentation = present(messages, state);
+  expect(pendingIds(presentation)).toEqual(["old"]);
+  expect(state.asyncQuestionDrafts.get("old")).toBe(draft);
+  expect(state.asyncQuestionDrafts.get("old")?.answers.get("0")?.freeText).toBe("My team");
+  expectPending([...messages, terminal("run-3")], 0, state);
+});
+
 it("keeps a rejected in-flight answer and its retry error visible after a later completion", async () => {
   const old = question("old", "run-1");
   const state = presentationState();
@@ -398,6 +419,7 @@ it("keeps a persisted answer resolved across remount and reconnect and displays 
 
 it.each([
   ["unsaved answer", [{ role: "user", content: historicalAnswer.content }], 1],
+  ["unrelated text", [{ ...historicalAnswer, content: "Everyone" }], 1],
   ["internal input", [{ ...historicalAnswer, provenance: { kind: "internal_system" } }], 1],
   ["empty answer", [{ ...historicalAnswer, content: "> Which audience?\n\n" }], 1],
   [
@@ -470,17 +492,19 @@ it.each([
         ? "Edited in the outbox: use my earlier details."
         : "> First?\n\nQuote this:\n\n> Second?\n\nStill the first answer\n\n> Second?\n\nThe second answer",
     };
-    const presentation = historyPresentation([promptMessage, answer]);
-    expect(presentation.pending).toHaveLength(confirmed ? 0 : 1);
-    drawSummary(promptMessage.openclawAsyncDelivery, presentation);
-    expect(container.textContent?.includes("Answer sent")).toBe(confirmed);
-    if (confirmed) {
-      expectSummary([answer.content], ["Awaiting delivery confirmation"]);
+    for (const epoch of [1, 2]) {
+      const presentation = historyPresentation([promptMessage, answer], epoch);
+      expect(presentation.pending).toHaveLength(confirmed ? 0 : 1);
+      drawSummary(promptMessage.openclawAsyncDelivery, presentation);
+      expect(container.textContent?.includes("Answer sent")).toBe(confirmed);
+      if (confirmed) {
+        expectSummary([answer.content], ["Awaiting delivery confirmation"]);
+      }
     }
   },
 );
 
-it("prefers the queued payload over newer drafts and fences stale retry actions", () => {
+it("projects answer delivery from the outbox, retries its payload, and waits for canonical confirmation", () => {
   const state: QuestionState = presentationState();
   const retry = vi.fn();
   const queue: ChatQueueItem[] = [
@@ -499,29 +523,47 @@ it("prefers the queued payload over newer drafts and fences stale retry actions"
     drawSummary(readAsyncQuestions(messages[0])!, presentation);
     return presentation;
   };
-  draw();
+  const showDelivery = (sendState: ChatQueueItem["sendState"], label: string) => {
+    queue[0] = { ...queue[0]!, sendState };
+    draw();
+    expectSummary([label]);
+  };
+  const pending = draw();
+  const admitted = queue[0]!;
+  queue.length = 0;
+  expect(draw().pending).toEqual([]);
+  expectSummary(["Awaiting delivery confirmation"], ["Answer sent"]);
+  queue.push(admitted);
   state.asyncQuestionDrafts.set("question-1", {
     status: "submitted",
     answers: new Map([["0", { selected: new Set(), freeText: "A newer draft" }]]),
   });
-  expect(draw().pending).toEqual([]);
+  expect(pending.pending).toEqual([]);
+  draw();
   expect(container.textContent).toContain("Answer queued");
   expect(container.querySelector('[role="status"][aria-live="polite"]')).not.toBeNull();
   queue[0] = { ...queue[0]!, sendState: "failed", sendError: "Synthetic rejection" };
   const failed = draw();
+  expect(failed.historyKey).not.toBe(pending.historyKey);
   expectSummary(["Everyone", "Answer not sent", "Synthetic rejection"], ["A newer draft"]);
   container.querySelector<HTMLButtonElement>("button")!.click();
   expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
   expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
+  showDelivery("failed", "Answer not sent");
   const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
   state.asyncQuestionScope = "another-context";
   retainedRetry.click();
   expect(retry).toHaveBeenCalledTimes(1);
   state.asyncQuestionScope = failed.scope;
-  queue[0] = { ...queue[0]!, sendState: "waiting-reconnect" };
-  draw();
-  expectSummary(["Waiting for reconnect"]);
+  showDelivery("waiting-reconnect", "Waiting for reconnect");
   expect(container.querySelector("button")).toBeNull();
+  showDelivery("sending", "Sending answer");
+  queue.length = 0;
+  draw();
+  expectSummary(["Awaiting delivery confirmation"], ["Answer sent"]);
+  props.messages = [...messages, historicalAnswer];
+  draw();
+  expectSummary(["Answer sent", "Everyone"], ["A newer draft"]);
 });
 
 it.each(["old", "new"])(

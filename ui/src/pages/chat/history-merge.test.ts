@@ -19,6 +19,7 @@ import {
   publishChatSessionProjection as publish,
   publishChatSessionProjectionMessages as publishMessages,
 } from "./history-merge.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const imageDataUrl = "data:image/png;base64,iVBORw0KGgo=";
@@ -36,7 +37,13 @@ function projectLiveMessage(
   liveMessage: unknown,
   scope: SessionProjectionScope,
 ) {
-  return reduceChat(owner, { type: "messagePersisted", message: liveMessage }, { scope });
+  const projection = reduceSessionProjection(projectionFor(owner, scope), {
+    type: "messagePersisted",
+    message: liveMessage,
+    scope,
+  });
+  publish(owner, projection);
+  return projection;
 }
 
 function runningPane(scope: SessionProjectionScope) {
@@ -87,7 +94,8 @@ function initialFixture(retain = true) {
     buildInitialChatSubmission(
       sessionKey,
       {
-        text: "initial prompt",
+        text: "inspect this image",
+        attachments: [{ id: "image-1", mimeType: "image/png", dataUrl: imageDataUrl }],
         createdAt: 123,
         sender: {
           id: "local",
@@ -118,23 +126,33 @@ function initialFixture(retain = true) {
       "delivered source",
     );
   return {
+    client,
     chatSubmissions,
     owner,
     sessionKey,
     initial,
     deliver,
     admit: () => admitChatSubmission(owner, undefined),
+    reset: () => reduceChat(owner, { type: "sessionReset" }),
     read: () => chatSubmissions.readInitial(sessionKey, client),
   };
 }
 
 function authoritativeMessage() {
-  return message("user", "persisted prompt", {
-    id: "persisted-initial-user",
-    idempotencyKey: "initial-run:user",
-    runId: "initial-execution",
-    seq: 1,
-  });
+  return {
+    role: "user",
+    content: "Inspect this persisted image",
+    timestamp: 456,
+    serverField: "authoritative",
+    __openclaw: {
+      id: "persisted-initial-user",
+      idempotencyKey: "initial-run:user",
+      runId: "initial-execution",
+      seq: 1,
+      media: [{ url: "media://inbound/image-1.png", contentType: "image/png" }],
+      mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+    },
+  };
 }
 
 it.each(["message", "user", "imported", "session", "agent", "lifecycle"])(
@@ -186,16 +204,18 @@ it.each(["reset", "session", "branch"] as const)(
   "retires the compaction marker's live state on %s changes",
   (change) => {
     const owner = {
-      ...emptyPane(),
-      compactionStatus: {
-        phase: "complete" as const,
-        runId: "compact-one",
-        startedAt: 1_000,
-        completedAt: 2_000,
-      },
+      sessionKey: "agent:main:one",
+      chatMessages: [] as unknown[],
+      compactionStatus: null as CompactionStatus | null,
     };
     const scope = { sessionKey: owner.sessionKey, activeLeafEntryId: "first" };
     projectionFor(owner, scope);
+    owner.compactionStatus = {
+      phase: "complete",
+      runId: "compact-one",
+      startedAt: 1_000,
+      completedAt: 2_000,
+    };
     reduceChat(
       owner,
       change === "reset" ? { type: "sessionReset" } : { type: "snapshotLoaded", messages: [] },
@@ -211,14 +231,44 @@ it.each(["reset", "session", "branch"] as const)(
   },
 );
 
+it.each(["messagePersisted", "snapshotLoaded"] as const)(
+  "sender provenance does not survive authoritative omission in %s",
+  (type) => {
+    const { owner, initial: handoff } = initialFixture();
+    expect(handoff.message["__openclaw"]).toHaveProperty("senderIdentity", {
+      type: "profile",
+      id: "local",
+    });
+    admitChatSubmission(owner, undefined);
+    const authoritative = authoritativeMessage();
+    reduceChat(
+      owner,
+      type === "messagePersisted"
+        ? { type, message: authoritative }
+        : { type, messages: [authoritative] },
+    );
+    const metadata = (owner.chatMessages[0] as { __openclaw: Record<string, unknown> })[
+      "__openclaw"
+    ];
+    for (const key of ["senderIdentity", "senderId", "senderProfileAvatarUrl"]) {
+      expect(metadata).not.toHaveProperty(key);
+    }
+  },
+);
+
 it("uses one canonical identity for an explicitly unbranched pane", () => {
   const owner = {
-    ...emptyPane(),
+    sessionKey: "agent:main:shared",
     currentSessionId: "shared-session",
     chatDisplayedLeafEntryId: undefined,
+    chatMessages: [],
   };
 
-  expect(scopeFor(owner)).toEqual(branchScope(null));
+  expect(scopeFor(owner)).toEqual({
+    sessionKey: "agent:main:shared",
+    sessionId: "shared-session",
+    activeLeafEntryId: null,
+  });
   expect(
     scopeFor(owner, {
       agentId: "main",
@@ -249,17 +299,41 @@ it("does not revive a consumed delivered copy from the cache or consume foreign 
   expect(owner.chatMessages).toEqual([initial.message]);
 });
 
-it.each([
-  { cached: false, type: "snapshotLoaded" },
-  { cached: true, type: "snapshotLoaded" },
-  { cached: true, type: "messagePersisted" },
-] as const)("owns initial adoption with cached seed $cached via $type", ({ cached, type }) => {
+it("publishes each pane reducer transition and displayed transcript together", () => {
+  const owner = emptyPane();
+  const liveUser = persistedMessage("user", "shared prompt", "shared-user", 1);
+
+  const projection = reduceChat(owner, { type: "messagePersisted", message: liveUser });
+
+  expect(owner.chatMessages).toEqual([liveUser]);
+  expect(projectionFor(owner, projection.scope)).toBe(projection);
+  owner.chatMessages = [];
+  expect(projectionFor(owner)).toBe(projection);
+  publishMessages(owner, [liveUser, liveUser]);
+  const composed = projectionFor(owner);
+  expect(owner.chatMessages).toEqual([liveUser, liveUser]);
+  expect(composed.entries[0]).toBe(projection.entries[0]);
+  expect(composed.entries[1]?.message).toBe(liveUser);
+  expect(composed.entries[1]?.live).toBe(false);
+  publishMessages(owner, [liveUser, liveUser]);
+  expect(projectionFor(owner).entries).toEqual(composed.entries);
+});
+
+it.each([false, true])("owns initial adoption with cached seed: %s", (cached) => {
   const f = initialFixture();
   const { owner, initial: handoff } = f;
   if (cached) {
     owner.chatMessages = [handoff.message];
     expect(f.admit()).toBe(!cached);
     expect(projectionFor(owner).entries[0]?.pending).toBe(true);
+    const admittedMessage = owner.chatMessages[0];
+    f.reset();
+    expect(f.admit()).toBe(true);
+    expect(owner.chatMessages).toEqual([admittedMessage]);
+    f.reset();
+    snapshot(owner, [], { scope: scopeFor(owner, { sessionId: "rebound-session" }) });
+    expect(owner.chatMessages).toEqual([admittedMessage]);
+    owner.currentSessionId = "rebound-session";
     const previousUser = persistedMessage("user", "Earlier prompt", "earlier-user", 1, 120);
     const previousReply = persistedMessage("assistant", "Earlier reply", "earlier-reply", 2, 121);
     const output = persistedMessage("assistant", "Preparing reply", "early-output", 3, 124);
@@ -269,15 +343,25 @@ it.each([
     expect(owner.chatMessages).toEqual([handoff.message]);
   }
   const authoritative = authoritativeMessage();
-  const event =
-    type === "messagePersisted"
-      ? ({ type: "messagePersisted", message: authoritative } as const)
-      : ({ type: "snapshotLoaded", messages: [authoritative] } as const);
-  reduceChat(owner, event, { runActive: cached });
+  const event = cached
+    ? ({ type: "messagePersisted", message: authoritative } as const)
+    : ({ type: "snapshotLoaded", messages: [authoritative] } as const);
+  const projection = reduceChat(owner, event, { runActive: cached });
 
   expect(owner.chatMessages).toEqual([authoritative]);
+  expect(projection.messages[0]).toBe(authoritative);
+
+  if (cached) {
+    expect(f.read()).not.toBeNull();
+    f.reset();
+    expect(f.admit()).toBe(false);
+    expect(owner.chatMessages).toEqual([]);
+    snapshot(owner, [authoritative], { runActive: false });
+  }
   expect(f.read()).toMatchObject({ pending: false, message: null });
-  expect(f.admit()).toBe(false);
+  if (!cached) {
+    expect(f.admit()).toBe(false);
+  }
 });
 
 it("does not revive an initial handoff delivered after its canonical user message", () => {
@@ -306,21 +390,29 @@ it("binds learned session and branch identity without reclassifying live runs", 
   const projection = projectionFor(owner, learnedScope);
 
   expect(projection.scope).toEqual(learnedScope);
+  expect(projection.entries).toBe(running.entries);
   expect(projection.entries[0]?.live).toBe(true);
-  expect(projection.messages).toEqual(running.messages);
+  expect(projection.runs).toBe(running.runs);
   expect(projection.runs["live-run"]?.status).toBe("streaming");
   expect(getChatRunOwner(owner)).toBe("live-run");
+  expect(getChatRunOwner({})).toBeUndefined();
 });
 
-it.each([
-  { sessionKey: "other", sessionId: "other-session" },
-  { activeLeafEntryId: "next-leaf" },
-  { activeLeafEntryId: null },
-  { lifecycleRevision: 2 },
-  { agentId: "other" },
-])("drops stale live and run provenance for changed scope %j", (change) => {
-  const previous = { ...branchScope("previous-leaf"), lifecycleRevision: 1, agentId: "main" };
-  const next = { ...previous, ...change };
+it.each<[string, SessionProjectionScope, SessionProjectionScope]>([
+  [
+    "session",
+    { sessionKey: "agent:main:previous", sessionId: "previous-session" },
+    { sessionKey: "agent:main:next", sessionId: "next-session" },
+  ],
+  ["active branch", branchScope("previous-leaf"), branchScope("next-leaf")],
+  ["cleared branch", branchScope("previous-leaf"), branchScope(null)],
+  [
+    "lifecycle",
+    { sessionKey: "agent:main:shared", lifecycleRevision: 1 },
+    { sessionKey: "agent:main:shared", lifecycleRevision: 2 },
+  ],
+  ["agent", { sessionKey: "main", agentId: "first" }, { sessionKey: "main", agentId: "second" }],
+])("drops stale live and run provenance when the %s changes", (_, previous, next) => {
   const { owner } = runningPane(previous);
 
   const projection = snapshot(owner, [], { scope: next });
@@ -329,15 +421,31 @@ it.each([
   expect(getChatRunOwner(owner)).toBeUndefined();
 });
 
-it("publishes repeated rows and retains the live prefix across a later empty snapshot", () => {
+it("retires every materialized local assistant when its pending send fails", () => {
+  const owner = emptyPane();
+  const pendingUser = message("user", "prompt", {
+    idempotencyKey: "pending-run:user",
+  });
+  const first = message("assistant", "first part");
+  const second = message("assistant", "second part");
+  const canonical = persistedMessage("assistant", "persisted boundary", "reply", 1);
+  const afterBoundary = message("assistant", "after boundary");
+  publishMessages(owner, [pendingUser, first]);
+  publishMessages(owner, [pendingUser, first, second, canonical, afterBoundary]);
+
+  reduceChat(owner, { type: "sendFailed", runId: "pending-run" });
+
+  expect(owner.chatMessages).toEqual([canonical, afterBoundary]);
+});
+
+it("keeps a retained live prefix across a later empty snapshot", () => {
   const owner = emptyPane();
   const prefix = message("assistant", "causal prefix", { runId: "same-run" });
   const tail = message("assistant", "terminal tail", { runId: "same-run" });
   reduceChat(owner, { type: "messagePersisted", message: prefix });
-  publishMessages(owner, [prefix, prefix, tail], {
+  publishMessages(owner, [prefix, tail], {
     event: { type: "messagePersisted", message: tail },
   });
-  expect(owner.chatMessages).toEqual([prefix, prefix, tail]);
 
   snapshot(owner, []);
 

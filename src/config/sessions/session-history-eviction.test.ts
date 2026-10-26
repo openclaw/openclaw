@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
@@ -153,15 +154,6 @@ describe("SQLite historical session disk budget", () => {
   };
   const defaultMaintenance = () =>
     resolveMaintenanceConfigFromInput({ mode: "enforce", ...budget().maintenance });
-  const settle = async () => {
-    await enforceSqliteSessionHistoryDiskBudget({
-      ...budget(1, 1, "warn"),
-      maintenance: { maxDiskBytes: null, highWaterBytes: null },
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  };
 
   it.each([
     [64 * 1024, 1, false, "worker"],
@@ -203,11 +195,33 @@ describe("SQLite historical session disk budget", () => {
         const before = await measureSessionPhysicalDiskUsage(storePath);
         const highWaterBytes = before.totalBytes - reclaimBytes;
 
+        let reclamationWorkers = 0;
+        type ArchiveReply = {
+          type: string;
+          result?: { kind: string };
+        };
+        const archiveReplies: Array<{ worker: Worker; message: ArchiveReply }> = [];
+        const observeWorker = (worker: Worker) => {
+          worker.on("message", (message: ArchiveReply | null | undefined) => {
+            if (message?.type === "reclaimed" && message.result?.kind === "history-eviction") {
+              reclamationWorkers += 1;
+            }
+            if (message?.type === "done" || message?.type === "published") {
+              archiveReplies.push({ worker, message });
+            }
+          });
+        };
+        process.on("worker", observeWorker);
         const references = vi.spyOn(sessionReferences, "readReferencedSessionIds");
-        const result = await enforceSqliteSessionHistoryDiskBudget({
-          ...budget(before.totalBytes - 1, highWaterBytes),
-          ...(execution === "in-process" ? { reclamationMode: execution } : {}),
-        });
+        let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
+        try {
+          result = await enforceSqliteSessionHistoryDiskBudget({
+            ...budget(before.totalBytes - 1, highWaterBytes),
+            ...(execution === "in-process" ? { reclamationMode: execution } : {}),
+          });
+        } finally {
+          process.off("worker", observeWorker);
+        }
 
         const hostDiscoveryScans = references.mock.calls.filter(
           (call) => call[2] === undefined,
@@ -216,6 +230,10 @@ describe("SQLite historical session disk budget", () => {
         if (execution === "worker") {
           expect(references.mock.calls.length).toBe(0);
         }
+        expect(reclamationWorkers).toBe(execution === "in-process" ? 0 : 1);
+        expect(archiveReplies.map(({ message }) => message.type)).toEqual(["done", "published"]);
+        expect(new Set(archiveReplies.map(({ worker }) => worker)).size).toBe(1);
+        expect(archiveReplies.every(({ worker }) => worker.threadId > 0)).toBe(true);
         expect(result?.removedEntries).toBe(1);
         expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
         expect(result?.totalBytesAfter).toBe(
@@ -229,6 +247,7 @@ describe("SQLite historical session disk budget", () => {
           analysis_limit: 37,
         });
         await closeOpenClawAgentDatabaseByPathAsync(database().path);
+        expect(archiveReplies.every(({ worker }) => worker.threadId === -1)).toBe(true);
       };
       if (execution === "worker") {
         await run();
@@ -387,7 +406,7 @@ describe("SQLite historical session disk budget", () => {
 
     const cachedDatabase = database();
     const rm = fs.promises.rm.bind(fs.promises);
-    vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
+    const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
       if (args[0] === archivePath) {
         expect(cachedDatabase.db.isOpen).toBe(true);
         closeCachedOpenClawAgentDatabase(cachedDatabase);
@@ -399,6 +418,7 @@ describe("SQLite historical session disk budget", () => {
 
     expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
     expect(fs.existsSync(archivePath ?? "")).toBe(false);
+    expect(removeArchive).toHaveBeenCalledWith(archivePath);
     expect(
       database()
         .db.prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
@@ -612,16 +632,17 @@ describe("SQLite historical session disk budget", () => {
       if (after === "discovery") {
         observeDiscovery(addReference);
       }
-      vi.spyOn(archive, "materializeSessionHistoryEvictionPlan").mockImplementationOnce(
-        async (plan) => {
+      const materialization = vi
+        .spyOn(archive, "materializeSessionHistoryEvictionPlan")
+        .mockImplementationOnce(async (plan) => {
           const prepared = await materialize(plan);
           if (after === "materialization") {
             addReference();
           }
           return prepared;
-        },
-      );
+        });
       expect(await enforce()).toMatchObject({ removedEntries: 0 });
+      expect(materialization).toHaveBeenCalledOnce();
       expectRetainedHistory("reference-old", sessionKey);
       // Excluding the deliberately deleted owner must not exclude a surviving reference.
       expect(await remove(sessionKey)).toMatchObject({ deleted: true });
@@ -633,6 +654,15 @@ describe("SQLite historical session disk budget", () => {
   it("backs off protected over-budget history and warns once while manual cleanup remains immediate", async () => {
     await seed("protected");
     addRouteReference("agent:main:shared-history", "protected-old");
+    const settle = async () => {
+      await enforceSqliteSessionHistoryDiskBudget({
+        ...budget(1, 1, "warn"),
+        maintenance: { maxDiskBytes: null, highWaterBytes: null },
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    };
     await settle();
     evictionWarnSpy.mockClear();
     const now = Date.now();
@@ -693,13 +723,13 @@ describe("SQLite historical session disk budget", () => {
   it("finishes a budget sweep kicked inside a turn after that turn is stopped", async () => {
     // Entry writes kick the store-wide sweep from inside turns; stopping the turn must not
     // cancel the sweep's eviction mutation through the turn's controller context.
-    await history(
-      "kicked-old",
-      "kicked-live",
-      "agent:main:kicked-history",
-      "kicked " + "x".repeat(64 * 1024),
-      10,
-    );
+    await createHistoricalTranscript({
+      content: "kicked " + "x".repeat(64 * 1024),
+      nextSessionId: "kicked-live",
+      sessionId: "kicked-old",
+      sessionKey: "agent:main:kicked-history",
+      updatedAt: 10,
+    });
     settlePhysicalUsage();
     const before = await measureSessionPhysicalDiskUsage(storePath);
     const maintenanceConfig = resolveMaintenanceConfigFromInput({
@@ -721,7 +751,11 @@ describe("SQLite historical session disk budget", () => {
         stop.abort(new Error("turn stopped"));
       },
     );
-    await settle();
+    await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+    });
 
     expect(evictionWarnSpy).not.toHaveBeenCalledWith(
       expect.stringContaining("disk-budget sweep failed"),

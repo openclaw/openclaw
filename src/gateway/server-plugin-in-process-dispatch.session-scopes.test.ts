@@ -123,6 +123,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
     permissionMode: "full",
     ...(source === "scheduled" ? {} : { createdActor: person }),
   });
+  expect(loadSessionEntry(parentScope)?.sessionId).toBe("scope-parent-session");
   const context = createDirectChatContext({
     getRuntimeConfig: () => cfg,
     loadGatewayModelCatalog: async () => [
@@ -332,6 +333,7 @@ describe("hosted session tool narrow scope projection", () => {
     withHostedCreation(async (fixture) => {
       const created = await fixture.create();
       expect(created.key).toBe(childKey);
+      expect(fixture.handler).toHaveBeenCalledOnce();
       expect(fixture.read()).toMatchObject({
         sessionId: created.sessionId,
         sandbox: "required",
@@ -373,6 +375,7 @@ describe("hosted session tool narrow scope projection", () => {
         );
         try {
           await Promise.race([entered.promise, request]);
+          expect(fixture.handler).toHaveBeenCalledOnce();
           fixture.revoke();
         } finally {
           release.resolve();
@@ -404,6 +407,7 @@ describe("hosted visible spawn permission inheritance", () => {
         if (typeof key !== "string") {
           throw new Error("visible spawn did not return its committed child");
         }
+        expect(fixture.handler).toHaveBeenCalledOnce();
         const child = fixture.read(key, agentId);
         expect(child).toMatchObject({
           parentSessionKey: parentKey,
@@ -440,7 +444,8 @@ describe("hosted visible spawn permission inheritance", () => {
 
 describe("independent session creation tool", () => {
   it("creates a guest-owned idle root with destination defaults and a bounded receipt", () =>
-    withHostedCreation(async ({ toolCreate, read, profileId }) => {
+    withHostedCreation(async ({ tool, toolCreate, read, profileId }) => {
+      expect(tool?.name).toBe("sessions_create");
       const result = await toolCreate({ label: "Independent investigation" });
       expect(result.details).toEqual({
         sessionKey: expect.any(String),
@@ -518,13 +523,18 @@ describe("independent session creation tool", () => {
       expect(result.details).not.toHaveProperty("runId");
     }));
 
-  it.each([{ message: 4 }, { group: null }])(
-    "rejects non-string arguments before dispatch: %j",
-    (args) =>
-      withHostedCreation(async ({ toolCreate, handler }) => {
-        await expect(toolCreate(args)).rejects.toThrow();
-        expect(handler).not.toHaveBeenCalled();
-      }),
+  it.each([
+    { message: 4 },
+    { fork: true },
+    { ownerId: "other" },
+    { role: "admin" },
+    { toolOverrides: {} },
+    { group: null },
+  ])("rejects invalid or identity/lineage-bearing arguments before dispatch: %j", (args) =>
+    withHostedCreation(async ({ toolCreate, handler }) => {
+      await expect(toolCreate(args)).rejects.toThrow();
+      expect(handler).not.toHaveBeenCalled();
+    }),
   );
 
   it("retains backend role-agent, permission, and workspace restrictions", () =>
@@ -543,8 +553,9 @@ describe("independent session creation tool", () => {
   it.each(["unidentified", "scheduled"] as const)(
     "does not turn a %s run into an operator creation grant",
     (source) =>
-      withHostedCreation(async ({ toolCreate, handler, keys }) => {
+      withHostedCreation(async ({ tool, toolCreate, handler, keys }) => {
         const before = await keys();
+        expect(tool.name).toBe("sessions_create");
         const refused = await toolCreate({ message: "Investigate" });
         expect(refused.details).toMatchObject({ gated: true });
         expect(handler).not.toHaveBeenCalled();

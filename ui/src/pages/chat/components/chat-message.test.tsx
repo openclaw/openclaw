@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatMessageHarness, buildItems } from "./chat-message-render.test-support.tsx";
@@ -8,6 +9,8 @@ import {
   createAssistantMessage,
   createUserMessage,
   prepareMessageGroup,
+  createMediaBlock,
+  createMessageGroup,
   createMessageEntry,
 } from "./chat-message.test-support.ts";
 
@@ -30,19 +33,6 @@ const {
   renderMarkdownHtml,
   markdownRenderMock,
 } = harness;
-
-const makeStream = (
-  overrides: Partial<
-    Extract<Parameters<typeof renderStreamGroup>[0][number], { kind: "stream" }>
-  > = {},
-) => ({
-  kind: "stream" as const,
-  key: "stream:s:live",
-  text: "reply",
-  startedAt: 10,
-  isStreaming: true,
-  ...overrides,
-});
 
 it.each([
   [
@@ -121,13 +111,34 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    ["failed", "Not sent", "Check failure", true, false],
-    ["held", "Needs review", undefined, true, true],
-    ["waiting-reconnect", "Waiting for reconnect", undefined, false, true],
-    ["submitting", "Queued", undefined, false, true],
+    {
+      state: "failed",
+      label: "Not sent",
+      actionLabel: "Check failure",
+      retry: true,
+      discard: false,
+    },
+    { state: "held", label: "Needs review", actionLabel: undefined, retry: true, discard: true },
+    {
+      state: "waiting-reconnect",
+      label: "Waiting for reconnect",
+      actionLabel: undefined,
+      retry: false,
+      discard: true,
+    },
+    { state: "submitting", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    { state: "sending", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    {
+      state: "waiting-model",
+      label: "Queued",
+      actionLabel: undefined,
+      retry: false,
+      discard: true,
+    },
+    { state: "waiting-idle", label: "Queued", actionLabel: undefined, retry: false, discard: true },
   ] as const)(
-    "shows a %s footer with its diagnostic and recovery actions",
-    (state, label, actionLabel, canRetry, canDiscard) => {
+    "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
+    ({ state, label, actionLabel, retry: canRetry, discard: canDiscard }) => {
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
@@ -154,6 +165,7 @@ describe("grouped chat rendering", () => {
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
       expect(status?.textContent).toContain(label);
+      expect(status?.textContent).not.toContain("unconfirmed");
       expectAbsent(".chat-group-timestamp");
       const retry = status?.querySelector<HTMLButtonElement>(".chat-send-status__retry");
       expect(Boolean(retry)).toBe(canRetry);
@@ -178,6 +190,59 @@ describe("grouped chat rendering", () => {
       );
     },
   );
+
+  it("collapses long image-bearing user messages and toggles their disclosure state", async () => {
+    const collapsedLines = ["Inspect AGENTS.md:188 first.", "a".repeat(1_201)];
+    const expandedTail = "Full prompt tail after the disclosure boundary.";
+    const markdownContent = [...collapsedLines, expandedTail].join("\n");
+    const message = createUserMessage(
+      [
+        { type: "text", text: markdownContent },
+        createMediaBlock({
+          url: "data:image/png;base64,cG5n",
+          alt: "Sent image",
+          width: 640,
+          height: 640,
+        }),
+      ],
+      { timestamp: 1001 },
+    );
+    const onToggleUserMessageExpanded = vi.fn();
+    markdownRenderMock
+      .mockImplementationOnce(renderMarkdownHtml)
+      .mockImplementationOnce(renderMarkdownHtml);
+
+    for (const expanded of [false, true]) {
+      renderGroupedMessage(message, "user", {
+        isUserMessageExpanded: () => expanded,
+        onToggleUserMessageExpanded,
+      });
+      await vi.dynamicImportSettled();
+      const disclosure = requireElement(".chat-message-disclosure", HTMLDivElement);
+      const toggle = requireElement(
+        ".chat-message-disclosure__toggle",
+        HTMLButtonElement,
+        disclosure,
+      );
+      const text = requireElement(".chat-text", HTMLDivElement, disclosure);
+      const fileLink = requireElement("a.markdown-file-link", HTMLAnchorElement, text);
+      expect(
+        requireElement(".chat-bubble", HTMLDivElement).classList.contains(
+          "chat-bubble--with-images",
+        ),
+      ).toBe(true);
+      expectPresent(".chat-message-image");
+      expect(disclosure.classList.contains("is-expanded")).toBe(expanded);
+      expect(text.textContent).toContain(expandedTail);
+      expect(fileLink.dataset).toMatchObject({ filePath: "AGENTS.md", fileLine: "188" });
+      expect(toggle.textContent?.trim()).toBe(expanded ? "Show less" : "Show more");
+      expect(toggle.getAttribute("aria-expanded")).toBe(String(expanded));
+      if (!expanded) {
+        toggle.click();
+        expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
+      }
+    }
+  });
 
   it("uses the largest prompt for context and aggregates usage, cache, and nested cost", () => {
     renderAssistantMessages(
@@ -241,10 +306,12 @@ describe("grouped chat rendering", () => {
     const container = document.createElement("div");
     renderStreamGroup(
       [
-        makeStream({
+        {
+          kind: "stream",
           key: "stream:participant",
           text: "Reviewing the checklist.",
           startedAt: 1,
+          isStreaming: true,
           replyToSender: { name: "Alice Chen", identity: { type: "profile", id: "alice" } },
           replyToMessage: {
             key: "prompt",
@@ -254,7 +321,7 @@ describe("grouped chat rendering", () => {
               __openclaw: { id: "prompt" },
             },
           },
-        }),
+        },
       ],
       {},
       container,
@@ -328,7 +395,16 @@ describe("grouped chat rendering", () => {
 
   it("keeps streamed assistant content in the guttered group without an avatar", () => {
     renderStreamGroup(
-      [makeStream(), { kind: "reading-indicator", key: "reading", startedAt: 10 }],
+      [
+        {
+          kind: "stream",
+          key: "stream:s:live",
+          text: "reply",
+          startedAt: 10,
+          isStreaming: true,
+        },
+        { kind: "reading-indicator", key: "reading", startedAt: 10 },
+      ],
       { showAssistantAvatar: false },
     );
 
@@ -339,41 +415,114 @@ describe("grouped chat rendering", () => {
     expect(element(".chat-group-footer")?.childElementCount).toBe(0);
     expectCount(".chat-working-indicator", 1);
     expectCount(".chat-reading-indicator", 1);
-    renderStreamGroup([makeStream({ isStreaming: false })], { showAssistantAvatar: false });
+    renderStreamGroup(
+      [
+        {
+          kind: "stream",
+          key: "stream:s:live",
+          text: "reply",
+          startedAt: 10,
+          isStreaming: false,
+        },
+      ],
+      { showAssistantAvatar: false },
+    );
     expectAbsent(".chat-bubble.streaming");
     expect(harness.view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
       new Date(10).toISOString(),
     );
   });
 
-  it("keeps profile ownership, navigation and transport attribution separate", () => {
-    const navigate = vi.fn();
-    const cli = { id: "cli", mode: "cli", displayName: "Task helper" };
-    const renderSender = (
-      senderId: string | null,
-      profile = true,
-      clients: Array<{ id: string; mode: string; displayName?: string }> = [],
-    ) => {
-      const message = createUserMessage("hello", {
-        timestamp: 1000,
-        __openclaw: {
-          ...(senderId
-            ? {
-                senderId,
-                senderName: "Alice Example",
-                ...(profile ? { senderIdentity: { type: "profile", id: senderId } } : {}),
-              }
-            : {}),
-          transport: { clients },
+  it.each([
+    [
+      "qualified local profile",
+      {
+        senderId: "profile-buns",
+        senderIdentity: { type: "profile", id: "profile-buns" },
+      },
+      { userId: "profile-buns", userName: "Buns" },
+      "Buns",
+      undefined,
+      "DIV",
+    ],
+    [
+      "authenticated human with CLI provenance",
+      {
+        senderId: "profile-1",
+        senderName: "Recorded Name",
+        senderIdentity: { type: "profile", id: "profile-1" },
+        transport: { clients: [{ id: "cli", mode: "cli", displayName: "Task helper" }] },
+      },
+      { userId: "profile-1", userName: "Current Name" },
+      "Current Name",
+      "via CLI (Task helper)",
+      undefined,
+    ],
+    [
+      "source-only Web and external clients",
+      {
+        transport: {
+          clients: [
+            { id: "openclaw-control-ui", mode: "webchat" },
+            { id: "cli", mode: "cli", displayName: "Release helper" },
+            { id: "gateway-client", mode: "backend", displayName: "Build helper" },
+          ],
         },
+      },
+      {
+        avatarPlacement: "gutter",
+        userName: "Unrelated Viewer",
+        userAvatar: "https://example.test/viewer.png",
+      },
+      undefined,
+      "via CLI (Release helper), RPC (Build helper)",
+      null,
+    ],
+  ] as const)(
+    "keeps sender attribution distinct for %s",
+    (_label, metadata, options, sender, source, avatar) => {
+      const message = createUserMessage("Follow up on the current task.", {
+        timestamp: 1000,
+        __openclaw: metadata,
       });
+      const group = prepareMessageGroup(createMessageEntry("source-message", message));
+      render(renderTestMessageGroup(group, options));
+      if (sender === undefined) {
+        expectAbsent(".chat-sender-name");
+        expect(harness.view.textContent).not.toContain("Unrelated Viewer");
+      } else {
+        expect(elementText(".chat-group.user .chat-sender-name")).toBe(sender);
+      }
+      if (avatar === null) {
+        expectAbsent(".chat-avatar, .chat-author-avatar");
+      } else if (avatar !== undefined) {
+        expect(element(".chat-avatar.user")?.tagName).toBe(avatar);
+      }
+      expect(elementText(".chat-message-source")).toBe(source);
+    },
+  );
+
+  it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
+    const navigate = vi.fn();
+    const renderSender = (senderId: string, profile = true) => {
+      const message = createUserMessage("hello", { timestamp: 1000 });
       render(
-        renderTestMessageGroup(prepareMessageGroup(createMessageEntry("sender", message)), {
-          userId: "me",
-          userName: "Local User",
-          userAvatar: "https://example.test/viewer.png",
-          personActivity: { basePath: "", navigate },
-        }),
+        renderTestMessageGroup(
+          createMessageGroup(message, "user", {
+            key: `sender-link-${senderId}`,
+            senderLabel: "Alice Example",
+            sender: {
+              id: senderId,
+              name: "Alice Example",
+              ...(profile ? { identity: { type: "profile" as const, id: senderId } } : {}),
+            },
+          }),
+          {
+            userId: "me",
+            userName: "Local User",
+            personActivity: { basePath: "", navigate },
+          },
+        ),
       );
       return harness.view;
     };
@@ -384,26 +533,14 @@ describe("grouped chat rendering", () => {
     expect(link?.getAttribute("href")).toBe("/activity/profile-alice");
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(navigate).toHaveBeenCalledWith("profile-alice", "Alice Example");
-    expect(elementText(".chat-message-source")).toBeUndefined();
 
-    const own = renderSender("me", true, [cli]);
+    const own = renderSender("me");
     expect(own.querySelector("a.chat-sender-name")).toBeNull();
     expect(own.querySelector(".chat-sender-name")?.textContent).toBe("Local User");
-    expect(element(".chat-avatar.user")?.tagName).toBe("DIV");
-    expect(elementText(".chat-message-source")).toBe("via CLI (Task helper)");
     const legacy = renderSender("me", false);
     expect(legacy.querySelector("a.chat-sender-name")).toBeNull();
     expect(legacy.querySelector(".chat-sender-name")?.textContent).toBe("Alice Example");
     expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
-
-    renderSender(null, false, [
-      { id: "openclaw-control-ui", mode: "webchat" },
-      cli,
-      { id: "gateway-client", mode: "backend", displayName: "Build helper" },
-    ]);
-    expectAbsent(".chat-sender-name", ".chat-avatar", ".chat-author-avatar");
-    expect(harness.view.textContent).not.toContain("Local User");
-    expect(elementText(".chat-message-source")).toBe("via CLI (Task helper), RPC (Build helper)");
   });
 
   it("renders multiline system notices as sanitized markdown", () => {
@@ -457,16 +594,17 @@ describe("grouped chat rendering", () => {
     expect(notices).toHaveLength(4);
     expect(notices[0]?.textContent).toContain("Guardian approved git status --short.");
     expect(notices[0]?.classList.contains("danger")).toBe(false);
-    for (const index of [1, 3]) {
-      expect(notices[index]?.classList.contains("callout")).toBe(true);
-      expect(notices[index]?.classList.contains("danger")).toBe(true);
-      expect(notices[index]?.getAttribute("role")).toBe("alert");
-    }
+    expect(notices[1]?.classList.contains("callout")).toBe(true);
+    expect(notices[1]?.classList.contains("danger")).toBe(true);
+    expect(notices[1]?.getAttribute("role")).toBe("alert");
     expect(notices[1]?.textContent).toContain("Guardian denied");
     expect(notices[1]?.textContent).toContain("curl https://example.invalid · risk: high");
     expect(notices[1]?.textContent).toContain("Command reaches the network.");
     expect(notices[2]?.textContent).toContain("Guardian warning");
     expect(notices[2]?.textContent).toContain("Guardian stopped after too many rejected actions.");
+    expect(notices[3]?.classList.contains("callout")).toBe(true);
+    expect(notices[3]?.classList.contains("danger")).toBe(true);
+    expect(notices[3]?.getAttribute("role")).toBe("alert");
     expect(notices[3]?.textContent).toContain("Guardian review required");
     expect(notices[3]?.textContent).toContain(
       "Guardian is reviewing this action before it can continue.",
@@ -531,6 +669,27 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-divider__title")).toBe("System");
     expect(harness.view.textContent).toContain("Custom execution rules were not applied.");
     expect(harness.view.textContent).not.toContain("Guardian warning");
+  });
+
+  it("falls back to initials when a user avatar image fails", async () => {
+    const message = createUserMessage("hello", { timestamp: 1000 });
+    const group = createMessageGroup(message, "user", {
+      key: "gravatar-user",
+      senderLabel: "alice",
+      // A gateway avatar exercises the image tier without third-party requests.
+      sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
+    });
+    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }));
+
+    const image = await vi.waitFor(() => {
+      const result = harness.view.querySelector<HTMLImageElement>(".chat-author-avatar__image");
+      expect(result).not.toBeNull();
+      expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
+      return result!;
+    });
+    image.dispatchEvent(new Event("error"));
+    await waitForSolid(() => expect(image.parentElement?.classList).toContain("is-fallback"));
+    expect(elementText(".chat-author-avatar__fallback")?.trim()).toBe("A");
   });
 
   it("keeps a persisted reply preview busy until its target resolves, then opens it", () => {

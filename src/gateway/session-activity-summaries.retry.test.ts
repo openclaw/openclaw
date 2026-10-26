@@ -1,6 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as utilityCompletion from "../agents/utility-completion.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
@@ -20,6 +21,7 @@ import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/ses
 import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -37,7 +39,6 @@ import {
   type SessionActivitySummaryService,
 } from "./session-activity-summaries.js";
 import {
-  activityRecapResult,
   preparedActivityRecapModel,
   recapRpc,
   seedRecapConversation,
@@ -50,7 +51,12 @@ import {
 import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import * as observerModel from "./session-observer-model.js";
 
-const result = activityRecapResult("Verified the change.");
+const result = {
+  text: "Verified the change.",
+  provider: "test",
+  model: "utility",
+  owner: { kind: "harness" as const, id: "test" },
+};
 const scope = (target: ActivitySummaryTarget) => ({
   agentId: target.agentId,
   sessionKey: target.key,
@@ -78,15 +84,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       entry: loadSessionEntryReadOnly(scope(target)),
       watermark: readSessionTranscriptWatermark(scope(target)),
     });
-  const savedSummary = (target: ActivitySummaryTarget) =>
-    loadSessionEntryReadOnly(scope(target))?.activitySummary;
-  const expectSummary = (
-    target: ActivitySummaryTarget,
-    expected: Partial<SessionActivitySummary>,
-  ) => expect(savedSummary(target)).toMatchObject(expected);
-  const prompt = (index = 0) => JSON.parse(complete.mock.calls[index]![0].prompt);
-  const expectStates = (targets: ActivitySummaryTarget[], state: string) =>
-    expect(targets.map((target) => view(target)?.state)).toEqual(targets.map(() => state));
   const publication = (
     target: ActivitySummaryTarget,
     ready = (summary: ReturnType<typeof view>) => summary?.state === "current",
@@ -136,10 +133,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       getConfig: () => cfg,
       onChanged: changed,
     });
-  const restart = async () => {
-    await service.dispose();
-    service = createService();
-  };
 
   const restartWithClock = async (onArmed: () => void) => {
     await service.dispose();
@@ -166,10 +159,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId }),
       }),
     );
-  const ensureCurrent = async (target: ActivitySummaryTarget) => {
-    await ensureRecap(target);
-    await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-  };
 
   beforeEach(async () => {
     testState = await createOpenClawTestState({ scenario: "minimal" });
@@ -222,6 +211,41 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
   });
 
+  it("refreshes the bounded recap source after a committed append", async () => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const initial = readActivitySummaryBatch({ scope: transcript })!;
+    expect(initial.snapshot.totalMessages).toBe(1);
+    expect(initial.page.events).toMatchObject([
+      { event: { message: { role: "user", content: "Request 1" } } },
+    ]);
+    const previous = {
+      version: 1 as const,
+      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+      text: result.text,
+      updatedAt: 1,
+      sessionId: transcript.sessionId,
+      ...initial.watermark,
+      leafEntryId: initial.snapshot.activeLeafEntryId ?? null,
+      coveredMessages: 1,
+      totalMessages: 1,
+      omittedContent: false,
+    };
+
+    await appendWork(target);
+
+    const appended = readActivitySummaryBatch({ scope: transcript, previous })!;
+    expect(appended.covered).toBe(1);
+    expect(appended.snapshot.totalMessages).toBe(2);
+    expect(appended.page.scannedMessages).toBe(1);
+    expect(appended.page.events).toMatchObject([
+      { event: { message: { role: "assistant", content: "Verified additional work." } } },
+    ]);
+    expect(appended.watermark.generation).toBe(initial.watermark.generation);
+    expect(appended.watermark.maxSeq).toBeGreaterThan(initial.watermark.maxSeq!);
+    expect(appended.omitted).toBe(false);
+  });
+
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
     const target = { agentId: "main", key: "agent:main:unindexed-recap" };
     const transcript = scope(target);
@@ -267,11 +291,11 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await ensureRecap(target);
     expect(await settled).toMatchObject({ state: "current", text: result.text });
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(prompt().messages).toEqual([
+    expect(JSON.parse(complete.mock.calls[0]![0].prompt).messages).toEqual([
       "user: Repair the import.",
       "assistant: Repaired the import.",
     ]);
-    expectSummary(target, { coveredMessages: 2 });
+    expect(loadSessionEntryReadOnly(transcript)?.activitySummary?.coveredMessages).toBe(2);
   });
 
   it("does not call the model after a grouped child becomes hidden during preparation", async () => {
@@ -307,6 +331,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     "counts only oversized recap messages through legacy migration (%s)",
     async (role) => {
       const notice = " (Some oversized messages were omitted.)";
+      const recap = result.text;
       const target = await addSession(0);
       await persistSessionTranscriptTurn(scope(target), {
         messages: [
@@ -342,30 +367,55 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         await settled.promise;
       };
       await refresh();
-      const expected = {
-        text: result.text + (role === "toolResult" ? "" : notice),
+      const summaryText = recap + (role === "toolResult" ? "" : notice);
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
+        text: summaryText,
         omittedContent: role !== "toolResult",
-      };
-      expectSummary(target, { ...expected, coveredMessages: 3 });
-      const legacy = { formatRevision: 2, omittedContent: true, text: result.text + notice };
-      await patchSummary(target, legacy);
-      await restart();
-      expect(view(target)).toMatchObject({ state: "stale", text: legacy.text });
+        coveredMessages: 3,
+      });
+      await patchSummary(target, { formatRevision: 2, omittedContent: true, text: recap + notice });
+      await service.dispose();
+      service = createService();
+      expect(view(target)).toMatchObject({ state: "stale", text: recap + notice });
       complete.mockClear();
       await refresh();
       expect(complete).not.toHaveBeenCalled();
-      expectSummary(target, {
-        ...expected,
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
         formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+        text: summaryText,
+        omittedContent: role !== "toolResult",
       });
+      if (role === "user") {
+        const summary = loadSessionEntryReadOnly(scope(target))!.activitySummary!;
+        const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        const countReads = (formatRevision: number) => {
+          reads.queries.length = 0;
+          readActivitySummaryBatch({
+            scope: scope(target),
+            previous: { ...summary, formatRevision },
+          });
+          return reads.queries.length;
+        };
+        try {
+          countReads(2);
+          countReads(ACTIVITY_SUMMARY_FORMAT_REVISION);
+          expect(countReads(ACTIVITY_SUMMARY_FORMAT_REVISION)).toBeLessThan(countReads(2));
+        } finally {
+          reads.restore();
+        }
+      }
       await appendMessage(target, "message-3", "message-2", "Outcome 3");
       await refresh();
-      expect(prompt()).toMatchObject({
-        previousRecap: result.text,
+      expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
+        previousRecap: recap,
         messages: ["assistant: Outcome 3"],
         omittedContent: role !== "toolResult",
       });
-      expectSummary(target, { ...expected, coveredMessages: 4 });
+      expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
+        text: summaryText,
+        omittedContent: role !== "toolResult",
+        coveredMessages: 4,
+      });
     },
   );
 
@@ -373,7 +423,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     "restyles old cached text once while retaining coverage (new work: %s)",
     async (newWork) => {
       const target = await addSession(1);
-      await ensureCurrent(target);
+      await ensureRecap(target);
+      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
       const oldText = "Ran internal_tool and checked the result. Waiting for review.";
       await patchSummary(target, { formatRevision: undefined, text: oldText });
       if (newWork) {
@@ -383,15 +434,18 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       const restyled = createDeferred<typeof result>();
       complete.mockImplementationOnce(() => restyled.promise);
       try {
-        expect(await ensureRecap(target)).toMatchObject({ state: "updating", text: oldText });
+        expect(await ensureRecap(target)).toMatchObject({
+          state: "updating",
+          text: oldText,
+        });
         await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
-        expect(prompt(1)).toMatchObject({
+        expect(JSON.parse(complete.mock.calls[1]![0].prompt)).toMatchObject({
           previousRecap: oldText,
           messages: newWork ? ["assistant: Verified additional work."] : [],
         });
         restyled.resolve({ ...result, text: "Verified the change. Waiting for review." });
         await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
-        expectSummary(target, {
+        expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
           version: 1,
           formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
           text: "Verified the change. Waiting for review.",
@@ -401,8 +455,10 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       } finally {
         restyled.resolve({ ...result, text: "Verified the change. Waiting for review." });
       }
-      await restart();
-      await ensureCurrent(target);
+      await service.dispose();
+      service = createService();
+      await ensureRecap(target);
+      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
       await ensureRecap(target);
       await service.dispose();
       expect(complete).toHaveBeenCalledTimes(2);
@@ -411,7 +467,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
 
   it("retains the previous recap on restyle failure without rebilling repeated requests", async () => {
     const target = await addSession(1);
-    await ensureCurrent(target);
+    await ensureRecap(target);
+    await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
     await patchSummary(target, { formatRevision: undefined });
     complete.mockRejectedValue(new Error("temporary failure"));
     await ensureRecap(target);
@@ -525,7 +582,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await ensureRecap(overflow);
     await withinTest(initial, signal);
     expect(view(overflow)?.state).toBe("current");
-    await restart();
+    await service.dispose();
+    service = createService();
     complete.mockClear();
     const first = createDeferred<typeof result>();
     const remaining = createDeferred<typeof result>();
@@ -572,11 +630,15 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       }
       await withinTest(slotsOccupied.promise, signal);
       expect(complete).toHaveBeenCalledTimes(2);
-      expectStates(targets.slice(0, 100), "updating");
+      expect(targets.slice(0, 100).map((target) => view(target)?.state)).toEqual(
+        Array.from({ length: 100 }, () => "updating"),
+      );
       for (let index = 100; index < 256; index += 20) {
         await ensure(targets.slice(index, Math.min(index + 20, 256)));
       }
-      expectStates(targets.slice(0, 256), "updating");
+      expect(targets.slice(0, 256).every((target) => view(target)?.state === "updating")).toBe(
+        true,
+      );
       await ensureOverflow("current");
       expect(view(overflow)?.state).toBe("current");
       await appendMessage(
@@ -593,7 +655,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       await ensureOverflow("updating");
       remaining.resolve(result);
       await withinTest(drained.promise, signal);
-      expectStates(targets, "current");
+      expect(targets.every((target) => view(target)?.state === "current")).toBe(true);
       expect(complete).toHaveBeenCalledTimes(257);
     } finally {
       const disposal = service.dispose();
@@ -713,11 +775,13 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       await withinTest(healthyReady.promise, signal);
       expect(view(healthy)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(3);
-      expectStates([first, next], "updating");
+      expect(view(first)?.state).toBe("updating");
+      expect(view(next)?.state).toBe("updating");
       release.resolve(result);
       await vi.advanceTimersByTimeAsync(30_000);
       await withinTest(retried.promise, signal);
-      expectStates([first, next], "current");
+      expect(view(first)?.state).toBe("current");
+      expect(view(next)?.state).toBe("current");
       const requests = complete.mock.calls.map(
         ([request]) => JSON.parse(request.prompt).messages[0],
       );

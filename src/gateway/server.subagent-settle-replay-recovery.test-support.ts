@@ -146,19 +146,6 @@ export async function runPublicSettleRecoveryCase(
   const append = (message: Parameters<typeof appendTranscriptMessage>[1]["message"]) =>
     appendTranscriptMessage(scope, { cwd: process.env.OPENCLAW_STATE_DIR!, message });
   const readWake = () => loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
-  const startCommand = async (command: AgentCommandOpts) => {
-    await context.prepareVisibleRequesterCommand(command);
-    await command.userTurnTranscriptRecorder!.persistApproved();
-    await context.markCommandExecutionStarted(command);
-  };
-  const expectQueuedRecovery = () =>
-    expect(context.recoverViaRpc()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        message:
-          "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
-      },
-    });
   const assertNoReplay = async () => {
     const replay = wake(sibling);
     expect(await replay.result).toBe(false);
@@ -398,7 +385,19 @@ export async function runPublicSettleRecoveryCase(
         expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
       ).settled;
       await expect(recover()).resolves.toMatchObject({ started: 0, settled: 1, failed: 0 });
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      expect(
+        agentCommandMock,
+        JSON.stringify(
+          agentCommandMock.mock.calls.map(([command]) => {
+            const input = command as AgentCommandOpts;
+            return {
+              sessionKey: input.sessionKey,
+              runId: input.runId,
+              provenance: input.inputProvenance,
+            };
+          }),
+        ),
+      ).toHaveBeenCalledTimes(1);
       assertSettled("interrupted");
       expect(JSON.stringify(transcript())).toContain(
         "could not resume after the Gateway restarted",
@@ -413,14 +412,28 @@ export async function runPublicSettleRecoveryCase(
       expect(loadSessionEntryReadOnly(scope)?.mainRestartRecovery).toBeDefined();
       await expect(recover()).resolves.toMatchObject({ started: 0, failed: 0 });
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      await expectQueuedRecovery();
+      await expect(context.recoverViaRpc()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          message:
+            "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+        },
+      });
       // A crash between input admission and backend start has the same private owner.
       await updateSessionEntry(scope, () => ({ status: undefined, abortedLastRun: false }));
-      await expectQueuedRecovery();
+      await expect(context.recoverViaRpc()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          message:
+            "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+        },
+      });
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
       agentCommandMock.mockImplementationOnce(async (input) => {
         const command = input as AgentCommandOpts;
-        expect(command).toMatchObject({ runId, message: privateMessage, privateCompletion: true });
+        expect(command.runId).toBe(runId);
+        expect(command.message).toBe(privateMessage);
+        expect(command.privateCompletion).toBe(true);
         expect(command.userTurnTranscriptRecorder?.getPendingInputMessage?.()).toEqual(
           acceptedPrivateInput,
         );
@@ -433,7 +446,9 @@ export async function runPublicSettleRecoveryCase(
         authority.assertCurrent();
         retainedPrivateAuthority = authority;
         releasePrivateAuthority = retain();
-        await startCommand(command);
+        await context.prepareVisibleRequesterCommand(command);
+        await command.userTurnTranscriptRecorder!.persistApproved();
+        await context.markCommandExecutionStarted(command);
         await publishTerminal(command, finalResult(), true);
         return finalResult();
       });
@@ -615,7 +630,9 @@ export async function runPublicSettleRecoveryCase(
         expect(retryRunIds).not.toContain(command.runId);
         retryRunIds.push(expectDefined(command.runId, "Public retry run"));
         expect(command.message).toContain("provide the missing result");
-        await startCommand(command);
+        await context.prepareVisibleRequesterCommand(command);
+        await command.userTurnTranscriptRecorder!.persistApproved();
+        await context.markCommandExecutionStarted(command);
         const result = { payloads: [], meta: { durationMs: 1 } };
         await publishTerminal(command, { payloads: result.payloads });
         return result;

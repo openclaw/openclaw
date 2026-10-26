@@ -1,7 +1,6 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -88,8 +87,10 @@ const trackPendingReads = () =>
     sql.startsWith("select ") && sql.includes('from "session_pending_inputs"') ? "pending" : null,
   );
 const appendResult = (messageId: string, appended = true) => ({ appended, messageId });
-const expectNative = (result: unknown, messageId: string, appended = true) =>
-  expect(result).toMatchObject({ ok: true, value: appendResult(messageId, appended) });
+const nativeResult = (messageId: string, appended = true) => ({
+  ok: true,
+  value: appendResult(messageId, appended),
+});
 const pendingPage = (inputs: SessionPendingInputReceipt[], state = "queued") => ({
   total: inputs.length,
   items: inputs.map(({ inputId: id, message }) => ({ id, state, message })),
@@ -129,13 +130,6 @@ const promote = (receipt: SessionPendingInputReceipt) => receipt.run(() => appen
 const promoteSync = (receipt: SessionPendingInputReceipt) =>
   receipt.run(() => appendSync(receipt.message));
 const anchor = (entryId: string) => readActiveAnchor({ ...scope(), entryId });
-const exclusive = <T>(operation: () => Promise<T>) =>
-  runExclusiveSqliteSessionWrite(
-    resolveSqliteScope(scope()),
-    operation,
-    "session.pending-input.stage",
-  );
-const exec = (sql: string) => withWriteAdmission(databaseOptions(), () => database().db.exec(sql));
 const bind = (sources: SessionPendingInputReceipt[], runId: string) => {
   const receipt = bindSessionPendingInputSources(sources, message(runId))!;
   receipts.push(receipt);
@@ -223,6 +217,7 @@ it("keeps accepted input outside the active transcript and applies its hook once
       prepareMessageAfterIdempotencyCheck: prepare,
     }),
   ).rejects.toThrow("already admitted");
+  expect(prepare).toHaveBeenCalledOnce();
   expect(await readTranscript()).toEqual(before);
   expect(await pendingInputs()).toMatchObject(pendingPage([receipt]));
   await expect(stage("queued", { message: message("queued", "Changed input") })).rejects.toThrow(
@@ -264,6 +259,7 @@ it("keeps requester facts with exact accepted custody through projection edits a
   expect(readSessionPendingInputRequesterOrigin(receipt)).toMatchObject(requesterOrigin);
   const captured = readSessionPendingInputRequesterOrigin(receipt);
   expect(Object.isFrozen(captured)).toBe(true);
+  expect(captured?.sessionKey).toBe(requesterOrigin.sessionKey);
   expect(readSessionPendingInputRequesterOrigin({ ...receipt })).toBeUndefined();
   receipt.finish("interrupted");
   await receipt.settled?.();
@@ -385,9 +381,15 @@ it.each([
         message: receipt.message,
       });
       const committed = await readTranscript();
-      expect(committed.filter((event) => asOptionalRecord(event)?.type === "message")).toEqual([
-        expect.objectContaining({ id: receipt.inputId, message: receipt.message }),
-      ]);
+      expect(
+        committed.filter(
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "message",
+        ),
+      ).toEqual([expect.objectContaining({ id: receipt.inputId, message: receipt.message })]);
       expect(await promote(renewed)).toMatchObject(appendResult(receipt.inputId, false));
       expect(await readTranscript()).toEqual(committed);
     }
@@ -411,30 +413,34 @@ it("rolls transcript promotion and custody consumption back together", async () 
 it("moves transcript custody only after an authorized relocation commits", async () => {
   const receipt = await stage("relocation");
   await promote(receipt);
-  const { copy, move } = createRelocation(receipt);
+  const { copy: appendCopy, move } = createRelocation(receipt);
 
-  expectNative(
+  expect(
     receipt.run(() =>
       appendSync(receipt.message, {
         eventId: "unauthorized-copy",
         idempotencyLookup: "caller-checked",
       }),
     ),
-    receipt.inputId,
-    false,
-  );
+  ).toMatchObject(nativeResult(receipt.inputId, false));
 
-  await exec(
-    "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
-  );
+  await withWriteAdmission(databaseOptions(), () => {
+    database().db.exec(
+      "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
+    );
+  });
   expect(() => move(receipt.inputId, "relocation-copy")).toThrow("relocation failed");
-  await exec("DROP TRIGGER reject_relocation");
+  await withWriteAdmission(databaseOptions(), () => {
+    database().db.exec("DROP TRIGGER reject_relocation");
+  });
   expect(await promote(receipt)).toMatchObject(appendResult(receipt.inputId, false));
 
-  expectNative(move(receipt.inputId, "relocated-user"), "relocated-user");
+  expect(move(receipt.inputId, "relocated-user")).toMatchObject(nativeResult("relocated-user"));
   expect(() => move(receipt.inputId, "stale-source-copy")).toThrow("does not match");
   receipt.finish("cancelled");
-  expectNative(copy("relocated-user", "closed-owner-copy"), "closed-owner-copy");
+  expect(appendCopy("relocated-user", "closed-owner-copy")).toMatchObject(
+    nativeResult("closed-owner-copy"),
+  );
   await expect(withPersistence(receipt, () => append(receipt.message))).rejects.toThrow(
     "conflicts with the admitted message",
   );
@@ -459,7 +465,9 @@ it("publishes committed relocation before fallible post-commit observers", async
       move(receipt.inputId, "relocated-before-observer");
     }, databaseOptions()),
   ).not.toThrow();
-  expect(errorLog).toHaveBeenCalledOnce();
+  expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("SQLite post-commit notification failed"),
+  );
 
   expect(() => move(receipt.inputId, "stale-source-after-observer")).toThrow("does not match");
   expect(promoteSync(receipt)).toMatchObject({ ok: true, value: { appended: false } });
@@ -470,35 +478,43 @@ it("stages repeated relocation through savepoints and restores it on rollback", 
   await promote(receipt);
   const options = databaseOptions();
   await waitForSessionTranscriptIndexReconcile(options);
-  const { copy, move } = createRelocation(receipt);
+  const { copy: appendCopy, move } = createRelocation(receipt);
 
-  await exclusive(async () => {
-    expect(() =>
+  await runExclusiveSqliteSessionWrite(
+    resolveSqliteScope(scope()),
+    async () => {
+      expect(() =>
+        writeTransaction(() => {
+          move(receipt.inputId, "rolled-back-outer");
+          throw new Error("outer rollback");
+        }, options),
+      ).toThrow("outer rollback");
+
       writeTransaction(() => {
-        move(receipt.inputId, "rolled-back-outer");
-        throw new Error("outer rollback");
-      }, options),
-    ).toThrow("outer rollback");
-
-    writeTransaction(() => {
-      receipt.run(() => {
-        expectNative(copy(receipt.inputId, "first-copy"), "first-copy");
-        expect(() =>
-          writeTransaction(() => {
-            copy("first-copy", "rolled-back-savepoint");
-            throw new Error("savepoint rollback");
-          }, options),
-        ).toThrow("savepoint rollback");
-        expectNative(copy("first-copy", "final-copy"), "final-copy");
-      });
-    }, options);
-  });
+        receipt.run(() => {
+          expect(appendCopy(receipt.inputId, "first-savepoint-copy")).toMatchObject(
+            nativeResult("first-savepoint-copy"),
+          );
+          expect(() =>
+            writeTransaction(() => {
+              appendCopy("first-savepoint-copy", "rolled-back-savepoint");
+              throw new Error("savepoint rollback");
+            }, options),
+          ).toThrow("savepoint rollback");
+          expect(appendCopy("first-savepoint-copy", "final-savepoint-copy")).toMatchObject(
+            nativeResult("final-savepoint-copy"),
+          );
+        });
+      }, options);
+    },
+    "session.pending-input.stage",
+  );
 
   for (const eventId of ["rolled-back-outer", "rolled-back-savepoint"]) {
     expect(await readTranscript()).not.toContainEqual(expect.objectContaining({ id: eventId }));
   }
   await withWriteAdmission(options, () => {
-    expect(() => move("first-copy", "stale-source")).toThrow("does not match");
+    expect(() => move("first-savepoint-copy", "stale-savepoint-source")).toThrow("does not match");
     expect(promoteSync(receipt)).toMatchObject({ ok: true, value: { appended: false } });
   });
 });
@@ -517,13 +533,12 @@ it("rejects a split-cursor replay before and after projection reconciliation", a
       appendMode: "side",
     }),
   ).toMatchObject({ ok: true, value: true });
-  expectNative(
+  expect(
     appendSync(message("continued", "Continued visible history"), {
       eventId: "continued",
       parentId: receipt.inputId,
     }),
-    "continued",
-  );
+  ).toMatchObject(nativeResult("continued"));
 
   const replay = () => promoteSync(receipt);
   expect(anchor(receipt.inputId)).toBeUndefined();
@@ -537,7 +552,13 @@ it("promotes a queued input with its own custody after another receipt releases 
   const first = await stage("writer-first");
   const second = await stage("writer-second");
   const gate = createDeferred();
-  const held = first.run(() => exclusive(async () => gate.promise));
+  const held = first.run(() =>
+    runExclusiveSqliteSessionWrite(
+      resolveSqliteScope(scope()),
+      async () => gate.promise,
+      "session.pending-input.stage",
+    ),
+  );
   const queued = promote(second);
   gate.resolve();
   await held;
@@ -587,35 +608,43 @@ it("revalidates every collected source after an await and rejects copied receipt
 });
 
 it("binds lazy recorder collection to approved sources and reports consumed source retry without execution", async () => {
-  type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
   const target = { ...scope(), sessionEntry: undefined, config: {} };
-  const recorder = (
-    options: Omit<Parameters<typeof createUserTurnTranscriptRecorder>[0], "target">,
-  ) => createUserTurnTranscriptRecorder({ target, ...options });
-  const approve = (entry: Recorder) =>
-    entry.stageApproved?.({ runId: "recorder-source", assertCurrent: () => {} });
   const hook = vi.fn(({ message: input }: { message: PersistedUserTurnMessage }) => ({
     ...input,
     content: "Approved source",
   }));
-  const source = recorder({
+  const source = createUserTurnTranscriptRecorder({
+    target,
     message: message("recorder-source", "Original source"),
     beforeMessageWrite: hook,
   });
-  expect(await approve(source)).toBe(true);
-  const aggregate = recorder({
+  expect(await source.stageApproved?.({ runId: "recorder-source", assertCurrent: () => {} })).toBe(
+    true,
+  );
+  const aggregate = createUserTurnTranscriptRecorder({
+    target,
     input: { text: "Unresolved collection" },
-    resolveInput: async () => ({
-      text: `Collected: ${(await source.resolveMessage())?.content}`,
-      idempotencyKey: "recorder-aggregate:user",
-      timestamp: 100,
-    }),
+    resolveInput: async () => {
+      const content = (await source.resolveMessage())?.content;
+      if (typeof content !== "string") {
+        throw new Error("Expected approved text input");
+      }
+      return {
+        text: `Collected: ${content}`,
+        idempotencyKey: "recorder-aggregate:user",
+        timestamp: 100,
+      };
+    },
     pendingInputSources: [source],
     beforeMessageWrite: hook,
   });
   try {
-    const unstaged = recorder({ message: message("unstaged-source") });
-    const mixed = recorder({
+    const unstaged = createUserTurnTranscriptRecorder({
+      target,
+      message: message("unstaged-source"),
+    });
+    const mixed = createUserTurnTranscriptRecorder({
+      target,
       message: message("mixed-aggregate"),
       pendingInputSources: [source, unstaged],
       onPersistenceError: () => {},
@@ -630,13 +659,16 @@ it("binds lazy recorder collection to approved sources and reports consumed sour
     });
     expect(hook).toHaveBeenCalledOnce();
     expect((await pendingInputs()).total).toBe(0);
-    const duplicate = recorder({
+    const duplicate = createUserTurnTranscriptRecorder({
+      target,
       message: message("recorder-source", "Original source"),
       assertOriginalInputCommit: () => {
         throw new Error("Consumed input no longer belongs to its original source");
       },
     });
-    expect(await approve(duplicate)).toBe(false);
+    expect(
+      await duplicate.stageApproved?.({ runId: "recorder-source", assertCurrent: () => {} }),
+    ).toBe(false);
     expect(duplicate.isPendingInputConsumed?.()).toBe(true);
     expect(() =>
       duplicate.withPendingInput?.(() => {
@@ -913,11 +945,15 @@ it("reads retained inputs off-thread and paginates with stable cursors while ano
   await promote(third);
   const older = await pendingInputs({ limit: 2, before: page.nextBefore });
   expect(older.items.map((input) => input.id)).toEqual([first.inputId]);
-  for (const changed of [{ sessionId: "other-session" }, { sessionKey: "agent:main:other" }]) {
-    for (const idempotencyKey of ["first:user", "third:user"]) {
-      expect(
-        await readSessionSubmittedInput({ ...scope(), ...changed }, idempotencyKey),
-      ).toBeUndefined();
-    }
+  for (const idempotencyKey of ["first:user", "third:user"]) {
+    expect(
+      await readSessionSubmittedInput({ ...scope(), sessionId: "other-session" }, idempotencyKey),
+    ).toBeUndefined();
+    expect(
+      await readSessionSubmittedInput(
+        { ...scope(), sessionKey: "agent:main:other" },
+        idempotencyKey,
+      ),
+    ).toBeUndefined();
   }
 });

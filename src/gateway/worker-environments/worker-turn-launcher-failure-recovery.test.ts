@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -13,6 +14,10 @@ import { createReplyOperation, type ReplyOperation } from "../../sessions/sessio
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
+import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { journalOwner } from "./placement-suite.test-support.js";
 import {
@@ -32,7 +37,7 @@ import {
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
-import { workspaceFile, workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -118,8 +123,9 @@ describe("worker turn launcher failure recovery", () => {
       const environment = fx.attachedEnvironment();
       assert(environment.bootstrapReceipt);
       environment.bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
+      const recovered = vi.fn(() => failPendingWorkspace(loss));
       const provider = createLauncher({
-        reconcileActivePlacement: () => failPendingWorkspace(loss),
+        reconcileActivePlacement: recovered,
         environments: {
           ...fx.unusedEnvironments(),
           get: () => environment,
@@ -151,6 +157,7 @@ describe("worker turn launcher failure recovery", () => {
       });
       const attempt = executeTurn(provider, "node-loss", vi.fn());
       await expect(attempt).rejects.toBeInstanceOf(WorkerNodeLostError);
+      expect(recovered).toHaveBeenCalledOnce();
       expectPlacement({ state: "failed", turnClaim: null });
     },
   );
@@ -286,12 +293,40 @@ describe("worker turn launcher failure recovery", () => {
     }
   });
 
-  it("records bounded launch and cancellation diagnostics after held cleanup", async () => {
+  it("publishes bounded launch and cancellation diagnostics after held cleanup", async () => {
     const claim = await claimActivePlacement("rejected-launch-claim", "rejected-launch-run");
     const secret = "synthetic-worker-recovery-secret";
     const launchDiagnosis = "node worker supervisor worker.launch.v1 failed: invalid descriptor";
     const cancellationDiagnosis =
       "node worker cancellation did not produce a terminal receipt before its deadline";
+    const cfg = {
+      session: { store: fx.sessionTarget.storePath },
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "unit-test/model", utilityModel: "" },
+      },
+    };
+    const projection = await createSessionRowProjection({
+      cfg,
+      modelCatalog: [],
+      placementFactsReader: fx.placements,
+    });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const respond = vi.fn();
+    const expectDescribedPlacement = async (placement: object) => {
+      respond.mockClear();
+      await sessionByKeyReadHandlers["sessions.describe"]!({
+        req: { type: "req", id: "failed-worker-placement", method: "sessions.describe" },
+        params: { key: fx.SESSION_KEY },
+        client: null,
+        context,
+        isWebchatConnect: () => false,
+        respond,
+      });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({ placement: expect.objectContaining(placement) }),
+      });
+    };
     const { teardown, cleanup } = heldFailure(
       claim,
       new AggregateError(
@@ -308,7 +343,7 @@ describe("worker turn launcher failure recovery", () => {
         cleanup,
         "Failed worker did not enter teardown",
       );
-      expectPlacement({ state: "draining" });
+      await expectDescribedPlacement({ state: "draining" });
       teardown.finish.resolve();
       await cleanup;
       const failed = fx.placements.get(fx.SESSION_ID);
@@ -319,9 +354,11 @@ describe("worker turn launcher failure recovery", () => {
       expect(failed?.recoveryError).not.toContain("\n");
       expect(failed?.recoveryError?.length).toBeLessThanOrEqual(1_024);
       expect(failed?.terminalReason).toBe(failed?.recoveryError);
+      await expectDescribedPlacement({ state: "failed", recoveryError: failed?.recoveryError });
     } finally {
       teardown.finish.resolve();
       await cleanup;
+      projection.dispose();
     }
   });
 
@@ -396,7 +433,7 @@ describe("worker turn launcher failure recovery", () => {
       syncWorkspace: vi.fn(),
       reconcileWorkspace: vi.fn(),
     });
-    const { stopTunnel, destroy, acknowledgeCredentialDelivery } = environments;
+    const { startTunnel, stopTunnel, destroy, acknowledgeCredentialDelivery } = environments;
     const persistAbandonedPartial = vi.fn(async () => {});
     const provider = createLauncher({
       environments,
@@ -406,6 +443,7 @@ describe("worker turn launcher failure recovery", () => {
     await expect(executeTurn(provider, "run-replay-local-fallback", runLocal)).rejects.toThrow(
       WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
     );
+    expect(startTunnel).toHaveBeenCalledOnce();
     expectUncalled(
       launchTurn,
       persistAbandonedPartial,
@@ -422,12 +460,19 @@ describe("worker turn launcher failure recovery", () => {
     const active = activePlacement();
     const owner = journalOwner(active);
     const basePack = Buffer.from("conflicted journal snapshot");
+    const fileEntry = (text: string) => ({
+      path: "blocked.txt",
+      type: "file" as const,
+      mode: 0o644,
+      size: Buffer.byteLength(text),
+      sha256: createHash("sha256").update(text).digest("hex"),
+    });
     await fx.placements.beginWorkspaceReconciliation(
       owner,
       workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"f".repeat(64)}`, {
         temporaryNonce: "e".repeat(32),
-        baseEntries: [workspaceFile("blocked.txt", "base\n")],
-        appliedEntries: [workspaceFile("blocked.txt", "worker\n")],
+        baseEntries: [fileEntry("base\n")],
+        appliedEntries: [fileEntry("worker\n")],
         baseTree: "d".repeat(40),
         basePack,
       }),
@@ -466,6 +511,7 @@ describe("worker turn launcher failure recovery", () => {
     "keeps placement active after a runner rejection (dispatched: %s)",
     async (dispatched, error, expectedMessage) => {
       await fx.seedActivePlacement();
+      const startReconcile = vi.spyOn(fx.placements, "startReconcile");
       const environments = workerEnvironment({
         launchTurn: vi.fn(async (request) => {
           if (dispatched) {
@@ -483,7 +529,7 @@ describe("worker turn launcher failure recovery", () => {
       expect(runLocal).not.toHaveBeenCalled();
       expectPlacement({ state: "active", turnClaim: null });
       expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
-      expectUncalled(stopTunnel, destroy);
+      expectUncalled(stopTunnel, destroy, startReconcile);
     },
   );
 

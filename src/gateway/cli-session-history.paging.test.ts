@@ -24,20 +24,22 @@ import {
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import {
+  claudeUser,
   cliMeta,
   LEGACY_EXEC_COMPLETION_PROMPT,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
-import {
-  historyParams as baseHistoryParams,
-  historyTarget,
-} from "./session-history-events.test-support.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
 
 async function historyFixture(state: OpenClawTestState, nativeId: string, sessionId: string) {
-  const scope = historyTarget(state, sessionId);
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+  };
   const entry = {
     sessionId,
     updatedAt: 1,
@@ -106,12 +108,18 @@ function historyParams(
   max = 10,
 ): ChatHistoryPageParams {
   return {
-    ...baseHistoryParams(scope, entry),
+    entry,
     provider: "claude-cli",
+    sessionId: scope.sessionId,
+    storePath: scope.storePath,
+    sessionAgentId: scope.agentId,
+    canonicalKey: scope.sessionKey,
     cliHistoryHomeDir: homeDir,
     max,
     maxHistoryBytes: 64 * 1024,
     effectiveMaxChars: 4096,
+    offset: undefined,
+    messageId: undefined,
   };
 }
 
@@ -145,6 +153,60 @@ function readPreparedPage(
     deferProfileDisplay: true,
   });
 }
+
+it("pages past native interrupts without consuming an identical canonical human turn", async () => {
+  await withPagingHistory("cli-interrupts", async (fixture) => {
+    const { scope, entry, readers, filePath, homeDir } = fixture;
+    const text = "[Request interrupted by user]";
+    await fixture.setEvents([local("human", null, text, 2_000, "user")]);
+    const userRow = (uuid: string, content: unknown, timestamp: number, promptSource?: string) =>
+      JSON.stringify(
+        claudeUser(content, {
+          uuid,
+          timestamp: new Date(timestamp).toISOString(),
+          ...(promptSource ? { promptSource } : {}),
+        }),
+      );
+    await fs.writeFile(
+      filePath,
+      [
+        native("before", "Earlier reply", 1_000),
+        userRow("interrupt", [{ type: "text", text }], 1_500),
+        userRow("native-human", text, 2_001, "sdk"),
+        native("after", "Later reply", 3_000),
+        userRow(
+          "tool-interrupt",
+          [{ type: "text", text: "[Request interrupted by user for tool use]" }],
+          3_500,
+        ),
+        userRow("latest", text, 4_000),
+      ].join("\n"),
+    );
+    await fixture.owner.run(fixture.target.database, async () => {
+      const params = historyParams({ scope, entry }, homeDir, 2);
+      await withCliReader(params, readers, async (cli) => {
+        const latest = await readPreparedPage(params, cli);
+        const older = await readPreparedPage({ ...params, offset: 2 }, cli);
+        expect(latest.messages.map(readChatHistoryMessageId)).toEqual(["after", "latest"]);
+        expect(older.messages).toMatchObject([
+          { content: "Earlier reply", __openclaw: { id: "before" } },
+          { content: text, __openclaw: { id: "human", externalId: "native-human" } },
+        ]);
+        expect([...older.messages, ...latest.messages].map(cli.sequence)).toEqual([1, 2, 3, 4]);
+        const raw = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+          maxMessages: 10,
+        });
+        expect(raw.totalMessages).toBe(4);
+        expect(raw.messages.map(readChatHistoryMessageId)).toEqual([
+          "before",
+          "human",
+          "after",
+          "latest",
+        ]);
+      });
+    });
+  });
+});
 
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
   await withPagingHistory("cli-prefix", async (fixture) => {
@@ -327,53 +389,80 @@ it("observes newly available reset archives and refuses changed archive bodies u
 });
 
 it.each([
-  ["\n", true],
-  ["\r\n", true],
-  ["\n", false],
-] as const)(
-  "matches original native text before cleaning imports (newline=%j, frame=%s)",
-  async (newline, framed) => {
-    await withPagingHistory("cli-generated-prefixes", async (fixture) => {
-      const { scope, entry, readers } = fixture;
-      const note = buildCliSessionDriftNote(["prompt-tools"]);
-      const hint =
-        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
-      const context =
-        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
-      const prefix = `${framed ? `${note}\n\n${context}` : ""}${hint}`.replaceAll("\n", newline);
-      const literal = `${prefix}hello`;
-      const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
-      await fixture.setEvents([local("literal", null, literal, 1_000, "user")]);
-      await fs.writeFile(
-        fixture.filePath,
-        [
-          native("native-literal", literal, 1_001, "user"),
-          native("native-unmatched", `${prefix}${events}only in the native file`, 2_000, "user"),
-          native("native-exec", `${events}${LEGACY_EXEC_COMPLETION_PROMPT}`, 3_000, "user"),
-        ].join("\n"),
+  "resume",
+  "legacy hint",
+  "legacy context",
+  "legacy resume",
+  "legacy hint CRLF",
+  "legacy context CRLF",
+])("matches original native text and cleans unmatched imports with %s", async (decoration) => {
+  const kind = decoration.replace(" CRLF", "");
+  await withPagingHistory("cli-generated-prefixes", async (fixture) => {
+    const { scope, entry, readers } = fixture;
+    const note = buildCliSessionDriftNote(["prompt-tools"]);
+    const hint =
+      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
+    const context =
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
+    const prefix = (
+      kind === "resume"
+        ? `${note}\n\n`
+        : kind === "legacy hint"
+          ? hint
+          : kind === "legacy context"
+            ? context + hint
+            : `${note}\n\n${context}${hint}`
+    ).replaceAll("\n", decoration.endsWith("CRLF") ? "\r\n" : "\n");
+    const literal = `${prefix}hello`;
+    const plain =
+      kind === "legacy context"
+        ? context.replace("}}", '},"requester_profile_hint":"current"}') + "hello"
+        : "hello";
+    const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
+    await fixture.setEvents([
+      local("plain", null, plain, 1_000, "user"),
+      local("literal", "plain", literal, 2_000, "user"),
+      local("question", "literal", "real question", 3_000, "user"),
+    ]);
+    const nativeUser = (uuid: string, content: string, timestamp: number) =>
+      native(uuid, content, timestamp, "user");
+    await fs.writeFile(
+      fixture.filePath,
+      [
+        nativeUser("native-literal", literal, 1_001),
+        nativeUser(
+          "native-plain",
+          kind === "legacy context" ? `${prefix}${events}hello` : "hello",
+          2_001,
+        ),
+        nativeUser("native-question", `${prefix}${events}real question`, 3_001),
+        nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
+        nativeUser("native-exec", `${events}${LEGACY_EXEC_COMPLETION_PROMPT}`, 5_000),
+      ].join("\n"),
+    );
+    await fixture.owner.run(fixture.target.database, async () => {
+      await withCliReader(
+        historyParams({ scope, entry }, fixture.homeDir),
+        readers,
+        async (cli) => {
+          const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+            maxMessages: 10,
+          });
+          expect(page.messages).toMatchObject([
+            { content: plain, __openclaw: { id: "plain", externalId: "native-plain" } },
+            { content: literal, __openclaw: { id: "literal", externalId: "native-literal" } },
+            { content: "real question", __openclaw: { id: "question" } },
+            {
+              content: "only in the native file",
+              __openclaw: { externalId: "native-unmatched" },
+            },
+            { display: false, provenance: { kind: "internal_system", sourceTool: "exec" } },
+          ]);
+        },
       );
-      await fixture.owner.run(fixture.target.database, async () => {
-        await withCliReader(
-          historyParams({ scope, entry }, fixture.homeDir),
-          readers,
-          async (cli) => {
-            const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
-              maxMessages: 10,
-            });
-            expect(page.messages).toMatchObject([
-              { content: literal, __openclaw: { id: "literal", externalId: "native-literal" } },
-              {
-                content: "only in the native file",
-                __openclaw: { externalId: "native-unmatched" },
-              },
-              { display: false, provenance: { kind: "internal_system", sourceTool: "exec" } },
-            ]);
-          },
-        );
-      });
     });
-  },
-);
+  });
+});
 
 it("pages merged incognito CLI history without allocating SQLite", async () => {
   await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {

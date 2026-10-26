@@ -5,6 +5,7 @@ import {
   markOrphanedMainSessionForRecovery,
   markRestartAbortedMainSessions,
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import {
   createAgentRunDirectAbortError,
@@ -353,6 +354,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
       runId: "resumed-run",
       status: "ok",
     });
+    const recoveryLog = vi.spyOn(mainSessionRecoveryLog, "info");
     try {
       const harness = createAgentEventTestHarness();
       await shutdown(harness, resolveGatewayContext);
@@ -398,6 +400,9 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
         expect(transcript.match(/Send a new authenticated message to continue/g)).toHaveLength(1);
+        expect(recoveryLog).toHaveBeenCalledWith(
+          expect.stringContaining('"reason":"delegated_authority_unavailable"'),
+        );
         rotateAgentEventLifecycleGeneration();
         expect(
           await markOrphanedMainSessionForRecovery({ target, expectedSessionId: sessionId, cfg }),
@@ -418,6 +423,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         queued.cleanup();
       }
       admission.release();
+      recoveryLog.mockRestore();
     }
   },
 );
@@ -883,6 +889,7 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
         code: "OPENCLAW_RESTART_ABORT",
       });
     }
+    expect.soft(read(childKey).status).toBe("interrupted");
     expect(hasLiveAgentRunContext(`${childKey}:run`)).toBe(false);
     const active = resolveVisibleActiveSessionRunState({
       storePath,

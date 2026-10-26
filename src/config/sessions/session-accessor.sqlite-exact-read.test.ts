@@ -1,7 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -16,7 +15,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   listSessionEntriesReadOnly as listEntries,
   loadExactSessionEntryReadOnly as readEntry,
@@ -49,37 +47,13 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture(projection: "full" | "list" = "full") {
+function fixture() {
   const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-") };
-  const scope = { agentId: "main", env, projection };
-  let opened: OpenClawAgentDatabase | undefined;
-  const database = () => (opened ??= openDatabase(scope));
-  const put = (
-    sessionKey: string,
-    entry: Parameters<typeof putEntry>[1] = sessionEntry(sessionKey),
-  ) => putEntry({ ...scope, sessionKey }, entry);
-  const read = (sessionKey: string, selected = projection) =>
-    readEntry({ ...scope, sessionKey, projection: selected });
-  const retain = (sessionKey: string) =>
-    writeTransaction((db) => {
-      ensureTranscriptSessionRoot(db, { ...scope, sessionKey, sessionId: sessionKey }, 1);
-    }, scope);
-  const participant = (sessionKey: string, id = sessionKey) =>
-    recordParticipant(
-      { ...scope, sessionKey },
-      { identity: { type: "profile", id }, promptedAt: 1 },
-    );
-  const rows = (keys: string[], selected = projection, options?: Parameters<typeof readRows>[4]) =>
-    readRows(database(), keys, selected, "canonical", options);
-  const set = (key: string, column: string, value: string | number) =>
-    database()
-      .db.prepare(`UPDATE session_nodes SET ${column} = ? WHERE session_key = ?`)
-      .run(value, key);
-  return { scope, put, read, retain, participant, rows, set, database };
+  return { agentId: "main", env };
 }
 
 const sessionFixture = (sessionId: string) => ({
-  ...fixture().scope,
+  ...fixture(),
   sessionKey: `agent:main:${sessionId}`,
 });
 
@@ -88,15 +62,6 @@ const sessionEntry = (sessionId: string, label?: string) => ({
   updatedAt: 1,
   ...(label === undefined ? {} : { label }),
 });
-
-function readError(read: () => unknown) {
-  try {
-    read();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected a failed session read");
-}
 
 describe("exact SQLite session reads", () => {
   it("checks captured database birthtime even without an open owner handle", () => {
@@ -175,22 +140,27 @@ describe("exact SQLite session reads", () => {
   it.each(["current_session_id", "updated_at", "malformed", "delivery", "lineage"] as const)(
     "keeps per-key %s errors after an intervening list reload",
     (corruption) => {
-      const { scope, put, read, rows, set } = fixture("list");
+      const scope = { ...fixture(), projection: "list" as const };
       const healthy = "agent:main:healthy";
       const broken = "agent:main:matrix:group:!room:example.org";
       for (const sessionKey of [healthy, broken]) {
-        put(sessionKey);
+        putEntry({ ...scope, sessionKey }, sessionEntry(sessionKey));
       }
       listEntries(scope);
+      const database = openDatabase(scope);
       if (corruption === "lineage") {
-        set(broken, "parent_session_key", "agent:main:divergent");
-        const readRow = rows([healthy, broken]);
+        database.db
+          .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+          .run("agent:main:divergent", broken);
+        const readRow = readRows(database, [healthy, broken], "list", "canonical");
         expect(readRow(healthy)?.entry.sessionId).toBe(healthy);
         expect(() => readRow(broken)).toThrow("invalid persisted session row");
         return;
       }
       if (corruption === "current_session_id" || corruption === "updated_at") {
-        set(broken, corruption, corruption === "current_session_id" ? "mismatched" : 2);
+        database.db
+          .prepare(`UPDATE session_nodes SET ${corruption} = ? WHERE session_key = ?`)
+          .run(corruption === "current_session_id" ? "mismatched" : 2, broken);
       } else {
         const json =
           corruption === "malformed"
@@ -198,20 +168,39 @@ describe("exact SQLite session reads", () => {
             : JSON.stringify({
                 sessionId: broken,
                 updatedAt: 1,
-                delivery: normalizeSessionDeliveryState({
+                delivery: {
+                  kind: "external",
+                  route: {
+                    channel: "matrix",
+                    accountId: "work",
+                    target: { to: "!Room:example.org" },
+                  },
                   context: { channel: "matrix", accountId: "work", to: "!Room:example.org" },
-                }),
+                  origin: { provider: "matrix", to: "!Room:example.org", accountId: "work" },
+                },
               });
-        set(broken, "entry_json", json);
+        database.db
+          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run(json, broken);
       }
       if (corruption === "delivery") {
         expect(() => listEntries(scope)).toThrow(/non-canonical persisted row/);
       } else {
         listEntries(scope);
       }
-      const originalError = readError(() => read(broken));
+      let originalError: unknown;
+      try {
+        readEntry({ ...scope, sessionKey: broken });
+      } catch (error) {
+        originalError = error;
+      }
       expect(originalError).toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
-      const readRow = rows([healthy, broken, "agent:main:missing"]);
+      const readRow = readRows(
+        database,
+        [healthy, broken, "agent:main:missing"],
+        "list",
+        "canonical",
+      );
       expect(readRow(healthy)?.entry.sessionId).toBe(healthy);
       expect(readRow("agent:main:missing")).toBeUndefined();
       expect(() => readRow(broken)).toThrow(originalError);
@@ -235,10 +224,13 @@ describe("exact SQLite session reads", () => {
   it.each(["full", "list"] as const)(
     "preserves native key bindings in %s exact reads",
     (projection) => {
-      const { put, read, participant } = fixture(projection);
+      const scope = fixture();
       const storedKey = "agent:main:replacement-\ufffd";
-      put(storedKey, sessionEntry("replacement"));
-      participant(storedKey, "person");
+      putEntry({ ...scope, sessionKey: storedKey }, sessionEntry("replacement"));
+      recordParticipant(
+        { ...scope, sessionKey: storedKey },
+        { identity: { type: "profile", id: "person" }, promptedAt: 1 },
+      );
       const keys = [
         "agent:main:replacement-\ud800",
         "agent:main:replacement-\udc00",
@@ -251,7 +243,9 @@ describe("exact SQLite session reads", () => {
         participants: [{ identity: { type: "profile", id: "person" } }],
       };
       for (const sessionKey of keys) {
-        expect(read(sessionKey)).toMatchObject({ entry: expectedEntry });
+        expect(readEntry({ ...scope, sessionKey, projection })).toMatchObject({
+          entry: expectedEntry,
+        });
       }
     },
   );
@@ -259,20 +253,29 @@ describe("exact SQLite session reads", () => {
   it.each(["entries", "participants"] as const)(
     "isolates native SQLite conversion errors in exact %s reads",
     (table) => {
-      const { put, read, retain, participant, rows, database: open } = fixture();
+      const scope = fixture();
       const keys = ["agent:main:before", "agent:main:broken", "agent:main:after"] as const;
       const retained = "agent:main:retained";
       for (const sessionKey of keys) {
-        put(sessionKey);
-        participant(sessionKey);
+        putEntry({ ...scope, sessionKey }, sessionEntry(sessionKey));
+        recordParticipant(
+          { ...scope, sessionKey },
+          { identity: { type: "profile", id: sessionKey }, promptedAt: 1 },
+        );
       }
-      retain(retained);
+      writeTransaction((database) => {
+        ensureTranscriptSessionRoot(
+          database,
+          { ...scope, sessionKey: retained, sessionId: retained },
+          1,
+        );
+      }, scope);
       for (const projection of ["full", "list"] as const) {
         for (const sessionKey of keys) {
-          expect(read(sessionKey, projection)?.entry.sessionId).toBe(sessionKey);
+          expect(readEntry({ ...scope, sessionKey, projection })?.entry.sessionId).toBe(sessionKey);
         }
       }
-      const database = open();
+      const database = openDatabase(scope);
       for (const sessionKey of [keys[0], retained]) {
         database.db
           .prepare(
@@ -288,9 +291,14 @@ describe("exact SQLite session reads", () => {
         )
         .run(9007199254740993n, keys[1]);
       for (const projection of ["full", "list"] as const) {
-        const originalError = readError(() => read(keys[1], projection));
+        let originalError: unknown;
+        try {
+          readEntry({ ...scope, sessionKey: keys[1], projection });
+        } catch (error) {
+          originalError = error;
+        }
         expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-        const readRow = rows([...keys, retained], projection, {
+        const readRow = readRows(database, [...keys, retained], projection, "canonical", {
           includeBoardPresence: true,
         });
         expect(readRow(keys[0])?.entry.sessionId).toBe(keys[0]);
@@ -304,7 +312,7 @@ describe("exact SQLite session reads", () => {
   );
 
   it("uses lineage indexes for direct child discovery with stale clustered statistics", () => {
-    const { scope } = fixture();
+    const scope = fixture();
     const parent = "agent:main:indexed-parent";
     const olderParent = (index: number) => `agent:main:older-parent-${index}`;
     const otherParent = olderParent(0);
@@ -359,49 +367,87 @@ describe("exact SQLite session reads", () => {
       }
     }, scope);
     const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
-    const result = readChildren(database, parent);
-    const names =
-      "a-spawn b-parent c-parent d-parent m-both w-spawn x-spawn y-spawn z-parent".split(" ");
-    expect(
-      result.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
-    ).toEqual(names.map((name) => ({ sessionKey: childKey(name), sessionId: name })));
-    const childQuery = queries.mock.calls
-      .map(([, query]) => query.compile())
-      .find(({ sql }) => /"parent_session_key"\s+in/u.test(sql) && /"spawned_by"\s+in/u.test(sql))!;
-    const plan = requireNativeSqliteDatabase(database.db)
-      .prepare(`EXPLAIN QUERY PLAN ${childQuery.sql}`)
-      .all(...childQuery.parameters.map(String))
-      .map(({ detail }) => detail);
-    expect(plan).not.toContainEqual(expect.stringMatching(/\bSCAN session_nodes\b/u));
-    for (const index of ["parent_session_key", "spawned_by"]) {
-      expect(plan).toContainEqual(
-        expect.stringMatching(
-          new RegExp(`\\bSEARCH\\b.*\\bidx_agent_session_nodes_${index}\\b`, "u"),
-        ),
-      );
+    try {
+      const result = readChildren(database, parent);
+      const names = [
+        "a-spawn",
+        "b-parent",
+        "c-parent",
+        "d-parent",
+        "m-both",
+        "w-spawn",
+        "x-spawn",
+        "y-spawn",
+        "z-parent",
+      ];
+      expect(
+        result.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
+      ).toEqual(names.map((name) => ({ sessionKey: childKey(name), sessionId: name })));
+      const childQueries = queries.mock.calls
+        .map(([readDatabase, query]) => ({ readDatabase, ...query.compile() }))
+        .filter(
+          ({ sql }) => /"parent_session_key"\s+in/u.test(sql) && /"spawned_by"\s+in/u.test(sql),
+        );
+      expect(childQueries).toHaveLength(1);
+      const childQuery = childQueries[0]!;
+      const parameters = childQuery.parameters.map((parameter) => {
+        if (typeof parameter !== "string") {
+          throw new Error("Expected a string child-query binding");
+        }
+        return parameter;
+      });
+      if (!(childQuery.readDatabase instanceof DatabaseSync)) {
+        throw new Error("Expected a SQLite connection for the query-plan assertion");
+      }
+      const plan = childQuery.readDatabase
+        .prepare(`EXPLAIN QUERY PLAN ${childQuery.sql}`)
+        .all(...parameters)
+        .map(({ detail }) => detail);
+      expect(plan).not.toContainEqual(expect.stringMatching(/\bSCAN session_nodes\b/u));
+      for (const index of [
+        "idx_agent_session_nodes_parent_session_key",
+        "idx_agent_session_nodes_spawned_by",
+      ]) {
+        expect(plan).toContainEqual(
+          expect.stringMatching(new RegExp(`\\bSEARCH\\b.*\\b${index}\\b`, "u")),
+        );
+      }
+    } finally {
+      queries.mockRestore();
     }
   });
 
   it.each(["full", "list"] as const)(
     "does not read malformed placeholder participants in %s exact and child reads",
     (projection) => {
-      const { scope, put, read, retain, rows, set, database: open } = fixture(projection);
+      const scope = { ...fixture(), projection };
       const parent = "agent:main:parent";
       const healthy = "agent:main:healthy";
       const retained = "agent:main:retained";
-      put(healthy, { ...sessionEntry(healthy), parentSessionKey: parent });
-      retain(retained);
-      const database = open();
-      set(retained, "parent_session_key", parent);
-      expect(read(healthy)?.entry.sessionId).toBe(healthy);
-      expect(read(retained)).toBeUndefined();
+      putEntry(
+        { ...scope, sessionKey: healthy },
+        { sessionId: healthy, updatedAt: 1, parentSessionKey: parent },
+      );
+      writeTransaction((database) => {
+        ensureTranscriptSessionRoot(
+          database,
+          { ...scope, sessionKey: retained, sessionId: retained },
+          1,
+        );
+      }, scope);
+      const database = openDatabase(scope);
+      database.db
+        .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
+        .run(parent, retained);
+      expect(readEntry({ ...scope, sessionKey: healthy })?.entry.sessionId).toBe(healthy);
+      expect(readEntry({ ...scope, sessionKey: retained })).toBeUndefined();
       database.db
         .prepare(
           "INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at) VALUES (?, ?, ?, ?, 1, 1)",
         )
         .run(retained, "invalid namespace", "unused", 9007199254740993n);
-      expect(read(retained)).toBeUndefined();
-      const readRow = rows([retained, healthy]);
+      expect(readEntry({ ...scope, sessionKey: retained })).toBeUndefined();
+      const readRow = readRows(database, [retained, healthy], projection, "canonical");
       expect(readRow(retained)).toBeUndefined();
       expect(readRow(healthy)?.entry.sessionId).toBe(healthy);
       expect(readChildren(database, parent, scope.projection)).toMatchObject([
@@ -415,10 +461,14 @@ function excludedRowsFixture(encoding?: "UTF-8" | "UTF-16le" | "UTF-16be") {
   const stateDir = autoTempDirs.make("openclaw-excluded-rows-");
   const pathname = path.join(stateDir, "agent.sqlite");
   if (encoding) {
-    using seed = new DatabaseSync(pathname);
-    seed.exec(
-      `PRAGMA encoding='${encoding}'; CREATE TABLE encoding_probe(value TEXT); DROP TABLE encoding_probe;`,
-    );
+    const seed = new DatabaseSync(pathname);
+    try {
+      seed.exec(
+        `PRAGMA encoding='${encoding}'; CREATE TABLE encoding_probe(value TEXT); DROP TABLE encoding_probe;`,
+      );
+    } finally {
+      seed.close();
+    }
   }
   const database = openDatabase({
     agentId: "main",
@@ -466,6 +516,27 @@ function excludedRowsFixture(encoding?: "UTF-8" | "UTF-16le" | "UTF-16be") {
         },
       ),
   };
+}
+
+function trackMaterializedKeys(database: OpenClawAgentDatabase) {
+  const materializedKeys: string[] = [];
+  const nativeDb = requireNativeSqliteDatabase(database.db);
+  const prepare = nativeDb.prepare.bind(nativeDb);
+  vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    const iterate = statement.iterate.bind(statement);
+    vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
+      for (const row of iterate(...args)) {
+        if (typeof row.session_key === "string") {
+          materializedKeys.push(row.session_key);
+        }
+        yield row;
+      }
+      return undefined;
+    });
+    return statement;
+  });
+  return materializedKeys;
 }
 
 describe("SQLite exclusions and candidate reference reads", () => {
@@ -561,19 +632,11 @@ describe("SQLite exclusions and candidate reference reads", () => {
     });
     // Admit the fixture before measuring the hot lifecycle planning path.
     readSessionEntryStore(database);
-    const reads = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["nodes"],
-      (sql) => (/\bsession_nodes\b/.test(sql) ? "nodes" : null),
-    );
-    try {
-      const result = await plan([{ sessionKey: removedKey, expectedEntry: entry }]);
-      expect(result.removals).toHaveLength(1);
-      expect(result.deletePlans.map((item) => item.sessionId)).toEqual(["removed"]);
-      expect(reads.rowCounts.nodes).toBeLessThan(50);
-    } finally {
-      reads.restore();
-    }
+    const keys = trackMaterializedKeys(database);
+    const result = await plan([{ sessionKey: removedKey, expectedEntry: entry }]);
+    expect(result.removals).toHaveLength(1);
+    expect(result.deletePlans.map((item) => item.sessionId)).toEqual(["removed"]);
+    expect(keys.length).toBeLessThan(50);
   });
 
   it("preserves surviving and same-call references to generations absent from the removed entry", async () => {

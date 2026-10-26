@@ -12,6 +12,7 @@ import {
   options as publicationOptions,
   setup,
   settled,
+  shared as sharedPublisher,
 } from "../chat-github-publication.test-support.ts";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
@@ -24,13 +25,7 @@ import {
 
 let container: HTMLDivElement;
 const query = (selector: string) => container.querySelector(selector);
-const queryButton = (selector: string) => container.querySelector<HTMLButtonElement>(selector)!;
-const publish = () => queryButton(".chat-pr__create");
-const branchMenu = () => query(".chat-pr-branch-menu");
-const openBranchMenu = async () => {
-  queryButton(".chat-pr__actions-trigger").click();
-  await waitForSolid(() => expect(branchMenu()?.matches(":popover-open")).toBe(true));
-};
+const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
 const waitForPublication = () =>
   waitForSolid(() => {
     const button = publish();
@@ -89,19 +84,17 @@ const personalAccount = (login = "alice-tools") => ({
   pending: null,
 });
 
-const workWithPublication = (view: GitHubPublicationView | undefined): ChatPullRequestsProps => ({
-  pullRequests: [],
-  status: "ready",
-  onDismiss: () => {},
-  branch: sessionBranch(),
-  publication: view,
-});
-
 function paint(
   overrides: Partial<GitHubPublicationView>,
   surface: "pull-requests" | "environment" = "pull-requests",
 ) {
-  const work = workWithPublication(publication(overrides));
+  const work: ChatPullRequestsProps = {
+    pullRequests: [],
+    status: "ready",
+    onDismiss: () => {},
+    branch: sessionBranch(),
+    publication: publication(overrides),
+  };
   if (surface === "environment") {
     paintEnvironment(work);
   } else {
@@ -125,8 +118,8 @@ const unknownAvailability =
   "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
 function availability(
   reason: GitHubPublicationOptions["sharedUnavailableReason"],
-  message: string,
-  extra: { name?: string; unidentified?: boolean } = {},
+  message: string | undefined,
+  extra: { name?: string; native?: boolean; unidentified?: boolean } = {},
 ) {
   return { name: reason?.replaceAll("_", "-") ?? "unknown", reason, message, ...extra };
 }
@@ -153,10 +146,19 @@ it.each([
     name: "unknown-unidentified",
     unidentified: true,
   }),
+  availability(undefined, undefined, { name: "native-publisher", native: true }),
+  availability(undefined, undefined, {
+    name: "native-publisher-unidentified",
+    native: true,
+    unidentified: true,
+  }),
 ])("explains $name publication availability without requiring a connection", async (scenario) => {
-  const { controller } = setup({
+  const shared = scenario.native
+    ? { ...sharedPublisher, source: "system-detected" as const }
+    : null;
+  const { controller, request } = setup({
     ...publicationOptions,
-    shared: null,
+    shared,
     personal: scenario.unidentified
       ? null
       : {
@@ -168,21 +170,37 @@ it.each([
     ...(scenario.reason ? { sharedUnavailableReason: scenario.reason } : {}),
   });
   paintEnvironment({
-    ...workWithPublication(await settled(controller)),
+    pullRequests: [],
+    status: "ready",
+    onDismiss: () => {},
     onDismissBranch: () => {},
+    branch: sessionBranch(),
+    publication: await settled(controller),
   });
   const action = await waitForPublication();
   const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
   expect(action.textContent).toBe("Create PR");
-  expect(action.disabled).toBe(true);
-  await openBranchMenu();
+  expect(action.disabled).toBe(!scenario.native);
+  row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
+  await waitForSolid(() =>
+    expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
+  );
   const note = row.querySelector(".chat-pr__publication-note");
   const refresh = row.querySelector<HTMLButtonElement>('[aria-label="Refresh publication"]');
-  expect(note?.textContent).toContain(scenario.message);
-  expect(row.querySelectorAll('[aria-label="Refresh publication"]')).toHaveLength(1);
-  expect(refresh?.disabled).toBe(false);
+  if (scenario.native) {
+    expect(note).toBeNull();
+    expect(refresh).toBeNull();
+  } else {
+    expect(note?.textContent).toContain(scenario.message);
+    expect(row.querySelectorAll('[aria-label="Refresh publication"]')).toHaveLength(1);
+    expect(refresh?.disabled).toBe(false);
+  }
   expect(row.textContent).not.toContain("Connect GitHub in Settings");
   expect(row.querySelector('[aria-label="Publication account"]')).toBeNull();
+  expect(request).toHaveBeenCalledExactlyOnceWith("sessions.github.options", {
+    sessionKey: "agent:main:one",
+    agentId: "main",
+  });
 });
 
 it.each(["system-configured", "agent-override", null] as const)(
@@ -254,7 +272,7 @@ it.each([false, true])(
     expect(choices[0]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
     expect(choices[1]?.querySelector(".oc-menu-item__details svg")).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
-    queryButton('button[aria-label="Publication account"]').click();
+    container.querySelector<HTMLButtonElement>('button[aria-label="Publication account"]')!.click();
     await waitForSolid(() => expect(menu?.matches(":popover-open")).toBe(true));
     choices[1]!.click();
     await waitForSolid(() => expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal"));
@@ -295,13 +313,70 @@ it("warns about the workspace only for a selected or sole personal account", () 
   expect(onSelect).not.toHaveBeenCalled();
 });
 
+it("selects an eligible profile directly from Details and publishes its exact identity", async () => {
+  const { controller, request, changed } = setup();
+  await settled(controller);
+  request.mockResolvedValue({
+    requestId: "profile-choice",
+    status: "requested",
+    publisher: { source: "personal", accountId: 2, login: "alice-tools" },
+  });
+  const draw = () =>
+    paintEnvironment({
+      pullRequests: [],
+      status: "ready",
+      onDismiss: () => {},
+      branch: sessionBranch(),
+      publication: controller.view(),
+    });
+  changed.mockImplementation(draw);
+  draw();
+  const create = await waitForPublication();
+  expect(create?.textContent).toBe("Create PR");
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
+  ).toHaveLength(0);
+  container.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
+  await waitForSolid(() =>
+    expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
+  );
+  const personal = container.querySelector<HTMLButtonElement>(
+    '.chat-pr-branch-menu [role="menuitemradio"][value="personal"]',
+  )!;
+  expect(personal).not.toBeNull();
+  expect(personal.textContent).toContain("My GitHub");
+  expect(personal.textContent).toContain("@alice-tools");
+  expect(query('.chat-pr-branch-menu [role="menuitemradio"]')).toBe(personal);
+  expect(personal.closest('[role="menu"]')).toBe(query(".chat-pr-branch-menu"));
+  personal.click();
+  await waitForSolid(() => expect(controller.view()?.selection?.source).toBe("personal"));
+  expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(false);
+  create!.click();
+  await waitForSolid(() =>
+    expect(request).toHaveBeenCalledWith("sessions.github.publish", {
+      sessionKey: "agent:main:one",
+      agentId: "main",
+      idempotencyKey: expect.any(String),
+      selection: {
+        source: "personal",
+        generation: "bdca439a-e787-4f9f-b5f3-a878c662cc76",
+        account: { accountId: 2, login: "alice-tools" },
+      },
+    }),
+  );
+});
+
 it.each(["personal", "confirmation"] as const)(
   "opens the native %s action from the Environment row before dispatching",
   async (state) => {
     const personal = personalAccount();
     const nativeAction = vi.fn();
-    paint(
-      {
+    paintEnvironment({
+      pullRequests: [],
+      status: "ready",
+      onDismiss: () => {},
+      branch: sessionBranch(),
+      publication: publication({
         options: { shared: null, personal, pendingPersonal: null, latestShared: null },
         selection: null,
         result:
@@ -315,15 +390,18 @@ it.each(["personal", "confirmation"] as const)(
             : null,
         onPublish: nativeAction,
         onConfirm: nativeAction,
-      },
-      "environment",
-    );
+      }),
+    });
     const entry = await waitForPublication();
     expect(entry.textContent).toBe(state === "personal" ? "Create PR" : "Review");
     entry.click();
-    await waitForSolid(() => expect(branchMenu()?.matches(":popover-open")).toBe(true));
+    await waitForSolid(() =>
+      expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
+    );
     expect(nativeAction).not.toHaveBeenCalled();
-    const action = queryButton(".chat-pr-branch-menu .chat-pr__create");
+    const action = container.querySelector<HTMLButtonElement>(
+      ".chat-pr-branch-menu .chat-pr__create",
+    )!;
     expect(action.textContent).toBe(
       state === "personal" ? "Publish as @alice-tools" : "Confirm original publication",
     );
@@ -335,7 +413,13 @@ it.each(["personal", "confirmation"] as const)(
 it.each([false, true])("labels publication reads as Loading (recovery=%s)", async (recovery) => {
   const onPublish = vi.fn();
   const draw = (activity: GitHubPublicationView["activity"]) =>
-    paint({ activity, locked: recovery, onPublish }, "environment");
+    paintEnvironment({
+      pullRequests: [],
+      status: "ready",
+      onDismiss: () => {},
+      branch: sessionBranch(),
+      publication: publication({ activity, locked: recovery, onPublish }),
+    });
   draw("read");
   await waitForPublication();
   expect(publish()?.textContent?.trim()).toBe("Loading…");
@@ -393,7 +477,7 @@ it.each(["pull-requests", "environment"] as const)(
     await waitForSolid(() =>
       expect(container.textContent).toContain("Publication action unavailable"),
     );
-    queryButton(".lazy-view-error button")?.click();
+    container.querySelector<HTMLButtonElement>(".lazy-view-error button")?.click();
     await waitForSolid(() =>
       expect(publish()?.textContent).toContain(
         surface === "environment" ? "Create PR" : "Publish PR",
@@ -435,11 +519,11 @@ it.each(["pull-requests", "environment"] as const)(
     );
     (await waitForPublication()).click();
     await waitForSolid(() =>
-      expect(query('button[aria-label="Refresh publication"]')).not.toBeNull(),
+      expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
     completion.reject(new Error("Replaced publication action unavailable"));
     await waitForSolid(() =>
-      expect(query('button[aria-label="Refresh publication"]')).not.toBeNull(),
+      expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
   },
 );

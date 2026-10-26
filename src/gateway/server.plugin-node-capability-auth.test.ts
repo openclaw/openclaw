@@ -1,4 +1,4 @@
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, createServer, type ListenOptions, type Socket } from "node:net";
@@ -28,6 +28,7 @@ import { createGatewayHttpServer } from "./server-http.js";
 import { authorizePluginNodeCapabilityRequest } from "./server/plugin-node-capability-auth.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { withTempConfig } from "./test-temp-config.js";
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
@@ -58,16 +59,25 @@ async function expectCanvasStatus(
   status: number,
   headers?: Record<string, string>,
 ) {
-  const response = await fetch(canvasUrl(listener, path), {
-    headers: { ...headers, connection: "close" },
-    signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
-  });
+  const response = await fetchCanvas(canvasUrl(listener, path), { headers });
   expect(response.status).toBe(status);
   return response;
 }
 
 type HttpHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type UpgradeOptions = Parameters<typeof attachGatewayUpgradeHandler>[0];
+
+async function fetchCanvas(input: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  headers.set("connection", "close");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function closeServer(
   server: { close(callback: (err?: Error) => void): unknown },
@@ -94,8 +104,13 @@ async function listen(
       sockets.delete(socket);
     });
   });
-  const listening = once(server, "listening");
-  server.listen(address);
+  const listening = new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(address, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
   await (address.path
     ? withTimeout(listening, SERVER_CLOSE_TIMEOUT_MS, {
         message: "desktop server listen timed out",
@@ -269,12 +284,8 @@ async function withCanvasGatewayHarness(
     handleHttpRequest?: HttpHandler;
     resolvePluginNodeCapabilityRoute?: UpgradeOptions["resolvePluginNodeCapabilityRoute"];
     desktopSessionRegistry?: UpgradeOptions["desktopSessionRegistry"];
-    trustedProxy?: boolean;
   } = {},
 ) {
-  setRuntimeConfigSnapshot({
-    gateway: { trustedProxies: params.trustedProxy ? ["127.0.0.1"] : [] },
-  });
   const clients = new Set<GatewayWsClient>();
   const canvasWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
   const shared = {
@@ -344,7 +355,11 @@ describe("gateway plugin node capability auth", () => {
   const withLoopbackTrustedProxy = (
     run: Parameters<typeof withCanvasGatewayHarness>[0],
     params?: Parameters<typeof withCanvasGatewayHarness>[1],
-  ) => withCanvasGatewayHarness(run, { ...params, trustedProxy: true });
+  ) =>
+    withTempConfig({
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
+      run: () => withCanvasGatewayHarness(run, params),
+    });
 
   test("authorizes canvas HTTP/WS via node-scoped capability and rejects misuse", async () => {
     await withLoopbackTrustedProxy(async ({ listener, clients }) => {
@@ -495,15 +510,21 @@ describe("gateway plugin node capability auth", () => {
           canvasUrl(listener, CANVAS_WS_PATH, "ws"),
           headers,
         );
+        const expectedBody = JSON.stringify({
+          error: {
+            message: "Too many failed authentication attempts. Please try again later.",
+            type: "rate_limited",
+          },
+        });
         expect(upgradeResponse).toMatchObject({
           statusCode: 429,
           complete: true,
+          body: expectedBody,
           headers: {
             "retry-after": expect.stringMatching(/^\d+$/),
-            "content-length": String(Buffer.byteLength(upgradeResponse.body, "utf8")),
+            "content-length": String(Buffer.byteLength(expectedBody, "utf8")),
           },
         });
-        expect(JSON.parse(upgradeResponse.body)).toMatchObject({ error: { type: "rate_limited" } });
       },
       { rateLimiter, handleHttpRequest: async () => false },
     );
@@ -582,6 +603,7 @@ describe("gateway plugin node capability auth", () => {
           desktopSessionRegistry,
         },
       );
+      expect(release).toHaveBeenCalledOnce();
     } finally {
       await desktopServer.close();
       await fs.rm(root, { recursive: true, force: true });

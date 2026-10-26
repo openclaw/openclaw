@@ -17,6 +17,7 @@ import {
   readSessionTranscriptWatermark,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -92,6 +93,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   const prepare = vi.fn<typeof defaultPrepareModel>();
   const changed = vi.fn();
   const releasePending: (() => void)[] = [];
+  const restoreObservers: (() => void)[] = [];
   const settlePending: Promise<unknown>[] = [];
   const read = (session = scope) => loadSessionEntryReadOnly(session);
   const view = (session = scope) =>
@@ -135,6 +137,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   const currentStore = () =>
     resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId });
   const summary = (coveredMessages: number, text = completedText) => ({ text, coveredMessages });
+  const observeReads = () => {
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    restoreObservers.push(observation.restore);
+    return observation;
+  };
+  const observeParsing = () => {
+    const parse = vi.spyOn(JSON, "parse");
+    restoreObservers.push(() => parse.mockRestore());
+    return parse;
+  };
   const makeConversation = (key: string, sessionId: string, entry: Partial<SessionEntry> = {}) => ({
     target: { key, agentId: "main" },
     scope: { sessionKey: key, agentId: "main", sessionId },
@@ -194,6 +206,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     service = createService();
   });
   afterEach(async () => {
+    for (const restore of restoreObservers.splice(0)) {
+      restore();
+    }
     for (const release of releasePending) {
       release();
     }
@@ -290,9 +305,23 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     complete.mockImplementation(async () =>
       result(`Recap through batch ${complete.mock.calls.length}.`),
     );
+    const unrelatedLabel = "Unrelated retained recap inventory marker";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:unrelated-recap" },
+      {
+        sessionId: "unrelated-recap-session",
+        updatedAt: Date.now(),
+        label: unrelatedLabel,
+        skillsSnapshot: { prompt: "Unrelated saved prompt. ".repeat(1024), skills: [] },
+      },
+    );
+    read();
+    const parse = observeParsing();
     await awaitPublication(async () => {
       await Promise.all(Array.from({ length: 12 }, () => ensureRecap(target)));
     });
+    expect(parse.mock.calls.some(([json]) => json.includes(unrelatedLabel))).toBe(false);
+    parse.mockRestore();
     expect(complete).toHaveBeenCalledTimes(3);
     const [first, second] = complete.mock.calls.map(([request]) => request);
     expect(first).toMatchObject({
@@ -403,20 +432,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     residentProjection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
     await residentProjection.ensureMaterialized();
     await start();
-    const queries = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      for (let index = 0; index < 50; index += 1) {
-        complete.mock.calls[0]![0].assertCurrent?.();
-      }
-      expect(queries.queries).toHaveLength(0);
-      expect(parse.mock.calls.some(([json]) => json.includes("Saved recap prompt marker."))).toBe(
-        false,
-      );
-    } finally {
-      queries.restore();
-      parse.mockRestore();
+    const queries = observeReads();
+    const parse = observeParsing();
+    for (let index = 0; index < 50; index += 1) {
+      complete.mock.calls[0]![0].assertCurrent?.();
     }
+    expect(queries.queries).toHaveLength(0);
+    expect(parse.mock.calls.some(([json]) => json.includes("Saved recap prompt marker."))).toBe(
+      false,
+    );
+    queries.restore();
     await patchSessionEntryCore(scope, () => ({ initializationPending: true }), {
       preserveActivity: true,
     });
@@ -426,10 +451,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }), {
       preserveActivity: true,
     });
+    parse.mockRestore();
     completion.resolve(result(completedText));
     const committed = createDeferred();
     changed.mockImplementation(() => committed.resolve());
+    const settlementReads = observeReads();
     await withinTest(committed.promise, testSignal);
+    const transcriptSql =
+      /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i;
+    expect(settlementReads.queries.some((sql) => transcriptSql.test(sql))).toBe(false);
+    settlementReads.restore();
     expect(view()?.state).toBe("current");
     const currentRefresh = new AsyncWorkScope();
     await currentRefresh.track(() => terminal(service));

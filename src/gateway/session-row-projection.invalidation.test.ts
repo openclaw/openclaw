@@ -1,9 +1,24 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionCommunicationMode } from "../../packages/gateway-protocol/src/session-communication.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+  prepareRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import * as agentIdentity from "../agents/identity.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
+  getRuntimeConfigSnapshotMetadata,
+  getRuntimeConfigSourceSnapshot,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  setRuntimeConfigSourceSnapshotIfCurrent,
+} from "../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   deleteSessionEntryLifecycle,
@@ -11,6 +26,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -22,6 +38,12 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
+  setSecretsRuntimeSourceSnapshotIfCurrent,
+} from "../secrets/runtime-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -40,8 +62,6 @@ import * as materialization from "./session-row-projection-materialize.js";
 import {
   createTestProjection,
   holdForeground,
-  seedRow,
-  watchRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
@@ -54,17 +74,20 @@ it("indexes and filters the causal creator without publishing its isolation acto
     const causal = ensureProfileForEmail("causal@example.test");
     const legacy = ensureProfileForEmail("isolation@example.test");
     const key = "agent:main:dashboard:creator-projection";
-    seedRow(key, {
-      sessionId: "creator-projection",
-      updatedAt: 1,
-      createdVia: "spawn",
-      createdActor: {
-        type: "human",
-        source: "profile",
-        id: legacy.id,
-        delegatedBy: { type: "human", source: "profile", id: causal.id },
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        sessionId: "creator-projection",
+        updatedAt: 1,
+        createdVia: "spawn",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: legacy.id,
+          delegatedBy: { type: "human", source: "profile", id: causal.id },
+        },
       },
-    });
+    );
     using _ = holdForeground();
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const result = await listProjectedSessions({ projection, opts: { creatorId: causal.id } });
@@ -89,11 +112,10 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 4 }, (_, index) => `agent:main:plugin-reload-${index}`);
     for (const [index, sessionKey] of keys.entries()) {
-      seedRow(sessionKey, {
-        sessionId: `plugin-reload-${index}`,
-        updatedAt: index + 1,
-        visibility: "shared",
-      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: `plugin-reload-${index}`, updatedAt: index + 1, visibility: "shared" },
+      );
     }
     const instances: PluginInstance[] = [];
     const view = (model: string, sourceDigest = "original-code") => {
@@ -178,12 +200,14 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
         expect(sequences()).toEqual(materialized);
         expect(projection.dirtyRowCount).toBe(0);
       }
+      // Captured code changes still invalidate policy even with the same registration shape.
       catalog = view("original", "changed-code");
       notifyPreparedModelRuntimePublication({ phase: "published" });
       await projection.ensureMaterialized();
       expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
       expect(sequences()).not.toEqual(materialized);
       const beforeNormalization = sequences();
+      // A manifest policy edit still changes rows even when catalog entries stay identical.
       catalog = view("replacement", "changed-code");
       notifyPreparedModelRuntimePublication({ phase: "published" });
       await projection.ensureMaterialized();
@@ -202,7 +226,12 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
 it("reuses descendants after parent progress while keeping inherited models current", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     vi.spyOn(Date, "now").mockReturnValue(100);
-    const cfg = { agents: { entries: { main: {} }, defaults: { model: "unit-test/default" } } };
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "unit-test/default" },
+      },
+    };
     setRuntimeConfigSnapshot(cfg);
     const parentKey = "agent:main:discord:channel:parent";
     const children = ["agent:main:child", `${parentKey}:thread:child`];
@@ -218,12 +247,15 @@ it("reuses descendants after parent progress while keeping inherited models curr
     };
     replaceSessionEntrySync(scope, { ...parent });
     for (const [index, sessionKey] of [...children, siblingKey].entries()) {
-      seedRow(sessionKey, {
-        sessionId: `child-${index}`,
-        updatedAt: index + 2,
-        visibility: "shared",
-        ...(sessionKey === children[0] ? { parentSessionKey: parentKey } : {}),
-      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `child-${index}`,
+          updatedAt: index + 2,
+          visibility: "shared",
+          ...(sessionKey === children[0] ? { parentSessionKey: parentKey } : {}),
+        },
+      );
     }
     using _ = holdForeground();
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
@@ -235,14 +267,31 @@ it("reuses descendants after parent progress while keeping inherited models curr
     try {
       const initial = await list();
       expect(initial.totalCount).toBe(4);
+      expect(initial.sessions.map((row) => row.key)).toEqual([
+        siblingKey,
+        children[1],
+        children[0],
+        parentKey,
+      ]);
       expect(initial.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
         children[0],
       ]);
       const reads: string[] = [];
-      watchRowFacts((owner) => (input) => {
-        reads.push(...input.sessionKeys);
-        return owner.readRowFacts(input);
-      });
+      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
+      vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume) =>
+          readDatabases(targets, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          ),
+      );
       const original = children.map(sequence);
       const siblingSequence = sequence(siblingKey);
       const snapshot = (key: string) =>
@@ -255,7 +304,10 @@ it("reuses descendants after parent progress while keeping inherited models curr
           ),
         )
           .getPresentation()
-          .snapshot({ agentId: "main", key }).row!;
+          .snapshot({
+            agentId: "main",
+            key,
+          }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
       const siblingBytes = JSON.stringify(siblingSnapshot);
@@ -320,9 +372,9 @@ it("reuses descendants after parent progress while keeping inherited models curr
       parent.modelOverrideSource = "user";
       replaceSessionEntrySync(scope, { ...parent });
       const pinned = await list();
-      expect(
-        pinned.sessions.filter((row) => children.includes(row.key)).map((row) => row.model),
-      ).toEqual(["changed", "changed"]);
+      for (const key of children) {
+        expect(pinned.sessions.find((row) => row.key === key)?.model).toBe("changed");
+      }
       registerAgentRunContext("publication-model", {
         agentId: "main",
         sessionKey: siblingKey,
@@ -452,7 +504,9 @@ it("refreshes profile display fields on selected live and archived rows without 
 it("reuses row identities across lists until their entry, profile, or config changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
-      agents: { entries: { main: { identity: { name: "Original agent" } } } },
+      agents: {
+        entries: { main: { identity: { name: "Original agent" } } },
+      },
       session: { communication: { receive: "ask" as SessionCommunicationMode } },
     };
     const scope = { agentId: "main", sessionKey: "agent:main:identity-cache" };
@@ -473,7 +527,9 @@ it("reuses row identities across lists until their entry, profile, or config cha
         receive: "ask",
       });
       const identities = vi.spyOn(agentIdentity, "resolveAgentIdentity");
-      expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
+      for (let index = 0; index < 3; index++) {
+        expect((await list()).sessions[0]?.owner?.actor.label).toBe("Original agent");
+      }
       expect(identities).not.toHaveBeenCalled();
 
       const serialized = () =>
@@ -495,13 +551,12 @@ it("reuses row identities across lists until their entry, profile, or config cha
       cfg.agents.entries.main.identity.name = "Renamed agent";
       cfg.session.communication.receive = "always";
       sessionChanges.emit({ all: true, scope: "config" });
-      const renamed = await list();
-      expect(renamed.owners?.[0]?.label).toBe("Renamed agent");
-      expect(renamed.sessions[0]?.effectiveCommunication).toEqual({
+      expect((await list()).owners?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
         send: "never",
         receive: "always",
       });
-      expect(renamed.sessions[0]?.communication).toEqual({ send: "never" });
+      expect((await list()).sessions[0]?.communication).toEqual({ send: "never" });
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "missing" },
         assignedBy: { type: "system", id: "test" },
@@ -524,3 +579,118 @@ it("reuses row identities across lists until their entry, profile, or config cha
     }
   });
 });
+
+it.each(["source rewrite", "resolved snapshot"] as const)(
+  "keeps projected rows clean for an equivalent config %s",
+  async (publication) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      for (let index = 0; index < 4; index++) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: `agent:main:republish-${index}` },
+          { sessionId: `republish-${index}`, updatedAt: index + 1 },
+        );
+      }
+      using release = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      try {
+        if (publication === "source rewrite") {
+          const source = (version: string) => ({
+            ...structuredClone(cfg),
+            meta: { lastTouchedVersion: version },
+          });
+          activateSecretsRuntimeSnapshotState({
+            snapshot: {
+              sourceConfig: source("1"),
+              config: structuredClone(cfg),
+              authStores: prepareRuntimeAuthProfileStoreSnapshots([]),
+              authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+              authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
+              warnings: [],
+              webTools: {
+                search: { providerSource: "none", diagnostics: [] },
+                fetch: { providerSource: "none", diagnostics: [] },
+                diagnostics: [],
+              },
+            },
+            refreshContext: null,
+            refreshHandler: null,
+          });
+          await listProjectedSessions({ projection, opts: {} });
+          await projection.ensureMaterialized();
+          expect(projection.dirtyRowCount).toBe(0);
+
+          // A source-only restamp is a full no-op for runtime publication and resident rows.
+          const previousSource = getRuntimeConfigSourceSnapshot();
+          const previousMetadata = getRuntimeConfigSnapshotMetadata();
+          const rewritten = source("2");
+          expect(
+            setSecretsRuntimeSourceSnapshotIfCurrent({
+              expectedSecretsRevision: getActiveSecretsRuntimeSnapshotRevisionState(),
+              expectedRuntimeConfigRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+              runtimeSourceConfig: rewritten,
+              secretsSourceConfig: rewritten,
+            }),
+          ).toBe(true);
+          expect(getRuntimeConfigSourceSnapshot()).toBe(previousSource);
+          expect(getRuntimeConfigSnapshotMetadata()).toBe(previousMetadata);
+          expect(projection.dirtyRowCount).toBe(0);
+        } else {
+          await listProjectedSessions({ projection, opts: {} });
+          expect(projection.dirtyRowCount).toBe(0);
+
+          // The first publication of a config is a real change: every row is invalidated.
+          setRuntimeConfigSnapshot(structuredClone(cfg));
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          await projection.ensureMaterialized();
+          expect(projection.dirtyRowCount).toBe(0);
+
+          // The same config published again is not a session-data change, so no row is
+          // invalidated and no drain starts.
+          setRuntimeConfigSnapshot(structuredClone(cfg));
+          expect(projection.dirtyRowCount).toBe(0);
+
+          // Equal values with different resolution provenance can resolve differently, so rows refresh.
+          const reresolved = structuredClone(cfg);
+          setConfigResolutionFacts(
+            reresolved,
+            createConfigResolutionFacts([
+              { varName: "UNIT_TEST_AGENT", configPath: "agents.entries.main" },
+            ]),
+          );
+          setRuntimeConfigSnapshot(reresolved);
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          await projection.ensureMaterialized();
+          expect(projection.dirtyRowCount).toBe(0);
+
+          // A source-only republish that changes provenance copies it onto the published object in
+          // place, so it reaches rows through the same-object path.
+          expect(
+            setRuntimeConfigSourceSnapshotIfCurrent({
+              expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+              sourceConfig: structuredClone(cfg),
+            }),
+          ).toBe(true);
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+          await projection.ensureMaterialized();
+          expect(projection.dirtyRowCount).toBe(0);
+
+          // A real config change still dirties every row.
+          setRuntimeConfigSnapshot({
+            ...structuredClone(cfg),
+            agents: { ...cfg.agents, defaults: { model: "unit-test/model" } },
+          });
+          expect(projection.dirtyRowCount).toBeGreaterThan(0);
+        }
+      } finally {
+        await projection.ensureMaterialized();
+        projection.dispose();
+        release();
+        if (publication === "source rewrite") {
+          clearSecretsRuntimeSnapshotState();
+        }
+        resetConfigRuntimeState();
+      }
+    });
+  },
+);
