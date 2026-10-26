@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { configForProviders } from "../../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -8,13 +9,13 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import {
   catalogEntry,
   listModels,
   providerCatalogEntry,
   createModelsListTestContext,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
 const IMPLICIT_CODEX_RUNTIME = {
@@ -148,17 +149,13 @@ describe("models.list OpenAI routes", () => {
   });
 
   it("keeps the all view exhaustive while default hides incompatible implicit rows", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
-          },
-        },
+    const cfg = configForProviders({
+      openai: {
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
 
     const incompatibleRow = {
       ...catalogEntry("chat-latest", "openai-chatgpt-responses"),
@@ -288,13 +285,11 @@ describe("models.list OpenAI routes", () => {
 
           const inventoryConfig = {
             ...cfg,
-            models: {
-              providers: {
-                openai: {
-                  models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
-                },
+            models: configForProviders({
+              openai: {
+                models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
               },
-            },
+            }).models,
           } as unknown as OpenClawConfig;
           await expect(
             listModels({
@@ -347,16 +342,12 @@ describe("models.list OpenAI routes", () => {
 
   it("includes runtime-discovered rows for configured providers without explicit models", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      const cfg = {
-        models: {
-          providers: {
-            litellm: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:14004",
-            },
-          },
+      const cfg = configForProviders({
+        litellm: {
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:14004",
         },
-      } as unknown as OpenClawConfig;
+      }) as unknown as OpenClawConfig;
 
       await expect(
         listModels({
@@ -379,16 +370,12 @@ describe("models.list OpenAI routes", () => {
 
   it("does not infer runtime inventory for static providers without explicit models", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      const cfg = {
-        models: {
-          providers: {
-            kimi: {
-              api: "openai-completions",
-              baseUrl: "https://api.kimi.com/coding/v1",
-            },
-          },
+      const cfg = configForProviders({
+        kimi: {
+          api: "openai-completions",
+          baseUrl: "https://api.kimi.com/coding/v1",
         },
-      } as unknown as OpenClawConfig;
+      }) as unknown as OpenClawConfig;
 
       await expect(
         listModels({
@@ -415,15 +402,13 @@ describe("models.list OpenAI routes", () => {
             },
           },
         },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-chatgpt-responses",
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [],
-            },
+        models: configForProviders({
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [],
           },
-        },
+        }).models,
       } as unknown as OpenClawConfig;
 
       await expect(

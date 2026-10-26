@@ -1,6 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +11,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
@@ -330,6 +332,11 @@ export function createSessionSharingInputAuthority(
   };
 }
 
+const projectedSharingKeys = new WeakMap<
+  object,
+  WeakMap<object, { facts: readonly unknown[]; key: string }>
+>();
+
 export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
@@ -367,8 +374,39 @@ export function prepareProjectedSessionSharing(params: {
       isMember,
     }),
     policy,
-    getCacheKey() {
-      return (cacheKey ??= JSON.stringify([
+    /** Only publication owners may supply a revision retired on sharing/config changes. */
+    getCacheKey(revision?: object) {
+      if (cacheKey !== undefined) {
+        return cacheKey;
+      }
+      let keys = revision && projectedSharingKeys.get(revision);
+      const viewer = client ?? cfg;
+      const facts = revision && [
+        cfg,
+        getRuntimeConfigSnapshotMetadata(),
+        readGatewayAccessRevision(),
+        actor?.kind,
+        actor?.kind === "operator" ? actor.profileId : undefined,
+        identity?.id,
+        client?.authenticatedUserProfile?.profileId,
+        client?.authenticatedUserId,
+        Boolean(client?.authenticatedGitHubIdentitySync),
+        profile,
+        policy,
+        Boolean(cfg.gateway?.roles),
+        client?.connect.scopes !== undefined,
+        ...(client?.connect.scopes ?? []),
+      ];
+      const previous = keys?.get(viewer);
+      if (
+        facts &&
+        previous &&
+        facts.length === previous.facts.length &&
+        facts.every((fact, i) => fact === previous.facts[i])
+      ) {
+        return (cacheKey = previous.key);
+      }
+      cacheKey = JSON.stringify([
         actor,
         identity?.id,
         client?.authenticatedUserProfile?.profileId,
@@ -379,7 +417,15 @@ export function prepareProjectedSessionSharing(params: {
         profile && [...profile.aliases].toSorted(),
         policy,
         Boolean(cfg.gateway?.roles),
-      ]));
+      ]);
+      if (revision && facts) {
+        if (!keys) {
+          keys = new WeakMap();
+          projectedSharingKeys.set(revision, keys);
+        }
+        keys.set(viewer, { facts, key: cacheKey });
+      }
+      return cacheKey;
     },
   };
 }

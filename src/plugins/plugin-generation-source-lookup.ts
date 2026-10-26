@@ -174,19 +174,18 @@ function getCapturedSource(
   return sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
 }
 
-export type PluginRecoverySourceResolverSnapshot = {
+export type PluginRecoverySourceResolverSnapshot = Readonly<{
   rootDir: string;
   sourceRoot: string;
   sources: ReadonlyMap<string, string>;
-};
+}>;
 const recoverySourceResolvers = new WeakMap<object, PluginRecoverySourceResolverSnapshot>();
 
 /** Transfer only immutable lookup facts, never a call back into a retired source owner. */
 export function snapshotPluginRecoverySourceResolver(
   resolve: object,
 ): PluginRecoverySourceResolverSnapshot | undefined {
-  const snapshot = recoverySourceResolvers.get(resolve);
-  return snapshot && { ...snapshot, sources: new Map(snapshot.sources) };
+  return recoverySourceResolvers.get(resolve);
 }
 
 export function restorePluginRecoverySourceResolver(

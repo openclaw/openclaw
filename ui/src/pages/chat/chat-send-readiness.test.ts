@@ -9,6 +9,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -814,22 +815,16 @@ it.each(["steer", "interrupt", "queue"] as const)(
     const host = makeChatHost({
       sessionKey,
       chatMessage: message,
-      sessionsResult: {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: sessionKey,
-            sessionId: "current-session",
-            hasActiveRun: false,
-            status: "done",
-            kind: "direct",
-            updatedAt: 1,
-          },
-        ],
-      },
+      sessionsResult: sessionListResult(1, [
+        {
+          key: sessionKey,
+          sessionId: "current-session",
+          hasActiveRun: false,
+          status: "done",
+          kind: "direct",
+          updatedAt: 1,
+        },
+      ]),
       requestHandlers: {
         "chat.startup": () => history.promise,
         "chat.send": { status: "started", messageSeq: 1 },

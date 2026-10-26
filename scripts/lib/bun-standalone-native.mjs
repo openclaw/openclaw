@@ -200,7 +200,7 @@ export function createStandaloneNativeAdapter({
   const packageSearchPaths = (owner) =>
     owner?.require.resolve.paths("__standalone_package__") ?? [];
 
-  function register(inputDirectory) {
+  function register(inputDirectory, inputManifest) {
     const directory = fs.realpathSync(inputDirectory);
     if (packages.has(directory)) {
       return packages.get(directory);
@@ -208,7 +208,8 @@ export function createStandaloneNativeAdapter({
     if (!contained(directory)) {
       return undefined;
     }
-    const manifest = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
+    const manifest =
+      inputManifest ?? JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
     if (
       (!manifest.name && directory !== runtimeRoot) ||
       !matchesPlatform(manifest.os, platform) ||
@@ -356,9 +357,15 @@ export function createStandaloneNativeAdapter({
     let directory = path.dirname(filename);
     let found;
     while (contained(directory) && directory !== runtimeRoot) {
-      if (fs.existsSync(path.join(directory, "package.json"))) {
-        found = register(directory);
-        break;
+      const manifestPath = path.join(directory, "package.json");
+      if (fs.existsSync(manifestPath)) {
+        const manifest =
+          packages.get(directory)?.manifest ?? JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        if (manifest.name) {
+          found = register(directory, manifest);
+          break;
+        }
+        // Anonymous module scopes, including typed contexts, share their enclosing owner.
       }
       directory = path.dirname(directory);
     }
@@ -793,8 +800,13 @@ export function createStandaloneNativeAdapter({
 
   return {
     bootstrap,
-    discover(moduleEntries) {
-      const pending = new Set([...moduleEntries, ...additionalModuleEntries]);
+    /**
+     * Discover emitted companions before selecting original-source roots.
+     * @param {string[]} moduleEntries
+     * @param {{selectRuntimeEntries?: (entries: string[]) => string[], scanOnlyEntries?: string[]}} options
+     */
+    discover(moduleEntries, { selectRuntimeEntries, scanOnlyEntries = [] } = {}) {
+      const pending = new Set([...moduleEntries, ...scanOnlyEntries, ...additionalModuleEntries]);
       for (const entry of pending) {
         const filename = path.join(runtimeRoot, entry);
         const contents = fs.readFileSync(filename, "utf8");
@@ -812,6 +824,12 @@ export function createStandaloneNativeAdapter({
           pending.add(additional);
         }
       }
+      return [
+        ...new Set([
+          ...(selectRuntimeEntries ? selectRuntimeEntries(moduleEntries) : moduleEntries),
+          ...additionalModuleEntries.toSorted((left, right) => left.localeCompare(right)),
+        ]),
+      ];
     },
     get builtinModules() {
       return [...builtinModules].toSorted((left, right) => left.localeCompare(right));
@@ -1092,6 +1110,7 @@ export function createStandaloneNativeAdapter({
         }
         return dependencies;
       }
+      // Keep longest-prefix lookup while making equal-length owners independent of discovery.
       const owners = [...metadataOwners]
         .map((owner) => ({
           original: owner.original,
@@ -1118,11 +1137,19 @@ export function createStandaloneNativeAdapter({
             }),
           ),
         }))
-        .toSorted((a, b) => b.original.length - a.original.length);
+        .toSorted(
+          (a, b) =>
+            b.original.length - a.original.length ||
+            (a.original < b.original ? -1 : a.original > b.original ? 1 : 0),
+        );
       const table = {
         owners,
         // Hoisted copies share emitted bytes but retain every original resolution path.
-        files: Object.fromEntries(files.map((file) => [file.source, file.destination])),
+        files: Object.fromEntries(
+          files
+            .toSorted((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0))
+            .map((file) => [file.source, file.destination]),
+        ),
       };
       return {
         files: [...emittedFiles.values()],

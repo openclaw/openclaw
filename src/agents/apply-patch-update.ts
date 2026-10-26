@@ -2,7 +2,6 @@
  * Locates expected old lines with tolerant matching, applies chunks in order,
  * and retains source bytes that the patch does not change.
  */
-import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ToolInputError } from "./tool-input-error.js";
 
@@ -38,10 +37,9 @@ type Replacement = [number, number, SourceLine[]];
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
-  options?: { readFile?: (filePath: string) => Promise<string> },
+  options: { readFile: (filePath: string) => Promise<string> },
 ): Promise<string> {
-  const reader = options?.readFile ?? ((target: string) => fs.readFile(target, "utf8"));
-  const originalContents = await reader(filePath).catch((err: unknown) => {
+  const originalContents = await options.readFile(filePath).catch((err: unknown) => {
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });
 

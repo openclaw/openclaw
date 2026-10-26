@@ -6,6 +6,7 @@ import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
   listSessionEntryKeysReadOnly,
   loadSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import {
   initializeGlobalHookRunner,
@@ -352,7 +353,10 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       name: "fingerprint replaced",
       rewrite: { [SWARM_CODE_MODE_REQUEST_FINGERPRINT]: "different" },
     },
-  ])("native plugin rejects incompatible finalized rewrite: $name", async ({ rewrite }) => {
+    // A hook must not quietly unblind a child the plugin asked to keep blind.
+    { name: "blind cleared", rewrite: { blind: undefined }, blind: true },
+    { name: "blind disabled", rewrite: { blind: false }, blind: true },
+  ])("native plugin rejects incompatible finalized rewrite: $name", async ({ rewrite, blind }) => {
     await withRewriteFixture(async ({ native, bound }) => {
       const keys = () => listSessionEntryKeysReadOnly({ storePath: bound.storePath });
       const before = await keys();
@@ -361,13 +365,55 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       );
       installNativeToolHook("native-rewrite-test", hook);
       await expect(
-        native.spawn({ requestId: "rewrite", task: "original", context: "isolated" }),
+        native.spawn({
+          requestId: "rewrite",
+          task: "original",
+          context: "isolated",
+          ...(blind ? { blind } : {}),
+        }),
       ).rejects.toThrow("Native subagent hooks must preserve collector mode and replay identity.");
       expect(hook).toHaveBeenCalledTimes(1);
       expect(await keys()).toEqual(before);
       expect(subagentRuns.size).toBe(0);
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("native plugin keeps a blind requester's children blind and never forks its transcript", async () => {
+    await withRewriteFixture(async ({ native, bound }) => {
+      await upsertSessionEntryCore(
+        { storePath: bound.storePath, sessionKey: bound.parentSessionKey },
+        { blindPrompt: true },
+      );
+      const keys = () => listSessionEntryKeysReadOnly({ storePath: bound.storePath });
+      const before = await keys();
+      // The child would inherit blinding, and a fork would copy the requester's own transcript.
+      await expect(
+        native.spawn({ requestId: "inherited-fork", task: "forked", context: "fork" }),
+      ).rejects.toThrow('Blind spawns require context="isolated"');
+      expect(await keys()).toEqual(before);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const accepted = await native.spawn({
+        requestId: "inherited",
+        task: "inherited blind task",
+        context: "isolated",
+      });
+      expect(
+        loadSessionEntry({ storePath: bound.storePath, sessionKey: accepted.childSessionKey }),
+      ).toMatchObject({ blindPrompt: true });
+      await native.collect({ ids: [accepted.runId], awaitResults: true });
+      const [run] = expectDefined(
+        runEmbeddedAgent.mock.calls.find(
+          ([params]) => params.sessionKey === accepted.childSessionKey,
+        ),
+        "inherited blind child run",
+      );
+      expect(run.blindPrompt).toBe(true);
+      expect(run.prompt).toContain("inherited blind task");
+      expect(run.prompt).not.toContain("Your session:");
+      expect(run.prompt).not.toContain(bound.parentSessionKey);
     });
   });
 

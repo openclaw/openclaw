@@ -326,6 +326,8 @@ export type ModelCatalog = {
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
   discovery?: Record<string, ModelCatalogDiscovery>;
+  /** Runtime catalogs bound to the configured origin, or the manifest default when absent. */
+  configuredEndpointDiscovery?: string[];
   runtimeAugment?: boolean;
 };
 

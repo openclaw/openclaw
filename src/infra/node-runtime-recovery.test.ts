@@ -16,6 +16,7 @@ import {
   recoverNodeRuntime,
 } from "../../node-runtime-recovery.mjs";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -94,8 +95,7 @@ const probeResult = (text: boolean): SpawnSyncReturns<string> => ({
 
 const originalArgv = process.argv;
 const originalExecArgv = process.execArgv;
-const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const ttyMock = createCliTtyMock();
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const nodeVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "node")!;
@@ -176,16 +176,7 @@ afterEach(async () => {
   process.exitCode = originalExitCode;
   process.argv = originalArgv;
   process.execArgv = originalExecArgv;
-  for (const [stream, descriptor] of [
-    [process.stdin, stdinTtyDescriptor],
-    [process.stdout, stdoutTtyDescriptor],
-  ] as const) {
-    if (descriptor) {
-      Object.defineProperty(stream, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(stream, "isTTY");
-    }
-  }
+  ttyMock.restore();
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
     Object.defineProperty(process.versions, "node", nodeVersionDescriptor);

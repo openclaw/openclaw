@@ -95,28 +95,25 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
-  it("keeps the turn active without a tool failure when it owns no pending child completion", async () => {
-    const { onYield, execute } = setup({ claimYield: () => false });
-    const result = await execute();
-
-    expect(isToolResultError(result)).toBe(false);
-    expect(result.details).toMatchObject({
-      status: "nothing_pending",
-      message: expect.stringContaining("did not pause the turn or schedule a continuation"),
-    });
-    expect(onYield).not.toHaveBeenCalled();
-  });
-
-  it("does not ask an ineligible caller to repeat explicit message intent", async () => {
-    const { onYield, execute } = setup({ sessionId: "root", claimYield: () => false });
-    const result = await execute({ waitFor: "message" });
-    expect(result.details).toMatchObject({
-      status: "nothing_pending",
-      message: expect.stringContaining("eligible active native task"),
-    });
-    expect(JSON.stringify(result)).not.toContain("set waitFor");
-    expect(onYield).not.toHaveBeenCalled();
-  });
+  it.each([
+    [undefined, "test-session", "did not pause the turn or schedule a continuation"],
+    ["message", "root", "eligible active native task"],
+  ] as const)(
+    "keeps an ineligible turn active with intent %s",
+    async (waitFor, sessionId, message) => {
+      const { onYield, execute } = setup({ sessionId, claimYield: () => false });
+      const result = await execute({ waitFor });
+      expect(isToolResultError(result)).toBe(false);
+      expect(result.details).toMatchObject({
+        status: "nothing_pending",
+        message: expect.stringContaining(message),
+      });
+      if (waitFor) {
+        expect(JSON.stringify(result)).not.toContain("set waitFor");
+      }
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports children an earlier turn already waits for instead of the generic error", async () => {
     const pendingChildren = [
@@ -164,6 +161,25 @@ describe("sessions_yield tool", () => {
         "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting. This turn owns no new claim, so no yield is needed: end this turn normally.",
     });
     expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("reports when waitFor was not applied because the turn yielded for its own children", async () => {
+    const { tool } = setup({ sessionId: "runner-session", claimYield: () => true });
+    const childWait = await tool.execute("child-wait", { waitFor: "message" });
+    expect(childWait.details).toEqual({
+      status: "yielded",
+      note: 'waitFor: "message" was not applied: this turn yielded for its own pending child completions, which resume this session. Omit waitFor when yielding for children.',
+    });
+    expect((await tool.execute("plain", {})).details).toEqual({ status: "yielded" });
+
+    const paused = setup({
+      sessionId: "runner-session",
+      claimYield: () => ({ messageWaitRegistered: true }),
+    });
+    expect((await paused.tool.execute("message-wait", { waitFor: "message" })).details).toEqual({
+      status: "yielded",
+    });
+    expect(paused.onYield).toHaveBeenCalledWith("Turn yielded.", undefined, true);
   });
 
   it("passes explicit message intent to its owner without treating private text as intent", async () => {

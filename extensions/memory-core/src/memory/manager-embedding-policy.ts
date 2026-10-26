@@ -98,9 +98,11 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 
 // Zhipu's item cap is reported as `input array max 64` (English) or
 // `input数组最大不得超过64条` (Chinese). Require the whole count and
-// message boundary so per-item and token limits remain terminal.
+// message boundary so per-item and token limits remain terminal. Mistral
+// rejects a batch by its aggregate token count and asks for more batches;
+// that exact phrase is splittable while a per-input token limit is not.
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
+  /(too many tokens overall,?\s*split into more batches|request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
 
 const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
   attempts: 3,

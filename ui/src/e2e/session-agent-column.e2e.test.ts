@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI session agent column" });
@@ -27,15 +28,11 @@ suite.define(() => {
         await installMockGateway(page, {
           sessionKey: "unknown",
           methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [
-                { id: "main", name: "Assistant" },
-                { id: "research", name: "Research" },
-              ],
-            },
+            "agents.list": agentRoster(
+              { main: "Assistant", research: "Research" },
+              "main",
+              "per-sender",
+            ),
             "sessions.list": {
               count: 2,
               defaults: { contextTokens: null, model: null, modelProvider: null },

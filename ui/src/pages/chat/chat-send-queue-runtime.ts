@@ -3,13 +3,14 @@ import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "../../../../packages/gateway-protocol/src/restart-unavailable.ts";
-import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayPayloadLimitError } from "../../api/gateway-browser-socket.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";

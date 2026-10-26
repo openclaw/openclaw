@@ -26,9 +26,17 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
       githubLogin: null,
     });
     const stop = onUserProfilesChanged(() => prepareGatewayRecipientProfile(client));
+    const cfg = rolePolicyConfig();
+    let revision = {};
+    const key = () =>
+      prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
     try {
+      const initialKey = key();
+      expect(key()).toBe(initialKey);
       setUserProfileRole(source.id, "view");
       expect(client.preparedSessionProfile?.role).toBe("view");
+      // The same effective policy still has the same canonical audience key.
+      expect(key()).toBe(initialKey);
       setUserProfileRole(target.id, "none");
       linkEmail("source@example.test", target.id);
       expect(client.preparedSessionProfile).toEqual({
@@ -37,9 +45,22 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
         role: "none",
         githubLogin: null,
       });
+      const mergedKey = key();
+      expect(mergedKey).not.toBe(initialKey);
+      client.connect.scopes!.push("operator.admin");
+      const adminKey = key();
+      expect(adminKey).not.toBe(mergedKey);
+      client.connect.scopes!.pop();
+      expect(key()).toBe(mergedKey);
+      // The owner retires the revision when publishing same-object policy edits.
+      cfg.gateway!.roles!.definitions.none!.sessions.others = "view";
+      revision = {};
+      expect(key()).not.toBe(mergedKey);
+      cfg.gateway!.roles!.definitions.none!.sessions.others = "none";
+      revision = {};
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const sharing = prepareProjectedSessionSharing({
-        cfg: rolePolicyConfig(),
+        cfg,
         client,
         isMember: () => false,
       });
@@ -51,6 +72,7 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
       client.authenticatedUserProfile = undefined;
       prepareGatewayRecipientProfile(client);
       expect(client.preparedSessionProfile).toBeUndefined();
+      expect(key()).not.toBe(mergedKey);
     } finally {
       stop();
     }

@@ -160,7 +160,7 @@ export function createAnthropicBetaHeadersWrapper(
     const openClawBetas = isOauth
       ? OPENCLAW_OAUTH_ANTHROPIC_BETAS
       : OPENCLAW_DEFAULT_ANTHROPIC_BETAS;
-    const allBetas = [...new Set([...openClawBetas, ...effectiveBetas])];
+    const allBetas = [...openClawBetas, ...effectiveBetas];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),

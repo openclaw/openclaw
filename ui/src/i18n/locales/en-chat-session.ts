@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { registerSessionNavigationEnglish } from "./en-session-navigation.ts";
 import { en } from "./en.ts";
@@ -656,6 +657,12 @@ const enChatSession = {
         "Interrupted before the agent started it. If it does not resume, copy it and send again.",
       earlier: "Show earlier messages",
       latest: "Show latest messages",
+      dismiss: "Dismiss",
+      dismissInterrupted: "Dismiss interrupted message: {preview}",
+      dismissCancelled: "Dismiss cancelled message: {preview}",
+      dismissAll: "Dismiss all",
+      dismissAllLabel: "Dismiss all interrupted and cancelled messages shown",
+      untitledInput: "message without text",
     },
     sessionSuggestions: {
       attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
@@ -682,35 +689,7 @@ const enChatSession = {
 export const registerChatSessionEnglish = Object.assign(
   () => {
     registerSessionNavigationEnglish();
-    Object.assign(en.chat.sessionAutomation, enChatSession.chat.sessionAutomation);
-    Object.assign(en.chat.activityPills, enChatSession.chat.activityPills);
-    Object.assign(en.chat.sessionDetails, enChatSession.chat.sessionDetails);
-    Object.assign(en.chat.usageLimit, enChatSession.chat.usageLimit);
-    Object.assign(en.chat.providerPolicy, enChatSession.chat.providerPolicy);
-    Object.assign(en.chat.diskSpace, enChatSession.chat.diskSpace);
-    Object.assign(en.chat.workerRuntimeInstall, enChatSession.chat.workerRuntimeInstall);
-    Object.assign(en.chat.subagentsPanel, enChatSession.chat.subagentsPanel);
-    Object.assign(en.chat.sessionSharing, enChatSession.chat.sessionSharing);
-    Object.assign(en.chat.reactions, enChatSession.chat.reactions);
-    Object.assign(en.chat.sessionHeader, enChatSession.chat.sessionHeader);
-    Object.assign(en.chat.board, enChatSession.chat.board);
-    Object.assign(en.chat.taskSuggestions, enChatSession.chat.taskSuggestions);
-    Object.assign(en.chat.view, enChatSession.chat.view);
-    Object.assign(en.chat.workspaceConflict, enChatSession.chat.workspaceConflict);
-    Object.assign(en.chat.skillLearned, enChatSession.chat.skillLearned);
-    Object.assign(en.chat.asyncQuestions, enChatSession.chat.asyncQuestions);
-    Object.assign(en.chat.youtube, enChatSession.chat.youtube);
-    Object.assign(en.chat.rail, enChatSession.chat.rail);
-    Object.assign(en.chat.thread, enChatSession.chat.thread);
-    Object.assign(en.chat.sessionDiff, enChatSession.chat.sessionDiff);
-    Object.assign(en.chat.sessionDiscussion, enChatSession.chat.sessionDiscussion);
-    Object.assign(en.chat.workspaceFiles, enChatSession.chat.workspaceFiles);
-    const { agentUpdate, ...pendingInputs } = enChatSession.chat.pendingInputs;
-    Object.assign(en.chat.pendingInputs, pendingInputs);
-    Object.assign(en.chat.pendingInputs.agentUpdate, agentUpdate);
-    const { state, ...sessionSuggestions } = enChatSession.chat.sessionSuggestions;
-    Object.assign(en.chat.sessionSuggestions, sessionSuggestions);
-    Object.assign(en.chat.sessionSuggestions.state, state);
+    mergeCatalog(en, enChatSession);
   },
   { catalog: enChatSession },
 );

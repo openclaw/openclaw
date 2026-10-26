@@ -41,9 +41,18 @@ export function stripToolResultDetails(messages: unknown[]): unknown[] {
 }
 
 /** A transient view; evidence and persistence readers must retain the original messages. */
-export function projectModelContextMessages(messages: AgentMessage[]): AgentMessage[];
-export function projectModelContextMessages(messages: unknown[]): unknown[];
-export function projectModelContextMessages(messages: unknown[]): unknown[] {
+export function projectModelContextMessages(
+  messages: AgentMessage[],
+  onFreshMetadata?: (metadata: Record<string, unknown>) => void,
+): AgentMessage[];
+export function projectModelContextMessages(
+  messages: unknown[],
+  onFreshMetadata?: (metadata: Record<string, unknown>) => void,
+): unknown[];
+export function projectModelContextMessages(
+  messages: unknown[],
+  onFreshMetadata?: (metadata: Record<string, unknown>) => void,
+): unknown[] {
   const output: unknown[] = [];
   for (const message of stripToolResultDetails(messages)) {
     const record = asOptionalRecord(message);
@@ -56,6 +65,8 @@ export function projectModelContextMessages(messages: unknown[]): unknown[] {
     for (const key of MODEL_CONTEXT_PRIVATE_METADATA_KEYS) {
       delete projected[key];
     }
+    // This mutable envelope belongs only to this projection, never to its source or cache.
+    onFreshMetadata?.(projected);
     output.push({ ...record, __openclaw: projected });
   }
   return output;

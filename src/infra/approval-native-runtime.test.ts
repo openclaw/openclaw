@@ -1,7 +1,8 @@
-// Covers native approval runtime delivery and resolution.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
+// Covers native approval runtime delivery and resolution.
+import { createSystemAgentChangeRequest } from "./approval-handler.test-helpers.js";
 import { createChannelNativeApprovalRuntime as createChannelNativeApprovalRuntimeRaw } from "./approval-native-runtime.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -212,14 +213,7 @@ describe("createChannelNativeApprovalRuntime", () => {
 
     await runtime.handleRequested({
       id: "system-agent:native-1",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "a".repeat(64),
-        allowedDecisions: ["allow-once", "deny"],
-        sessionId: "delegation-1",
-      },
+      request: createSystemAgentChangeRequest("delegation-1"),
       createdAtMs: 0,
       expiresAtMs: 2_000,
     });

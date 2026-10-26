@@ -7,7 +7,7 @@ import {
   isLegacySessionRecordOwnedByTarget,
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
-import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { loadExactSessionEntryCandidatesReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import {
   resolveConfiguredAgentDatabaseTargets,
   type SessionStoreTarget,
@@ -319,7 +319,7 @@ function appendRetainedIndexComparison(
       return;
     }
     const current = new Map(
-      loadExactSessionEntryCandidates({
+      loadExactSessionEntryCandidatesReadOnly({
         readOnly: true,
         env: params.env,
         readSource: {

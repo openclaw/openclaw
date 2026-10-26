@@ -223,6 +223,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           authMethod: "trusted-proxy",
+          subscriptionInitialHistory: false,
           authMode: "trusted-proxy",
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           heldMethods: ["connect"],

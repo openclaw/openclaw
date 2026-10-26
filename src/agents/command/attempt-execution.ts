@@ -53,7 +53,6 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveCommandReplyExpectation } from "../reply-completion.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
@@ -69,7 +68,6 @@ import {
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
-import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   resolveCompletionToolPolicy,
@@ -78,8 +76,10 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { buildCommonCommandRunParams } from "./attempt-run-params.js";
 import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
+import { readSessionRunSettings } from "./session-run-settings.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -312,69 +312,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
-  const expectation = resolveCommandReplyExpectation(params);
-  // Read session fields at invocation time, after admitted CLI binding recovery.
-  const buildCommonRunParams = () =>
-    ({
-      preparedRunAdmission: params.preparedRunAdmission,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-      chatType: params.sessionEntry?.chatType,
-      contextWindow: params.sessionEntry?.contextWindow,
-      agentId: params.sessionAgentId,
-      trigger: "user",
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      config: params.cfg,
-      toolOverrides: params.sessionEntry?.toolOverrides,
-      modelHasVision: params.modelHasVision,
-      model: params.modelOverride,
-      modelRoutingProvenance: params.modelRoutingProvenance,
-      thinkLevel: params.resolvedThinkLevel,
-      thinkingExplicit: params.thinkingExplicit,
-      fastMode: params.fastMode,
-      fastModeStartedAtMs: params.fastModeStartedAtMs,
-      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
-      timeoutMs: params.timeoutMs,
-      runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-      runId: params.runId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
-      lane: params.opts.lane,
-      swarmExecutionLane: params.opts.swarmExecutionLane,
-      extraSystemPrompt: params.opts.extraSystemPrompt,
-      extraSystemPromptTurnContext: params.opts.extraSystemPromptTurnContext,
-      inputProvenance: params.opts.inputProvenance,
-      privateCompletion: params.opts.privateCompletion,
-      skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
-      sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
-      taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
-      clientCaps: params.opts.clientCaps,
-      gatewayUiCommandTarget: params.opts.gatewayUiCommandTarget,
-      media: params.opts.media,
-      skillsSnapshot: params.skillsSnapshot,
-      streamParams: params.opts.streamParams,
-      approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
-      bashElevated: params.opts.bashElevated,
-      cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
-      oneShotCliRun: params.opts.oneShotCliRun,
-      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-      prepareAssistantTranscriptMessage: params.opts.prepareAssistantTranscriptMessage,
-      contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
-      onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-      suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
-      disableTools,
-      terminalReplyExpectation: expectation,
-      silentReplyPromptMode:
-        params.opts.silentReplyPromptMode ??
-        (expectation === "result-required" ? "none" : undefined),
-      bootstrapContextMode: params.opts.bootstrapContextMode,
-      bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
-      bootstrapPromptWarningSignaturesSeen,
-      bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
-    }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withAdmittedCliCandidate(
@@ -409,6 +346,11 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         classifyResult: params.classifyResult,
       },
       async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
+        if ((params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram) !== undefined) {
+          throw new Error(
+            "Explicit access programs are unsupported by this CLI runtime. Reset Access to the model default or use the OpenClaw or native Codex runtime.",
+          );
+        }
         params.sessionEntry = sessionEntry;
         const cliAuthProfileId = cliAuthNeedsSessionBinding
           ? await resolveCliExecutionAuthProfileId({
@@ -528,7 +470,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
                 }
               : undefined;
           result = await runCliAgent({
-            ...buildCommonRunParams(),
+            ...buildCommonCommandRunParams(params, {
+              disableTools,
+              bootstrapPromptWarningSignaturesSeen,
+            }),
             diagnosticOwner,
             sessionEntry: params.sessionEntry,
             storePath: params.storePath,
@@ -678,14 +623,13 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   }
 
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
-    ...buildCommonRunParams(),
+    ...buildCommonCommandRunParams(params, { disableTools, bootstrapPromptWarningSignaturesSeen }),
     sandboxSessionKey: params.sessionKey,
     ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    permissionMode: params.sessionEntry?.permissionMode,
-    sessionRoot: params.sessionEntry?.sessionRoot,
+    ...readSessionRunSettings(params.sessionEntry),
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: isRawModelRun ? undefined : resolveSessionPinnedHarnessId(params.sessionEntry),
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
@@ -769,4 +713,3 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
   );
   return runEmbeddedAgent(embeddedRunParams);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

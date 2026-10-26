@@ -5,31 +5,26 @@ import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 
 type RunHook = Parameters<typeof createGatewayCronReconciliation>[0]["runHook"];
 
-function createReconciliation(runHook: RunHook, isClosing = () => false) {
-  const reconciliation = createGatewayCronReconciliation({
-    port: 18789,
-    workspaceDir: "/tmp/openclaw-workspace",
-    isClosing,
-    runHook,
-  });
-  return {
-    ...reconciliation,
-    arm(reason: "startup" | "reload", id: string = reason, enabled = true) {
-      return reconciliation.arm({ reason, config: {}, cronState: createCronState(id, enabled) });
-    },
-    armSnapshot: reconciliation.arm,
-  };
-}
-
 describe("gateway cron reconciliation lifecycle", () => {
   let runHook: ReturnType<typeof vi.fn<RunHook>>;
   let closing: boolean;
-  let reconciliation: ReturnType<typeof createReconciliation>;
+  let reconciliation: ReturnType<typeof createGatewayCronReconciliation>;
   beforeEach(() => {
     runHook = vi.fn<RunHook>(async () => undefined);
     closing = false;
-    reconciliation = createReconciliation(runHook, () => closing);
+    reconciliation = createGatewayCronReconciliation({
+      port: 18789,
+      workspaceDir: "/tmp/openclaw-workspace",
+      isClosing: () => closing,
+      runHook,
+    });
   });
+  const arm = (reason: "startup" | "reload", enabled = true) =>
+    reconciliation.arm({
+      reason,
+      config: {},
+      cronState: { cron: {}, storePath: "/tmp/cron.json", cronEnabled: enabled } as never,
+    });
   it("emits only the public snapshot fields and captures the reconciled service", async () => {
     const cron = { id: "startup-cron" };
     const config = { cron: { enabled: true } } as OpenClawConfig;
@@ -38,7 +33,7 @@ describe("gateway cron reconciliation lifecycle", () => {
       storePath: "/private/cron.json",
       cronEnabled: false,
     };
-    const armed = reconciliation.armSnapshot({
+    const armed = reconciliation.arm({
       reason: "startup",
       config,
       cronState: cronState as never,
@@ -54,15 +49,15 @@ describe("gateway cron reconciliation lifecycle", () => {
       port: 18789,
       workspaceDir: "/tmp/openclaw-workspace",
       config,
+      abortSignal: expect.objectContaining({ aborted: false }),
     });
     expect(ctx?.getCron?.()).toBe(cron);
     expect(ctx?.abortSignal).toBeInstanceOf(AbortSignal);
-    expect(ctx?.abortSignal).toMatchObject({ aborted: false });
   });
 
   it("suppresses a startup completion superseded by reload", async () => {
-    const startup = reconciliation.arm("startup");
-    const reload = reconciliation.arm("reload");
+    const startup = arm("startup");
+    const reload = arm("reload");
 
     await startup.complete();
     await reload.complete();
@@ -72,11 +67,11 @@ describe("gateway cron reconciliation lifecycle", () => {
   });
 
   it("suppresses invalidated and shutdown completions", async () => {
-    const invalidated = reconciliation.arm("reload", "invalidated", true);
+    const invalidated = arm("reload");
     reconciliation.invalidate();
     await invalidated.complete();
 
-    const shutdown = reconciliation.arm("reload", "shutdown", false);
+    const shutdown = arm("reload", false);
     closing = true;
     await shutdown.complete();
 
@@ -97,10 +92,10 @@ describe("gateway cron reconciliation lifecycle", () => {
         }
         order.push(`${event.reason}:end`);
       });
-      const completion = reconciliation.arm("startup").complete();
+      const completion = arm("startup").complete();
       await vi.waitFor(() => expect(order).toEqual(["startup:start"]));
       if (action === "reload") {
-        const reload = reconciliation.arm("reload");
+        const reload = arm("reload");
         expect(activeSignal?.aborted).toBe(true);
         await reload.complete();
         expect(order).toEqual(["startup:start", "reload:start", "reload:end"]);
@@ -116,11 +111,3 @@ describe("gateway cron reconciliation lifecycle", () => {
     },
   );
 });
-
-function createCronState(id: string, cronEnabled: boolean) {
-  return {
-    cron: { id },
-    storePath: `/tmp/${id}.json`,
-    cronEnabled,
-  } as never;
-}

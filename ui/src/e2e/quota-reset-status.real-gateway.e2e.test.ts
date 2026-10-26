@@ -120,10 +120,11 @@ async function captureFinalStatus(
   expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: inject("controlUiE2eChromium").executablePath,
-  });
+  const { wsEndpoint } = inject("controlUiE2eChromium");
+  if (!wsEndpoint) {
+    throw new Error("Control UI E2E requires its shared Chromium server");
+  }
+  const browser = await chromium.connect(wsEndpoint);
   try {
     const context = await browser.newContext({
       locale: "en-US",
@@ -156,31 +157,34 @@ async function captureFinalStatus(
   }
 }
 
-describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)(
-  "Running Gateway quota status: %s",
-  (recovery) => {
-    it(
-      "serves the same account and shows ready status after recovery without restarting",
-      { timeout: 600_000 },
-      async (context) => {
+describe("Running Gateway quota status", () => {
+  it(
+    "serves the same account and shows ready status after each recovery without restarting",
+    { timeout: 600_000 },
+    async (context) => {
+      const fixture = await createQuotaResetFixture(context, {
+        source: "codex_rate_limits",
+        controlUi: true,
+      });
+      const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
+      const gatewayProcess = gateway.child;
+      expect(gatewayProcess?.pid).toEqual(expect.any(Number));
+      // Saved-only recovery needs an unadvanced clock. Each stage uses a fresh
+      // conversation while sharing the Gateway and its quota state.
+      for (const recovery of ["saved-clear", "automatic", "automatic-during-catalog"] as const) {
         const artifactDir = createControlUiE2eArtifactDir(`quota-refresh-${recovery}`);
-        const fixture = await createQuotaResetFixture(context, {
-          source: "codex_rate_limits",
-          controlUi: true,
-        });
-        const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
+        const sessionKey = `${fixture.sessionKey}-${recovery}`;
         let finalProfile: unknown;
-        const gatewayProcess = gateway.child;
         let catalogHold: ReturnType<typeof provider.holdNextCatalog> | undefined;
         let catalogRefresh:
           | Promise<{ ok: true; result: ModelsListResult } | { ok: false; error: unknown }>
           | undefined;
-        expect(gatewayProcess?.pid).toEqual(expect.any(Number));
         try {
-          expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+          provider.setPhase("healthy");
+          expect(await turn(sessionKey), evidence()).toEqual({ status: "ok", output: [MARKER] });
           await expect.poll(() => stats()?.lastProbeAt).toEqual(expect.any(Number));
           provider.setPhase("initial-exhaustion");
-          expect((await turn()).status, evidence()).toBe("error");
+          expect((await turn(sessionKey)).status, evidence()).toBe("error");
           const blocked = stats();
           expect(blocked, evidence()).toMatchObject({
             blockedReason: "subscription_limit",
@@ -254,7 +258,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             await auxiliary.text();
             expect(beforeRecoveryReply, evidence()).toBeUndefined();
           }
-          const nextTurn = await turn();
+          const nextTurn = await turn(sessionKey);
           const inference = provider.requests
             .slice(beforeRecovery)
             .filter((request) => request.path.endsWith("/responses"));
@@ -327,7 +331,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             JSON.stringify(await fixture.publicDiagnostics(finalProfile), null, 2),
           );
         }
-      },
-    );
-  },
-);
+      }
+    },
+  );
+});

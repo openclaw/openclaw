@@ -35,7 +35,7 @@ continues to run PostgreSQL 17. See the [qualification evidence](#server-major-q
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
 | Update admission, forward migrations and recovery | Supported                               | Exact captures and state/agent rollback; independent writes can prevent automatic recovery.                                                                                                                                    |
-| Latest published stable → current upgrade         | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. Stable PG → current is not applicable; [evidence and service/turn limits](#published-stable-upgrade-qualification). |
+| Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. Stable PG → current is not applicable; [evidence and service/turn limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
 | Mixed engines                                     | Supported                               | All four state/agent pairs and independently selected plugin families; one shared PostgreSQL connection configuration.                                                                                                         |
 | Independent Gateways on one server                | Supported                               | Separate databases recommended; distinct namespaces in one database also tested. One live Gateway per store.                                                                                                                   |
@@ -51,7 +51,10 @@ continues to run PostgreSQL 17. See the [qualification evidence](#server-major-q
 | `unaccent`, `pg_trgm`, `vector`                   | Supported requirements                  | Positive and missing-extension cases tested; administrators install extensions.                                                                                                                                                |
 | Headless Linux, including Linux under WSL2        | Supported                               | Linux PostgreSQL conformance and CLI/Gateway paths.                                                                                                                                                                            |
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
-| Headless native Windows                           | Experimental                            | No native Windows PostgreSQL acceptance run recorded. Test setup, turns, port, backup and update on Windows.                                                                                                                   |
+| Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
+| Native Windows managed service                    | Supported                               | Install, readiness, turns, graceful stop, restart continuity and data-preserving uninstall; [qualification](#native-windows-qualification).                                                                                    |
+| Native Windows package update with PG state       | Not yet applicable                      | No published release selects PostgreSQL for state and agent stores; requalify when one ships. [Evidence](#native-windows-qualification).                                                                                       |
+| Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
 
@@ -101,6 +104,65 @@ rejecting the row. Its first full attempt also exhausted the default lock table.
 The recorded full PG18 run used `max_locks_per_transaction=512` with 100
 connections; production sizing depends on actual concurrent store use.
 
+## Native Windows qualification
+
+The `PGQUALWIN` qualification on 2026-10-25 used Windows Server 2022 Datacenter
+build **20348.5761**, Node **24.22.1**, PostgreSQL **17.11** from the official EDB
+Windows installer, and pgvector **0.8.7** built from its official release tag with
+MSVC. Extensions were `pg_trgm` **1.6** and `unaccent` **1.1**. Both OpenClaw and
+PostgreSQL ran natively on Windows, connected over loopback TLS `verify-full`.
+Source pins, commands, timings, and redacted evidence are recorded in
+[PR #183512](https://github.com/openclaw/openclaw/pull/183512).
+
+Covered flows include non-interactive onboarding through a file DSN SecretRef,
+Doctor/status/models, foreground Gateway readiness and health, scripted turns,
+memory indexing/search, and forced Gateway restart continuity. A populated PG
+backup was created, verified, and restored into fresh staging with exact canonical
+digests and no embedding calls during backup/restore and index rebuild. Path checks
+covered spaces/non-ASCII names, drive-letter/backslash SecretRef and `sslrootcert`
+paths, and a **324-character state directory**. An unreachable DSN failed without
+credential leaks, and Gateway startup rejected invalid config with exit **78**.
+
+The `PGQUALWIN2` follow-up on the same Windows/Node/PostgreSQL versions qualified
+native Scheduled Task service lifecycle with a file DSN SecretRef. Patched build
+`8f8721740bdb`, whose service fix landed in
+[PR #183632](https://github.com/openclaw/openclaw/pull/183632), passed installation,
+readiness/health, a scripted turn, and completed graceful shutdown. No Gateway
+worker/bridge processes or OpenClaw role backends remained in `pg_stat_activity`.
+Start and restart preserved exact six-table, session/history and memory digests.
+Uninstall removed the service registration and retained PostgreSQL data, local
+anchors and the file SecretRef. Lifecycle checks emitted no embedding calls
+before deliberate memory-search probes, which separately embedded their queries.
+
+Host reboot recovery passed on the earlier build `5abc0c66e293`: the Scheduled
+Task ran automatically, a subsequent `gateway start` returned `already-running`,
+and readiness and continuity checks passed. Reboot was not repeated on the
+patched build. The baseline `2f95e977c77d`, target `5abc0c66e293` and patched service
+build used state **32** / agent **34**; this run does not qualify the later state
+33 / agent 35–36 migrations.
+
+**Package update with PostgreSQL state is not yet applicable.** No published
+release selected PostgreSQL for state and agent stores in the 2026-10-25 registry
+inspection. Stable **2026.10.7** lacks that support; **2026.10.10-beta.3** accepts
+the configuration but its bundled runtime selects SQLite for state and agent
+stores, with PostgreSQL enabled only for Workboard. Requalify published-release
+updates when a version selecting PostgreSQL state and agent stores ships.
+
+The previous-main update and managed rollback attempts did not complete.
+Separate handoff-path and candidate-admission fixes landed in
+[PR #183622](https://github.com/openclaw/openclaw/pull/183622) and
+[PR #183645](https://github.com/openclaw/openclaw/pull/183645). Manual package
+replacement followed the documented
+[recovery procedure](/install/updating/rollback-and-recovery), but does not qualify
+managed activation or rollback. Commands, source pins, continuity digests and
+timings are recorded in
+[PR #183634](https://github.com/openclaw/openclaw/pull/183634).
+
+Native Windows does not yet support SQLite ↔ PostgreSQL database port, including
+dry-run, resume, and rollback. The command refuses before creating recovery
+artifacts and leaves existing data and engine selection unchanged. Start with
+fresh PostgreSQL state on Windows, or run the port on Linux/macOS.
+
 ## When to use PostgreSQL
 
 Choose PostgreSQL when you want supported Gateway stores on an independently
@@ -142,6 +204,17 @@ and an idle connection lost by the server is replaced at the next open. Workers
 close their cached connections after three minutes idle or on shutdown. Taking a
 connection from the cache cancels its idle timeout; checked-out connections are
 not expired by this cache.
+
+Gateway workers share four PostgreSQL I/O services per process. The Gateway
+starts them when it selects PostgreSQL, overlapping their initialization with
+config and plugin preparation. Replies wake only their own connection; blocked
+callers check for service failure at intervals of at most 50 milliseconds.
+This changes where connections run, not their exclusive ownership or idle retention. An
+externally constructed SDK or plugin worker without inherited pool endpoints
+starts its own four services on first PostgreSQL use. It emits a once-per-thread
+warning and `openclaw.postgres.pool.self-root` diagnostic with the worker label
+and thread ID. Worker diagnostics count these roots separately from physical
+I/O services, so unexpected worker creation remains visible.
 
 Usage reports retain their reader in the existing history worker between requests.
 Each report still uses a fresh read snapshot; database maintenance and worker
@@ -399,7 +472,8 @@ ownership, routing, or failover.
 
 `database.families` can override `state`, `agent`, `workboard`, `logbook`, and
 `team-reports`. Every override requires an `engine`. All PostgreSQL families
-share one connection and prefix. Fixed-local journals cannot be overridden.
+share the same connection settings and schema prefix. Fixed-local journals cannot
+be overridden.
 
 For fresh stores, this selects PostgreSQL shared state while retaining SQLite
 agents and plugin stores:
@@ -438,7 +512,8 @@ selections require `--family`.
 
 Mixed installations support matched backup/restore and compatible updates.
 Whole-installation backups containing any PostgreSQL store require offline
-custody. Archive extraction still does not recreate PostgreSQL namespaces.
+custody. [Archive restore](#restore-all-postgresql-stores) imports captured
+PostgreSQL stores into fresh namespaces and publishes matching local anchors.
 Updates require candidate proof of family-override support as well as support
 for each selected or retained PostgreSQL family.
 
@@ -717,22 +792,40 @@ state migrations take their own exact backup before mutation.
 
 PostgreSQL schema upgrades run through `openclaw doctor --fix` or the normal
 update flow with writers stopped. A direct Gateway start on an older schema
-refuses and directs you to Doctor. For example, [state schema 32](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-db-engine.ts)
-and [agent schema 34](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-engine.ts)
-([#183015](https://github.com/openclaw/openclaw/pull/183015)) add nullability-aware
-index ordering by [recreating changed indexes](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/postgres-index-ordering.ts).
-The affected indexes rebuild in seconds: the three-index group on a 500,000-row
-table took about 1.1 seconds in the measured fixture, not including the rest of
-the upgrade. [Doctor's migration owner](https://github.com/openclaw/openclaw/blob/main/src/commands/doctor-schema-migrations.ts)
-and the [agent maintenance gate](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-maintenance-authority.ts)
-enforce stopped-writer maintenance.
+refuses and directs you to Doctor. With the Gateway and embedded writers stopped,
+run `openclaw doctor --fix` before restarting. Doctor takes a backup and applies
+the consecutive migrations needed by each store:
+
+- State 32 and agent 34 add nullability-aware PostgreSQL index ordering.
+- State 33 and agent 35 extend that ordering to partial indexes whose predicates
+  prove a key is non-null. Logbook 3 applies the same correction when its service
+  opens the store.
+- Agent 36 adds the three memory keyword path indexes described below.
+
+The ordering migrations rebuild only changed indexes; agent 36 creates only its
+three new indexes. SQLite advances version metadata without changing its indexes
+for these migrations. See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+and [agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36).
+Older binaries require the verified pre-upgrade backup and matching build;
+reinstalling an older package does not reverse these migrations.
+
+After a PostgreSQL major-version upgrade, `REINDEX` the
+`idx_memory_index_sources_exact_path`, `idx_memory_index_sources_basename`, and
+`idx_memory_index_sources_stem` indexes because `normalize()` follows PostgreSQL's
+Unicode tables.
 
 First boot, ports, rebuilds, and migrations can take longer on slow disks or a
 remote server. Connection waits allow 60 seconds. On runtime store connections,
 OpenClaw sets session-level `lock_timeout` to 60 seconds and `statement_timeout`
 to 90 seconds. These liveness bounds override role, database, and DSN startup
-settings; the synchronous bridge also has a 120-second deadline. These are not per-operation
-config options. Port and restore materialization allow a one-hour statement timeout.
+settings. The synchronous bridge has a 120-second deadline. If it expires, the
+process root terminates the whole I/O service, resetting every connection assigned
+to that service (roughly a quarter of the process's PostgreSQL connections) with
+an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
+deadline covers a wedged service or a black-holed network. Offline port and restore
+materialization use a direct asynchronous client with a one-hour statement timeout;
+those statements do not pass through the synchronous bridge.
+These are not per-operation config options.
 A timeout is a failure to investigate, not permission to delete recovery state.
 Inspect server load, locks, network, and storage, and retry only
 after resolving the reported cause.
@@ -807,6 +900,16 @@ These are workload and host measurements, not a latency SLA. A later apparent
 fourfold concurrency slowdown reproduced on an unchanged control under host
 load; the remaining roughly 5% difference was confounded by optional cost-summary
 work. Measure network latency, concurrency and server load for your deployment.
+
+The [four-service I/O pool qualification](https://github.com/openclaw/openclaw/pull/182888)
+measured a synthetic 20-agent installation at 7,714.1 → 1,950.7 MiB idle
+process-tree RSS and 337 → 12 I/O workers across three process roots. It did not
+reduce server connections: idle backends were 144 → 146. These are fixture
+measurements on the original pool candidate, not a memory budget for a deployed
+Gateway. The accepted follow-up measured about 0.1 ms higher foreground query
+p95 and a 25.2% higher cold-ready p95 across five paired runs, alongside a lower
+cold-ready median. The footprint reduction trades some query latency for memory;
+the pool does not promise faster queries.
 
 ## Monitoring and troubleshooting
 
@@ -935,6 +1038,8 @@ follow a prefix):
 | `PostgreSQL connection lost; transaction rolled back`                                                                                                  | Restore connectivity and reopen the failed store through its owner before retrying.                                      |
 | `PostgreSQL connection lost; outcome unknown`                                                                                                          | Reconcile whether the operation committed before repeating an external effect.                                           |
 
+### Outcome unknown after a connection loss
+
 Connection loss closes the failed connection. The engine distinguishes a known
 rolled-back transaction from an uncertain outcome, invalidating cached facts
 when a commit may have occurred. It does not switch to SQLite or promise
@@ -943,6 +1048,23 @@ connection so a subsequent operation can reopen the store once PostgreSQL is
 available. The interrupted operation is not replayed. Recover server connectivity
 and inspect the operation's recorded result before repeating an external effect.
 If another store remains unavailable, restart the Gateway through its service owner.
+
+The 120-second bridge deadline also has an unknown outcome and resets the whole
+I/O service, including its other assigned connections. Check the recorded result
+through the owning feature after connectivity recovers; a lost reply does not
+prove that the write rolled back. Do not blindly repeat an operation that could
+send a message, charge an account, or perform another external effect.
+
+### Slow first search after a bulk import
+
+Stale PostgreSQL planner statistics can contribute to slow queries after loading
+many rows. Database port and its post-port memory rebuild attempt `ANALYZE` after
+committing verified data. If that best-effort refresh fails, the command warns
+that the data is retained and autovacuum can refresh statistics later. Check for
+that warning and have the database operator inspect statistics and autovacuum,
+or run `ANALYZE` on the affected tables. This is not a required delay after every
+import: the agent 36 exact-path indexes support indexed lookup even before
+`ANALYZE`.
 
 ## Roll back to SQLite
 

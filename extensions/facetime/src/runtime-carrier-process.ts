@@ -16,11 +16,7 @@ export async function terminateExactCarrierProcesses(params: {
         ? "FaceTime"
         : peer.bundleIdentifier === "com.apple.FaceTime.FTConversationService"
           ? "FTConversationService"
-          : peer.bundleIdentifier === "com.apple.mobilephone"
-            ? "Phone"
-            : peer.bundleIdentifier === "com.apple.TelephonyUtilities"
-              ? "TelephonyUtilities"
-              : "";
+          : "";
     const inspectExactProcess = async (): Promise<boolean> => {
       const inspected = await params.runtime.system.runCommandWithTimeout(
         ["/bin/ps", "-p", String(peer.processId), "-o", "comm="],

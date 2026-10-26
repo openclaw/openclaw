@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
+import * as sourceProjection from "../config/runtime-source-projection.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
@@ -8,6 +10,8 @@ import {
   resolveProviderModelRoutes,
 } from "./provider-model-routes.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createIndeterminateRouteMock() {
   return vi.fn((_context: ProviderResolveModelRoutesContext) => ({
     kind: "indeterminate" as const,
@@ -15,6 +19,33 @@ function createIndeterminateRouteMock() {
 }
 
 describe("provider model route adapter", () => {
+  it.each(["present", "none", undefined] as const)(
+    "projects authored overrides only when the request has not already established them (%s)",
+    (requestTransportOverrides) => {
+      const project = vi.spyOn(sourceProjection, "projectConfigOntoRuntimeSourceSnapshot");
+      const resolveModelRoutes = createIndeterminateRouteMock();
+      const resolveRoutes = createProviderModelRoutesResolver({
+        provider: "fixture",
+        requestTransportOverrides,
+        config: configForProviders({
+          fixture: {
+            baseUrl: "https://provider.example.test/v1",
+            headers: { "x-route": "custom" },
+            models: [],
+          },
+        }),
+        env: {},
+        surface: { resolveModelRoutes },
+      });
+      resolveRoutes({ modelId: "first" });
+      resolveRoutes({ modelId: "second" });
+      expect(project).toHaveBeenCalledTimes(requestTransportOverrides === "present" ? 0 : 1);
+      expect(
+        resolveModelRoutes.mock.calls.map(([context]) => context.requestTransportOverrides),
+      ).toEqual(["present", "present"]);
+    },
+  );
+
   it("forwards a non-chat capability without inventing route intent", () => {
     const resolveModelRoutes = createIndeterminateRouteMock();
     resolveProviderModelRoutes({
@@ -39,17 +70,13 @@ describe("provider model route adapter", () => {
       resolveProviderModelRoutes({
         provider: "openai",
         modelId: "gpt-5.4-mini",
-        config: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-                agentRuntime: { id: "openclaw" },
-              },
-            },
+        config: configForProviders({
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "openclaw" },
           },
-        },
+        }),
         routeIntent: { runtimeId: "codex", authRequirement: "subscription", source },
         env: {},
         surface: { resolveModelRoutes },
@@ -67,28 +94,24 @@ describe("provider model route adapter", () => {
     "projects an explicit %s runtime pin without treating the adapter as a pin",
     (scope) => {
       const resolveModelRoutes = createIndeterminateRouteMock();
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              api: "openai-completions",
-              ...(scope === "provider" ? { agentRuntime: { id: "openclaw" } } : {}),
-              models: [
-                {
-                  id: "gpt-5.4-mini",
-                  name: "Small model",
-                  reasoning: false,
-                  input: ["text"],
-                  maxTokens: 4096,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  ...(scope === "model" ? { agentRuntime: { id: "openclaw" } } : {}),
-                },
-              ],
+      const config: OpenClawConfig = configForProviders({
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          ...(scope === "provider" ? { agentRuntime: { id: "openclaw" } } : {}),
+          models: [
+            {
+              id: "gpt-5.4-mini",
+              name: "Small model",
+              reasoning: false,
+              input: ["text"],
+              maxTokens: 4096,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              ...(scope === "model" ? { agentRuntime: { id: "openclaw" } } : {}),
             },
-          },
+          ],
         },
-      };
+      });
       resolveProviderModelRoutes({
         provider: "openai",
         modelId: "gpt-5.4-mini",

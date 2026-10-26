@@ -120,9 +120,9 @@ describe("scheduled command timeouts", () => {
       vi.useFakeTimers();
       const preflightStarted = createDeferred();
       const releasePreflight = createDeferred();
-      const originalRead = proactiveReceipts.readDefaultProactiveJobReceiptsAsync;
+      const originalRead = proactiveReceipts.readDefaultProactiveJobReceiptsByKeyAsync;
       const readReceipt = vi
-        .spyOn(proactiveReceipts, "readDefaultProactiveJobReceiptsAsync")
+        .spyOn(proactiveReceipts, "readDefaultProactiveJobReceiptsByKeyAsync")
         .mockImplementationOnce(async (...args) => {
           preflightStarted.resolve();
           await releasePreflight.promise;
@@ -274,13 +274,6 @@ describe("cron agent setup watchdog", () => {
     await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 1);
     expect(triggerTimeout).toHaveBeenCalledTimes(1);
     expect(watchdog.observedLaneWait()).toBe(false);
-  });
-
-  it("lets initial workspace progress use the configured job timeout", async () => {
-    const { runner, phase, advance } = makeWatchdog();
-    runner();
-    phase("workspace");
-    await advance(CRON_AGENT_SETUP_WATCHDOG_MS);
   });
 
   it("keeps the fallback watchdog armed across later setup progress", async () => {

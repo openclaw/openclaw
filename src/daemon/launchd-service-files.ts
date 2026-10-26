@@ -12,6 +12,10 @@ import {
 } from "./launchd-env-wrapper.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
+  prepareLaunchAgentCaEnvironment,
+  rethrowCaMigrationAuthorityError,
+} from "./launchd-legacy-ca-migration.js";
+import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist,
   normalizeLaunchdPlistXml,
@@ -112,7 +116,40 @@ async function prepareLaunchAgentPlist(
     definitionTransaction: GatewayServiceDefinitionTransactionHooks;
   },
 ): Promise<string> {
-  const entries = collectLaunchAgentEnvironmentEntries(params.environment);
+  const warn = (message: string) => {
+    if (params.warn) {
+      params.warn(message);
+    } else {
+      params.stdout?.write(`${formatLine("Warning", message)}\n`);
+    }
+  };
+  let installedExtraCa: string | undefined;
+  try {
+    // Read the actual installed service before replacing its private env file.
+    // The invoking updater shell does not own the service's CA configuration.
+    const installed = await readLaunchAgentProgramArgumentsFromFile(
+      resolveLaunchAgentPlistPathForLabel(params.env, params.label),
+      {
+        ...resolveLaunchAgentEnvironmentReadOptions(params.env, params.label),
+        requireEffective: true,
+      },
+    );
+    installedExtraCa = installed?.environment?.NODE_EXTRA_CA_CERTS;
+  } catch (error) {
+    rethrowCaMigrationAuthorityError(error);
+    warn(
+      "CA migration unavailable: the installed service environment could not be inspected. The installer retains its hardened trust policy; inspect service CA configuration and configure a distinct maintained NODE_EXTRA_CA_CERTS bundle if private connections fail.",
+    );
+  }
+  const environment = await prepareLaunchAgentCaEnvironment({
+    env: params.env,
+    label: params.label,
+    environment: params.environment,
+    installedExtraCa,
+    assertCurrent: () => params.definitionTransaction.assertCurrent(),
+    warn,
+  });
+  const entries = collectLaunchAgentEnvironmentEntries(environment);
   let { programArguments } = params;
   if (entries.length > 0) {
     // Secret values belong to the private env file, never inline plist XML.

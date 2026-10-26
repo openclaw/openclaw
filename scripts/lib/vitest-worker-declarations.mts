@@ -11,12 +11,25 @@ export const vitestWorkerRuntimeAssets = [
   "node-runtime-env.mjs",
 ];
 
-export const runtimeProcessDeclarationEntries = {
+export const rootRuntimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
     "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
   "extensions/document-extract/document-extractor-worker-entrypoint":
     "extensions/document-extract/document-extractor-worker-entrypoint.ts",
+  "infra/update-managed-service-handoff-runtime-assets":
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
+  "infra/package-update-activation-runtime-assets":
+    "src/infra/package-update-activation-runtime-assets.ts",
+};
+
+export const runtimeProcessDeclarationEntries = {
+  ...rootRuntimeProcessDeclarationEntries,
+  // Codex is package-owned and excluded from the root runtime bundle.
+  "extensions/codex/catalog-page-worker-entrypoint":
+    "extensions/codex/catalog-page-worker-entrypoint.ts",
+  "extensions/codex/session-history-worker-entrypoint":
+    "extensions/codex/session-history-worker-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
   "infra/postgres-sync/locks-runtime.test-support":
@@ -110,15 +123,10 @@ export const vitestWorkerDeclarationEntries = {
     "packages/terminal-core/src/table-runtime.test-support.ts",
   "extensions/discord/src/voice/audio-worker-entrypoints.test-support":
     "extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts",
-  // Codex is package-owned and excluded from the root runtime bundle.
-  "extensions/codex/catalog-page-worker-entrypoint":
-    "extensions/codex/catalog-page-worker-entrypoint.ts",
   "extensions/codex/doctor-closed-stdin.test-support":
     "extensions/codex/src/doctor-closed-stdin.test-support.ts",
   "extensions/codex/doctor-closed-stdin-entrypoint.test-support":
     "extensions/codex/src/doctor-closed-stdin-entrypoint.test-support.ts",
-  "extensions/codex/session-history-worker-entrypoint":
-    "extensions/codex/session-history-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
   "extensions/memory-core/manager-publication-admission-entrypoint.test-support":
@@ -141,10 +149,6 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts",
   "extensions/workboard/sqlite-backend-entrypoint.test-support":
     "extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts",
-  "infra/update-managed-service-handoff-runtime-assets":
-    "src/infra/update-managed-service-handoff-runtime-assets.ts",
-  "infra/package-update-activation-runtime-assets":
-    "src/infra/package-update-activation-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "infra/sqlite-readonly-worker.compile-cache-runtime.test-support":
     "src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts",

@@ -3,8 +3,11 @@ import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as transfer from "../../infra/sqlite-worker-transfer.js";
+import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { readConversation, registerConversationAddresses } from "./conversation-registry.js";
@@ -12,12 +15,17 @@ import { resolveConversationRouteFingerprint } from "./conversation-route-finger
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   applySessionEntryOperation,
+  patchSessionEntryCore,
   recordInboundSessionMeta,
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
 } from "./session-accessor.sqlite-entry.js";
+import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+import { withActor } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
 
 const { getSessionEntryPatchDelivery } =
@@ -25,6 +33,91 @@ const { getSessionEntryPatchDelivery } =
 const delivery = getSessionEntryPatchDelivery();
 const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+
+it("accepts hydrated owner ordering but rejects a changed owner during callback patches", async () => {
+  await withFixture(async (f) => {
+    const owner = assignSessionOwner(f.scope, {
+      owner: { type: "human", id: "synthetic-owner" },
+      assignedBy: { type: "system", id: "synthetic-system" },
+      assignedAt: 20,
+    });
+    await readSessionEntryInWorker(f.scope);
+    await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { pinnedAt: 30 } },
+      { skipMaintenance: true },
+    );
+    const result = await patchSessionEntryCore(
+      f.scope,
+      (entry) => {
+        // Retained facts keep owner before new metadata; SQL hydration appends it last.
+        const keys = Object.keys(entry);
+        expect(keys.indexOf("owner")).toBeLessThan(keys.indexOf("pinnedAt"));
+        return { label: "prepared with the same owner" };
+      },
+      { skipMaintenance: true, workerGuard: {} },
+    );
+    expect(result).toMatchObject({ label: "prepared with the same owner", pinnedAt: 30, owner });
+    expect(f.read()).toEqual(result);
+
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      assignSessionOwner(f.scope, {
+        owner: { type: "human", id: "replacement-owner" },
+        assignedBy: { type: "system", id: "synthetic-system" },
+        assignedAt: 40,
+      });
+    };
+    await expect(
+      patchSessionEntryCore(f.scope, () => ({ label: "stale owner patch" }), {
+        skipMaintenance: true,
+        workerGuard: {},
+      }),
+    ).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+    expect(f.read()).toMatchObject({
+      label: "prepared with the same owner",
+      owner: { actor: { type: "human", id: "replacement-owner" }, assignedAt: 40 },
+    });
+  });
+});
+
+it("keeps resident SQL metadata out of callback patch preparation and commit bytes", async () => {
+  await withActor(async (f) => {
+    const prompt = "synthetic tool instructions ".repeat(400);
+    const label = "synthetic session title ".repeat(400);
+    f.writeEntry({ ...f.nativeEntry()!, label, skillsSnapshot: { prompt, skills: [] } });
+    f.read();
+    const context: AgentWorkerOperationContext = {
+      options: { agentId: f.database.agentId, path: f.database.path },
+      open: () => f.database,
+      admit() {},
+      writeTransaction: (_operation, _owner, write) =>
+        runSqliteImmediateTransactionSync(f.database.db, () => write(f.database)),
+    };
+    const operations = await createAgentWorkerTestLoaders(context)["session.entry.patch.prepare"]();
+    const selection = { kind: "entry" as const, sessionKey: f.target.sessionKey, exact: true };
+    const prepared = structuredClone(operations["session.entry.patch.prepare"](selection, context));
+    const writeBase = prepared[0]!.entry;
+    const input = {
+      selection,
+      prepared,
+      sessionKey: f.target.sessionKey,
+      writeBase,
+      next: { ...writeBase, label: "small patch" },
+      operationLabel: "session-entry.patch" as const,
+      validateCanonicalKeys: true,
+    };
+    // The logical preimage is required for CAS; its duplicate SQL JSON is not.
+    const logicalEntryBudget = Buffer.byteLength(prompt) + Buffer.byteLength(label) + 4_096;
+    expect(serialize(prepared).byteLength).toBeLessThan(logicalEntryBudget);
+    expect(serialize(input).byteLength).toBeLessThan(logicalEntryBudget);
+    f.patchEntry(structuredClone(input));
+    expect(f.nativeEntry()).toMatchObject({
+      label: "small patch",
+      skillsSnapshot: { prompt, skills: [] },
+    });
+  });
+});
 
 async function conversationGuard(f: ReturnType<typeof fixture>, peerId: string) {
   const identity = buildConversationIdentity({
@@ -219,6 +312,64 @@ it("acknowledges no-result patches without transferring the entry and keeps fina
     ).rejects.toBe(refused);
     expect(current).toBe(false);
     expect(f.read()).toMatchObject({ label: "observed", skillsSnapshot: { prompt } });
+  });
+});
+
+it("reuses unchanged resident entry fields across patches without losing result isolation or newer writes", async () => {
+  await withFixture(async (f) => {
+    const prompt = "synthetic retained instructions ".repeat(4096);
+    const skills = [{ name: "synthetic-skill", requiredEnv: ["SYNTHETIC_REQUIRED"] }];
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      skillsSnapshot: { prompt, skills },
+      pinnedAt: 20,
+    });
+    await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "warm" } },
+      { result: "none", skipMaintenance: true },
+    );
+    const deliveredBytes: number[] = [];
+    const collect = transfer.createSqliteWorkerTransferCollector;
+    vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
+      collect(kind, (value) => {
+        deliveredBytes.push(serialize(value).byteLength);
+        consume(value);
+      }),
+    );
+    const result = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "changed", pinnedAt: undefined } },
+      { skipMaintenance: true },
+    );
+    expect(result).toMatchObject({ label: "changed", skillsSnapshot: { prompt, skills } });
+    expect(result?.pinnedAt).toBeUndefined();
+    expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
+    result!.skillsSnapshot!.prompt = "caller-owned";
+    result!.skillsSnapshot!.skills[0]!.name = "caller-mutated";
+    result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED");
+    result!.skillsSnapshot!.skills.push({ name: "caller-added" });
+    const next = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "next" } },
+      { skipMaintenance: true },
+    );
+    expect(next?.skillsSnapshot).toMatchObject({ prompt, skills });
+    expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      replaceSessionEntrySync(f.scope, {
+        ...f.read()!,
+        skillsSnapshot: { prompt: "newer persisted instructions", skills: [] },
+      });
+    };
+    const latest = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "after concurrent write" } },
+      { skipMaintenance: true },
+    );
+    expect(latest?.skillsSnapshot?.prompt).toBe("newer persisted instructions");
+    expect(f.read()).toEqual(latest);
   });
 });
 

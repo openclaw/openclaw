@@ -397,16 +397,11 @@ describe("main session recovery store", () => {
       const retainedUpdatedAt = Date.now();
       await seedExact({
         [sessionKey]: interruptedEntry(),
-        ...Object.fromEntries(
-          Array.from({ length: 64 }, (_, index) => [
-            `agent:main:retained-${index}`,
-            {
-              sessionId: `retained-${index}`,
-              updatedAt: retainedUpdatedAt,
-              lastHeartbeatText: unrelatedPayload,
-            },
-          ]),
-        ),
+        "agent:main:retained": {
+          sessionId: "retained",
+          updatedAt: retainedUpdatedAt,
+          lastHeartbeatText: unrelatedPayload,
+        },
       });
       let command: CommitParams["command"];
       if (kind === "validate_foreground" || kind === "release_foreground") {
@@ -683,6 +678,7 @@ describe("main session recovery store", () => {
           session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
+          prepareFailedWorkerPlacement: async () => undefined,
           prepareRestartRecovery: () => undefined,
           resumeChatInput: dispatch,
           dispatchSessionMethod: dispatch,

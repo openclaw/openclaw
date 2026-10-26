@@ -1,3 +1,4 @@
+import { main as checkSqlPortability } from "./check-sql-portability.mts";
 import {
   changedProductionFiles,
   inventory,
@@ -18,6 +19,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const args = parseRatchetArgs(argv.filter((arg) => arg !== "--full-tree"));
     if (args.prune) {
       throw new Error("SQLite dialect ratchet has no baseline to prune.");
+    }
+    if (checkSqlPortability(root, args.staged) !== 0) {
+      return 1;
     }
     const base = resolveRatchetBase(root, args);
     if (!base) {

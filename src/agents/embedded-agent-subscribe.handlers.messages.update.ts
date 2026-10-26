@@ -133,12 +133,9 @@ export function handleMessageUpdate(
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
     // here stays unconditional.
-    const block =
-      Array.isArray(msg.content) && msg.content.length === 1 ? msg.content[0] : undefined;
-    const nativeThinking = block?.type === "thinking" ? block : undefined;
     ctx.emitReasoningStream(
-      nativeThinking ?? (extractAssistantThinking(msg) || thinkingContent || thinkingDelta),
-      nativeThinking ? thinkingContent || thinkingDelta : undefined,
+      Array.isArray(msg.content) ? msg.content : [],
+      thinkingContent || thinkingDelta,
     );
     if (evtType === "thinking_end" && !suppressSourceReplyOutput) {
       // Mirror the open gate above: when confirmed source delivery has made the

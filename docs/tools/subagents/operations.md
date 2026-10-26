@@ -73,6 +73,11 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
+After execution ownership ends, the sweeper can reconcile the child's persisted
+terminal state even if routing metadata remains in memory. The completed result
+then follows normal completion delivery and retry; retained routing metadata does
+not keep the child running.
+
 During a graceful restart or Gateway suspension, lifecycle events from
 already-admitted runs remain tracked through restart preservation and completion
 processing. An already-admitted replacement run can finish refreshing a deferred

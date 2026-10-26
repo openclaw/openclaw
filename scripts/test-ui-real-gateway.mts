@@ -1,12 +1,16 @@
 // Spend the existing two UI worker slots on desktop + serial, then qualified fixtures.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPrebuiltUiE2eVitestConfig } from "../test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cache-slots.mts";
 import { mergeVitestExitCodes } from "./lib/vitest-outcome.mts";
+import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
+import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 
 const configPath = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 const desktopFile = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
@@ -22,8 +26,12 @@ export async function runRealGatewayUiTests(
   delete desktopEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   delete desktopEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
   let receivedSignal: NodeJS.Signals | undefined;
+  let compiledWorkers: VitestWorkerRun | undefined;
+  const onSignal = (signal: NodeJS.Signals) => {
+    receivedSignal ??= signal;
+  };
   const withCache = createVitestCacheSlots();
-  const run = async (args: string[], childEnv = env) => {
+  const run = async (args: string[], childEnv = env, workerRun?: VitestWorkerRun) => {
     return withCache(
       {
         config: configPath,
@@ -33,39 +41,66 @@ export async function runRealGatewayUiTests(
           ? {}
           : { cacheAssignment: { kind: "scheduler" as const, root: resolveVitestCacheRoot(env) } }),
       },
-      async ({ env: assignedEnv }) => ({
-        code: receivedSignal
-          ? signalExitCode(receivedSignal)
-          : await runManagedCommand({
-              bin: process.execPath,
-              args,
-              env: assignedEnv,
-              stdio: "inherit",
-              onSignal: (signal) => {
-                receivedSignal ??= signal;
-              },
-              requireProcessTreeExit: true,
-              waitForCleanupRelease: true,
-            }),
-        groupJoined: true,
-      }),
+      async ({ env: assignedEnv }) => {
+        if (receivedSignal) {
+          return { code: signalExitCode(receivedSignal), groupJoined: true };
+        }
+        const completion = Promise.withResolvers<number>();
+        let borrower: Promise<number> | undefined;
+        try {
+          const code = await runManagedCommand({
+            bin: process.execPath,
+            args: workerRun
+              ? [
+                  fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
+                  workerRun.descriptor.directory,
+                  ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
+                  ...args,
+                ]
+              : args,
+            env: assignedEnv,
+            stdio: workerRun ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
+            onReady(child) {
+              if (workerRun) {
+                borrower = workerRun.borrow(child, completion.promise);
+              }
+            },
+            onSignal,
+            requireProcessTreeExit: true,
+            waitForCleanupRelease: true,
+          });
+          completion.resolve(code);
+          return { code, groupJoined: true };
+        } catch (error) {
+          if (borrower) {
+            completion.reject(error);
+          }
+          throw error;
+        } finally {
+          await borrower;
+        }
+      },
     ).then(({ code }) => code);
   };
   const vitest = (projects: string[] = [], maxWorkers = workers) =>
-    run([
-      "scripts/run-vitest.mjs",
-      "run",
-      "--config",
-      configPath,
-      "--configLoader",
-      "runner",
-      ...reporterArgs,
-      "--maxWorkers",
-      String(maxWorkers),
-      ...projects.flatMap((project) => ["--project", project]),
-      "--exclude",
-      desktopFile,
-    ]);
+    run(
+      [
+        "scripts/run-vitest.mjs",
+        "run",
+        "--config",
+        configPath,
+        "--configLoader",
+        "runner",
+        ...reporterArgs,
+        "--maxWorkers",
+        String(maxWorkers),
+        ...projects.flatMap((project) => ["--project", project]),
+        "--exclude",
+        desktopFile,
+      ],
+      env,
+      compiledWorkers,
+    );
   const desktop = async () => {
     const code = await run(["--import", "tsx", "scripts/test-desktop-resize-real.mts"], desktopEnv);
     if (code > 1) {
@@ -115,26 +150,45 @@ export async function runRealGatewayUiTests(
     );
   const serial = selected(["ui-e2e-serial", "ui-e2e-serial-standalone"]);
   const qualified = selected(["ui-e2e-real-gateway", "ui-e2e-real-gateway-standalone"]);
-  const outcomes = await Promise.allSettled([
-    serial.length ? vitest(serial, 1) : Promise.resolve(0),
-    desktop(),
-  ]);
-  const errors = outcomes.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (errors.length) {
-    throw new AggregateError(errors, "UI proof phase or cleanup failed");
+  // The two Vitest phases borrow one generation; the desktop carrier owns its separate lifecycle.
+  if (serial.length && qualified.length) {
+    compiledWorkers = createVitestWorkerRun(
+      resolveVitestProcessEnv(env),
+      getVitestWorkerDescriptor(),
+      "runtime",
+    );
   }
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   let code = 0;
-  for (const outcome of outcomes) {
-    if (outcome.status === "fulfilled") {
-      code = mergeVitestExitCodes(code, outcome.value);
+  try {
+    const outcomes = await Promise.allSettled([
+      serial.length ? vitest(serial, 1) : Promise.resolve(0),
+      desktop(),
+    ]);
+    const errors = outcomes.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length) {
+      throw new AggregateError(errors, "UI proof phase or cleanup failed");
+    }
+    for (const outcome of outcomes) {
+      if (outcome.status === "fulfilled") {
+        code = mergeVitestExitCodes(code, outcome.value);
+      }
+    }
+    if (code <= 1 && qualified.length) {
+      code = mergeVitestExitCodes(code, await vitest(qualified));
+    }
+  } finally {
+    try {
+      await compiledWorkers?.dispose({ interrupted: Boolean(receivedSignal) });
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
     }
   }
-  if (code > 1 || !qualified.length) {
-    return code;
-  }
-  return mergeVitestExitCodes(code, await vitest(qualified));
+  return receivedSignal ? signalExitCode(receivedSignal) : code;
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

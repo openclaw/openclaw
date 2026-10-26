@@ -179,37 +179,33 @@ if (!isMainThread) {
            FROM cache_entries WHERE scope IN (?, ?)`,
         )
         .all(USAGE_COST_ROLLUP_SCOPE, USAGE_COST_PARTITION_SCOPE);
+      const row = (scope: string, key: string, value: object, blob: string, updated_at = 2) => ({
+        scope,
+        key,
+        value_json: JSON.stringify(value),
+        blob,
+        updated_at,
+      });
       const expected = ids.flatMap((id, index) => [
-        {
-          scope: USAGE_COST_ROLLUP_SCOPE,
-          key: id,
-          value_json: `{"totalTokens":${20 + index}}`,
-          blob: "11",
-          updated_at: 2,
-        },
-        {
-          scope: USAGE_COST_PARTITION_SCOPE,
-          key: usageCostPartitionKey(id, index < 25 ? "2026-03-01" : "2026-02-01"),
-          value_json: `{"tokens":${10 + index}}`,
-          blob: "22",
-          updated_at: 2,
-        },
+        row(USAGE_COST_ROLLUP_SCOPE, id, { totalTokens: 20 + index }, "11"),
+        row(
+          USAGE_COST_PARTITION_SCOPE,
+          usageCostPartitionKey(id, index < 25 ? "2026-03-01" : "2026-02-01"),
+          { tokens: 10 + index },
+          "22",
+        ),
       ]);
       expected.push(
-        {
-          scope: USAGE_COST_ROLLUP_SCOPE,
-          key: "unrelated",
-          value_json: '{"totalTokens":7}',
-          blob: "01",
-          updated_at: 1,
-        },
-        ...["2026-01-01", "2026-02-01"].map((date) => ({
-          scope: USAGE_COST_PARTITION_SCOPE,
-          key: usageCostPartitionKey("unrelated", date),
-          value_json: '{"tokens":3}',
-          blob: "02",
-          updated_at: 1,
-        })),
+        row(USAGE_COST_ROLLUP_SCOPE, "unrelated", { totalTokens: 7 }, "01", 1),
+        ...["2026-01-01", "2026-02-01"].map((date) =>
+          row(
+            USAGE_COST_PARTITION_SCOPE,
+            usageCostPartitionKey("unrelated", date),
+            { tokens: 3 },
+            "02",
+            1,
+          ),
+        ),
       );
       expect(rows).toHaveLength(103);
       expect(rows).toEqual(expect.arrayContaining(expected));

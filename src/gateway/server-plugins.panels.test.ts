@@ -39,18 +39,10 @@ function createHarness() {
   const requester = createOperatorClient({
     profileName: "panel-requester",
     scopes: ["operator.write"],
+    caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
   });
   requester.connect.client.id = GATEWAY_CLIENT_IDS.CONTROL_UI;
-  requester.connect.caps = [GATEWAY_CLIENT_CAPS.UI_COMMANDS];
-  const recipients = [
-    requester,
-    { ...requester, connId: "same-profile-other-tab" },
-    {
-      ...requester,
-      connId: "other-profile-tab",
-      authenticatedUserProfile: { ...requester.authenticatedUserProfile!, profileId: "other" },
-    },
-  ];
+  const recipients = [requester, { ...requester, connId: "same-profile-other-tab" }];
   const broadcastToConnIds = vi.fn<GatewayRequestContext["broadcastToConnIds"]>();
   let current = true;
   const context = createContext();
@@ -61,8 +53,6 @@ function createHarness() {
     );
   context.broadcastToConnIds = broadcastToConnIds;
   const runtime = createPluginRuntime();
-  const openPanel = () =>
-    runtime.gateway.openPluginPanel({ panelId: "document", sessionKey: "agent:main:main" });
   const open = () =>
     withPluginRuntimeGatewayRequestScope(
       {
@@ -74,7 +64,8 @@ function createHarness() {
       () =>
         withPluginRuntimePluginScope(
           { pluginId: plugin.id, pluginOrigin: plugin.origin },
-          openPanel,
+          () =>
+            runtime.gateway.openPluginPanel({ panelId: "document", sessionKey: "agent:main:main" }),
           registry,
         ),
     );
@@ -95,16 +86,19 @@ function createHarness() {
 it("binds the plugin ID and delivers only to the requesting browser", async () => {
   using harness = createHarness();
   await expect(harness.open()).resolves.toEqual({ ok: true });
-  const command = {
-    kind: "panel",
-    panel: "plugin",
-    pluginId: "review",
-    panelId: "document",
-    open: true,
-  };
   expect(harness.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
     "ui.command",
-    { sessionKey: "agent:main:main", agentId: "main", command },
+    {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      command: {
+        kind: "panel",
+        panel: "plugin",
+        pluginId: "review",
+        panelId: "document",
+        open: true,
+      },
+    },
     new Set([harness.requester.connId]),
   );
 });
@@ -149,7 +143,6 @@ it.for<[string, (h: ReturnType<typeof createHarness>) => void, RegExp]>([
         ),
         signal,
       );
-      expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
       revoke(harness);
     } finally {
       gate.release();

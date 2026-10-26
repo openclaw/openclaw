@@ -4,6 +4,14 @@ import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 
 export const TEAM_SCALE_SELF_INSTANCE_ID = "team-scale-self";
 
+export const TEAM_SCALE_AVATAR_ASSET = {
+  contentType: "image/png",
+  body: Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAALElEQVR4nO3NMQkAAAwDsEqv9Jko7AnkT9L+EIvFYrFYLBaLxWKxWCwWi3cOaSNAW3upfawAAAAASUVORK5CYII=",
+    "base64",
+  ),
+};
+
 function personId(index: number) {
   return `team-person-${String(index + 1).padStart(3, "0")}`;
 }
@@ -45,17 +53,10 @@ export function createTeamScalePeople(
   const sharingPeople = options.sharing ? people.slice(34, 82) : [];
   const avatarAssets = new Map<string, { body: Buffer; contentType: string }>();
   if (options.sharing) {
-    const asset = {
-      contentType: "image/png",
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAALElEQVR4nO3NMQkAAAwDsEqv9Jko7AnkT9L+EIvFYrFYLBaLxWKxWCwWi3cOaSNAW3upfawAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    };
     for (const profile of profiles.slice(34, 82)) {
       profile.hasAvatar = true;
       profile.avatarMime = "image/png";
-      avatarAssets.set(`/api/users/${profile.id}/avatar`, asset);
+      avatarAssets.set(`/api/users/${profile.id}/avatar`, TEAM_SCALE_AVATAR_ASSET);
     }
   }
   const sharingMembers = options.sharing

@@ -75,7 +75,30 @@ export class ChatMessageEntryAnimations {
             current = element instanceof HTMLElement ? element : undefined;
           }
           if (current && this.pending.delete(identity)) {
-            this.enter(current);
+            const arriving = current;
+            this.active.get(arriving)?.();
+            if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+              return;
+            }
+            const finish = () => {
+              if (this.active.get(arriving) !== finish) {
+                return;
+              }
+              this.active.delete(arriving);
+              stopEnd();
+              stopCancel();
+              // A completed class otherwise replays when the retained bubble is reparented.
+              arriving.classList.remove("chat-bubble--enter");
+            };
+            const settled = (event: AnimationEvent) => {
+              if (event.target === arriving && event.animationName === "chat-message-enter") {
+                finish();
+              }
+            };
+            this.active.set(arriving, finish);
+            const stopEnd = listen(arriving, "animationend", settled);
+            const stopCancel = listen(arriving, "animationcancel", settled);
+            arriving.classList.add("chat-bubble--enter");
           }
         });
       }
@@ -94,32 +117,6 @@ export class ChatMessageEntryAnimations {
     }
     this.committed = entries;
     this.enabled = enabled;
-  }
-
-  private enter(element: HTMLElement): void {
-    this.active.get(element)?.();
-    if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-      return;
-    }
-    const finish = () => {
-      if (this.active.get(element) !== finish) {
-        return;
-      }
-      this.active.delete(element);
-      stopEnd();
-      stopCancel();
-      // A completed class otherwise replays when the retained bubble is reparented.
-      element.classList.remove("chat-bubble--enter");
-    };
-    const settled = (event: AnimationEvent) => {
-      if (event.target === element && event.animationName === "chat-message-enter") {
-        finish();
-      }
-    };
-    this.active.set(element, finish);
-    const stopEnd = listen(element, "animationend", settled);
-    const stopCancel = listen(element, "animationcancel", settled);
-    element.classList.add("chat-bubble--enter");
   }
 
   refFor = (key: string): ((element?: Element) => void) | undefined => this.refs.get(key);

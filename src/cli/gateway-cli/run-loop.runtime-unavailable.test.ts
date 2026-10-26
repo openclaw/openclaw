@@ -152,7 +152,8 @@ it("keeps the process hard-exit watchdog armed while native-worker close is unse
     try {
       // Let the shared lifecycle fixture install its partial restart mocks before
       // loading this owner, whose imports also reach the restart module.
-      const { requestGatewayNativeWorkerRecovery } = await import("../../infra/process-respawn.js");
+      const { requestGatewayNativeWorkerRecovery } =
+        await import("../../infra/gateway-native-worker-recovery.js");
       const recovery = await requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
       expect(recovery.status, recovery.reason).toBe("restart-requested");
       await closing.entered;

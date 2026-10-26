@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD as subscribe } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD as subscribe,
+} from "../../../src/gateway/control-ui-contract.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { publicationMethods } from "./chat-github-publication.test-support.ts";
@@ -37,7 +39,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: row.key } });
       await page.locator("openclaw-chat-pane.chat-pane-cache__pane--active").waitFor();
       await gateway.waitForRequest("sessions.github.options");
       const ownRead = await gateway.waitForRequest(subscribe);

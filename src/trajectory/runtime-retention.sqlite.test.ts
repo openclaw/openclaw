@@ -13,7 +13,7 @@ import {
   readSqliteDatabaseScopedWriteToken,
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
-import { retainAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
+import { retainAgentDatabase } from "../state/openclaw-agent-db-borrower.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,

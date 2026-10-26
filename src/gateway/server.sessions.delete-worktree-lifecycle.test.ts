@@ -276,7 +276,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   }
 });
 
-test("sessions.delete snapshots dirty work before admitting same-key successor worktree creation", async () => {
+test("archived deletion replies before snapshotting while fencing same-key successor creation", async () => {
   await using fixture = await createDeletionFixture();
   const { workspace, storePath } = fixture;
   const key = "agent:main:dashboard:delete-worktree-successor";
@@ -297,11 +297,17 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
   const removal = createStartupGate();
   const originalRemove = captureMethodCall("remove")(ManagedWorktreeService.prototype);
   using removeSpy = vi.spyOn(ManagedWorktreeService.prototype, "remove");
+  let deletion: ReturnType<typeof directSessionReq<{ deleted: boolean }>> | undefined;
   try {
     const create = () => createWorktree({ key, agentId: "main" }, adminClient);
     const predecessor = await create();
     expect(predecessor.ok, JSON.stringify(predecessor)).toBe(true);
     const predecessorSessionId = predecessor.payload!.sessionId;
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({ ...entry!, archivedAt: Date.now() }),
+      { skipMaintenance: true },
+    );
     const predecessorWorktree = predecessor.payload!.worktree;
     await fs.writeFile(path.join(predecessorWorktree.path, "dirty.txt"), "keep me\n");
 
@@ -317,11 +323,21 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
       return await originalRemove(this, params);
     });
 
-    const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
-      key,
-      expectedSessionId: predecessorSessionId,
-    });
+    const responses: unknown[] = [];
+    deletion = directSessionReq<{ deleted: boolean }>(
+      "sessions.delete",
+      { key, expectedSessionId: predecessorSessionId, archivedOnly: true },
+      { onResponse: (response) => responses.push(response) },
+    );
     await removal.entered;
+    expect(responses).toEqual([
+      expect.objectContaining({ ok: true, payload: expect.objectContaining({ deleted: true }) }),
+    ]);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+    expect(getRegistryWorktree(process.env, predecessorWorktree.id)?.snapshotRef).toBeUndefined();
+    expect(await fs.readFile(path.join(predecessorWorktree.path, "dirty.txt"), "utf8")).toBe(
+      "keep me\n",
+    );
     let successorSettled = false;
     const successorPromise = create().then((result) => {
       successorSettled = true;
@@ -333,6 +349,7 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
     removal.release();
     const [deleted, successor] = await Promise.all([deletion, successorPromise]);
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(responses).toHaveLength(1);
     const removedPredecessor = getRegistryWorktree(process.env, predecessorWorktree.id);
     expect(removedPredecessor).toMatchObject({
       removedAt: expect.any(Number),
@@ -378,17 +395,19 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
     await runLease.release();
   } finally {
     removal.release();
+    await deletion;
   }
 });
 
 test.each([
-  ["sessions.delete", "snapshot-failed"],
-  ["sessions.delete", "finalized"],
-  ["sessions.delete", "busy"],
-  ["sessions.delete", "owner-mismatch"],
-  ["sessions.reset", "removed"],
-  ["sessions.reset", "busy"],
-] as const)("%s reports worktree truth after %s", async (method, outcome) => {
+  ["sessions.delete", "snapshot-failed", false],
+  ["sessions.delete", "snapshot-failed", true],
+  ["sessions.delete", "finalized", false],
+  ["sessions.delete", "busy", false],
+  ["sessions.delete", "owner-mismatch", false],
+  ["sessions.reset", "removed", false],
+  ["sessions.reset", "busy", false],
+] as const)("%s cleanup outcome=%s archived=%s", async (method, outcome, archivedOnly) => {
   await using fixture = await createDeletionFixture();
   const { workspace, storePath } = fixture;
   const incognito = method === "sessions.reset";
@@ -435,13 +454,33 @@ test.each([
       });
     }
 
-    const deleted = await directSessionReq<SessionsDeleteResult>(method, {
-      key,
-      ...(outcome === "owner-mismatch" ? { deleteTranscript: false } : {}),
-    });
+    if (archivedOnly) {
+      await patchSessionEntryCore(
+        { storePath, sessionKey: key },
+        (entry) => ({ ...entry!, archivedAt: Date.now() }),
+        { skipMaintenance: true },
+      );
+    }
+    const replies: unknown[] = [];
+    const deleted = await directSessionReq<SessionsDeleteResult>(
+      method,
+      {
+        key,
+        ...(archivedOnly ? { archivedOnly: true } : {}),
+        ...(outcome === "owner-mismatch" ? { deleteTranscript: false } : {}),
+      },
+      { onResponse: (response) => replies.push(response) },
+    );
+    expect(replies).toHaveLength(1);
+    if (outcome === "snapshot-failed") {
+      expect(getRegistryWorktree(process.env, worktree.id)?.runEndCleanup).toMatchObject({
+        outcome: "failed",
+        reason: expect.stringContaining("simulated snapshot failure"),
+      });
+    }
 
     const preserved = outcome !== "finalized" && outcome !== "removed";
-    if (preserved) {
+    if (preserved && !archivedOnly) {
       const { id, path: worktreePath, branch } = worktree;
       expect(deleted).toMatchObject({
         ok: true,

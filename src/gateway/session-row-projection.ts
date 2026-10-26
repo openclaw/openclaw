@@ -224,14 +224,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const lookup = (query: records.Lookup) =>
     disposed
       ? undefined
-      : rowReads.lookupSessionRow(query, {
-          cfg,
-          rows,
-          byKey,
-          scope,
-          stores,
-          assertCurrent: assertActive,
-        });
+      : rowReads.lookupSessionRow(query, cfg, rows, byKey, scope, stores, assertActive);
   function referenced(ref: string) {
     return records.firstReferenced(ref, rows, byKey, stores.keys());
   }
@@ -630,6 +623,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
+    hasLogicalChildEntries: (parent: Pick<records.Row, "agentId" | "key">) =>
+      byParent.has(records.logicalSessionRowIdentity(parent.agentId, parent.key)),
     get physicalPaths() {
       return scope.physicalPaths;
     },

@@ -23,6 +23,7 @@ export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
   offRosterSession?: boolean;
+  rowFacts?: boolean;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SessionSnapshotStore | undefined = pane
@@ -75,6 +76,9 @@ export async function persistColdLoadWarmState(input: {
         session: Object.entries(sessionStorage),
       },
       messages: record.snapshot.messages.length,
+      ...(input.rowFacts
+        ? { snapshotBytes: new TextEncoder().encode(JSON.stringify(record)).byteLength }
+        : {}),
       databaseVersion: database.version,
       projectionVersion: record.projectionVersion,
       sidebarView: sidebar.model.navigationView,
@@ -88,6 +92,7 @@ export async function persistColdLoadWarmState(input: {
 export async function restoreColdLoadWarmState(
   page: Page,
   storage: Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"],
+  leavingStorage?: typeof storage,
 ) {
   const url = page.url();
   const resetUrl = new URL("/__control-ui-bench-warm-reset__", url).href;
@@ -95,6 +100,15 @@ export async function restoreColdLoadWarmState(
   // Unload pagehide writers first; Playwright setStorageState would also clear the HTTP cache.
   await page.mainFrame().goto(resetUrl);
   await page.unroute(resetUrl);
+  if (leavingStorage) {
+    // Priming captures the leaving variant's native exit writes; repeats keep frozen inputs.
+    const exit = await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }));
+    leavingStorage.local = exit.local;
+    leavingStorage.session = exit.session;
+  }
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
       const databases: Record<string, Record<string, unknown[]>> = {

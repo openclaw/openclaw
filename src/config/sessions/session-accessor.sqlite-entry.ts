@@ -84,16 +84,19 @@ export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.
 export { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
 export { listSessionEntryKeysReadOnly } from "./session-retirement-read.js";
 export {
-  loadExactSessionEntry,
-  loadExactSessionEntryCandidates,
   loadExactSessionEntryFromStoreReadOnly,
   loadExactSessionEntryReadOnly,
-  loadSessionEntry,
   loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnly,
   withSessionEntryReadOnlyScope,
   loadSessionEntryReadOnlyInScope,
 } from "./session-accessor.sqlite-exact-read.js";
+
+export {
+  loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadSessionEntry,
+} from "./session-accessor.sqlite-entry-admitted-read.js";
 
 export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
 

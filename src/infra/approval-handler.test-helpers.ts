@@ -1,6 +1,7 @@
 // Provides native approval runtime stubs for approval tests.
 import { vi } from "vitest";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime.js";
+import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
 
 // Shared approval-runtime stubs keep channel approval tests focused on route
 // behavior instead of rebuilding the native adapter shape.
@@ -52,5 +53,18 @@ export function createApprovalNativeRuntimeAdapterStubs(
     observe: {
       onFinalized: params.onFinalized,
     },
+  };
+}
+
+export function createSystemAgentChangeRequest(
+  sessionId: string,
+): SystemAgentApprovalRequestPayload {
+  return {
+    title: "OpenClaw change",
+    description: "restart the Gateway",
+    command: "restart the Gateway",
+    proposalHash: "a".repeat(64),
+    allowedDecisions: ["allow-once", "deny"],
+    sessionId,
   };
 }

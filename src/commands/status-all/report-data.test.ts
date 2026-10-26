@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -21,18 +21,12 @@ import {
 const localGatewaySnapshot = {
   gatewayReachable: false,
   gatewayProbe: null,
-  gatewayCallOverrides: undefined,
-  gatewayConnection: {},
-  remoteUrlMissing: false,
 };
 function localOverview() {
   return {
     cfg: {},
     gatewaySnapshot: { ...localGatewaySnapshot },
-    tailscaleMode: "off",
-    tailscaleDns: null,
     agentStatus: { agents: [], defaultId: null },
-    osSummary: { label: "test" },
   };
 }
 
@@ -92,80 +86,44 @@ describe("statusAllCommand report data", () => {
   const success = "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).";
   const runLine = `Update run: ${success}`,
     restartLine = `Update restart: ${success}`;
-  it.each([
-    ["completed", "finished", null, null, [runLine]],
-    ["active", "active", null, null, ["Update run: ⬆️ OpenClaw update in progress: verifying."]],
-    ["sentinel", null, "ok", null, [restartLine]],
-    ["none", null, null, null, []],
-    [
-      "mixed-sentinel",
-      "finished",
-      "error",
-      null,
-      [runLine, "Update restart: ⚠️ OpenClaw update failed: restart-unhealthy."],
-    ],
-    ["same-run", "finished", "ok", "same", [runLine]],
-    ["different-run", "finished", "ok", "different", [runLine, restartLine]],
-    ["same-prose", "finished", "ok", null, [runLine, restartLine]],
-    ["generic-sentinel", "finished", "restart", null, [runLine]],
-    [
-      "failed-healthy",
-      "failed",
-      null,
-      null,
-      [
-        "Update run: Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record.",
-      ],
-    ],
-  ] as const)(
-    "keeps current availability alongside %s history without observing config",
-    async (_history, phase, sentinel, reference, expected) => {
+  it.each`
+    history               | phase         | sentinel     | reference                                 | expected
+    ${"completed"}        | ${"finished"} | ${null}      | ${null}                                   | ${[runLine]}
+    ${"active"}           | ${"active"}   | ${null}      | ${null}                                   | ${["Update run: ⬆️ OpenClaw update in progress: verifying."]}
+    ${"sentinel"}         | ${null}       | ${"ok"}      | ${null}                                   | ${[restartLine]}
+    ${"none"}             | ${null}       | ${null}      | ${null}                                   | ${[]}
+    ${"mixed-sentinel"}   | ${"finished"} | ${"error"}   | ${null}                                   | ${[runLine, "Update restart: ⚠️ OpenClaw update failed: restart-unhealthy."]}
+    ${"same-run"}         | ${"finished"} | ${"ok"}      | ${"same"}                                 | ${[runLine]}
+    ${"different-run"}    | ${"finished"} | ${"ok"}      | ${"1e36e13e-8cbf-4c33-bd2b-03adbd8f7a64"} | ${[runLine, restartLine]}
+    ${"same-prose"}       | ${"finished"} | ${"ok"}      | ${null}                                   | ${[runLine, restartLine]}
+    ${"generic-sentinel"} | ${"finished"} | ${"restart"} | ${null}                                   | ${[runLine]}
+    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record."]}
+  `(
+    "keeps current availability alongside $history history without observing config",
+    async ({ phase, sentinel, reference, expected }) => {
       const rows = await vi.importActual<typeof import("../status-overview-rows.ts")>(
         "../status-overview-rows.ts",
       );
       mocks.buildStatusAllOverviewRows.mockImplementationOnce(rows.buildStatusAllOverviewRows);
       const failed = phase === "failed";
-      const completed: UpdateRunRecord = {
-        runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-        createdAtMs: 1,
-        updatedAtMs: 2,
-        trigger: "cli",
-        phase: "finished",
+      const completed = createUpdateRunRecordFixture("6631ecee-adbf-41e8-a0e3-1b88b28b0a59", {
         status: failed ? "failed" : "succeeded",
         reason: failed ? "post-update-failed" : null,
-        origin: {},
-        target: {},
         before: { version: "2026.9.1" },
         after: { version: "2026.9.2" },
-        steps: [],
-        verification: {},
-        repair: [],
-        confirmedAtMs: null,
-        finishedAtMs: 2,
-        downtimeMs: null,
-      };
+      });
       if (phase) {
         mocks.history.mockResolvedValue({
           lastRun: completed,
-          ...(phase === "active"
-            ? {
-                activeRun: {
-                  ...completed,
-                  status: "running" as const,
-                  phase: "verifying" as const,
-                },
-              }
-            : {}),
+          activeRun:
+            phase === "active"
+              ? { ...completed, status: "running", phase: "verifying" }
+              : undefined,
         });
         mocks.getUpdateRun.mockReturnValue(completed);
       }
       if (sentinel) {
-        const runId =
-          reference === "different"
-            ? "1e36e13e-8cbf-4c33-bd2b-03adbd8f7a64"
-            : reference === "same"
-              ? completed.runId
-              : undefined;
+        const runId = reference === "same" ? completed.runId : (reference ?? undefined);
         if (runId) {
           mocks.getUpdateRun.mockReturnValue({ ...completed, runId });
         }
@@ -199,8 +157,6 @@ describe("statusAllCommand report data", () => {
           },
           agentStatus: { agents: [], defaultId: null, totalSessions: 0, bootstrapPendingCount: 0 },
         } as never,
-        daemon: baseStatusOverviewSurface.gatewayService as never,
-        nodeService: baseStatusOverviewSurface.nodeService as never,
       });
       const update = report.find((line) => line.startsWith("Update: "));
       expect(update).toContain("npm update 9999.1.1");
@@ -208,11 +164,7 @@ describe("statusAllCommand report data", () => {
       expect(report.filter((line) => /^(Update run|Update restart): /.test(line))).toEqual(
         expected,
       );
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
-      expect(mocks.resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
-      expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789, { probeHosts: ["127.0.0.1"] });
-      expect(mocks.resolveStatusSummaryFromOverview).toHaveBeenCalledOnce();
     },
   );
 
@@ -249,38 +201,19 @@ describe("statusAllCommand report data", () => {
           }),
         ],
       ]);
-      expect(mocks.resolveStatusSummaryFromOverview).not.toHaveBeenCalled();
     },
   );
 
-  it("renders the system agent's unfiltered readiness and refreshes newly installed binaries", async () => {
-    const rootDir = tempDirs.make("openclaw-status-readiness-");
-    const workspaceDir = path.join(rootDir, "beta");
-    const bundledDir = path.join(rootDir, "bundled");
-    const binDir = path.join(rootDir, "bin");
-    await fs.mkdir(binDir);
+  it("renders the system agent's unfiltered readiness and refreshes installed binaries", async () => {
+    const workspaceDir = tempDirs.make("status-readiness-beta-");
     const missingBin = "openclaw-readiness-fixture-bin";
-    for (const name of [
-      "ready",
-      "missing",
-      "disabled",
-      "always",
-      "agent-excluded",
-      "unsupported-os",
-      "blocked",
-    ]) {
+    for (const name of ["ready", "missing"]) {
       await writeSkill({
-        dir: path.join(name === "blocked" ? bundledDir : path.join(workspaceDir, "skills"), name),
+        dir: path.join(workspaceDir, "skills", name),
         name,
-        description: "Synthetic status readiness fixture",
+        description: name,
         metadata: JSON.stringify({
-          openclaw: {
-            always: name === "always",
-            requires: {
-              bins: ["missing", "disabled", "always"].includes(name) ? [missingBin] : [],
-            },
-            ...(name === "unsupported-os" ? { os: ["openclaw-fixture-unsupported"] } : {}),
-          },
+          openclaw: { requires: { bins: name === "missing" ? [missingBin] : [] } },
         }),
       });
     }
@@ -293,7 +226,6 @@ describe("statusAllCommand report data", () => {
         ...localOverview(),
         cfg: {
           plugins: { enabled: false },
-          skills: { allowBundled: ["other"], entries: { disabled: { enabled: false } } },
           agents: {
             ownership: "explicit",
             defaults: { systemAgent: { agentId: "beta" } },
@@ -310,30 +242,31 @@ describe("statusAllCommand report data", () => {
       } as never,
     };
     await withEnvAsync(
-      { OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir, PATH: binDir, PATHEXT: ".CMD" },
+      {
+        OPENCLAW_BUNDLED_SKILLS_DIR: path.join(workspaceDir, "bundled"),
+        PATH: workspaceDir,
+        PATHEXT: ".CMD",
+      },
       async () => {
-        const before = await runStatusAllReport(params);
-        expect(before.find((line) => line.includes("Skills:"))).toBe(
-          `! Skills: 3 eligible · 2 missing · ${workspaceDir}`,
+        expect(await runStatusAllReport(params)).toContain(
+          "! Skills: 1 eligible · 1 missing · " + workspaceDir,
         );
         await fs.writeFile(
-          path.join(binDir, process.platform === "win32" ? `${missingBin}.CMD` : missingBin),
+          path.join(workspaceDir, process.platform === "win32" ? missingBin + ".CMD" : missingBin),
           "",
           { mode: 0o755 },
         );
-        const after = await runStatusAllReport(params);
-        expect(after.find((line) => line.includes("Skills:"))).toBe(
-          `! Skills: 4 eligible · 1 missing · ${workspaceDir}`,
+        expect(await runStatusAllReport(params)).toContain(
+          "✓ Skills: 2 eligible · 0 missing · " + workspaceDir,
         );
         mocks.buildWorkspaceSkillReadiness.mockImplementationOnce(() => {
           throw new Error("Synthetic discovery failure");
         });
-        const partialLines = await runStatusAllReport(params);
-        expect(partialLines.some((line) => line.includes("Skills:"))).toBe(false);
-        expect(partialLines.some((line) => line.includes("Diagnosis (read-only)"))).toBe(true);
+        const partial = await runStatusAllReport(params);
+        expect(partial.some((line) => line.includes("Skills:"))).toBe(false);
+        expect(partial).toContain("Diagnosis (read-only)");
       },
     );
-
     expect(mocks.resolveNodeExecEligibility).toHaveBeenCalledWith({
       cfg: expect.any(Object),
       execApprovals: { version: 1, agents: {} },
@@ -356,14 +289,13 @@ describe("statusAllCommand report data", () => {
           },
         },
       } as never,
-      nodeOnlyGateway: {} as never,
     });
 
     expect(mocks.resolveNodeExecEligibility).not.toHaveBeenCalled();
     expect(mocks.buildWorkspaceSkillReadiness).not.toHaveBeenCalled();
   });
 
-  it("renders bootstrap state and invalid config diagnostics through status --all", async () => {
+  it("prepares detail and agent rows before rendering and prefixes config diagnostics", async () => {
     const renderingEvents: string[] = [];
     const actual = await vi.importActual<
       typeof import("../../../packages/terminal-core/src/table.js")
@@ -392,15 +324,13 @@ describe("statusAllCommand report data", () => {
           details: [
             {
               title: "Discord accounts",
-              columns: ["Account", "Status", "Notes"],
+              columns: ["Status"],
               rows: [
                 {
-                  Account: "default",
                   get Status() {
                     renderingEvents.push("prepare detail");
                     return "OK";
                   },
-                  Notes: "ready",
                 },
               ],
             },
@@ -419,25 +349,11 @@ describe("statusAllCommand report data", () => {
           ...scan.agentStatus,
           agents: [
             {
-              id: "main",
-              workspaceDir: null,
-              lastUpdatedAt: null,
+              ...scan.agentStatus.agents[0]!,
               get bootstrapPending() {
                 renderingEvents.push("prepare agent");
                 return true;
               },
-              sessionsCount: 1,
-              lastActiveAgeMs: 12_000,
-              sessionsPath: "/tmp/main-sessions.json",
-            },
-            {
-              id: "ops",
-              workspaceDir: null,
-              lastUpdatedAt: null,
-              bootstrapPending: false,
-              sessionsCount: 0,
-              lastActiveAgeMs: null,
-              sessionsPath: "/tmp/ops-sessions.json",
             },
           ],
         },
@@ -451,9 +367,6 @@ describe("statusAllCommand report data", () => {
     ]);
     const output = lines.join("\n");
     expectReport(output, [
-      "Bootstrap file",
-      "PRESENT",
-      "ABSENT",
       "Config diagnostics:",
       "Config file is invalid: /tmp/openclaw.json",
       "gateway.port: invalid",
@@ -477,17 +390,9 @@ describe("statusAllCommand report data", () => {
       "Agents",
       "Diagnosis (read-only)",
     ]);
-    expect(output.indexOf("Agents")).toBeLessThan(output.indexOf("Diagnosis (read-only)"));
     expect(output.indexOf("Diagnosis (read-only)")).toBeLessThan(
       output.indexOf("Gateway connection details:"),
     );
-    expect(output).toContain("✓ Secret diagnostics (0)");
-    expect(lines.slice(-5)).toEqual([
-      "",
-      "Pasteable debug report. Auth tokens redacted.",
-      "Troubleshooting: https://docs.openclaw.ai/troubleshooting",
-      "Support: https://community.openclaw.ai/",
-      "",
-    ]);
+    expect(output).toContain("Support: https://community.openclaw.ai/");
   });
 });

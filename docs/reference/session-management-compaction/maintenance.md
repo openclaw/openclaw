@@ -170,9 +170,21 @@ have not been restored, rather than copying an incomplete history.
 
 After restoration, the running Gateway keeps that transcript hot for 24 hours
 to avoid repeatedly extracting recently viewed history. This cooldown is local
-to the process and resets when it restarts. Transcripts whose uncompressed
-JSONL, including restoration metadata, exceeds 64 MiB stay in SQLite; the bound
-limits restoration memory and worker time.
+to the process and resets when it restarts. Large transcript windows use ordered,
+independently checksummed chunks. Each uncompressed JSONL file, including its
+restoration metadata, is bounded to 64 MiB. Reads and restores process one chunk
+at a time; the window leaves SQLite only after every chunk is durable and verified.
+One large window can exceed the normal background byte budget because its removal
+is atomic; the worker yields between windows.
+
+Before building an archive, the worker checks the largest original event. An event above
+64 MiB skips envelope preparation and leaves the transcript in SQLite, while
+the batch continues with later candidates. The warning includes the session ID
+and a lower bound on the envelope bytes. Oversized rejections have a process-local
+24-hour cooldown to avoid repeated size checks and warnings; after a restart,
+the worker checks the stored byte counts again without unpacking known-oversized
+events. An event whose encoded envelope and restore metadata cannot fit one chunk
+also stays in SQLite. Existing single-file archives remain readable unchanged.
 
 The worker writes, syncs, and verifies an immutable archive before a guarded
 transaction records its location and removes the corresponding transcript
@@ -192,7 +204,7 @@ passes, including later passes with no new archive candidates. Physical
 database size therefore shrinks gradually; readers can delay reclamation.
 Use Doctor's offline `compact` operation when a full rewrite is needed.
 
-If an archive is missing or its recorded size or hash does not match, reading
+If any archive chunk is missing or its recorded size or hash does not match, reading
 or restoring that transcript fails explicitly. OpenClaw does not substitute an
 empty transcript. Restore the matching file from a backup, or restore a
 complete supported database backup; a checksum cannot reconstruct deleted
@@ -212,7 +224,10 @@ Settings reports these moves separately from newly archived transcripts.
 Direct database replication needs the `cold/` files as well; see
 [backing up cold transcripts](/install/backups#cold-transcript-backups).
 
-Cold storage uses [agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage).
+Cold storage began with [agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage);
+chunked windows require [agent schema 37](/reference/database-schemas/agent-schema-history#agent-schema-37).
+The forward migration adds an empty chunk table without rewriting existing
+transcript or archive rows. PostgreSQL agent stores use the same chunk contract.
 Use the supported update path and a verified pre-upgrade backup. An older
 build must not open a database after cold payloads have moved out of its event
 table, so lowering the schema marker is not a downgrade procedure.

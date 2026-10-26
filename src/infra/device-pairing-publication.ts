@@ -128,9 +128,23 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       for (const service of captured.pending) {
         service();
       }
-      return publications.get(path) === captured && !captured.blocked && captured.complete
-        ? captured.nodes
-        : undefined;
+      if (publications.get(path) !== captured || captured.blocked || !captured.complete) {
+        return undefined;
+      }
+      if (!captured.nodes) {
+        const bindings = new Map<string, DevicePairingBinding>();
+        for (const [deviceId, binding] of captured.rows) {
+          if (binding) {
+            bindings.set(deviceId, Object.freeze({ ...binding }));
+          }
+        }
+        // Complete receipts already carry the committed rows; discovery must not reread them.
+        const paired = Object.values(Object.fromEntries(captured.devices))
+          .filter((device) => device !== null)
+          .toSorted((a, b) => b.approvedAtMs - a.approvedAtMs);
+        captured.nodes = Object.freeze({ paired: freezeTrustedJsonSnapshot(paired), bindings });
+      }
+      return captured.nodes;
     },
     fail() {
       if (publications.get(path) === captured && captured.epoch === epoch) {
@@ -169,30 +183,6 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       captured.complete ||= complete;
       captured.blocked = false;
       return true;
-    },
-    prepareNodes(revision: string, paired: PairedDevice[]): DevicePairingNodeSnapshot {
-      if (
-        publications.get(path) !== captured ||
-        captured.blocked ||
-        captured.mutation ||
-        !captured.complete ||
-        captured.revision !== revision
-      ) {
-        throw new Error("Device pairing nodes require a current worker publication");
-      }
-      if (!captured.nodes) {
-        const bindings = new Map<string, DevicePairingBinding>();
-        for (const [deviceId, binding] of captured.rows) {
-          if (binding) {
-            bindings.set(deviceId, Object.freeze({ ...binding }));
-          }
-        }
-        captured.nodes = Object.freeze({
-          paired: freezeTrustedJsonSnapshot(paired),
-          bindings,
-        });
-      }
-      return captured.nodes;
     },
     beginMutation() {
       captured.epoch++;
