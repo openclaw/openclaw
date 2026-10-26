@@ -7,6 +7,20 @@ import { ModelSetupView } from "../view.tsx";
 
 export type { ModelSetupViewProps } from "../view-types.ts";
 
+function provider(id: string, label: string) {
+  return { id, brandId: id, label };
+}
+
+const openai = {
+  ...provider("openai", "OpenAI"),
+  icon: "https://cdn.example.com/openai.png",
+};
+const ollama = {
+  ...provider("ollama", "Ollama"),
+  icon: "https://cdn.simpleicons.org/ollama",
+  website: "https://ollama.com/download",
+};
+
 export const detected: SystemAgentSetupDetectResult = {
   candidates: [
     {
@@ -22,30 +36,24 @@ export const detected: SystemAgentSetupDetectResult = {
   ],
   manualProviders: [
     {
-      id: "gemini-api-key",
+      ...provider("gemini-api-key", "Google AI Studio API key"),
       brandId: "google",
       groupLabel: "Google",
-      label: "Google AI Studio API key",
       hint: "Supported API-key access from aistudio.google.com/apikey",
     },
     {
-      id: "openai",
-      brandId: "openai",
+      ...openai,
       groupLabel: "OpenAI",
-      label: "OpenAI",
       hint: "Use a project API key.",
-      icon: "https://cdn.example.com/openai.png",
     },
   ],
   authOptions: [
     {
+      ...openai,
       id: "openai-oauth",
-      brandId: "openai",
-      label: "OpenAI",
       kind: "oauth",
       featured: true,
       hint: "Continue in your browser.",
-      icon: "https://cdn.example.com/openai.png",
     },
     {
       id: "other-device",
@@ -56,41 +64,24 @@ export const detected: SystemAgentSetupDetectResult = {
   ],
   prepareOptions: [
     {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
+      ...ollama,
       hint: "Connect to an Ollama server and select a cloud or local model",
       actionLabel: "Choose connection",
-      icon: "https://cdn.simpleicons.org/ollama",
-      website: "https://ollama.com/download",
     },
     {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
+      ...provider("lmstudio", "LM Studio"),
       hint: "Connect to a running LM Studio server and use an already loaded model",
       actionLabel: "Connect server",
       icon: "https://cdn.simpleicons.org/lmstudio",
       website: "https://lmstudio.ai/download",
     },
     {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
+      ...provider("llama-cpp", "llama.cpp"),
       hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
       actionLabel: "Set up model",
     },
   ],
-  recommendedInstalls: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Run open models locally",
-      website: "https://ollama.com/download",
-      icon: "https://cdn.simpleicons.org/ollama",
-    },
-  ],
+  recommendedInstalls: [{ ...ollama, hint: "Run open models locally" }],
   workspace: "/tmp/workspace",
   setupComplete: false,
 };

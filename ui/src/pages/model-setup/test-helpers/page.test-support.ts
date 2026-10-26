@@ -3,10 +3,6 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../../test-helpers/application-context.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "../first-run-setup.ts";
 import type { ModelSetupPageState } from "../state.ts";
@@ -96,8 +92,8 @@ export async function mountPage(
     state: Extract<ModelSetupPageState, { phase: "ready" }>;
     client: GatewayBrowserClient;
   },
-): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
-  const provider = createApplicationContextProvider(context);
+) {
+  const provider = document.createElement("div");
   const page = createPage(context);
   vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
   page.routeData = { firstRun: fixture.firstRun };
