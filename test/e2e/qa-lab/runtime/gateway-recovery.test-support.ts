@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Server, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 
@@ -26,21 +25,29 @@ export function messageText(message: { content?: unknown }): string {
 function resolveRetryableHistoryDelayMs(error: unknown): number | null {
   let current = error;
   for (let depth = 0; depth < 4; depth += 1) {
-    if (!isRecord(current)) {
+    if (typeof current !== "object" || current === null || Array.isArray(current)) {
       break;
     }
-    if ((current.gatewayCode ?? current.code) === "UNAVAILABLE" && current.retryable === true) {
+    const shaped = current as {
+      cause?: unknown;
+      code?: unknown;
+      details?: unknown;
+      gatewayCode?: unknown;
+      retryable?: unknown;
+      retryAfterMs?: unknown;
+    };
+    if ((shaped.gatewayCode ?? shaped.code) === "UNAVAILABLE" && shaped.retryable === true) {
       const method =
-        typeof current.details === "object" && current.details !== null
-          ? (current.details as { method?: unknown }).method
+        typeof shaped.details === "object" && shaped.details !== null
+          ? (shaped.details as { method?: unknown }).method
           : undefined;
       if (typeof method !== "string" || method === "chat.history") {
-        return typeof current.retryAfterMs === "number" && Number.isFinite(current.retryAfterMs)
-          ? Math.max(100, Math.min(Math.floor(current.retryAfterMs), 5_000))
+        return typeof shaped.retryAfterMs === "number" && Number.isFinite(shaped.retryAfterMs)
+          ? Math.max(100, Math.min(Math.floor(shaped.retryAfterMs), 5_000))
           : 250;
       }
     }
-    current = current.cause;
+    current = shaped.cause;
   }
   return null;
 }
