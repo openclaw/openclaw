@@ -20,7 +20,8 @@ vi.mock("./src/static-status.js", () => ({ inspectFaceTimeStaticStatus: mocks.st
 vi.mock("./src/plugin-paths.js", () => ({
   inspectFaceTimeNativePackage: mocks.nativePackageReady,
 }));
-vi.mock("./src/driver-setup.js", () => ({
+vi.mock("./src/driver-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/driver-setup.js")>()),
   inspectFaceTimeDriver: vi.fn(async () => "current"),
   uninstallFaceTimeDriver: mocks.uninstallDriver,
 }));
