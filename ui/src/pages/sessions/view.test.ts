@@ -160,6 +160,14 @@ describe("sessions view", () => {
         renderView(result, { ...sharedProps, allAgentsScope });
         columnCount = 4 + Number(allAgentsScope) + Number(categoryGrouping);
         expect(queryAll("thead th")).toHaveLength(columnCount);
+        if (!categoryGrouping) {
+          expectTexts(
+            "thead th",
+            allAgentsScope
+              ? ["", "Session", "Agent", "Updated", "Actions"]
+              : ["", "Session", "Updated", "Actions"],
+          );
+        }
         expect(queryAll(".session-data-row .session-agent-col")).toHaveLength(
           allAgentsScope ? 1 : 0,
         );
