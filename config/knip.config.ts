@@ -418,6 +418,7 @@ const repositoryScriptEntries = [
   "scripts/perf/identifier-renormalization-measure.ts!",
   "scripts/perf/ingress-ip-measure.ts!",
   "scripts/perf/memory-ranking-copies.ts!",
+  "scripts/perf/memory-prompt-copy-measure.ts!",
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",
   "scripts/perf/native-control-port-measure.ts!",
   "scripts/perf/plugin-fresh-arrays-measure.mjs!",
