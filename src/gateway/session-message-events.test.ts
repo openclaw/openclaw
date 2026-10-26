@@ -116,6 +116,36 @@ async function createSessionStore(entries: StoreEntries, agentId?: string) {
   return storePath;
 }
 
+async function appendAssistant(storePath: string, sessionKey: string, text: string) {
+  const appended = await appendAssistantMessageToSessionTranscript({ storePath, sessionKey, text });
+  expect(appended.ok).toBe(true);
+  if (!appended.ok) {
+    throw new Error(`append failed: ${appended.reason}`);
+  }
+  return appended;
+}
+
+function messageMetadata(message: unknown) {
+  return requireRecord(requireRecord(message, "message")["__openclaw"], "metadata");
+}
+
+function eventMessage(frame: { payload?: unknown }) {
+  return requireRecord(requireRecord(frame.payload, "event payload").message, "event message");
+}
+
+function expectNoSessionMessage(
+  ws: GatewayWs,
+  sessionKey: string,
+  action: () => Promise<unknown> | void,
+) {
+  return expectNoMessageWithin({
+    watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
+    action: async () => {
+      await action();
+    },
+  });
+}
+
 function textMessage(text: string, role = "assistant", timestamp = Date.now()) {
   return { role, content: [{ type: "text", text }], timestamp };
 }
@@ -376,77 +406,68 @@ describe("session.message websocket events", () => {
     using mainWs = await openTestSocket({ origin: copilotOrigin });
     using otherWs = await openTestSocket();
     using legacyWs = await openTestSocket();
-    let otherReceived = false;
-    const observeOtherChat = (data: RawData) => {
-      const message = requireRecord(JSON.parse(rawDataToString(data)), "gateway message");
-      otherReceived ||= message.type === "event" && message.event === "chat";
-    };
-    try {
-      const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
-      await rejectCopilot(
-        sessionClientCredentialPath(storePath, "unpaired-copilot-device"),
-        { prePairDevice: false },
-        { code: "NOT_PAIRED" },
-      );
+    const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    await rejectCopilot(
+      sessionClientCredentialPath(storePath, "unpaired-copilot-device"),
+      { prePairDevice: false },
+      { code: "NOT_PAIRED" },
+    );
 
-      const pairedHello = await connectOk(pairingWs, {
-        ...copilotOptions,
-        deviceIdentityPath: copilotIdentityPath,
-        prePairDevice: true,
-        browserOrigin: copilotOrigin,
-      });
-      const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
-      expect(deviceToken).toBeTruthy();
-      pairingWs.close();
-      await rejectCopilot(
-        copilotIdentityPath,
-        { deviceToken, skipDefaultAuth: true },
-        { code: "NOT_PAIRED", message: "dedicated paired device identity" },
-        "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
-      );
+    const pairedHello = await connectOk(pairingWs, {
+      ...copilotOptions,
+      deviceIdentityPath: copilotIdentityPath,
+      prePairDevice: true,
+      browserOrigin: copilotOrigin,
+    });
+    const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
+    expect(deviceToken).toBeTruthy();
+    pairingWs.close();
+    await rejectCopilot(
+      copilotIdentityPath,
+      { deviceToken, skipDefaultAuth: true },
+      { code: "NOT_PAIRED", message: "dedicated paired device identity" },
+      "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
+    );
 
-      await connectOk(mainWs, {
-        ...copilotOptions,
-        deviceIdentityPath: copilotIdentityPath,
-        deviceToken,
-        skipDefaultAuth: true,
-      });
-      await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
-      await connectOk(legacyWs, { scopes: ["operator.read"] });
-      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
-      await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+    await connectOk(mainWs, {
+      ...copilotOptions,
+      deviceIdentityPath: copilotIdentityPath,
+      deviceToken,
+      skipDefaultAuth: true,
+    });
+    await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
+    await connectOk(legacyWs, { scopes: ["operator.read"] });
+    await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
+    await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
-      otherWs.on("message", observeOtherChat);
-      const chatEvents = [mainWs, legacyWs].map((ws) =>
-        onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
-      );
+    using otherChats = collectEventPayloads(otherWs, "chat");
+    const chatEvents = [mainWs, legacyWs].map((ws) =>
+      onceMessage(ws, matchingEvent("chat", { sessionKey: "agent:main:main" })),
+    );
 
-      const [send, ...delivered] = await Promise.all([
-        rpcReq(mainWs, "chat.send", {
-          sessionKey: "main",
-          message: "/status",
-          toolBindings: {
-            browser: {
-              kind: "tab",
-              tabId: 7,
-              target: "host",
-              profile: "chrome",
-              targetId: "target-7",
-            },
+    const [send, ...delivered] = await Promise.all([
+      rpcReq(mainWs, "chat.send", {
+        sessionKey: "main",
+        message: "/status",
+        toolBindings: {
+          browser: {
+            kind: "tab",
+            tabId: 7,
+            target: "host",
+            profile: "chrome",
+            targetId: "target-7",
           },
-          idempotencyKey: "scoped-delivery-proof",
-        }),
-        ...chatEvents,
-      ]);
-      expect(send.ok, JSON.stringify(send)).toBe(true);
-      expect(delivered).toHaveLength(2);
-      // Reasserting existing membership replies after any chat frame already queued on this socket.
-      const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
-      await expect(barrier).resolves.toMatchObject({ ok: true });
-      expect(otherReceived).toBe(false);
-    } finally {
-      otherWs.off("message", observeOtherChat);
-    }
+        },
+        idempotencyKey: "scoped-delivery-proof",
+      }),
+      ...chatEvents,
+    ]);
+    expect(send.ok, JSON.stringify(send)).toBe(true);
+    expect(delivered).toHaveLength(2);
+    // Reasserting existing membership replies after any chat frame already queued on this socket.
+    const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+    await expect(barrier).resolves.toMatchObject({ ok: true });
+    expect(otherChats.messages).toHaveLength(0);
   });
 
   test("rejects client identity changes across a dedicated copilot pairing", async () => {
@@ -539,15 +560,7 @@ describe("session.message websocket events", () => {
     await connectOk(nodeWs, { role: "node", scopes: [] });
 
     const subscribedEvent = waitForSessionMessageEvent(subscribedWs, "agent:main:main");
-    const appended = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "agent:main:main",
-      text: "subscribed only",
-      storePath,
-    });
-    expect(appended.ok).toBe(true);
-    if (!appended.ok) {
-      throw new Error(`append failed: ${appended.reason}`);
-    }
+    const appended = await appendAssistant(storePath, "agent:main:main", "subscribed only");
     const event = await subscribedEvent;
     expectRecordFields(event, {
       type: "event",
@@ -623,9 +636,7 @@ describe("session.message websocket events", () => {
       scopes: ["operator.read"],
     });
     await subscribeMessages(ws, sessionKey);
-    const avatar = (message: unknown) =>
-      requireRecord(requireRecord(message, "message")["__openclaw"], "sender metadata")
-        .senderProfileAvatarUrl;
+    const avatar = (message: unknown) => messageMetadata(message).senderProfileAvatarUrl;
     const checkReads = async (messageId: string, expected: string) => {
       const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
       const direct = await rpcReq<{ ok?: boolean; message?: unknown }>(ws, "chat.message.get", {
@@ -635,9 +646,7 @@ describe("session.message websocket events", () => {
       expect(history.ok).toBe(true);
       expect(direct).toMatchObject({ ok: true, payload: { ok: true } });
       const row = history.payload?.messages?.find(
-        (message) =>
-          requireRecord(requireRecord(message, "history row")["__openclaw"], "metadata").id ===
-          messageId,
+        (message) => messageMetadata(message).id === messageId,
       );
       expect([avatar(row), avatar(direct.payload?.message)]).toEqual([expected, expected]);
     };
@@ -671,7 +680,7 @@ describe("session.message websocket events", () => {
         },
       });
       expect(persisted).toBeDefined();
-      expect(avatar(requireRecord((await delivered).payload, "event").message)).toBe(currentAvatar);
+      expect(avatar(eventMessage(await delivered))).toBe(currentAvatar);
       await checkReads(persisted!.messageId, currentAvatar);
       if (previousMessageId) {
         await checkReads(previousMessageId, currentAvatar);
@@ -774,17 +783,12 @@ describe("session.message websocket events", () => {
           __openclaw: { beforeAgentRunBlocked: blocked },
         },
       });
-      const message = requireRecord(
-        requireRecord(messageEvent.payload, "payload").message,
-        "blocked message",
-      );
+      const message = eventMessage(messageEvent);
       expectRecordFields(message, {
         role: "user",
         content: [{ type: "text", text: "The agent cannot read this message." }],
       });
-      expect(requireRecord(message["__openclaw"], "metadata").beforeAgentRunBlocked).toEqual(
-        blocked,
-      );
+      expect(messageMetadata(message).beforeAgentRunBlocked).toEqual(blocked);
     });
   });
 
@@ -798,23 +802,19 @@ describe("session.message websocket events", () => {
         ws,
         "agent:main:hidden-runtime",
       );
-      await expectNoMessageWithin({
-        watch: (timeoutMs) =>
-          waitForSessionMessageEvent(ws, "agent:main:hidden-runtime", timeoutMs),
-        action: () => {
-          emitSessionTranscriptUpdate({
-            sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
-            sessionKey: "agent:main:hidden-runtime",
-            messageId: "runtime-context-1",
-            messageSeq: 1,
-            message: {
-              role: "custom",
-              customType: "openclaw.runtime-context",
-              content: "secret runtime context",
-              display: false,
-            },
-          });
-        },
+      await expectNoSessionMessage(ws, "agent:main:hidden-runtime", () => {
+        emitSessionTranscriptUpdate({
+          sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
+          sessionKey: "agent:main:hidden-runtime",
+          messageId: "runtime-context-1",
+          messageSeq: 1,
+          message: {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+          },
+        });
       });
 
       const changedEvent = await changedEventPromise;
@@ -928,27 +928,10 @@ describe("session.message websocket events", () => {
     await subscribeMessages(ws, "agent:main:main");
 
     const mainEvent = waitForSessionMessageEvent(ws, "agent:main:main");
-    const [mainAppend] = await Promise.all([
-      appendAssistantMessageToSessionTranscript({
-        sessionKey: "agent:main:main",
-        text: "main only",
-        storePath,
-      }),
-      mainEvent,
-    ]);
-    expect(mainAppend.ok).toBe(true);
-
-    await expectNoMessageWithin({
-      watch: (timeoutMs) => waitForSessionMessageEvent(ws, "agent:main:worker", timeoutMs),
-      action: async () => {
-        const workerAppend = await appendAssistantMessageToSessionTranscript({
-          sessionKey: "agent:main:worker",
-          text: "worker hidden",
-          storePath,
-        });
-        expect(workerAppend.ok).toBe(true);
-      },
-    });
+    await Promise.all([appendAssistant(storePath, "agent:main:main", "main only"), mainEvent]);
+    await expectNoSessionMessage(ws, "agent:main:worker", () =>
+      appendAssistant(storePath, "agent:main:worker", "worker hidden"),
+    );
 
     const unsubscribeRes = await rpcReq(ws, "sessions.messages.unsubscribe", {
       key: "agent:main:main",
@@ -956,17 +939,9 @@ describe("session.message websocket events", () => {
     expect(unsubscribeRes.ok).toBe(true);
     expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
-    await expectNoMessageWithin({
-      watch: (timeoutMs) => waitForSessionMessageEvent(ws, "agent:main:main", timeoutMs),
-      action: async () => {
-        const hiddenAppend = await appendAssistantMessageToSessionTranscript({
-          sessionKey: "agent:main:main",
-          text: "hidden after unsubscribe",
-          storePath,
-        });
-        expect(hiddenAppend.ok).toBe(true);
-      },
-    });
+    await expectNoSessionMessage(ws, "agent:main:main", () =>
+      appendAssistant(storePath, "agent:main:main", "hidden after unsubscribe"),
+    );
   });
 
   test("streams worker commits and local-equivalent live events to the selected session", async () => {
@@ -1016,8 +991,7 @@ describe("session.message websocket events", () => {
       );
       expect(
         payloads.map((payload) => {
-          const message = requireRecord(payload.message, "message");
-          const metadata = requireRecord(message["__openclaw"], "metadata");
+          const metadata = messageMetadata(payload.message);
           return [payload.messageId, payload.messageSeq, metadata.id, metadata.seq];
         }),
       ).toEqual(outcome.result.entryIds.map((id, index) => [id, index + 1, id, index + 1]));
@@ -1026,11 +1000,8 @@ describe("session.message websocket events", () => {
         onceMessage(ws, matchingEvent("chat", { runId }), timeoutMs);
       const [workerEvent] = await Promise.all([
         waitForChat("worker"),
-        expectNoMessageWithin({
-          watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
-          action: async () => {
-            expect((await push()).ok).toBe(true);
-          },
+        expectNoSessionMessage(ws, sessionKey, async () => {
+          expect((await push()).ok).toBe(true);
         }),
       ]);
       const workerChat = requireRecord(workerEvent.payload, "worker chat");
