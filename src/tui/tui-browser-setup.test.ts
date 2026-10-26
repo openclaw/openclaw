@@ -28,39 +28,30 @@ function setupResponse(action = "inspect", profile = "chrome") {
   };
 }
 
-it.each([
-  { local: false, profile: "chrome" },
-  { local: true, profile: "work" },
-])(
-  "dispatches locally while disconnected: local=$local, profile=$profile",
-  async ({ local, profile }) => {
-    const runJson = vi.fn().mockImplementation(async (args: string[]) => ({
-      ok: true,
-      value: setupResponse(args[4], profile),
-    }));
-    const h = createTuiCommandHandlersHarness({
-      opts: { local },
-      isConnected: false,
-      localCli: localCli(runJson),
-    });
-    expect(runJson).not.toHaveBeenCalled();
-    for (const action of ["", "install", "verify"]) {
-      await h.handleCommand("/browser-setup " + action);
-      expect(runJson).toHaveBeenLastCalledWith(
-        `browser extension setup --action ${action || "inspect"} --json --wait-ms 1000`.split(" "),
-      );
-    }
-    expect(h.sendChat).not.toHaveBeenCalled();
-    expect(h.openOverlay).not.toHaveBeenCalled();
-    expect(h.addSystem).toHaveBeenCalledWith(
-      expect.stringContaining(`target=TUI process host (not the Gateway), profile=${profile}`),
+it.each([false, true])("dispatches locally while disconnected: local=%s", async (local) => {
+  const profile = local ? "work" : "chrome";
+  const runJson = vi.fn().mockImplementation(async (args: string[]) => ({
+    ok: true,
+    value: setupResponse(args[4], profile),
+  }));
+  const h = createTuiCommandHandlersHarness({
+    opts: { local },
+    isConnected: false,
+    localCli: localCli(runJson),
+  });
+  for (const action of ["", "install", "verify"]) {
+    await h.handleCommand("/browser-setup " + action);
+    expect(runJson).toHaveBeenLastCalledWith(
+      `browser extension setup --action ${action || "inspect"} --json --wait-ms 1000`.split(" "),
     );
-    expect(h.addSystem).toHaveBeenCalledWith(
-      expect.stringContaining("Approve the extension in Chrome"),
-    );
-    expect(JSON.stringify(h.addSystem.mock.calls)).not.toMatch(/secret-in|private-host/);
-  },
-);
+  }
+  expect(h.sendChat).not.toHaveBeenCalled();
+  expect(h.openOverlay).not.toHaveBeenCalled();
+  const output = JSON.stringify(h.addSystem.mock.calls);
+  expect(output).toContain(`target=TUI process host (not the Gateway), profile=${profile}`);
+  expect(output).toContain("Approve the extension in Chrome");
+  expect(output).not.toMatch(/secret-in|private-host/);
+});
 
 it("rejects extra arguments without history, model forwarding, or local execution", async () => {
   const runJson = vi.fn();

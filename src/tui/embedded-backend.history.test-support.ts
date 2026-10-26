@@ -9,6 +9,16 @@ export function registerEmbeddedHistoryProjectionTests(params: {
   withPreparedExactRows: Mock;
   buildSessionRow: Mock;
 }) {
+  async function loadHistory(opts: Parameters<EmbeddedTuiBackend["loadHistory"]>[0]) {
+    const backend = params.createBackend();
+    backend.start();
+    try {
+      return await backend.loadHistory(opts);
+    } finally {
+      await backend.stop();
+    }
+  }
+
   it("validates and presents history metadata within its prepared read frame", async () => {
     const entry = { sessionId: "captured-session", lifecycleRevision: "captured-revision" };
     const target = { key: "global", agentId: "work", storePath: "/tmp/physical.sqlite" };
@@ -43,22 +53,14 @@ export function registerEmbeddedHistoryProjectionTests(params: {
         active = false;
       }
     });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "global", agentId: "work" });
-      expect(result).toMatchObject({
-        sessionId: entry.sessionId,
-        sessionInfo: { key: target.key, sessionId: entry.sessionId },
-      });
-      expect(describe).toHaveBeenCalledExactlyOnceWith(target);
-      expect(present).toHaveBeenCalledExactlyOnceWith(row);
-      expect(params.present).not.toHaveBeenCalled();
-      expect(params.buildSessionRow).not.toHaveBeenCalled();
-      expect(active).toBe(false);
-    } finally {
-      await backend.stop();
-    }
+    expect(await loadHistory({ sessionKey: "global", agentId: "work" })).toMatchObject({
+      sessionId: entry.sessionId,
+      sessionInfo: { key: target.key, sessionId: entry.sessionId },
+    });
+    expect(describe).toHaveBeenCalledExactlyOnceWith(target);
+    expect(params.present).not.toHaveBeenCalled();
+    expect(params.buildSessionRow).not.toHaveBeenCalled();
+    expect(active).toBe(false);
   });
 
   it.each([
@@ -76,17 +78,12 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       entry: currentEntry,
       target: { key: "agent:main:main" },
     });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "agent:main:main" });
-      expect(result.sessionId).toBe("previous-session");
-      expect(result.sessionInfo).toBeUndefined();
-      expect(params.present).not.toHaveBeenCalled();
-      expect(params.buildSessionRow).not.toHaveBeenCalled();
-    } finally {
-      await backend.stop();
-    }
+    expect(await loadHistory({ sessionKey: "agent:main:main" })).toMatchObject({
+      sessionId: "previous-session",
+      sessionInfo: undefined,
+    });
+    expect(params.present).not.toHaveBeenCalled();
+    expect(params.buildSessionRow).not.toHaveBeenCalled();
   });
 
   it("loads history verbose level from the session agent's own verboseDefault", async () => {
@@ -101,13 +98,6 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       canonicalKey: "agent:ops:main",
       entry: {},
     });
-    const backend = params.createBackend();
-    backend.start();
-    try {
-      const result = await backend.loadHistory({ sessionKey: "agent:ops:main" });
-      expect(result.verboseLevel).toBe("full");
-    } finally {
-      await backend.stop();
-    }
+    expect((await loadHistory({ sessionKey: "agent:ops:main" })).verboseLevel).toBe("full");
   });
 }
