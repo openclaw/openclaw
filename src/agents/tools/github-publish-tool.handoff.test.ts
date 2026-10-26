@@ -29,6 +29,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
+import { completionConfig } from "../bash-tools.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import { createCodeModeHarness } from "../code-mode.test-support.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
@@ -74,15 +75,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
         const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: "mock-openai/gpt-5.6-luna" },
-              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
+          agents: completionConfig(state.workspaceDir).agents,
           gateway: {
             roles: {
               default: "guest",

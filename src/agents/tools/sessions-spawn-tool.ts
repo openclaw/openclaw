@@ -685,6 +685,7 @@ export function createSessionsSpawnTool(
             withExecRequestOwners(
               {
                 ...inheritedSpawnContext(),
+                signal: executionSignal,
                 requesterThinkingLevel: opts?.requesterThinkingLevel,
                 ...(collect ? captureCollectorPluginContext(tool, _toolCallId) : {}),
                 requesterThinkingExplicit,

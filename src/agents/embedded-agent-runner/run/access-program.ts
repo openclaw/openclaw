@@ -33,7 +33,16 @@ function isSameDiscoveredAccount(
 
 /** Session overrides need current account evidence; model configuration remains explicit policy. */
 export async function prepareEmbeddedAccessProgramGuard(
-  attempt: EmbeddedRunAttemptParams,
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "cyberAccessProgram"
+    | "preparedModelRuntime"
+    | "authProfileId"
+    | "authProfileStore"
+    | "provider"
+    | "modelId"
+    | "runtimePlan"
+  >,
 ): Promise<(() => void) | undefined> {
   const program = attempt.cyberAccessProgram;
   if (program === undefined || program === "standard") {
@@ -58,22 +67,26 @@ export async function prepareEmbeddedAccessProgramGuard(
       : undefined;
   const check = () => {
     const snapshot = runtime?.readFullModelCatalog?.() ?? runtime?.modelCatalog;
+    // Direct discovery belongs to the current prepared runtime generation.
     // A cold private catalog can reuse shared discovery only for the same account.
     // A published empty private catalog is authoritative and must not fall back.
-    const providerOutcomes = account?.hasPublishedCatalog
-      ? account.outcomes
-      : snapshot &&
-          profileId &&
-          credential &&
-          isSameDiscoveredAccount(
-            getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
-            credential,
-            runtime?.pluginRegistry?.providers.find(
-              ({ provider }) => provider.id === attempt.provider,
-            )?.provider,
-          )
-        ? snapshot.providerOutcomes
-        : [];
+    const providerOutcomes =
+      selectedCredential?.source === "direct"
+        ? (snapshot?.providerOutcomes ?? [])
+        : account?.hasPublishedCatalog
+          ? account.outcomes
+          : snapshot &&
+              profileId &&
+              credential &&
+              isSameDiscoveredAccount(
+                getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
+                credential,
+                runtime?.pluginRegistry?.providers.find(
+                  ({ provider }) => provider.id === attempt.provider,
+                )?.provider,
+              )
+            ? snapshot.providerOutcomes
+            : [];
     const programs =
       snapshot &&
       resolveModelCatalogAccessPrograms({

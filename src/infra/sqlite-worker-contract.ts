@@ -9,7 +9,7 @@ import {
   type SqliteSourceFence,
 } from "./sqlite-source-fence-contract.js";
 import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
-import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
+import type { DatabaseFileIdentity, DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
@@ -111,6 +111,8 @@ export type SqliteWorkerRequest = {
   operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
+  /** A borrowed client retains its original locator and physical identity across actor reuse. */
+  databaseIdentity?: DatabaseFileIdentity & { databasePath: string };
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
   timing?: DiagnosticWorkerRequestFields["timing"];

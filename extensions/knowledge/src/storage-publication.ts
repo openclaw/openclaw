@@ -46,7 +46,7 @@ export class StoragePublication extends StorageJournal {
     }
     await this.initialize(access);
     this.assertReadable();
-    return this.transaction((db) => {
+    return this.transaction("knowledge.attach", (db) => {
       this.identity(db, new PublicationFiles(this.config.root));
       return attachChunk(
         db,
@@ -460,7 +460,7 @@ export class StoragePublication extends StorageJournal {
     const scope = scopeKey(access.scope);
     this.hook("before-accept");
     access.assertCurrent();
-    this.transaction((db) => {
+    this.transaction("knowledge.accept", (db) => {
       const rival = this.row(db, scope, requestId);
       if (rival) {
         this.checkReplay(rival, intent);

@@ -296,6 +296,17 @@ read is a denial, never permission to fall back to an older value. Preparation
 and its receipt do not replace account, session-incarnation, or other independent
 security checks.
 
+For an ownership predicate that can survive metadata updates, use
+`preparePluginStateGuard(store, key, assertValueCurrent)`. It returns
+`{ assertCurrent, release }` without exposing row contents. The pure, synchronous
+predicate must validate the complete domain ownership condition. Each assertion
+checks the unexpired committed value and every overlapping pending effect.
+Read-only observations and non-evicting CAS updates with no TTL change may preserve
+the predicate. Replacements, deletions, unknown outcomes, and unclassified writes
+remain denied. Release the guard when the effect owner's custody ends; retain all
+independent session and account checks. Ordinary prepared reads keep their pending
+write fences.
+
 Retained synchronous effect guards can call `assertPluginStateReadAvailable(store)`
 with the host-created async store before their native read. This checks the same
 pending, unknown, and runtime state without depending on a cached row. Use it at

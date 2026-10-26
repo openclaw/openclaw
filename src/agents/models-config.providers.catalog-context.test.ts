@@ -121,6 +121,59 @@ it("revalidates selected-account authority before consuming an awaited discovery
   }
 });
 
+it.each(["api_key", "oauth"] as const)(
+  "keeps an explicitly selected %s account ahead of the configured provider key",
+  async (type) => {
+    const profileId = "openai:selected";
+    const credential =
+      type === "api_key"
+        ? createApiKeyCredential("openai", "synthetic-selected-key")
+        : createOAuthRefreshCredential({
+            access: "synthetic-selected-token",
+            expires: Date.now() + 60_000,
+          });
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            auth: "api-key" as const,
+            apiKey: "synthetic-unselected-config-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const provider = catalogProvider(
+      "openai",
+      "OpenAI",
+      async (ctx) => {
+        const auth = ctx.resolveProviderAuth("openai");
+        expect(auth.profileId).toBe(profileId);
+        expect(auth.mode).toBe(type);
+        expect(auth.discoveryApiKey).toBe(
+          type === "api_key" ? "synthetic-selected-key" : "synthetic-selected-token",
+        );
+        expect(ctx.config).toBe(config);
+        return { providers: {}, outcomes: [{ provider: "openai", profileId, status: "ready" }] };
+      },
+      [],
+    );
+    const result = await loadSelectedProviderAccountCatalog({
+      provider,
+      providerId: "openai",
+      profileId,
+      authStore: createAuthProfileStoreFixture({ [profileId]: credential }),
+      config,
+      agentDir: tempDirs.make("selected-catalog-config-key-"),
+      workspaceDir: "/fixture/workspace",
+      isCurrent: () => true,
+      assertCurrent: () => {},
+    });
+    expect(result).toEqual([{ provider: "openai", profileId, status: "ready" }]);
+  },
+);
+
 it("bypasses a selected account's HTTP cache on explicit refresh", async () => {
   clearLiveCatalogCacheForTests();
   const agentDir = tempDirs.make("selected-catalog-refresh-");

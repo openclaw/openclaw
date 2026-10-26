@@ -17,7 +17,7 @@ const PARTIAL_RECORD_KEYS = new Set(["type", "event", "uuid", "session_id", "par
 const PARTIAL_EVENT_KEYS = new Set(["type", "index", "delta"]);
 
 /** Discount recognized token envelopes, retaining payload, padding, and a per-frame budget. */
-export function measureClaudePartialMessage(
+function measureClaudePartialMessage(
   parsed: Record<string, unknown>,
   rawLine: string,
 ): number | undefined {

@@ -40,6 +40,9 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
+  const loadSessionCostSummariesFromCache = vi.fn(async ({ sessions }: { sessions: unknown[] }) =>
+    tokenBatch(sessions.length),
+  );
   return {
     ...actual,
     resolveUsageSessionSource: vi.fn(actual.resolveUsageSessionSource),
@@ -54,8 +57,14 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
           ]
         : [],
     ),
-    loadSessionCostSummariesFromCache: vi.fn(async ({ sessions }: { sessions: unknown[] }) =>
-      tokenBatch(sessions.length),
+    loadSessionCostSummariesFromCache,
+    // Overview reads fold the same per-session fixture into family rows.
+    loadSessionUsageOverviewFromCache: vi.fn(
+      async (params: Parameters<typeof actual.loadSessionUsageOverviewFromCache>[0]) =>
+        (await import("./usage.test-support.js")).overviewFromSessionSummaries(
+          params,
+          loadSessionCostSummariesFromCache,
+        ),
     ),
     loadSessionUsageTimeSeries: vi.fn(async () => ({ sessionId: "s-opus", points: [] })),
     loadSessionLogs: vi.fn(async () => []),
@@ -64,6 +73,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionUsageOverviewFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   resolveUsageSessionSource,
@@ -74,6 +84,7 @@ import {
   createUsageSessionStoreFixture,
   freshUsageBatch,
   invokeUsage,
+  overviewFromSessionSummaries,
   usageReply,
   usageTotals,
   type UsageSessionStoreFixture,
@@ -319,86 +330,97 @@ it("returns complete family usage while other reports occupy worker input capaci
   }
 });
 
-it.each(["time", "report allowance"])(
-  "keeps completed batches after exhausting %s",
-  async (budget) => {
-    const timed = budget === "time";
-    if (timed) {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    }
-    const started = createDeferred();
-    const release = createDeferred();
-    const discovered = discovery;
-    const originalDiscovery = discovered.getMockImplementation()!;
-    const load = summaryLoader;
-    const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(discoveredRows("budget", 1025, true));
-    load.mockImplementation(async ({ sessions, reportBudgetBytes }) => {
-      if (timed && sessions.some(({ sessionId }) => sessionId === "budget-256")) {
-        const signal = getAsyncWorkSignal()!;
-        const abort = () => release.resolve();
-        signal.addEventListener("abort", abort, { once: true });
-        started.resolve();
-        try {
-          await release.promise;
-          signal.throwIfAborted();
-        } finally {
-          signal.removeEventListener("abort", abort);
-        }
-      }
-      if (!timed) {
-        return {
-          summaries: sessions.map(() =>
-            reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
-          ),
-          remainingReportBytes: 0,
-          cacheStatus: {
-            status: reportBudgetBytes === 0 ? "partial" : "fresh",
-            cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
-            pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
-            staleFiles: 0,
-          },
-        };
-      }
-      return tokenBatch(sessions.length, 7);
+it("keeps completed batches after exhausting the report allowance", async () => {
+  const originalDiscovery = discovery.getMockImplementation()!;
+  const originalLoad = summaryLoader.getMockImplementation()!;
+  discovery.mockResolvedValue(discoveredRows("budget", 1025, true));
+  summaryLoader.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
+    summaries: sessions.map(() =>
+      reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
+    ),
+    remainingReportBytes: 0,
+    cacheStatus: {
+      status: reportBudgetBytes === 0 ? "partial" : "fresh",
+      cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
+      pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
+      staleFiles: 0,
+    },
+  }));
+  try {
+    const result = await readSessionsUsage({});
+    expect(result).toMatchObject({
+      totals: { totalTokens: 256 * 7 },
+      cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 769 },
     });
-    const params = { ...BASE_USAGE_RANGE, ...(timed ? { projection: "overview" } : {}) };
-    const pending = runSessionsUsage(params);
-    try {
-      if (timed) {
-        await started.promise;
-        await vi.advanceTimersByTimeAsync(15_000);
+    expect(summaryLoader.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
+  } finally {
+    discovery.mockImplementation(originalDiscovery);
+    summaryLoader.mockImplementation(originalLoad);
+  }
+});
+
+it("keeps completed agent overviews after exhausting time", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const started = createDeferred();
+  const release = createDeferred();
+  const originalDiscovery = discovery.getMockImplementation()!;
+  const overview = vi.mocked(loadSessionUsageOverviewFromCache);
+  const originalOverview = overview.getMockImplementation()!;
+  discovery.mockImplementation(async ({ agentId }) =>
+    agentId === "main"
+      ? discoveredRows("budget-main", 256, true)
+      : agentId === "opus"
+        ? discoveredRows("budget-opus", 1)
+        : [],
+  );
+  overview.mockImplementation(async (params) => {
+    if (params.agentId === "opus") {
+      const signal = getAsyncWorkSignal()!;
+      const abort = () => release.resolve();
+      signal.addEventListener("abort", abort, { once: true });
+      started.resolve();
+      try {
+        await release.promise;
+        signal.throwIfAborted();
+      } finally {
+        signal.removeEventListener("abort", abort);
       }
-      const result = readResult(await pending);
-      expect(result).toMatchObject({
-        totals: { totalTokens: 256 * 7 },
-        cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 769 },
-      });
-      if (timed) {
-        expect(result.sessions).toHaveLength(50);
-        expect(result.partial?.reason).toBe("time-budget");
-        expect(result.overview?.queryWarnings).toContain(result.partial?.message);
-        // A failed refresh can serve the prior subtotal, but must retain its warning.
-        load.mockRejectedValueOnce(new Error("Usage store unavailable"));
-        const fallback = await readSessionsUsage(params);
-        expect(fallback.partial).toEqual(result.partial);
-        // A timed-out subtotal must not be cached as a complete result.
-        load.mockImplementation(originalLoad);
-        const retried = await readSessionsUsage(params);
-        expect(retried.partial).toBeUndefined();
-        expect(retried.cacheStatus?.status).toBe("fresh");
-      } else {
-        expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
-      }
-    } finally {
-      release.resolve();
-      await pending;
-      discovered.mockImplementation(originalDiscovery);
-      load.mockImplementation(originalLoad);
-      vi.useRealTimers();
     }
-  },
-);
+    return overviewFromSessionSummaries(params, async ({ sessions }) =>
+      tokenBatch(sessions.length, 7),
+    );
+  });
+  const params = { ...BASE_USAGE_RANGE, agentScope: "all", projection: "overview" };
+  const pending = runSessionsUsage(params);
+  try {
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = readResult(await pending);
+    // Each agent reads its overview in one worker pass; a finished agent keeps its subtotal.
+    expect(result).toMatchObject({
+      totals: { totalTokens: 256 * 7 },
+      cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 1 },
+    });
+    expect(result.sessions).toHaveLength(50);
+    expect(result.partial?.reason).toBe("time-budget");
+    expect(result.overview?.queryWarnings).toContain(result.partial?.message);
+    // A failed refresh can serve the prior subtotal, but must retain its warning.
+    overview.mockRejectedValueOnce(new Error("Usage store unavailable"));
+    const fallback = await readSessionsUsage(params);
+    expect(fallback.partial).toEqual(result.partial);
+    // A timed-out subtotal must not be cached as a complete result.
+    overview.mockImplementation(originalOverview);
+    const retried = await readSessionsUsage(params);
+    expect(retried.partial).toBeUndefined();
+    expect(retried.cacheStatus?.status).toBe("fresh");
+  } finally {
+    release.resolve();
+    await pending;
+    discovery.mockImplementation(originalDiscovery);
+    overview.mockImplementation(originalOverview);
+    vi.useRealTimers();
+  }
+});
 
 it("keeps an identical cold usage request alive when the first client disconnects", async ({
   signal: testSignal,

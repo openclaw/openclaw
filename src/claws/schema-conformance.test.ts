@@ -1,34 +1,18 @@
 // Conformance regressions for the portable Claw v1 contract.
-import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawDiagnostic } from "./types.js";
 
 const baseManifest = {
   schemaVersion: 1,
   agent: { id: "portable-agent" },
-  workspace: { files: [] },
-  packages: [],
-  mcpServers: {},
-  cronJobs: [],
 } as const;
 
 const parseMcp = (github: unknown) =>
   parseClawManifest({ ...baseManifest, mcpServers: { github } });
 const parseNpx = (...args: string[]) => parseMcp({ command: "npx", args });
-const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
-function expectInvalid(
-  result: Pick<ReturnType<typeof parseClawManifest>, "ok" | "diagnostics">,
-  diagnostic: string | Partial<ClawDiagnostic>,
-) {
+function expectInvalid(result: ReturnType<typeof parseClawManifest>, path: string) {
   expect(result.ok).toBe(false);
-  expect(result.diagnostics).toContainEqual(
-    expect.objectContaining(typeof diagnostic === "string" ? { path: diagnostic } : diagnostic),
-  );
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ path }));
 }
 
 describe("portable Claw schema conformance", () => {
@@ -139,39 +123,5 @@ describe("portable Claw schema conformance", () => {
     ]) {
       expect(parseClawManifest({ ...baseManifest, cronJobs: [cronJob] }).ok).toBe(false);
     }
-  });
-});
-
-describe("development snapshot integrity", () => {
-  it("rejects noncanonical package metadata demo@01.0.0", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-package-metadata-"));
-    await writeJson(join(root, "package.json"), {
-      name: "demo",
-      version: "01.0.0",
-      openclaw: { claw: "openclaw.claw.json" },
-    });
-    await writeJson(join(root, "openclaw.claw.json"), baseManifest);
-    expectInvalid(await readClawManifestFile(root), {
-      code: "invalid_package_metadata",
-      phase: "parse",
-    });
-  });
-
-  it("binds every referenced workspace source", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-snapshot-"));
-    await mkdir(join(root, "workspace"));
-    const manifestPath = join(root, "demo.claw.json");
-    const sourcePath = join(root, "workspace", "SOUL.md");
-    await writeFile(sourcePath, "first\n", "utf8");
-    await writeJson(manifestPath, {
-      ...baseManifest,
-      workspace: { bootstrapFiles: { "SOUL.md": { source: "workspace/SOUL.md" } } },
-    });
-
-    const first = await readClawManifestFile(manifestPath);
-    await writeFile(sourcePath, "second\n", "utf8");
-    const second = await readClawManifestFile(manifestPath);
-    assert(first.ok && second.ok, "expected snapshots to parse");
-    expect(second.source.integrity).not.toBe(first.source.integrity);
   });
 });

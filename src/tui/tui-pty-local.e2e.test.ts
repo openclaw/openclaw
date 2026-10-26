@@ -20,6 +20,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildOpenAiResponsesTestModel } from "../gateway/test-openai-responses-model.js";
 import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -36,7 +37,7 @@ import {
   createChatTerminalObserver,
   createIdempotentCleanup,
   createFreshSession,
-  createLocalShellControlFloodPreload,
+  createLocalShellControlFloodOwner,
   lastOutputIndexAfter,
   readLocalShellControlFloodPids,
   registerIdempotentCleanup,
@@ -244,16 +245,7 @@ function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProvi
     apiKey: "test",
     api: "openai-responses",
     request: { allowPrivateNetwork: true },
-    models: modelIds.map((id) => ({
-      id,
-      name: id,
-      api: "openai-responses",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    })),
+    models: modelIds.map((id) => buildOpenAiResponsesTestModel(id)),
   };
 }
 
@@ -337,6 +329,7 @@ async function startLocalModeTui(
       tempDir: string;
       stateDir: string;
     }) => Promise<NodeJS.ProcessEnv> | NodeJS.ProcessEnv;
+    nativeProcessOwner?: (params: { tempDir: string }) => Promise<string> | string;
   } = {},
 ) {
   const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
@@ -391,7 +384,9 @@ async function startLocalModeTui(
 
     run = await startRuntimePty(
       process.execPath,
-      await buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]),
+      await buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"], {
+        nativeProcessOwner: await opts.nativeProcessOwner?.({ tempDir }),
+      }),
       {
         cwd: process.cwd(),
         env,
@@ -1007,16 +1002,11 @@ describe("TUI PTY real backends", () => {
       let rolePidPath = "";
       const trackedPids: number[] = [];
       const fixture = await startLocalModeTui(onTestFinished, {
-        prepareEnv: async ({ env, tempDir }) => {
-          const preloadPath = path.join(tempDir, "control-flood.cjs");
+        prepareEnv: ({ env, tempDir }) => {
           rolePidPath = path.join(tempDir, "control-flood-pids.txt");
-          await writeFile(preloadPath, createLocalShellControlFloodPreload(), "utf8");
-          return {
-            ...env,
-            NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
-            OPENCLAW_CONTROL_PROBE_PATH: rolePidPath,
-          };
+          return { ...env, OPENCLAW_CONTROL_PROBE_PATH: rolePidPath };
         },
+        nativeProcessOwner: ({ tempDir }) => createLocalShellControlFloodOwner(tempDir),
       });
       const commandPath = path.join(fixture.stateDir, "control-flood-command.cjs");
       const commandPidPath = path.join(fixture.stateDir, "control-flood-command-pids.txt");

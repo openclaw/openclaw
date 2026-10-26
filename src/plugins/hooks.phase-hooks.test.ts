@@ -574,12 +574,18 @@ describe("before_prompt_build dispatch", () => {
       messages: [{ date, leaf, map, __openclaw: metadata }, { leaf }],
     };
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
-    onTestFinished(() => ownKeys.mockRestore());
+    const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+    onTestFinished(() => {
+      ownKeys.mockRestore();
+      descriptors.mockRestore();
+    });
     const runner = promptRunner(
       [
         {
           handler: (input) => {
             const [first, second] = input.messages as typeof event.messages;
+            // Native cloning already materialized these fields as data properties.
+            expect(descriptors.mock.calls.some(([value]) => value === first!.leaf)).toBe(false);
             expect(first!.date).toEqual(date);
             expect(first!.date).not.toBe(date);
             expect(first!.leaf).toBe(second!.leaf);

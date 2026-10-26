@@ -3,4 +3,5 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 export type ClawMutationStateOptions = OpenClawStateDatabaseOptions & {
   stateMode?: "worker";
   assertCurrent?: () => void;
+  prepareEffect?: () => Promise<void>;
 };

@@ -66,6 +66,7 @@ type FixtureOptions = {
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  rowFacts?: boolean;
   offRosterSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
@@ -139,6 +140,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       activeRunIds: [TEAM_SCALE_LIVE_RUN_ID],
     });
   }
+  if (options.rowFacts && !options.liveRun) {
+    Object.assign(pinnedRows[0]!, {
+      status: "failed",
+      lastRunId: "synthetic-row-facts-run",
+      lastRunError: "Synthetic verification failed; retry the check.",
+      runtimeMs: 180_000,
+      contextTokens: 200_000,
+    });
+  }
   for (const [index, person] of people.entries()) {
     person.watchedSessions = [
       index < 8 ? selectedSessionKey : sessions[index === 119 ? 240 : index]!.key,
@@ -183,6 +193,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     inlineWidgets: counts.inlineWidgets,
     now,
     largeSnapshot: options.largeSnapshot,
+    rowFacts: options.rowFacts,
     attachments: duplicateReads?.attachments,
     sender: options.transcriptAvatars ? transcriptSender : undefined,
     historyStateReceipt: options.historyStateReceipt,
@@ -359,7 +370,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
+    models: [
+      { id: "gpt-5-mini", name: "Fixture reasoning model", provider: "openai", reasoning: true },
+    ],
     sessionKey: selectedSessionKey,
+    ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,
     presenceUsers: people,
     historyMessages,

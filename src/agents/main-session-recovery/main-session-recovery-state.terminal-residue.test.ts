@@ -36,6 +36,7 @@ const unexpectedRuntimeCall = async (): Promise<never> => {
   throw new Error("terminal residue must not dispatch, wait, or send a notice");
 };
 const unusedGatewayRuntime: GatewayRecoveryRuntime = {
+  prepareFailedWorkerPlacement: async () => undefined,
   prepareRestartRecovery: () => undefined,
   dispatchSessionMethod: unexpectedRuntimeCall,
   dispatchAgent: unexpectedRuntimeCall,

@@ -17,6 +17,7 @@ import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
+  type ChatFastModePresentation,
   type ChatFastModeTarget,
 } from "../../../lib/chat/model-select-state.ts";
 import {
@@ -76,6 +77,7 @@ export type ChatModelControlsProps = {
   effortMutationDisabledReason?: string;
   contextWindowMutationDisabledReason?: string;
   fastModeTarget?: ChatFastModeTarget;
+  fastModeDisplay?: ChatFastModePresentation;
   accessProgramMutationDisabledReason?: string;
   requestedAccessProgram?: CyberAccessProgram;
   onAccessProgramSelect?: (value: CyberAccessProgram | null, sessionKey: string) => unknown;
@@ -304,11 +306,14 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       loading: props.loading,
       sessionsResult: props.sessionsResult,
     });
+    const presentedFastMode = props.fastModeDisplay
+      ? { ...resolvedFastMode, ...props.fastModeDisplay }
+      : resolvedFastMode;
     // Reasoning/fast state still describes the previous model until the refreshed
     // session row lands. Lock both so stale levels cannot be committed mid-switch.
     const fastMode = props.modelSwitching
-      ? { ...resolvedFastMode, disabled: true }
-      : resolvedFastMode;
+      ? { ...presentedFastMode, disabled: true }
+      : presentedFastMode;
     const runtimeSelectionLocked = activeSession?.runtimeSelectionLocked === true;
     const currentProviderHint = activeSession?.modelProvider ?? "";
     // This control owns the saved preference, not the model observed on a run.

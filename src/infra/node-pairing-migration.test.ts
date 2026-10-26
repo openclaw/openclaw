@@ -1,29 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, expect, test } from "vitest";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { approveDevicePairing } from "./device-pairing-approval.js";
+import { expect, test } from "vitest";
 import {
   approveNodePairing,
   listNodePairing,
   recordPairedNodeConnection,
   requestNodePairing,
 } from "./device-pairing-node.js";
-import { getPairedDevice, requestDevicePairing } from "./device-pairing.js";
+import { seedNodeDevice } from "./device-pairing-node.test-support.js";
+import { usePairingState } from "./device-pairing-state.test-support.js";
+import { getPairedDevice } from "./device-pairing.js";
 import { migrateLegacyNodePairingStore } from "./node-pairing-migration.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 
-const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-migration-" });
+const state = usePairingState("openclaw-node-pairing-migration-");
 
 const deviceId = "canonical-node";
 async function fixture() {
-  const baseDir = await suiteRootTracker.make("case");
-  const request = await requestDevicePairing(
-    { deviceId, publicKey: `pk-${deviceId}`, role: "node", roles: ["node"], scopes: [] },
-    baseDir,
-  );
-  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+  const { baseDir } = state;
+  await seedNodeDevice(baseDir, deviceId);
   const paths = resolvePairingPaths(baseDir, "nodes");
   return {
     ...paths,
@@ -45,13 +40,6 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
-
-beforeAll(() => suiteRootTracker.setup());
-
-afterAll(async () => {
-  await closeStateDatabaseForTest();
-  await suiteRootTracker.cleanup();
-});
 
 test("folds legacy rows into device records, drops orphans, and archives files", async () => {
   const { migrate, read, list, pendingPath, pairedPath } = await fixture();

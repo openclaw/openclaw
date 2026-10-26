@@ -61,6 +61,7 @@ it("joins cron writes and receipt finalization before close", async ({ signal })
                     job,
                     runReceipt: handle,
                     status: "ok",
+                    errorReason: undefined,
                     completionStatus: "succeeded",
                     deliveryState: { ...notRequested, failureNotification: notRequested },
                     startedAt: 1,
