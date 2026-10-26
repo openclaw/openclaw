@@ -1,4 +1,4 @@
-import { createMemo, onSettled, Show } from "solid-js";
+import { createMemo, createProjection, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -12,7 +12,7 @@ import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
-import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
+import { Menu, type MenuItem, type MenuHandle, type MenuItemBindings } from "./solid/menu.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
@@ -71,44 +71,63 @@ defineSolidBridge<AgentSelectProps>(
       const resolved = () => avatars().get(avatarProps.option.value);
       return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
+    // Menu retains a custom renderer per key; retain that key's live option fields too.
+    const optionRows = createProjection(() => props.options, [], { key: "value" });
+    function OptionRow(row: { option: AgentSelectOption; bindings: MenuItemBindings }) {
+      return (
+        <button
+          {...row.bindings}
+          type="button"
+          class="oc-menu-item agent-select__option"
+          value={row.option.value}
+          disabled={props.disabled || row.option.disabled}
+          data-agent-option=""
+          data-selected={row.option.value === props.value ? "" : undefined}
+          data-initial-focus={
+            row.option.value === props.value && !props.disabled && !row.option.disabled
+              ? ""
+              : undefined
+          }
+        >
+          <span class="oc-menu-item__check" aria-hidden="true">
+            {row.option.value === props.value ? "✓" : ""}
+          </span>
+          <span class="oc-menu-item__icon">
+            <Avatar option={row.option} />
+          </span>
+          <span class="oc-menu-item__label">
+            <span class="agent-select__option-copy">
+              <span class="agent-select__option-heading">
+                <span class="agent-select__option-label">{row.option.label}</span>
+                <Show when={row.option.badge}>
+                  <span class="agent-select__badge">{row.option.badge}</span>
+                </Show>
+              </span>
+              <Show when={row.option.description}>
+                <span class="agent-select__option-description">{row.option.description}</span>
+              </Show>
+            </span>
+          </span>
+          <span class="oc-menu-item__details">
+            <span class="agent-select__option-state" aria-hidden="true">
+              <Show when={row.option.value === props.value}>
+                <span class="agent-select__option-check">
+                  <Icon name="check" />
+                </span>
+              </Show>
+            </span>
+          </span>
+        </button>
+      );
+    }
     const items = createMemo<readonly MenuItem[]>(() =>
-      props.options.map((option) => ({
+      optionRows.map((option) => ({
         id: `option:${option.value}`,
         label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
-        class: "agent-select__option",
         type: "radio" as const,
         checked: option.value === props.value,
         disabled: props.disabled || option.disabled,
-        icon: <Avatar option={option} />,
-        content: (
-          <span class="agent-select__option-copy">
-            <span class="agent-select__option-heading">
-              <span class="agent-select__option-label">{option.label}</span>
-              <Show when={option.badge}>
-                <span class="agent-select__badge">{option.badge}</span>
-              </Show>
-            </span>
-            <Show when={option.description}>
-              <span class="agent-select__option-description">{option.description}</span>
-            </Show>
-          </span>
-        ),
-        details: (
-          <span class="agent-select__option-state" aria-hidden="true">
-            <Show when={option.value === props.value}>
-              <span class="agent-select__option-check">
-                <Icon name="check" />
-              </span>
-            </Show>
-          </span>
-        ),
-        attributes: {
-          "data-agent-option": "",
-          "data-selected": option.value === props.value ? "" : undefined,
-          value: option.value,
-          "data-initial-focus":
-            option.value === props.value && !props.disabled && !option.disabled ? "" : undefined,
-        },
+        render: (bindings) => <OptionRow option={option} bindings={bindings} />,
       })),
     );
     return (
