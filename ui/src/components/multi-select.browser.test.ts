@@ -4,8 +4,9 @@ import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input
 import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
 import { MultiSelect } from "./multi-select.tsx";
+type MultiSelectInput = Parameters<typeof MultiSelect>[0];
+type MultiSelectOption = NonNullable<MultiSelectInput["options"]>[number];
 const primary = "openai/gpt-5.4";
 const sonnet = "anthropic/claude-sonnet-4-6";
 const opus = "anthropic/claude-opus-4-7";
@@ -23,7 +24,10 @@ afterEach(() => {
 function fixtureOptions(...rows: Array<[string, string, boolean?]>): MultiSelectOption[] {
   return rows.map(([value, label, disabled]) => ({ value: `fixture/${value}`, label, disabled }));
 }
-async function createMultiSelect(overrides: Partial<MultiSelectProps> = {}) {
+function createFixture(rows: Array<[string, string, boolean?]>, value: string[] = []) {
+  return createMultiSelect({ options: fixtureOptions(...rows), value, isExcluded: () => false });
+}
+async function createMultiSelect(overrides: MultiSelectInput = {}) {
   const props = {
     options,
     value: [sonnet],
@@ -41,15 +45,14 @@ async function createMultiSelect(overrides: Partial<MultiSelectProps> = {}) {
   return {
     element,
     props,
-    update: (next: Partial<MultiSelectProps>) => view.update({ ...props, ...next }),
+    update: (next: MultiSelectInput) => view.update({ ...props, ...next }),
   };
 }
 function input(element: HTMLElement): HTMLInputElement {
-  const found = element.querySelector<HTMLInputElement>("input.multi-select__input");
-  if (!found) {
-    throw new Error("multi-select input missing");
-  }
-  return found;
+  return element.querySelector<HTMLInputElement>("input.multi-select__input")!;
+}
+function highlighted(element: HTMLElement) {
+  return element.querySelector('[aria-selected="true"]')?.getAttribute("data-value");
 }
 function values(element: HTMLElement, kind: "option" | "chip") {
   return Array.from(element.querySelectorAll(`.multi-select__${kind}`), (node) =>
@@ -75,11 +78,10 @@ async function clickField(element: HTMLElement) {
   flush();
 }
 it("does not commit a disabled choice but keeps available choices usable", async () => {
-  const { element, props } = await createMultiSelect({
-    value: [],
-    isExcluded: () => false,
-    options: fixtureOptions(["blocked", "Blocked", true], ["ready", "Ready"]),
-  });
+  const { element, props } = await createFixture([
+    ["blocked", "Blocked", true],
+    ["ready", "Ready"],
+  ]);
   await clickField(element);
   const blocked = element.querySelector<HTMLElement>('[data-value="fixture/blocked"]');
   blocked?.click();
@@ -109,15 +111,14 @@ it.each(["content", "trigger"])(
   },
 );
 it("keeps disabled choices out of typed additions without discarding saved chips", async () => {
-  const { element, props } = await createMultiSelect({
-    value: ["fixture/saved"],
-    isExcluded: () => false,
-    options: fixtureOptions(
+  const { element, props } = await createFixture(
+    [
       ["saved", "Saved", true],
       ["blocked", "Blocked", true],
       ["ready", "Ready"],
-    ),
-  });
+    ],
+    ["fixture/saved"],
+  );
   await typeText(element, "fixture/blocked, fixture/ready");
   await pressKey(element, ",");
   expect(props.onChange).toHaveBeenCalledWith(["fixture/saved", "fixture/ready"]);
@@ -126,26 +127,18 @@ it("keeps disabled choices out of typed additions without discarding saved chips
   expect(props.onChange).toHaveBeenLastCalledWith([]);
 });
 it("skips disabled choices in both keyboard directions", async () => {
-  const { element, props } = await createMultiSelect({
-    value: [],
-    isExcluded: () => false,
-    options: fixtureOptions(["first", "First"], ["blocked", "Blocked", true], ["last", "Last"]),
-  });
+  const { element, props } = await createFixture([
+    ["first", "First"],
+    ["blocked", "Blocked", true],
+    ["last", "Last"],
+  ]);
   await clickField(element);
-  await waitForSolid(() =>
-    expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
-      "fixture/first",
-    ),
-  );
+  await waitForSolid(() => expect(highlighted(element)).toBe("fixture/first"));
   await pressKey(element, "ArrowDown");
   expect(document.activeElement).toBe(input(element));
-  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
-    "fixture/last",
-  );
+  expect(highlighted(element)).toBe("fixture/last");
   await pressKey(element, "ArrowUp");
-  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
-    "fixture/first",
-  );
+  expect(highlighted(element)).toBe("fixture/first");
   await pressKey(element, "ArrowUp");
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/last"]);
@@ -157,20 +150,12 @@ it("removes chips with Backspace on empty text and with the chip button", async 
   element.querySelector<HTMLButtonElement>(".multi-select__chip .chip-remove")?.click();
   expect(props.onChange).toHaveBeenLastCalledWith([gemini]);
 });
-it("moves the highlight with arrow keys and closes on Escape", async () => {
+it("closes on Escape and clears the unconfirmed query", async () => {
   const { element, props } = await createMultiSelect();
   await pressKey(element, "Enter");
   expect(props.onChange).not.toHaveBeenCalled();
   await pressKey(element, "ArrowDown");
   expect(isOpen(element)).toBe(true);
-  await pressKey(element, "ArrowDown");
-  const highlighted = () =>
-    Array.from(element.querySelectorAll(".multi-select__option")).findIndex(
-      (row) => row.getAttribute("aria-selected") === "true",
-    );
-  expect(highlighted()).toBe(1);
-  await pressKey(element, "ArrowUp");
-  expect(highlighted()).toBe(0);
   await typeText(element, "op");
   await pressKey(element, "Escape");
   expect(isOpen(element)).toBe(false);
@@ -223,13 +208,12 @@ it("keeps a bare fallback separate from a real alternate model", async () => {
   const existing = "gpt-5.4-mini";
   const alternate = "local/gpt-5.4-mini";
   const models = { [alternate]: {} };
-  const primaryModelRef = "openai/gpt-5.4";
   const { element, props } = await createMultiSelect({
     options: [{ value: alternate, label: "Alternate model" }],
     value: [existing],
     isExcluded: createPrimaryModelExclusion(
-      { agents: { defaults: { model: { primary: primaryModelRef }, models } } },
-      primaryModelRef,
+      { agents: { defaults: { model: { primary }, models } } },
+      primary,
     ),
     getValueKey: normalizeAgentModelRefForConfig,
   });
@@ -246,10 +230,7 @@ it("selects the visible highlight when a catalog refresh shortens the open list"
   await pressKey(element, "ArrowDown");
   update({ options: options.filter((option) => option.value !== gemini) });
   flush();
-  await waitForSolid(() => {
-    const highlighted = element.querySelector('.multi-select__option[aria-selected="true"]');
-    expect(highlighted?.getAttribute("data-value")).toBe(opus);
-  });
+  await waitForSolid(() => expect(highlighted(element)).toBe(opus));
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, opus]);
 });
@@ -295,6 +276,8 @@ it("keeps the scroll position when the pointer highlights a clipped edge row", a
   const list = element.querySelector<HTMLElement>(".multi-select__menu")!;
   await waitForSolid(() => expect(list.scrollHeight).toBeGreaterThan(list.clientHeight));
   const rows = [...element.querySelectorAll<HTMLElement>(".multi-select__option")];
+  // Opening reveals the initial highlight; finish that scroll before simulating a wheel scroll.
+  await waitForSolid(() => expect(rows[0]!.getAttribute("aria-selected")).toBe("true"));
   const bounds = list.getBoundingClientRect();
   const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
   // Leave half a row clipped at the bottom edge, as a wheel or trackpad scroll does.
@@ -303,6 +286,7 @@ it("keeps the scroll position when the pointer highlights a clipped edge row", a
   await settle();
   const top = list.scrollTop;
   const rect = edgeRow.getBoundingClientRect();
+  expect(rect.top).toBeLessThan(bounds.bottom);
   expect(rect.bottom).toBeGreaterThan(bounds.bottom);
   // Hover the menu at the clipped row's visible sliver; hovering the row
   // itself would let Playwright scroll it into view before moving.

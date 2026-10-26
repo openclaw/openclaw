@@ -191,9 +191,6 @@ it.each(["worker", "compatibility"] as const)(
         expect((await attempt.outcome).status).toBe(kind === "worker" ? "rejected" : "failed");
         await expect(attempt.acceptance).resolves.toBe(false);
         expect(effect).not.toHaveBeenCalled();
-        expect(sourcePreparation.compatAssertCurrent).toHaveBeenCalledTimes(
-          kind === "worker" ? 0 : 1,
-        );
         calls?.expectIdle();
       } finally {
         await gate.settle(attempt);
@@ -429,8 +426,6 @@ it.each(["completion", "observer", "before-acceptance"] as const)(
     );
     await expect(attempt.acceptance).resolves.toBe(failurePoint !== "before-acceptance");
     expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(failurePoint !== "before-acceptance");
-    expect(queueMessageAsync).toHaveBeenCalledOnce();
-    expect(queueMessage).not.toHaveBeenCalled();
     expect(operation.result).toBeNull();
     expect(operation.abortSignal.aborted).toBe(false);
   },

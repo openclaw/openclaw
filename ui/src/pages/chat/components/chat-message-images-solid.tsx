@@ -7,6 +7,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { ChatImageActions } from "./chat-image-actions.tsx";
+import { imageTitle } from "./chat-image-presentation.ts";
 import {
   MIN_CHAT_IMAGE_PREVIEW_WIDTH,
   resolveChatImagePreviewSize,
@@ -30,7 +31,7 @@ import {
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { imageTitle, openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
+import { openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
@@ -55,9 +56,8 @@ type RetainedInlineImage = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
-function isInlineImageSource(source: string | undefined): source is string {
-  return source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
-}
+const isInlineImageSource = (source: string | undefined): source is string =>
+  source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 
 type ImagePresentation = {
   image: ImageBlock;
@@ -176,13 +176,12 @@ function createMessageImagePresentation(props: MessageImageProps) {
     }
     currentImage = image;
     currentOptions = options;
-    if (!active) {
+    if (!active || (options?.mediaReadAllowed === false && !isInlineImageSource(image.url))) {
       releaseRetainedImage();
       releaseChatMediaResourceOwner(refreshImage);
       return renderImagePlaceholder(image);
     }
-    // A warm preview needs no network admission. Native images retain their
-    // decoded node only within the existing metadata cache and ticket lifetime.
+    // Reuse decoded images only within the metadata cache and ticket lifetime.
     if (!admitted) {
       if (managed) {
         admitted = Boolean(
@@ -428,22 +427,23 @@ function createMessageImagePresentation(props: MessageImageProps) {
       state: reason === undefined ? "loading" : "unavailable",
       reason,
       actions: {
-        onRetry: managed
-          ? () => {
-              resolveManagedImageResource(
-                image.url,
-                currentOptions?.mediaOwner !== undefined ||
-                  currentOptions?.onMediaChange !== undefined
-                  ? { ...currentOptions, onMediaChange: refreshImage }
-                  : currentOptions,
-                image.artifactId,
-                managedImageInlineVariant(image),
-                true,
-                previewWidth,
-              );
-              refreshImage();
-            }
-          : undefined,
+        onRetry:
+          managed && currentOptions?.mediaReadAllowed !== false
+            ? () => {
+                resolveManagedImageResource(
+                  image.url,
+                  currentOptions?.mediaOwner !== undefined ||
+                    currentOptions?.onMediaChange !== undefined
+                    ? { ...currentOptions, onMediaChange: refreshImage }
+                    : currentOptions,
+                  image.artifactId,
+                  managedImageInlineVariant(image),
+                  true,
+                  previewWidth,
+                );
+                refreshImage();
+              }
+            : undefined,
         ...actions,
       },
     };

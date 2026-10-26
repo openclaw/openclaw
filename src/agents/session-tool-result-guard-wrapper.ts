@@ -232,6 +232,7 @@ function createTranscriptRunContext(
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
+      runId,
       hidden,
       inputProvenance,
       message,

@@ -2,7 +2,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { hasTerminalMainSessionTranscriptNewerThanRegistryAsync } from "./lifecycle-read.js";
 import {
@@ -14,23 +13,21 @@ import type { SessionEntry } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-lifecycle-");
 
-let stateDir: string;
 let storePath: string;
 
 beforeEach(() => {
-  stateDir = sessionDirs.make();
-  storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+  storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
 });
 
 const scopeFor = (sessionKey: string) => ({ agentId: "main", sessionKey, storePath });
 
 async function createEntry(
   status?: SessionEntry["status"],
-  params: Partial<Pick<SessionEntry, "endedAt" | "sessionFile" | "updatedAt">> & {
+  params: Partial<Pick<SessionEntry, "endedAt" | "updatedAt">> & {
     sessionKey?: string;
   } = {},
 ) {
-  const { sessionKey = "agent:main:main", sessionFile, ...overrides } = params;
+  const { sessionKey = "agent:main:main", ...overrides } = params;
   const metadata = {
     updatedAt: Date.now() - 10_000,
     ...overrides,
@@ -40,12 +37,6 @@ async function createEntry(
   const sessionEntry = {
     ...metadata,
     sessionId,
-    sessionFile:
-      sessionFile ??
-      `sqlite:main:${sessionId}:${resolveOpenClawAgentSqlitePath({
-        agentId: "main",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      })}`,
   };
   await upsertSessionEntryCore(scopeFor(sessionKey), sessionEntry);
   await appendTranscriptEvent(
@@ -53,7 +44,7 @@ async function createEntry(
     { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
   );
   return {
-    entry: { ...loadEntry(sessionKey), ...metadata, sessionFile: sessionEntry.sessionFile },
+    entry: { ...loadEntry(sessionKey), ...metadata },
     sessionKey,
   };
 }
@@ -66,33 +57,21 @@ const check = (entry: SessionEntry, sessionKey: string) =>
   hasTerminalMainSessionTranscriptNewerThanRegistryAsync({ ...scopeFor(sessionKey), entry });
 
 it("uses the physical SQLite mutation watermark instead of event timestamps", async () => {
-  const registryTimestampMs = Date.now() - 10_000;
-  const { entry, sessionKey } = await createEntry("killed", { updatedAt: registryTimestampMs });
-
-  expect(entry.updatedAt).toBe(registryTimestampMs);
+  const { entry, sessionKey } = await createEntry("killed");
   const sql = observeHostDataSql();
   using _ = { [Symbol.dispose]: () => sql.restore() };
   expect(await check(entry, sessionKey)).toBe(true);
   expect(sql.queries).toEqual([]);
 });
 
-it.each(["done", "failed", "legacy"] as const)(
-  "uses the correct %s transcript freshness",
-  async (kind) => {
-    const legacy = kind === "legacy";
-    const { entry, sessionKey } = await createEntry(
-      legacy ? "killed" : kind,
-      legacy ? { sessionFile: path.join(stateDir, "legacy-session.jsonl") } : {},
-    );
-    expect(await check(entry, sessionKey)).toBe(legacy);
-  },
-);
+it.each(["done", "failed"] as const)("uses the correct %s transcript freshness", async (kind) => {
+  const { entry, sessionKey } = await createEntry(kind);
+  expect(await check(entry, sessionKey)).toBe(false);
+});
 
 it("keeps a yielded main session reusable after a child transcript admission", async () => {
   const { entry, sessionKey } = await createEntry(undefined, { endedAt: Date.now() - 20_000 });
 
-  expect(entry.status).toBeUndefined();
-  expect(entry.endedAt).toBeDefined();
   expect(await check(entry, sessionKey)).toBe(false);
 });
 

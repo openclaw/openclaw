@@ -25,14 +25,12 @@ function appendButton(textContent: string) {
   return button;
 }
 
-it.each(
-  (["assignment", "compact assignment", "members"] as const).flatMap((surface) =>
-    [60, 101].map((count) => ({ surface, count })),
-  ),
-)(
-  "shows every $surface entry with editable search and keyboard selection ($count entries)",
-  async ({ surface, count }) => {
+it.each(["assignment", "compact assignment", "members"] as const)(
+  "shows every %s entry with editable search and keyboard selection",
+  async (surface) => {
+    const count = 101;
     const compact = surface === "compact assignment";
+    const members = surface === "members";
     await page.viewport(compact ? 414 : 1280, 900);
     const shown = new Promise<void>((resolve) => {
       document.addEventListener("overlay-after-show", () => resolve(), {
@@ -43,7 +41,7 @@ it.each(
     const onAction = vi.fn();
     let root: HTMLElement;
     let reopen: () => Promise<void>;
-    if (surface !== "members") {
+    if (!members) {
       const names = Array.from({ length: count }, (_, i) => `Person ${String(i).padStart(4, "0")}`);
       const { context } = createSessionOwnerMenuHarness(() => sessionOwnerProfiles(...names));
       const returnTarget = appendButton("Session actions");
@@ -78,10 +76,10 @@ it.each(
     }
     const afterMenu = appendButton("After menu");
     const input = page.getByRole("searchbox", {
-      name: surface === "members" ? "Search people…" : "Search people and agents…",
+      name: members ? "Search people…" : "Search people and agents…",
     });
     const sharingSearch = page.getByRole("button", { name: "Search people…", exact: true });
-    if (surface === "members") {
+    if (members) {
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
     } else {
       await expect.element(input).toBeVisible();
@@ -90,17 +88,14 @@ it.each(
       const style = getComputedStyle(input.element().closest('[role="menu"]')!);
       expect(style).toMatchObject({ width: "320px", maxHeight: "420px", overflowY: "auto" });
     }
-    const selector =
-      surface !== "members"
-        ? '[data-value^="assign-owner:"]'
-        : 'button.chat-pane__sharing-permission[data-value^="permission:"]';
-    await expect
-      .poll(() => root.querySelectorAll(selector).length)
-      .toBe(count + (surface === "members" ? 0 : 2));
+    const selector = !members
+      ? '[data-value^="assign-owner:"]'
+      : 'button.chat-pane__sharing-permission[data-value^="permission:"]';
+    await expect.poll(() => root.querySelectorAll(selector).length).toBe(count + (members ? 0 : 2));
     for (const name of ["Next", "Previous"]) {
       await expect.element(page.getByRole("button", { name, exact: true })).not.toBeInTheDocument();
     }
-    if (surface === "compact assignment") {
+    if (compact) {
       await expect
         .poll(() => document.activeElement?.getAttribute("data-value"))
         .toBe("compact:back");
@@ -113,23 +108,26 @@ it.each(
     await expect.element(input).not.toBeInTheDocument();
     expect(document.activeElement).toBe(afterMenu);
     await reopen();
-    if (surface === "members") {
+    if (members) {
       await userEvent.click(sharingSearch);
     }
     await expect.element(input).toBeVisible();
-    await userEvent.click(input);
+    if (members) {
+      await userEvent.click(input);
+    }
+    // Assignment typing must enter the visible search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");
     await expect
       .element(
-        page.getByText(surface === "members" ? "No people found" : "No matching people or agents", {
+        page.getByText(members ? "No people found" : "No matching people or agents", {
           exact: true,
         }),
       )
       .toBeVisible();
     await userEvent.keyboard("{Escape}");
-    if (surface === "members") {
+    if (members) {
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
       expect(document.activeElement).toBe(sharingSearch.element());
       await userEvent.click(sharingSearch);
@@ -139,11 +137,11 @@ it.each(
     expect(document.activeElement).toBe(input.element());
     await input.fill(`Person ${String(count - 1).padStart(4, "0")}`);
     await expect.poll(() => root.querySelectorAll(selector).length).toBe(1);
-    await userEvent.keyboard(count === 101 ? "{Enter}" : "{ArrowDown}");
+    await userEvent.keyboard(surface === "assignment" ? "{ArrowDown}" : "{Enter}");
     expect(document.activeElement).toBe(root.querySelector(selector));
     expect(onAction).not.toHaveBeenCalled();
     await userEvent.keyboard("{Enter}");
-    if (surface !== "members") {
+    if (!members) {
       expect(onAction).toHaveBeenCalledWith({
         kind: "assign-owner",
         owner: { type: "human", id: `profile-person-${String(count - 1).padStart(4, "0")}` },

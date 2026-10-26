@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -138,217 +139,189 @@ suite.define(() => {
   );
 
   it("config.set keeps the default engine first and drains Off before selecting it", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const initialConfig = configResponse("memory-lancedb", "memory-hash-1");
-        const selectedConfig = configResponse("memory-core", "memory-hash-2");
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": initialConfig,
-            "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
-          },
-        });
+    await suite.withPage(createDarkDesktopControlUiContextOptions(), async ({ page }) => {
+      const initialConfig = configResponse("memory-lancedb", "memory-hash-1");
+      const selectedConfig = configResponse("memory-core", "memory-hash-2");
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": initialConfig,
+          "plugins.list": { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true },
+        },
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        expect(response?.status()).toBe(200);
+      const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
 
-        const engineGroup = page.getByRole("radiogroup").first();
-        await engineGroup.waitFor();
-        await expect
-          .poll(async () =>
-            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
-          )
-          .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
+      const engineGroup = page.getByRole("radiogroup").first();
+      await engineGroup.waitFor();
+      await expect
+        .poll(async () =>
+          (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
+        )
+        .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
 
-        await gateway.deferNext("config.set");
-        await gateway.deferNext("plugins.setEnabled");
-        await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
-        // Click again immediately, before the 800 ms autosave debounce. The
-        // write barrier must flush Off first instead of letting the plugin RPC
-        // race a still-scheduled config.set.
-        await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
-        expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
+      await gateway.deferNext("config.set");
+      await gateway.deferNext("plugins.setEnabled");
+      await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
+      // Click again immediately, before the 800 ms autosave debounce. The
+      // write barrier must flush Off first instead of letting the plugin RPC
+      // race a still-scheduled config.set.
+      await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
+      expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
-        const pendingOffSave = await gateway.waitForRequest("config.set");
-        expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
-        if (captureUiProofEnabled) {
-          await page
-            .locator(".settings-page > .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
-            });
-        }
-        await gateway.resolveDeferred("config.set");
-        const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
-        expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
+      const pendingOffSave = await gateway.waitForRequest("config.set");
+      expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
+      if (captureUiProofEnabled) {
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
+          });
+      }
+      await gateway.resolveDeferred("config.set");
+      const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
+      expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
 
-        await gateway.setMethodResponse("config.get", selectedConfig);
-        await gateway.resolveDeferred("plugins.setEnabled", {
-          ok: true,
-          plugin: memoryPlugins[1],
-          restartRequired: false,
-        });
+      await gateway.setMethodResponse("config.get", selectedConfig);
+      await gateway.resolveDeferred("plugins.setEnabled", {
+        ok: true,
+        plugin: memoryPlugins[1],
+        restartRequired: false,
+      });
 
-        const selected = engineGroup.getByRole("radio", {
-          name: "OpenClaw Memory",
-          exact: true,
-        });
-        await expect.poll(() => selected.isChecked()).toBe(true);
-        await expect
-          .poll(() => page.getByText("Could not change the memory engine").count())
-          .toBe(0);
+      const selected = engineGroup.getByRole("radio", {
+        name: "OpenClaw Memory",
+        exact: true,
+      });
+      await expect.poll(() => selected.isChecked()).toBe(true);
+      await expect.poll(() => page.getByText("Could not change the memory engine").count()).toBe(0);
 
-        if (captureUiProofEnabled) {
-          await page
-            .locator(".settings-page > .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "01-openclaw-memory-selected.png"),
-            });
-        }
-      },
-    );
+      if (captureUiProofEnabled) {
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "01-openclaw-memory-selected.png"),
+          });
+      }
+    });
   });
 
   it("keeps a committed add-on enabled and makes a failed config refresh visible", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(String(error)));
-        const activeMemory = {
-          id: "active-memory",
-          name: "Active memory",
-          installed: true,
-          enabled: false,
-          state: "disabled",
-        };
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": configResponse("memory-lancedb", "memory-refresh-hash-1"),
-            "plugins.list": {
-              plugins: [...memoryPlugins, activeMemory],
-              diagnostics: [],
-              mutationAllowed: true,
-            },
+    await suite.withPage(createDarkDesktopControlUiContextOptions(), async ({ page }) => {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
+      const activeMemory = {
+        id: "active-memory",
+        name: "Active memory",
+        installed: true,
+        enabled: false,
+        state: "disabled",
+      };
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configResponse("memory-lancedb", "memory-refresh-hash-1"),
+          "plugins.list": {
+            plugins: [...memoryPlugins, activeMemory],
+            diagnostics: [],
+            mutationAllowed: true,
           },
-        });
+        },
+      });
 
-        await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        const toggle = page.getByRole("switch", { name: "Enable or disable Active memory" });
-        await toggle.waitFor();
-        const initialConfigReads = (await gateway.getRequests("config.get")).length;
-        const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
-        await gateway.deferNext("plugins.setEnabled");
-        await gateway.deferNext("config.get");
-        await toggle.click();
+      await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      const toggle = page.getByRole("switch", { name: "Enable or disable Active memory" });
+      await toggle.waitFor();
+      const initialConfigReads = (await gateway.getRequests("config.get")).length;
+      const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
+      await gateway.deferNext("plugins.setEnabled");
+      await gateway.deferNext("config.get");
+      await toggle.click();
 
-        const mutation = await gateway.waitForRequest("plugins.setEnabled");
-        expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
-        const committed = { ...activeMemory, enabled: true, state: "enabled" };
-        await gateway.setMethodResponse("plugins.list", {
-          plugins: [...memoryPlugins, committed],
-          diagnostics: [],
-          mutationAllowed: true,
-        });
-        await gateway.resolveDeferred("plugins.setEnabled", {
-          ok: true,
-          plugin: committed,
-          restartRequired: false,
-        });
-        await expect
-          .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBeGreaterThan(initialConfigReads);
-        await gateway.rejectDeferred("config.get", {
-          code: "UNAVAILABLE",
-          message: "authoritative snapshot unavailable",
-        });
+      const mutation = await gateway.waitForRequest("plugins.setEnabled");
+      expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
+      const committed = { ...activeMemory, enabled: true, state: "enabled" };
+      await gateway.setMethodResponse("plugins.list", {
+        plugins: [...memoryPlugins, committed],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+      await gateway.resolveDeferred("plugins.setEnabled", {
+        ok: true,
+        plugin: committed,
+        restartRequired: false,
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(initialConfigReads);
+      await gateway.rejectDeferred("config.get", {
+        code: "UNAVAILABLE",
+        message: "authoritative snapshot unavailable",
+      });
 
-        await expect
-          .poll(async () => (await gateway.getRequests("plugins.list")).length)
-          .toBeGreaterThan(initialCatalogReads);
-        await expect.poll(() => toggle.isChecked()).toBe(true);
-        await page.getByText("Needs attention", { exact: true }).first().waitFor();
-        await page
-          .getByText(
-            "Could not refresh Control UI configuration: authoritative snapshot unavailable",
-          )
-          .waitFor();
-        expect(await page.getByText("Could not update Active memory").count()).toBe(0);
-        expect(pageErrors).toEqual([]);
+      await expect
+        .poll(async () => (await gateway.getRequests("plugins.list")).length)
+        .toBeGreaterThan(initialCatalogReads);
+      await expect.poll(() => toggle.isChecked()).toBe(true);
+      await page.getByText("Needs attention", { exact: true }).first().waitFor();
+      await page
+        .getByText("Could not refresh Control UI configuration: authoritative snapshot unavailable")
+        .waitFor();
+      expect(await page.getByText("Could not update Active memory").count()).toBe(0);
+      expect(pageErrors).toEqual([]);
 
-        if (captureUiProofEnabled) {
-          await page.locator("openclaw-memory-settings").screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "03-addon-committed-refresh-warning.png"),
-          });
-        }
-      },
-    );
+      if (captureUiProofEnabled) {
+        await page.locator("openclaw-memory-settings").screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "03-addon-committed-refresh-warning.png"),
+        });
+      }
+    });
   });
 
   it("keeps a missing default engine labelled, first, and selected as unavailable", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": configResponse("memory-core", "memory-hash-missing-default"),
-            "plugins.list": {
-              plugins: memoryPlugins.filter((plugin) => plugin.id !== "memory-core"),
-              diagnostics: [],
-              mutationAllowed: true,
-            },
+    await suite.withPage(createDarkDesktopControlUiContextOptions(), async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configResponse("memory-core", "memory-hash-missing-default"),
+          "plugins.list": {
+            plugins: memoryPlugins.filter((plugin) => plugin.id !== "memory-core"),
+            diagnostics: [],
+            mutationAllowed: true,
           },
-        });
+        },
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-        expect(response?.status()).toBe(200);
+      const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      expect(response?.status()).toBe(200);
 
-        const engineGroup = page.getByRole("radiogroup").first();
-        await engineGroup.waitFor();
-        await expect
-          .poll(async () =>
-            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
-          )
-          .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
-        await expect
-          .poll(() =>
-            engineGroup
-              .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
-              .isChecked(),
-          )
-          .toBe(true);
+      const engineGroup = page.getByRole("radiogroup").first();
+      await engineGroup.waitFor();
+      await expect
+        .poll(async () =>
+          (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
+        )
+        .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
+      await expect
+        .poll(() =>
+          engineGroup
+            .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
+            .isChecked(),
+        )
+        .toBe(true);
 
-        if (captureUiProofEnabled) {
-          await page
-            .locator(".settings-page > .settings-section")
-            .first()
-            .screenshot({
-              animations: "disabled",
-              path: path.join(uiProofArtifactDir, "02-configured-engine-unavailable.png"),
-            });
-        }
-      },
-    );
+      if (captureUiProofEnabled) {
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "02-configured-engine-unavailable.png"),
+          });
+      }
+    });
   });
 });

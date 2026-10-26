@@ -135,6 +135,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           if (node.matches(tableShellSelector)) {
             shells.add(node);
           }
+          // Syntax highlighting inserts many leaf spans, which cannot contain tables.
+          if (!node.firstElementChild) {
+            continue;
+          }
           for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
             shells.add(added);
           }
@@ -145,7 +149,9 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           }
           const removed = [
             node,
-            ...node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`),
+            ...(node.firstElementChild
+              ? node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)
+              : []),
           ];
           for (const observed of removed) {
             if (observedNodes.delete(observed)) {

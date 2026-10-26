@@ -3,6 +3,7 @@ import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
   type GatewayNativeApprovalMethod,
@@ -53,6 +54,7 @@ import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
+import { prepareFailedWorkerPlacement } from "./worker-environments/session-placement-lifecycle.js";
 
 const loadRecoveryTypingAdapter = createLazyRuntimeModule(
   () => import("../channels/plugins/index.js"),
@@ -174,6 +176,20 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareFailedWorkerPlacement: async (target) => {
+      assertDispatchAvailable("restart recovery");
+      const context = options.getContext();
+      return prepareFailedWorkerPlacement({
+        ...target,
+        context,
+        assertCurrent: () => {
+          assertDispatchAvailable("restart recovery");
+          if (options.getContext() !== context) {
+            throw new GatewayDispatchUnavailableError("restart recovery", true);
+          }
+        },
+      });
+    },
     prepareRestartRecovery: (signal) => {
       signal?.throwIfAborted();
       assertDispatchAvailable("restart recovery");
@@ -264,7 +280,7 @@ export function createGatewayInstanceRuntime(
       const context = options.getContext();
       let startOwner: AgentTurnStartOwner | undefined;
       let ownerLost = false;
-      const assertRecoveryCurrent = () => {
+      const assertRecoveryOwnerCurrent = () => {
         assertDispatchAvailable("agent");
         assertRecoveryTarget();
         dispatchOptions.signal?.throwIfAborted();
@@ -287,11 +303,15 @@ export function createGatewayInstanceRuntime(
           ).restoreGatewayRunRecovery({
             target,
             context,
-            assertCurrent: assertRecoveryCurrent,
+            assertCurrent: assertRecoveryOwnerCurrent,
             restoreOperator: recoveryTarget !== undefined,
             restoreRequester: requesterTarget !== undefined,
           })
         : undefined;
+      const assertRecoveryCurrent = () => {
+        assertRecoveryOwnerCurrent();
+        restored?.parentSource?.source();
+      };
       let releaseOperatorAuthority: (() => void) | undefined;
       let delegatedToolPolicyHandoffId: string | undefined;
       try {
@@ -350,6 +370,7 @@ export function createGatewayInstanceRuntime(
                         agentId: requesterTarget.agentId,
                         sessionKey: requesterTarget.sessionKey,
                         requesterOrigin,
+                        assertCurrent: restored?.parentSource?.source,
                       }
                     : undefined),
                 allowModelOverride:
@@ -415,7 +436,12 @@ export function createGatewayInstanceRuntime(
               operatorAuthority?.assertCurrent();
             }
           },
-          executionSource: dispatchOptions.executionSource,
+          executionSource: restored?.parentSource
+            ? composeSessionSourceAssertion([
+                dispatchOptions.executionSource,
+                restored.parentSource.source,
+              ])
+            : dispatchOptions.executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
@@ -432,6 +458,7 @@ export function createGatewayInstanceRuntime(
         cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
         releaseOperatorAuthority?.();
         restored?.operator?.release();
+        restored?.parentSource?.release();
       }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number, signal?: AbortSignal) => {
@@ -611,6 +638,12 @@ export function createGatewayInstanceRuntime(
       },
     },
     nativeApprovals: {
+      getRuntimeConfig: () => {
+        if (closed) {
+          throw new Error("Gateway instance approval runtime is closed");
+        }
+        return options.getContext().getRuntimeConfig();
+      },
       request: async <T>(
         method: GatewayNativeApprovalMethod,
         payload: Record<string, unknown>,

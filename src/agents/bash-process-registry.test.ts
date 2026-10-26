@@ -30,7 +30,7 @@ const randomMocks = vi.hoisted(() => ({ generateSecureInt: vi.fn(() => 0) }));
 // mock-isolation: Deterministic session IDs exercise collision handling without real randomness.
 vi.mock("../infra/secure-random.js", () => ({ generateSecureInt: randomMocks.generateSecureInt }));
 
-it("releases discarded backing strings from live, finished, and staged output", async ({
+it("releases unrelated backing storage from live, finished, and staged output", async ({
   signal,
 }) => {
   const result = await runNodeScript(

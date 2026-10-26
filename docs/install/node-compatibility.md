@@ -28,7 +28,7 @@ Node 24 and 26 remain rejected, including `24.22.1-rc.1` and `26.12.1-rc.1`.
 Node 27 development builds are accepted without changing the installer or Docker
 defaults; Node 26 remains recommended and Node 24 remains the CI runtime.
 
-The Bun opt-in runtime requires **Bun 1.4.3+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
+The Bun opt-in runtime requires **Bun 1.4.4+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
 
 ## How the gate decides
 
@@ -97,6 +97,7 @@ Rows identify the first effective release, including a beta when applicable. Rec
 
 | Release                              | Node requirement                                 | What changed and why                                                                                                                                                                                                                                             |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                    | Node floors unchanged                            | Raises the independent stock Bun floor to 1.4.4; see Bun compatibility for remaining session/QUIC limits. The OpenClaw fork pin is unchanged.                                                                                                                    |
 | Unreleased (main)                    | `>=24.22.1 <25 \|\| >=26.12.1`                   | Requires the eMudhra compromised-key rejection releases, including for builds whose SQLite capability check passes. Preserves diagnostics/update recovery, SQLite safety checks, and well-formed future-major development labels. Node 22/23/25 remain excluded. |
 | v2026.9.3                            | `>=24.16.0 <25 \|\| >=26.1.0`                    | Raises the Node 24 floor and drops Node 22 and 25 to prevent embedded-NUL TEXT truncation; Node 23 remains excluded. Official Node-based support for macOS 11–13.4 and Linux ARMv7 provisioning ends. #140672                                                    |
 | v2026.8.2                            | `>=22.22.3 <23 \|\| >=24.15.0 <25 \|\| >=25.9.0` | Preserves supported RPM-owned Node packages with unsafe system SQLite and provisions a separate user-space runtime. The numeric range and loaded-library safety requirement stay unchanged. #134166                                                              |

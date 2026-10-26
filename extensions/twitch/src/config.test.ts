@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getAccountConfig, resolveTwitchAccountContext } from "./config.js";
+import { makeTwitchChannelTestConfig } from "./test-fixtures.js";
 
 describe("getAccountConfig", () => {
   it("normalizes account ids without reading inherited account properties", () => {
@@ -14,13 +15,9 @@ describe("getAccountConfig", () => {
       accessToken: "oauth:secondary",
     };
 
-    const cfg = {
-      channels: {
-        twitch: {
-          accounts,
-        },
-      },
-    };
+    const cfg = makeTwitchChannelTestConfig({
+      accounts,
+    });
 
     expect(getAccountConfig(cfg, "SECONDARY\r\n")).toEqual({
       username: "secondbot",
@@ -38,23 +35,21 @@ describe("getAccountConfig", () => {
 
 describe("resolveTwitchAccountContext", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
-    const context = resolveTwitchAccountContext({
-      channels: {
-        twitch: {
-          defaultAccount: "secondary",
-          accounts: {
-            default: {
-              username: "default-bot",
-              accessToken: "oauth:default-token",
-            },
-            secondary: {
-              username: "second-bot",
-              accessToken: "oauth:second-token",
-            },
+    const context = resolveTwitchAccountContext(
+      makeTwitchChannelTestConfig({
+        defaultAccount: "secondary",
+        accounts: {
+          default: {
+            username: "default-bot",
+            accessToken: "oauth:default-token",
+          },
+          secondary: {
+            username: "second-bot",
+            accessToken: "oauth:second-token",
           },
         },
-      },
-    } as Parameters<typeof resolveTwitchAccountContext>[0]);
+      }) as Parameters<typeof resolveTwitchAccountContext>[0],
+    );
 
     expect(context.accountId).toBe("secondary");
     expect(context.account?.username).toBe("second-bot");

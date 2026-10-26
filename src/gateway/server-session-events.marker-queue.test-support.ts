@@ -4,6 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import {
   createTranscriptUpdateBroadcastHandler,
   readSessionMessageByIdAsyncMock,
@@ -55,8 +56,7 @@ export function registerTranscriptMarkerQueueTests() {
       },
       targetsBySessionKey: differentStore ? new Map([["agent:main:global", otherRow]]) : undefined,
     });
-    const membershipEntered = createDeferred();
-    const releaseMembership = createDeferred();
+    const membership = createRequestGate();
     const markerResolved = createDeferred();
     let markerReady = false;
     const findBySessionId = projection.findBySessionId.bind(projection);
@@ -69,14 +69,11 @@ export function registerTranscriptMarkerQueueTests() {
       return rows;
     });
     vi.spyOn(projection, "prepareMembership").mockImplementation(async () => {
-      membershipEntered.resolve();
-      await releaseMembership.promise;
+      await membership.pause();
       markerReady = true;
     });
-    const earlierReadEntered = createDeferred();
-    const releaseEarlierRead = createDeferred();
-    const publicationEntered = createDeferred();
-    const releasePublication = createDeferred();
+    const earlierRead = createRequestGate();
+    const publication = createRequestGate();
     const prepareRows = projection.withPreparedExactRows.bind(projection);
     let earlierQueries: Parameters<typeof prepareRows>[0] | undefined;
     let markerHeld = false;
@@ -89,8 +86,7 @@ export function registerTranscriptMarkerQueueTests() {
           }
           if (queries !== earlierQueries && !markerHeld) {
             markerHeld = true;
-            publicationEntered.resolve();
-            await releasePublication.promise;
+            await publication.pause();
           }
         }
         return prepareRows(() => targets, consume, options);
@@ -98,8 +94,7 @@ export function registerTranscriptMarkerQueueTests() {
     );
     readSessionMessageByIdAsyncMock.mockImplementation(async (_scope, id: string) => {
       if (id === "earlier") {
-        earlierReadEntered.resolve();
-        await releaseEarlierRead.promise;
+        await earlierRead.pause();
       }
       return storedMessage(id, 1);
     });
@@ -130,7 +125,7 @@ export function registerTranscriptMarkerQueueTests() {
         void enqueue("earlier", {
           target: { agentId: "main", sessionId: "sess-main", sessionKey: "global", storePath },
         });
-        await waitForGate(earlierReadEntered.promise, tasks[0]!, "Earlier read did not start");
+        await waitForGate(earlierRead.entered, tasks[0]!, "Earlier read did not start");
       }
       const markerUpdate = enqueue("marker", {
         sessionFile: `sqlite:main:sess-main:${storePath}`,
@@ -139,10 +134,10 @@ export function registerTranscriptMarkerQueueTests() {
         ...(keyedResolved ? {} : { messageSeq: 2 }),
       });
       const waitForPublication = () =>
-        waitForGate(publicationEntered.promise, markerUpdate, "Marker publication did not prepare");
-      await waitForGate(membershipEntered.promise, markerUpdate, "Marker readiness did not start");
+        waitForGate(publication.entered, markerUpdate, "Marker publication did not prepare");
+      await waitForGate(membership.entered, markerUpdate, "Marker readiness did not start");
       if (keyedResolved) {
-        releaseMembership.resolve();
+        membership.release();
         await waitForPublication();
       }
       void enqueue("later", {
@@ -156,19 +151,19 @@ export function registerTranscriptMarkerQueueTests() {
       });
       await withinTest(independent, signal);
       expect(publications()).toEqual([["session.message", "independent"]]);
-      releaseMembership.resolve();
+      membership.release();
       await waitForGate(markerResolved.promise, markerUpdate, "Marker key did not resolve");
       if (keyedFirst) {
         expect(publications()).toEqual([["session.message", "independent"]]);
       }
-      releaseEarlierRead.resolve();
+      earlierRead.release();
       await waitForPublication();
       const beforeMarker = [
         ["session.message", "independent"],
         ...(keyedFirst ? [["session.message", "earlier"]] : []),
       ];
       expect(publications()).toEqual(beforeMarker);
-      releasePublication.resolve();
+      publication.release();
       await Promise.all(tasks);
       expect(publications()).toEqual([
         ...beforeMarker,
@@ -191,9 +186,9 @@ export function registerTranscriptMarkerQueueTests() {
       }
       expect(marker?.[3]).toMatchObject({ prepareSessionProjection: expect.any(Function) });
     } finally {
-      releaseMembership.resolve();
-      releaseEarlierRead.resolve();
-      releasePublication.resolve();
+      membership.release();
+      earlierRead.release();
+      publication.release();
       await Promise.allSettled(tasks);
       projection.dispose();
     }

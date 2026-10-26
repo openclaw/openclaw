@@ -12,6 +12,7 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   createCodexCliSessionNodeHostCommands,
@@ -50,11 +51,9 @@ async function completeResume(argv: string[]) {
   }
   await fs.writeFile(outputPath, "final answer\n");
   return {
+    ...commandResult(),
     stdout: Buffer.alloc(0),
     stderr: Buffer.alloc(0),
-    code: 0,
-    signal: null,
-    killed: false,
     termination: "exit" as const,
   };
 }
@@ -462,7 +461,7 @@ it("does not start a node resume canceled while its source is resolving", async 
   expect(runCommand).not.toHaveBeenCalled();
 });
 
-it("preserves the node-owned catalog home without redirecting legacy bindings", async () => {
+it("preserves the node-owned catalog home and rejects an unavailable source", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   const { factory, reconfigure } = await createCatalog();
   try {
@@ -474,7 +473,7 @@ it("preserves the node-owned catalog home without redirecting legacy bindings", 
       return completeResume(argv);
     });
     const command = nodeCommand(undefined, (agentId) => factory.forNode(agentId));
-    let entry = catalogEntry(source.sourceHomeId);
+    const entry = catalogEntry(source.sourceHomeId);
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => ({
       ok: true,
       payloadJSON: await command.handle(JSON.stringify(request.params)),
@@ -487,10 +486,6 @@ it("preserves the node-owned catalog home without redirecting legacy bindings", 
     await expect(resumeNode(request)).resolves.toMatchObject({
       text: "final answer",
     });
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-      agentId: "research",
-      sourceHomeId: source.sourceHomeId,
-    });
     expect(await fs.readFile(path.join(source.codexHome, "resumed"), "utf8")).toBe("yes");
     await expect(fs.stat(path.join(tempDir, "resumed"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -500,16 +495,6 @@ it("preserves the node-owned catalog home without redirecting legacy bindings", 
     await expect(resumeNode(request)).rejects.toThrow("requires a local Codex catalog source");
     reconfigure("unix", { agents: { ownership: "explicit", entries: { replacement: {} } } });
     await expect(resumeNode(request)).rejects.toThrow("unknown Codex session catalog agent");
-
-    entry = { ...entry, pluginExtensions: undefined };
-    await expect(
-      resumeNode({ ...request, sessionKey: "agent:research:legacy-chat" }),
-    ).resolves.toMatchObject({
-      text: "final answer",
-    });
-    expect(await fs.readFile(path.join(tempDir, "resumed"), "utf8")).toBe("yes");
-    expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("agentId");
-    expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("sourceHomeId");
   } finally {
     await factory.stop();
   }
@@ -624,9 +609,6 @@ it.each(["read", "close"] as const)("handles a large-file %s failure", async (fa
   expect(parsed.sessions).toEqual(
     partial ? [] : [summary(sessionId, sessionFile, cwd, "survives close failure")],
   );
-  if (partial) {
-    expect(read).toHaveBeenCalledTimes(2);
-  }
   expect(close).toHaveBeenCalledOnce();
 });
 

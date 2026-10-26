@@ -1,6 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { AssistantMessage, Model } from "../../llm/types.js";
+import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import {
@@ -134,7 +134,7 @@ export abstract class AgentSessionBase {
 
   protected async getRequiredRequestAuth(model: Model): Promise<{
     apiKey: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   }> {
     const result = await this.sessionModelRegistry.getApiKeyAndHeaders(model);
     if (!result.ok) {
@@ -160,7 +160,7 @@ export abstract class AgentSessionBase {
 
   protected async getCompactionRequestAuth(model: Model): Promise<{
     apiKey?: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   }> {
     if (
       getStreamLlmRuntime(this.agent.streamFn) ===

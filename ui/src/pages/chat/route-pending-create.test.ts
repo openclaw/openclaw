@@ -2,6 +2,7 @@
 import { expect, it, onTestFinished } from "vitest";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import {
   createSessionRouteContext,
   sessionRouteLocation,
@@ -45,14 +46,10 @@ it.each([
       location.search = `?${search}`;
     }
     const route = pages[0];
-    const loaded = route.loader!(context, {
-      location,
-      signal: new AbortController().signal,
-      cause: "navigation",
-      revalidating: false,
-      shouldRun: () => true,
-      deps: route.loaderDeps!(context, location),
-    });
+    const loaded = route.loader!(
+      context,
+      createRouteLoaderOptions(location, route.loaderDeps!(context, location)),
+    );
 
     expect(loaded).not.toBeInstanceOf(Promise);
     expect(await loaded).toMatchObject({ kind: "session", sessionKey, face: "chat", creation });
@@ -85,14 +82,10 @@ it.each(["admitted", "other-session"] as const)(
       }),
     );
     const route = pages[0];
-    await route.loader!(context, {
-      location,
-      signal: new AbortController().signal,
-      cause: "navigation",
-      revalidating: false,
-      shouldRun: () => true,
-      deps: route.loaderDeps!(context, location),
-    });
+    await route.loader!(
+      context,
+      createRouteLoaderOptions(location, route.loaderDeps!(context, location)),
+    );
     expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.resolve"]);
   },
 );

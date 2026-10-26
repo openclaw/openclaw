@@ -26,7 +26,10 @@ const SETTLE_MS = 3_000;
 const READY_TIMEOUT_MS = 60_000;
 // Idle decoration must not become a route preload just because the capture
 // waits for background work to settle after the composer is already visible.
-const idleEntries = new Set(["ui/src/components/lobster-pet.tsx"]);
+const idleEntries = new Set([
+  "ui/src/app/app-shell-idle.runtime.ts",
+  "ui/src/components/lobster-pet.tsx",
+]);
 
 const mime: Record<string, string> = {
   ".html": "text/html",
@@ -58,6 +61,8 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
       filePath.endsWith("index.html")
         ? source
             .toString("utf8")
+            // Measure requested boot code, not speculative idle preparation.
+            .replace(/<meta id="openclaw-navigation-preloads"[^>]*>/u, "")
             .replaceAll('src="./assets/', 'src="/assets/')
             .replaceAll('href="./assets/', 'href="/assets/')
         : source,

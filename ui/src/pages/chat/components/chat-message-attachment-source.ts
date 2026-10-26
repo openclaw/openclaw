@@ -30,6 +30,7 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+import type { AttachmentSidebarState } from "./chat-sidebar-content-types.ts";
 
 registerChatComposerEnglish();
 
@@ -105,6 +106,72 @@ function setManagedAttachmentAvailability(
   return availability;
 }
 
+function managedAttachmentGrant(url: string, expiresAt: string | undefined, now: number) {
+  const parsed = Date.parse(expiresAt ?? "");
+  return {
+    status: "available" as const,
+    url,
+    expiresAt: Number.isFinite(parsed) ? parsed : now + 5 * 60_000,
+  };
+}
+
+export function prepareManagedAttachmentGrant(
+  scope: { sessionKey: string; artifactId: string; connectionEpoch?: number },
+  signal: AbortSignal,
+) {
+  const owner = () => {};
+  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+    "managed-media",
+    `${scope.connectionEpoch ?? 0}::${scope.sessionKey}::${scope.artifactId}`,
+    owner,
+  );
+  const release = () => releaseChatMediaResourceOwner(owner);
+  const stopAbort = listen(signal, "abort", release, { once: true });
+  if (signal.aborted) {
+    release();
+  }
+  // Holding the native resource distinguishes retirement/recreation from an unchanged miss.
+  return {
+    sessionKey: scope.sessionKey,
+    artifactId: scope.artifactId,
+    resource,
+    value: resource.value,
+    owner,
+    release: () => {
+      stopAbort();
+      release();
+    },
+  };
+}
+
+export function admitManagedAttachmentGrant(
+  receipt: ReturnType<typeof prepareManagedAttachmentGrant>,
+  attachment: AttachmentItem["attachment"],
+  expiresAt: string | undefined,
+): void {
+  const resource = receipt.resource;
+  if (
+    !isChatMediaResourceCurrent(resource) ||
+    !resource.subscribers.has(receipt.owner) ||
+    resource.value !== receipt.value ||
+    resource.pending ||
+    attachment.artifactId !== receipt.artifactId ||
+    !isManagedOutgoingMediaSource(attachment.url) ||
+    resolveManagedOutgoingMediaSessionKey(attachment.url) !== receipt.sessionKey
+  ) {
+    return;
+  }
+  const now = Date.now();
+  const grant = managedAttachmentGrant(attachment.url, expiresAt, now);
+  if (grant.expiresAt - now <= ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS) {
+    return;
+  }
+  resource.retryAttempted = false;
+  resource.retainUntil = grant.expiresAt;
+  setManagedAttachmentAvailability(resource, grant);
+  notifyChatMediaResourceSubscribers(resource);
+}
+
 function resolveManagedAttachmentAvailability(
   attachment: AttachmentItem["attachment"],
   resolveArtifactDownload: ArtifactDownloadResolver | undefined,
@@ -131,6 +198,10 @@ function resolveManagedAttachmentAvailability(
     onMediaChange,
     attachment.url,
   );
+  if (onMediaChange) {
+    // The reader adopts prepared idle retention and resumes the normal subscriber lifecycle.
+    resource.retainUntil = undefined;
+  }
   const cached = resource.value;
   const now = Date.now();
   if (
@@ -196,16 +267,9 @@ function resolveManagedAttachmentAvailability(
         if (!url) {
           availability = handleResolutionFailure();
         } else {
-          const parsedExpiresAt = Date.parse(result?.expiresAt ?? "");
           const resolvedAt = Date.now();
-          const expiresAt = Number.isFinite(parsedExpiresAt)
-            ? parsedExpiresAt
-            : resolvedAt + 5 * 60_000;
-          const incoming: Extract<ManagedAttachmentAvailability, { status: "available" }> = {
-            status: "available",
-            url,
-            expiresAt,
-          };
+          const incoming = managedAttachmentGrant(url, result?.expiresAt, resolvedAt);
+          const expiresAt = incoming.expiresAt;
           availability =
             expiresAt - resolvedAt > ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS
               ? incoming
@@ -248,26 +312,6 @@ function resolveManagedAttachmentAvailability(
   return current ?? { status: "checking" };
 }
 
-function retryManagedAttachmentAvailability(
-  attachment: AttachmentItem["attachment"],
-  onMediaChange: (() => void) | undefined,
-  connectionEpoch: number | undefined,
-): void {
-  if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
-    return;
-  }
-  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
-    "managed-media",
-    `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
-    onMediaChange,
-    attachment.url,
-  );
-  resource.value = undefined;
-  resource.retryAttempted = false;
-  notifyChatMediaResourceSubscribers(resource);
-  onMediaChange?.();
-}
-
 export function resolveAttachmentSource(
   attachment: AttachmentItem["attachment"],
   options: ImageRenderOptions,
@@ -306,7 +350,21 @@ export function resolveAttachmentSource(
         managedAvailability.status === "unavailable" &&
         attachment.artifactId &&
         resolveArtifactDownload
-          ? () => retryManagedAttachmentAvailability(attachment, onMediaChange, connectionEpoch)
+          ? (): void => {
+              if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
+                return;
+              }
+              const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+                "managed-media",
+                `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
+                onMediaChange,
+                attachment.url,
+              );
+              resource.value = undefined;
+              resource.retryAttempted = false;
+              notifyChatMediaResourceSubscribers(resource);
+              onMediaChange?.();
+            }
           : undefined,
     };
   }
@@ -338,6 +396,26 @@ export function resolveAttachmentSource(
       height: assistantAvailability.height ?? attachment.height,
     },
   };
+}
+
+export function resolveAttachmentSidebarSource(
+  attachment: AttachmentItem["attachment"],
+  options: ImageRenderOptions,
+): AttachmentSidebarState {
+  const next = resolveAttachmentSource(attachment, options);
+  if (next.status === "available") {
+    return { status: "ready", ...next.source };
+  }
+  if (next.status === "checking") {
+    return { status: "pending" };
+  }
+  return next.error
+    ? {
+        status: "error",
+        reason: next.reason ?? t("chat.attachments.unavailable"),
+        onRetry: next.onRetry,
+      }
+    : { status: "unavailable", onRetry: next.onRetry };
 }
 
 /** Resolve fresh authorization at the media owner, then read within the caller's attachment budget. */

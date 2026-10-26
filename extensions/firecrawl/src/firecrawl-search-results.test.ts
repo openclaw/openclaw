@@ -1,5 +1,6 @@
 import type { MockInstance } from "vitest";
 import { assert, describe, expect, it, vi } from "vitest";
+import { hangingFetchUntilAbort } from "../../test-support/hanging-fetch.test-support.js";
 import { mockFirecrawlResponses } from "./firecrawl-payload.test-support.js";
 import { createFirecrawlFreeWebSearchProvider } from "./firecrawl-search-provider.js";
 
@@ -134,15 +135,7 @@ it("keeps the client default count when no search config is set", async () => {
 });
 
 it("cancels a slow Firecrawl search at the configured deadline", async () => {
-  vi.spyOn(globalThis, "fetch").mockImplementation(
-    (_url, init) =>
-      new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          const reason = init.signal?.reason;
-          reject(reason instanceof Error ? reason : new Error("aborted"));
-        });
-      }) as Promise<Response>,
-  );
+  vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetchUntilAbort);
   const tool = createConfiguredSearchTool({ timeoutSeconds: 1 });
   vi.useFakeTimers();
   try {

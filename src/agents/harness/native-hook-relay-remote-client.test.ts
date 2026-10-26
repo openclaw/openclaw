@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import os from "node:os";
@@ -6,6 +5,7 @@ import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import tls from "node:tls";
 import { expect, it } from "vitest";
+import * as httpFixtures from "../../../test/helpers/gateway-integration-fixtures.js";
 import {
   PROXY_FIXTURE_CERTIFICATE as cert,
   PROXY_FIXTURE_KEY as key,
@@ -45,13 +45,7 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
     void request.catch(() => res.destroy());
   });
   try {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing address");
-    }
-    const url = `https://127.0.0.1:${address.port}/__openclaw__/native-hook/relay`;
+    const url = `${await httpFixtures.listenLoopback(server, "https")}/__openclaw__/native-hook/relay`;
     const credential = path.join(dir, "credential.json");
     const save = (target: string) =>
       writeFile(credential, JSON.stringify({ url: target, token: "synthetic-relay-capability" }));

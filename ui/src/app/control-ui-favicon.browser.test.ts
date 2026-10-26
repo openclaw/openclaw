@@ -321,6 +321,21 @@ it("reuses palette reads through session publications while retaining retries an
     expect(styleReads).not.toHaveBeenCalled();
     expect(svgIcon.href).toBe(workingHref);
 
+    for (const property of [
+      "--shell-viewport-height",
+      "--shell-safe-area-bottom",
+      "--control-ui-system-chrome-background",
+      ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+        `--oc-${owner}-reserve-bottom`,
+        `--oc-${owner}-reserve-right`,
+      ]),
+    ]) {
+      root.style.setProperty(property, "123px");
+    }
+    await painted();
+    expect(styleReads).not.toHaveBeenCalled();
+    expect(svgIcon.href).toBe(workingHref);
+
     root.style.setProperty("--accent", "rgb(70, 140, 190)");
     await expectDot("rgb(70, 140, 190)");
     root.style.setProperty("--info", "rgb(20, 100, 180)");

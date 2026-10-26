@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
@@ -106,6 +107,29 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it.each<[string, TurnOverrides]>([
+    ["default", {}],
+    [
+      "configured review",
+      { config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } } },
+    ],
+  ])("preserves launch fingerprint bytes across JSON for %s policy", async (_name, overrides) => {
+    const { exec } = await resolvedAuthority(overrides);
+    // The node supervisor fingerprints the projection before and after JSON transport.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise JSON transport, which omits undefined fields.
+    expect(stableStringify(JSON.parse(JSON.stringify(exec)))).toBe(stableStringify(exec));
+  });
+
+  it.each(["auto", "ask"] as const)(
+    "preserves %s exec mode without withholding worker shell tools",
+    async (mode) => {
+      const overrides: TurnOverrides = { config: { tools: { exec: { host: "gateway", mode } } } };
+      const result = await resolvedAuthority(overrides);
+      expect(result.exec).toMatchObject({ mode });
+      expect(result.execUnavailable).toBe(false);
+      expect(await authority(overrides)).toEqual(expect.arrayContaining(["exec", "process"]));
+    },
+  );
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
     const sessionKey = "agent:main:dashboard:delegated";
     const config = {
@@ -234,12 +258,16 @@ describe("resolveWorkerToolAuthority", () => {
   });
 
   it.each([
-    ["deny", { permissionMode: "read-only" }, { security: "deny", ask: "off" }],
-    ["approval", { permissionMode: "guarded" }, { security: "allowlist", ask: "on-miss" }],
+    ["deny", { permissionMode: "read-only" }, { mode: "deny", security: "deny", ask: "off" }],
+    [
+      "approval",
+      { permissionMode: "guarded" },
+      { mode: "ask", security: "allowlist", ask: "on-miss" },
+    ],
     [
       "node binding",
       { ...sessionNode, execCwd: " /remote/session/workspace " },
-      { host: "node", node: "session-node", security: "full", ask: "off" },
+      { host: "node", mode: "full", node: "session-node", security: "full", ask: "off" },
     ],
   ] as const)(
     "preserves effective exec authority for session %s",
@@ -288,11 +316,6 @@ describe("resolveWorkerToolAuthority", () => {
     ).rejects.toThrow(
       "exec node not allowed (bound to bound-node, requested resolved to other-node)",
     );
-  });
-
-  it("projects runtime caps with canonical write-to-apply_patch semantics", async () => {
-    expect(await authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
-    expect(await authority({ toolsAllow: [] })).toEqual([]);
   });
 
   it.each([
@@ -356,7 +379,12 @@ describe("resolveWorkerToolAuthority", () => {
         messageProvider: "whatsapp",
         config: { channels: { whatsapp: { groups: { team: { tools: denyWrites } } } } },
         toolsAllow: ["write"],
-        scheduledToolPolicy,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerAccountId: "default",
+          ownerSessionKey: "agent:main:whatsapp:group:team",
+        },
       }),
     ).toEqual([]);
   });

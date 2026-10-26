@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult, ModelAuthStatusResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   configuredDetection,
@@ -18,7 +19,6 @@ import {
   authOption,
   mountDetection,
   createFirstRunContext,
-  configSnapshot,
   candidate,
   callsFor,
   mockRequests,
@@ -176,7 +176,7 @@ describe("ModelSetupPage catalog icons", () => {
     mockRequests(request, {
       "config.get": () => {
         order.push("config.get");
-        return configSnapshot(config, hash);
+        return sourceConfigSnapshot(config, hash);
       },
       "config.set": (params) => {
         order.push("config.set");
@@ -214,7 +214,7 @@ describe("ModelSetupPage catalog icons", () => {
     const { context, client, request, runtimeConfig, snapshot } = createContext();
     const configSet = createDeferred<{ hash: string }>();
     mockRequests(request, {
-      "config.get": () => configSnapshot(),
+      "config.get": () => sourceConfigSnapshot(),
       "config.set": () => configSet.promise,
     });
     await runtimeConfig.ensureLoaded();
@@ -245,7 +245,7 @@ describe("ModelSetupPage catalog icons", () => {
     request.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         order.push("config.get");
-        return configSnapshot();
+        return sourceConfigSnapshot();
       }
       order.push(method);
       if (method === "openclaw.setup.auth.start") {
@@ -452,7 +452,7 @@ describe("Model setup account connections", () => {
   function configureRequests(handlers: Parameters<typeof mockRequests>[1]) {
     mockRequests(fixture.request, {
       "models.authStatus": () => authStatus,
-      "config.get": () => configSnapshot({}, "unchanged"),
+      "config.get": () => sourceConfigSnapshot({}, "unchanged"),
       "openclaw.setup.detect": () => setup,
       ...handlers,
     });

@@ -17,6 +17,24 @@ function tables(table = "transcript_events", extraColumns = "") {
         CREATE TABLE session_windows (session_id TEXT${table === "source_rows" ? " PRIMARY KEY" : ""}, session_key TEXT);
       `);
 }
+function seed(sessionId: string, events: string[], table = "transcript_events") {
+  database
+    .prepare("INSERT INTO session_windows VALUES (?, ?)")
+    .run(sessionId, `agent:main:${sessionId}`);
+  const insert = database.prepare(`INSERT INTO ${table} VALUES (?, ?, ?, ?)`);
+  events.forEach((eventJson, seq) => insert.run(sessionId, seq, 20 + seq, eventJson));
+}
+function snapshot(events: string[], headerSession?: string) {
+  return {
+    ok: true,
+    rows: events.map((eventJson, seq) => ({
+      eventJson,
+      seq,
+      ...(headerSession ? { createdAt: 20 + seq } : {}),
+    })),
+    ...(headerSession ? { sessionKey: `agent:main:${headerSession}` } : {}),
+  };
+}
 
 it("preserves exact compressed payloads in label and header repair snapshots", () => {
   tables("transcript_events", ", event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT");
@@ -38,15 +56,10 @@ it("preserves exact compressed payloads in label and header repair snapshots", (
     insert.run("compressed", seq, 20 + seq, event_zstd, event_utf8_bytes, navigation_json);
   }
   const reader = new ReadOnlySqliteTranscriptReader(database);
-  expect(reader.labelRepairSnapshot("compressed", accept, accept)).toEqual({
-    ok: true,
-    rows: originals.map((eventJson, seq) => ({ eventJson, seq })),
-  });
-  expect(reader.headerlessSnapshot("compressed", accept)).toEqual({
-    ok: true,
-    sessionKey: "agent:main:compressed",
-    rows: originals.map((eventJson, seq) => ({ eventJson, seq, createdAt: 20 + seq })),
-  });
+  expect(reader.labelRepairSnapshot("compressed", accept, accept)).toEqual(snapshot(originals));
+  expect(reader.headerlessSnapshot("compressed", accept)).toEqual(
+    snapshot(originals, "compressed"),
+  );
   database
     .prepare("UPDATE transcript_events SET event_zstd = ? WHERE session_id = ? AND seq = 2")
     .run(new Uint8Array([0]), "compressed");
@@ -55,12 +68,7 @@ it("preserves exact compressed payloads in label and header repair snapshots", (
 
 it("closes a rejected header snapshot before the next database operation", () => {
   tables();
-  database.exec(`
-        INSERT INTO session_windows VALUES ('rejected', 'agent:main:rejected');
-        INSERT INTO transcript_events VALUES
-          ('rejected', 0, 10, '{"type":"message","id":"first"}'),
-          ('rejected', 1, 11, '{"type":"session","id":"rejected"}');
-      `);
+  seed("rejected", ['{"type":"message","id":"first"}', '{"type":"session","id":"rejected"}']);
   const reader = new ReadOnlySqliteTranscriptReader(database);
   expect(reader.headerlessSnapshot("rejected", () => false)).toEqual({ ok: true, rows: [] });
   // A live native cursor would keep this schema write locked.
@@ -79,21 +87,17 @@ it.each([
   database.exec(`
         CREATE VIEW transcript_events AS
           SELECT session_id, seq, created_at, json(event_json) AS event_json FROM source_rows;
-        INSERT INTO session_windows VALUES
-          ('broken', 'agent:main:broken'), ('healthy', 'agent:main:healthy');
       `);
-  const insert = database.prepare("INSERT INTO source_rows VALUES (?, ?, ?, ?)");
-  insert.run("broken", 0, 10, failingSeq === 0 ? "{" : '{"type":"message","id":"first"}');
-  if (failingSeq === 1) {
-    insert.run("broken", 1, 11, "{");
-  }
+  seed(
+    "broken",
+    [...(failingSeq === 1 ? ['{"type":"message","id":"first"}'] : []), "{"],
+    "source_rows",
+  );
   const healthyEvents = [
     '{"type":"message","id":"healthy-first"}',
     '{"type":"message","id":"healthy-second"}',
   ];
-  for (const [seq, eventJson] of healthyEvents.entries()) {
-    insert.run("healthy", seq, 20 + seq, eventJson);
-  }
+  seed("healthy", healthyEvents, "source_rows");
 
   const reader = new ReadOnlySqliteTranscriptReader(database);
   const read = (sessionId: string) =>
@@ -104,11 +108,5 @@ it.each([
     ok: false,
     error: { message: expect.stringMatching(/malformed JSON/iu) },
   });
-  expect(read("healthy")).toEqual({
-    ok: true,
-    rows: healthyEvents.map((eventJson, seq) =>
-      header ? { eventJson, seq, createdAt: 20 + seq } : { eventJson, seq },
-    ),
-    ...(header ? { sessionKey: "agent:main:healthy" } : {}),
-  });
+  expect(read("healthy")).toEqual(snapshot(healthyEvents, header ? "healthy" : undefined));
 });

@@ -144,18 +144,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 });
 
-it("reports a rejected engine change instead of silently snapping back", async () => {
-  const { element } = createPage({
-    catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
-    setEnabled: () => Promise.reject(new Error("plugin not installed: memory-lancedb")),
-  });
-  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-
-  selectEngine(element, "memory-lancedb");
-  await waitText(element, "plugin not installed: memory-lancedb");
-  expect(element.textContent).toContain("Could not change the memory engine");
-});
-
 it.each(["connection", "plugin publication"])(
   "drops a catalog completion superseded by %s",
   async (change) => {

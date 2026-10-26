@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -104,6 +104,7 @@ test("publishes standalone exact-commit releases with an inode-independent reusa
   writeFileSync(join(repository, "pnpm-workspace.yaml"), "packages: []\n");
   writeFileSync(join(repository, "fixture-build.cjs"), `
     const fs = require('node:fs');
+    if (process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== '1') throw new Error('release build must skip DTS');
     const head = require('node:child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
     fs.mkdirSync('dist/control-ui/assets', {recursive:true});
     for (const name of ['.buildstamp', '.runtime-postbuildstamp']) fs.writeFileSync('dist/'+name, JSON.stringify({head}));
@@ -200,34 +201,6 @@ publish_release "$1" "$mirror"
   assert.deepEqual(readdirSync(join(serving, "staging")), []);
 });
 
-test("builds historical checkouts through their existing runtime selector and package script", t => {
-  const root = mkdtempSync(join(tmpdir(), "team-historical-build-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const bin = join(root, "bin"), resultPath = join(root, "result.json");
-  mkdirSync(bin);
-  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { build: "historical build" } }));
-  const pnpm = join(bin, "pnpm");
-  writeFileSync(pnpm, `#!/bin/sh\nexec ${quote(process.execPath)} -e ${quote(`
-    const fs = require("node:fs");
-    const args = process.argv.slice(1);
-    const scripts = JSON.parse(fs.readFileSync(args[1] + "/package.json")).scripts;
-    if (!scripts[args[2]]) throw new Error("Unknown historical package script: " + args[2]);
-    fs.writeFileSync(process.env.RESULT_PATH, JSON.stringify({ args, skipDts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD }));
-  `)} -- "$@"\n`);
-  chmodSync(pnpm, 0o755);
-  const build = source.replace(/\\\r?\n\s*/g, " ").split("\n")
-    .find(line => line.includes('pnpm -C "$build_directory" build'));
-  assert.ok(build, "controller package build invocation");
-  const result = spawnSync("bash", ["-c", `set -euo pipefail
-build_directory=${quote(root)}; build_budget=30; cache_environment=()
-bounded_build() { shift; "$@"; }
-${build}
-`], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RESULT_PATH: resultPath } });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(readFileSync(resultPath, "utf8")), {
-    args: ["-C", root, "build"], skipDts: "1",
-  });
-});
 
 function prepare(t, scenario) {
   const root = mkdtempSync(join(tmpdir(), "team-prepare-release-"));

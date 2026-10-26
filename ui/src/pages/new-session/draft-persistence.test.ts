@@ -71,6 +71,8 @@ const retireDraft = store.retireDurableComposerDraft;
 const hydrateAttachments = store.hydrateDurableComposerAttachments;
 type Retirement = { status: "persisted"; revision: number; writeId: string };
 type SnapshotResult = Awaited<ReturnType<typeof writeSnapshot>>;
+const persisted = { result: { status: "persisted" as const }, payloadUnavailable: false };
+const conflict = { result: { status: "conflict" as const }, payloadUnavailable: false };
 
 function expectLastWrite(snapshot: Partial<Parameters<typeof writeSnapshot>[0]>) {
   expect(writeSnapshot).toHaveBeenLastCalledWith(expect.objectContaining(snapshot));
@@ -79,7 +81,7 @@ function expectLastWrite(snapshot: Partial<Parameters<typeof writeSnapshot>[0]>)
 function holdWrite() {
   const pending = createDeferred<SnapshotResult>();
   writeSnapshot.mockReturnValueOnce(pending.promise);
-  return () => pending.resolve({ result: { status: "persisted" }, payloadUnavailable: false });
+  return () => pending.resolve(persisted);
 }
 
 function modelSelection(
@@ -93,11 +95,7 @@ function modelSelection(
 
 async function resolvePendingRead(result: StoreReadResult) {
   // The read is issued behind the store's lazy import; wait for it to land.
-  await vi.waitFor(() => {
-    if (store.pendingReads.length === 0) {
-      throw new Error("no pending durable draft read");
-    }
-  });
+  await vi.waitFor(() => expect(store.pendingReads.length).toBeGreaterThan(0));
   store.pendingReads.shift()?.(result);
 }
 
@@ -113,8 +111,22 @@ async function restore(result: StoreReadResult) {
   await settle();
 }
 
+function activate(
+  flow: DraftSubmissionFlow,
+  route: string,
+  gatewayUrl = "ws://gateway.test",
+  recoveryScope = "recovery-a",
+) {
+  flow.draftPersistence.setOwner(gatewayUrl, recoveryScope);
+  flow.draftPersistence.activateRoute(route);
+}
+
+function waitForWrite(snapshot: Partial<Parameters<typeof writeSnapshot>[0]>) {
+  return vi.waitFor(() => expectLastWrite(snapshot));
+}
+
 // The gateway/place states are untouched by draft persistence and typing paths.
-function createFlow(route?: string, activate = false) {
+function createFlow(route?: string, active = false) {
   const flow = new DraftSubmissionFlow(
     {} as DraftGatewayState,
     {} as DraftPlaceState,
@@ -123,7 +135,7 @@ function createFlow(route?: string, activate = false) {
   );
   if (route) {
     flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-    if (activate) {
+    if (active) {
       flow.draftPersistence.activateRoute(route);
     } else {
       flow.draftPersistence.selectRoute(route);
@@ -154,8 +166,7 @@ describe("NewSessionDraftPersistence restore race", () => {
       return hydration.promise;
     });
     try {
-      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-      flow.draftPersistence.activateRoute("agent:main");
+      activate(flow, "agent:main");
       await hydrationEntered.promise;
       const mentions = [{ profileId: "new-alex", start: 0, end: 5 }];
       flow.setMessage("@Alex newer edit", mentions);
@@ -179,8 +190,7 @@ describe("NewSessionDraftPersistence restore race", () => {
       const flow = createFlow();
       const selection = { agentId: "main", model: "openai/retry", thinkingLevel: "high" };
       modelSelection(flow, () => selection);
-      flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
-      flow.draftPersistence.activateRoute("failed-restoration");
+      activate(flow, "failed-restoration", "ws://gateway.example", "principal-a");
       if (restoration !== "pending") {
         flow.draftPersistence.captureSubmission();
       }
@@ -203,9 +213,7 @@ describe("NewSessionDraftPersistence restore race", () => {
       await resolvePendingRead(saved);
       await vi.waitFor(() => expect(flow.message).toBe("Keep saved content"));
       flow.draftPersistence.persistNow();
-      await vi.waitFor(() =>
-        expectLastWrite({ text: "Keep saved content", modelSelection: selection }),
-      );
+      await waitForWrite({ text: "Keep saved content", modelSelection: selection });
       flow.disconnect();
     },
   );
@@ -214,8 +222,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     const flow = createFlow();
     let selected = "openai/first";
     modelSelection(flow, () => ({ agentId: "main", model: selected, thinkingLevel: "low" }));
-    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
-    flow.draftPersistence.activateRoute("failed-submission");
+    activate(flow, "failed-submission", "ws://gateway.example", "principal-a");
     await restore({ status: "not-found" });
     flow.setMessage("Still unsent");
     flow.draftPersistence.captureSubmission();
@@ -223,12 +230,10 @@ describe("NewSessionDraftPersistence restore race", () => {
     selected = "openai/second";
     flow.draftPersistence.noteModelSelectionMutation();
     flow.draftPersistence.persistNow();
-    await vi.waitFor(() =>
-      expectLastWrite({
-        text: "Still unsent",
-        modelSelection: expect.objectContaining({ model: selected }),
-      }),
-    );
+    await waitForWrite({
+      text: "Still unsent",
+      modelSelection: expect.objectContaining({ model: selected }),
+    });
     flow.disconnect();
   });
 
@@ -333,10 +338,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     await restore(storedDraft("original", "original-write"));
     let finishWrite: (() => void) | undefined;
     if (outcome === "conflict") {
-      writeSnapshot.mockResolvedValueOnce({
-        result: { status: "conflict" },
-        payloadUnavailable: false,
-      });
+      writeSnapshot.mockResolvedValueOnce(conflict);
     } else {
       finishWrite = holdWrite();
     }
@@ -410,10 +412,7 @@ describe("NewSessionDraftPersistence restore race", () => {
     async (settled) => {
       const flow = createFlow("conflict-route");
       const persistence = flow.draftPersistence;
-      writeSnapshot.mockResolvedValueOnce({
-        result: { status: "conflict" },
-        payloadUnavailable: false,
-      });
+      writeSnapshot.mockResolvedValueOnce(conflict);
       flow.setMessage("submitted retry");
       persistence.persistNow();
       await vi.waitFor(() => expect(store.pendingReads).toHaveLength(1));
@@ -469,8 +468,7 @@ describe("NewSessionDraftPersistence restore race", () => {
       if (state !== "pristine") {
         flow.setMessage(expectedText, state === "recipient" ? mentions : undefined);
       }
-      flow.draftPersistence.setOwner("ws://gateway.test", "recovery-a");
-      flow.draftPersistence.activateRoute("agent:main");
+      activate(flow, "agent:main");
       await restore(
         state === "missing"
           ? { status: "not-found" }

@@ -5,7 +5,7 @@ import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-sup
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -168,12 +168,9 @@ suite.define(() => {
             { role: "user", content: [{ type: "text", text: "Review the navigation changes." }] },
             {
               role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
-                },
-              ],
+              content: textContent(
+                "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+              ),
             },
           ],
           methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -534,6 +531,7 @@ suite.define(() => {
               "chat.startup",
               "device.scopes.requestUpgrade",
               "device.scopes.waitUpgrade",
+              "sessions.companion.state",
               "sessions.create",
             ],
             methodResponses: { "sessions.list": chatSessionListResponse() },

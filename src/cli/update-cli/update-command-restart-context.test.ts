@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   readState: vi.fn<() => Promise<GatewayServiceState>>(),
   revalidate: vi.fn<() => Promise<ManagedGatewayUpdateVerdict>>(),
 }));
+const serviceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
+const inspectedService = { inspected: true, runtimeInspected: true, serviceEnv };
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
@@ -64,11 +66,9 @@ describe("prepareUpdateRestart", () => {
       );
       const prepared = prepare({
         preManagedServiceStop: {
+          ...inspectedService,
           stopped: true,
-          inspected: true,
-          runtimeInspected: true,
           running: true,
-          serviceEnv: { OPENCLAW_STATE_DIR: "/managed/state" },
         },
         serviceRuntimeRefreshRequired: scenario === "masked-runtime-refresh",
       });
@@ -101,7 +101,6 @@ describe("prepareUpdateRestart", () => {
     "prepares native install environment: mode=%s installed=%s loaded=%s stopped=%s owned=%s prepare=%s captured=%s",
     async (mode, installed, loaded, stopped, owned, shouldPrepare, captured) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/caller/state");
-      const serviceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
       const verdict: ManagedGatewayUpdateVerdict = owned
         ? { kind: "owned", root: "/installed", fingerprint: "fixture", refreshDefinition: true }
         : { kind: "unresolved", root: "/installed", fingerprint: "fixture" };
@@ -116,9 +115,8 @@ describe("prepareUpdateRestart", () => {
       const result = await prepare({
         result: { status: "ok", mode, steps: [], durationMs: 0 },
         preManagedServiceStop: {
+          ...inspectedService,
           stopped,
-          inspected: true,
-          runtimeInspected: true,
           running: false,
           serviceEnv: captured ? serviceEnv : undefined,
           serviceUpdateVerdict: verdict,

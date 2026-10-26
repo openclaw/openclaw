@@ -14,6 +14,7 @@ import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
+import { textResult } from "./tool-results.js";
 
 const PLUGINS_TOOL_RESULT_MAX_BYTES = 3_840;
 
@@ -35,11 +36,9 @@ function pluginsToolResult(payload: Record<string, unknown>, refreshUnavailable 
     .join(" ");
   const response = continuation ? { ...payload, next: continuation } : payload;
   const size = boundedJsonUtf8Bytes(response, PLUGINS_TOOL_RESULT_MAX_BYTES);
-  if (
-    size.complete &&
-    Buffer.byteLength(JSON.stringify(response, null, 2), "utf8") <= PLUGINS_TOOL_RESULT_MAX_BYTES
-  ) {
-    return jsonResult(response);
+  const text = size.complete ? JSON.stringify(response, null, 2) : undefined;
+  if (text !== undefined && Buffer.byteLength(text, "utf8") <= PLUGINS_TOOL_RESULT_MAX_BYTES) {
+    return textResult(text, response);
   }
   const persistence = isRecord(details?.persistence) ? details.persistence : undefined;
   const rawWarnings =
@@ -159,14 +158,7 @@ export function createPluginsTool(options?: {
             operation,
             requestOwners,
             signal,
-            run: ({ assertCurrent, signal: handoffSignal }) =>
-              callAgentToolGatewayRequest({
-                method: "plugins.reload",
-                params: reloadRequest,
-                sessionMutationCommitGuard: assertCurrent,
-                signal: handoffSignal,
-                timeoutMs: null,
-              }),
+            request: { method: "plugins.reload", params: reloadRequest },
             formatResult: (payload) => JSON.stringify(pluginsToolResult(payload).details),
           });
         }

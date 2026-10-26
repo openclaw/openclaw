@@ -47,6 +47,30 @@ export type PaneDetailsActions = Pick<
 >;
 
 export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRender {
+  protected readonly showDetailsProcess = (instanceId?: string) => {
+    this.requestBackgroundPanel("processes", "open", {
+      instanceId: instanceId ?? null,
+      fromDetails: instanceId !== undefined,
+    });
+    this.navigateMobileHost({
+      area: "panels",
+      slot: "processes",
+      backTo: { area: "details" },
+    });
+  };
+
+  protected readonly returnToProcessDetails = () => {
+    if (!this.state) {
+      return;
+    }
+    if (this.usesMobileHost) {
+      this.mobileHost(this.state.sidebarLayout)?.back();
+    } else {
+      this.requestBackgroundPanel("processes", "close");
+      this.headerDetailsRef.value?.open(this.element);
+    }
+  };
+
   dashboardControls: Element | undefined = undefined;
   protected readonly setDashboardControls = (action: Element | undefined) => {
     if (this.dashboardControls === action) {
@@ -334,14 +358,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 backTo: { area: "details" },
               });
             },
-            onOpenProcesses: () => {
-              this.requestBackgroundPanel("processes", "open");
-              this.navigateMobileHost({
-                area: "panels",
-                slot: "processes",
-                backTo: { area: "details" },
-              });
-            },
+            onOpenProcesses: this.showDetailsProcess,
           } satisfies Partial<ChatDetailsProps>),
           mobileBindings: {
             sharing: this.prepareSessionSharing(selectedSession, {
@@ -372,6 +389,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           mobile: this.mergedChrome && !this.onBackToSubagents,
           nativePresentation: this.sessionPresentation,
           mobileHost,
+          contentPending: this.deferredSessionHydration !== null,
           // Details reserves header-owned geometry during retained navigation previews.
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,

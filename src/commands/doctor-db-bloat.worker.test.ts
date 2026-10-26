@@ -6,6 +6,7 @@ import {
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "../flows/doctor-health-contributions.test-support.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
@@ -55,7 +56,9 @@ it.each([
       }
       registerOpenClawAgentDatabase({ agentId: "bloat", path: databasePath, env: state.env });
       const snapshot = async () => {
-        const files = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
+        const files = (await listDirectoryTreeStrict(state.stateDir))
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted();
         const hashes = await Promise.all(
           files.map(async (file) => {
             const pathname = state.statePath(file);

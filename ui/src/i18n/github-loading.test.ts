@@ -94,6 +94,10 @@ it.each([
     expect(t("chat.pullRequests.rateLimited")).toContain("GitHub API rate limit reached");
     expect(t("chat.pullRequests.checksPassing")).toBe("CI checks passing");
     expect(t("chat.pullRequests.checksPassed")).toBe("Passed");
+    expect(t("chat.pullRequests.automationNoChecks")).toBe("No CI checks reported.");
+    if (_surface === "PR content") {
+      expect(t("chat.pullRequests.automationLabel")).toBe("chat.pullRequests.automationLabel");
+    }
     expect(t("githubPublication.sharedUnavailable.changed")).toBe(
       "The Gateway GitHub account changed. Reload and retry publication.",
     );

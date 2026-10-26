@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import type { AssistantMessageEvent } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -16,6 +17,46 @@ function createStream(): MutableAssistantMessageEventStream {
 }
 
 describe("stream event transforms", () => {
+  it.runIf(!process.versions.bun)(
+    "adds one promise per read for adjacent synchronous transforms",
+    async () => {
+      const stream = createStream();
+      const result = {
+        done: false as const,
+        value: { type: "text_delta" as const, contentIndex: 0, delta: "x" },
+      };
+      stream[Symbol.asyncIterator] = () => ({ next: () => Promise.resolve(result) });
+      const calls: number[] = [];
+      for (let index = 0; index < 3; index++) {
+        wrapStreamObjectEvents(stream, () => {
+          calls.push(index);
+        });
+      }
+      const iterator = stream[Symbol.asyncIterator]();
+      let promises = 0;
+      const hook = createHook({
+        init(_id, type) {
+          if (type === "PROMISE") {
+            promises++;
+          }
+        },
+      });
+      for (let index = 0; index < 16; index++) {
+        let pending: ReturnType<typeof iterator.next>;
+        hook.enable();
+        try {
+          pending = iterator.next();
+        } finally {
+          hook.disable();
+        }
+        expect(await pending).toBe(result);
+      }
+      expect(calls).toEqual(Array.from({ length: 16 }, () => [0, 1, 2]).flat());
+      // One source promise and one shared transform continuation per read.
+      expect(promises).toBe(32);
+    },
+  );
+
   it("awaits asynchronous transforms in registration order before exposing the event", async () => {
     const stream = createStream();
     const entered = createDeferred();
@@ -60,6 +101,35 @@ describe("stream event transforms", () => {
     await stream[Symbol.asyncIterator]().next();
     expect(calls).toEqual(["inner", "replace", "outer"]);
   });
+
+  it.each(["source-throw", "source-reject", "transform-throw", "transform-reject"])(
+    "rejects %s without delivering an event or running later transforms",
+    async (mode) => {
+      const stream = createStream();
+      const failure = new Error("stream failed");
+      if (mode.startsWith("source")) {
+        stream[Symbol.asyncIterator] = () => ({
+          next: () => {
+            if (mode === "source-throw") {
+              throw failure;
+            }
+            return Promise.reject(failure);
+          },
+        });
+      }
+      wrapStreamObjectEvents(stream, () => {
+        if (mode === "transform-throw") {
+          throw failure;
+        }
+        return Promise.reject(failure);
+      });
+      const later = vi.fn();
+      wrapStreamObjectEvents(stream, later);
+      const pending = stream[Symbol.asyncIterator]().next();
+      await expect(pending).rejects.toBe(failure);
+      expect(later).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps transforms added later out of an already opened iterator", async () => {
     const stream = createStream();

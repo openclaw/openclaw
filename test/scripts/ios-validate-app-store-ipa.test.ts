@@ -1,7 +1,6 @@
 // iOS IPA validation tests cover the App Store upload gate without real signing assets.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { chmodSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +12,7 @@ const BUILD_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILD_TIMESTAMP = "2026-07-10T12:34:56.000Z";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const toolDirs = useAutoCleanupTempDirTracker(afterAll);
 let toolsDir: string;
 
 function writeExecutable(filePath: string, body: string): void {
@@ -21,13 +21,9 @@ function writeExecutable(filePath: string, body: string): void {
 }
 
 function plist(body: Record<string, string>): string {
-  return [
-    `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
-    `<plist version="1.0"><dict>${Object.entries(body)
-      .map(([key, value]) => `<key>${key}</key><string>${value}</string>`)
-      .join("")}</dict></plist>`,
-  ].join("\n");
+  return `<plist version="1.0"><dict>${Object.entries(body)
+    .map(([key, value]) => `<key>${key}</key><string>${value}</string>`)
+    .join("")}</dict></plist>`;
 }
 
 const fakeTools = {
@@ -70,18 +66,8 @@ const path = require("node:path");
 const requireFromRepo = createRequire(path.join(process.cwd(), "package.json"));
 const JSZip = requireFromRepo("jszip");
 
-const args = process.argv.slice(2);
-let ipaPath = "";
-let outputDir = "";
-for (let i = 0; i < args.length; i++) {
-  const arg = args[i];
-  if (arg === "-d") {
-    outputDir = args[++i] || "";
-  } else if (!arg.startsWith("-")) {
-    ipaPath = arg;
-  }
-}
-if (!ipaPath || !outputDir) process.exit(2);
+const [quiet, ipaPath, destination, outputDir] = process.argv.slice(2);
+if (quiet !== "-q" || destination !== "-d" || !ipaPath || !outputDir) process.exit(2);
 
 (async () => {
   const zip = await JSZip.loadAsync(readFileSync(ipaPath));
@@ -187,15 +173,9 @@ async function expectRejected(
 describe("scripts/ios-validate-app-store-ipa.sh", () => {
   beforeAll(() => {
     // These metadata failures must occur before any signing inspection.
-    toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
+    toolsDir = toolDirs.make("openclaw-ios-ipa-tools-");
     for (const [name, body] of Object.entries(fakeTools)) {
       writeExecutable(path.join(toolsDir, name), body);
-    }
-  });
-
-  afterAll(() => {
-    if (toolsDir) {
-      rmSync(toolsDir, { recursive: true, force: true });
     }
   });
 
@@ -218,22 +198,15 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
     expect(missing.status).toBe(1);
   });
 
-  it("rejects an IPA without the Health update purpose string required by App Store Connect", async () => {
-    await expectRejected(
-      { healthUpdateUsage: null },
-      "Health update usage description must be a non-empty string",
-    );
-  });
-
-  it("rejects an IPA with the wrong canonical display name", async () => {
-    await expectRejected({ displayName: "OpenClaw Debug" }, "display name mismatch");
-  });
-
-  it("rejects unresolved build settings in localized plist resources", async () => {
-    await expectRejected(
+  it.each([
+    [{ healthUpdateUsage: null }, "Health update usage description must be a non-empty string"],
+    [{ displayName: "OpenClaw Debug" }, "display name mismatch"],
+    [
       { localizedDisplayName: "$(OPENCLAW_APP_DISPLAY_NAME)" },
       "unresolved build setting in localized plist",
-    );
+    ],
+  ] as const)("rejects invalid metadata %j", async (options, message) => {
+    await expectRejected(options, message);
   });
 
   it("rejects malformed or mismatched embedded build provenance", async () => {

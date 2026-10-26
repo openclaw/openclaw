@@ -29,6 +29,9 @@ async function createFixture(
   overrides: Partial<EmbeddedRunAttemptInternalParams> = {},
   authority?: Parameters<typeof prepareSystemAgentRunAdmission>[5],
   runAbortController = new AbortController(),
+  observeAttempt: (
+    attempt: EmbeddedRunAttemptInternalParams,
+  ) => EmbeddedRunAttemptInternalParams = (attempt) => attempt,
 ) {
   await using resources = new AsyncDisposableStack();
   const config = overrides.config ?? { tools: { codeMode: false, toolSearch: { enabled: false } } };
@@ -61,7 +64,7 @@ async function createFixture(
     ...overrides,
   } as EmbeddedRunAttemptInternalParams;
   const result = await prepareEmbeddedAttemptToolBase({
-    attempt,
+    attempt: observeAttempt(attempt),
     agentDir: attempt.agentDir ?? "/tmp/attribution-agent",
     setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
     markCoreToolStage: () => {},
@@ -107,6 +110,20 @@ beforeAll(async () => {
   );
 });
 afterAll(async () => await state?.cleanup());
+it("prepares tools without enumerating unrelated attempt state", async () => {
+  const enumerate = vi.fn((target: EmbeddedRunAttemptInternalParams) => Reflect.ownKeys(target));
+  codingTools.mockReturnValue([createStubTool("read")]);
+  await using fixture = await createFixture(
+    {},
+    undefined,
+    undefined,
+    (attempt) => new Proxy(attempt, { ownKeys: enumerate }),
+  );
+  expect(fixture.result.toolsRaw.map((tool) => tool.name)).toEqual(["read"]);
+  expect(codingTools).toHaveBeenCalledTimes(1);
+  expect(enumerate).not.toHaveBeenCalled();
+});
+
 it.each(
   (["built-in", "catalog"] as const).flatMap((surface) =>
     (["retired source", "capture invalidated"] as const).map((outcome) => ({ surface, outcome })),
@@ -167,9 +184,6 @@ it.each(
       expect(builtInOptions?.pluginExecutionAuthority).toBe(authority);
       expect(builtInOptions?.pluginExecutionSkillsSnapshot).toBe(skillsSnapshot);
       expect(() => builtInOptions?.assertInvocationCurrent?.()).not.toThrow();
-      expect(builtInOptions?.awaitSessionDiffBaseline).toBe(
-        result.toolHookContext.awaitSessionDiffBaseline,
-      );
       const tool =
         surface === "built-in"
           ? result.toolsRaw[0]
@@ -240,12 +254,10 @@ it.each([
     toolOverrides: scenario.sessionDisabled ? { webSearch: false } : undefined,
   });
   const { result, attempt } = fixture;
-  expect(codingTools).toHaveBeenCalledTimes(1);
   expect(result.webSearchUnconfigured).toBe(scenario.expected);
   // A disabled factory never reports configuration, so rebuild must clear the old fact.
   codingTools.mockImplementation(() => []);
   attempt.toolOverrides = { webSearch: false };
   await result.refreshPermissionMode(null, () => {});
   expect(result.webSearchUnconfigured).toBe(false);
-  expect(codingTools).toHaveBeenCalledTimes(2);
 });

@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import * as nativeAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import * as nativeAnchor from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import * as transcriptAnchor from "../../config/sessions/session-transcript-anchor-read.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";

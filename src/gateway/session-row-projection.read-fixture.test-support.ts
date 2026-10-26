@@ -3,6 +3,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
@@ -11,6 +12,14 @@ export async function createTestProjection(
 ) {
   const projection = await createSessionRowProjection(params);
   return Object.assign(projection, { [Symbol.dispose]: () => projection.dispose() });
+}
+
+export function holdSubagentExecution(runId: string, sessionKey: string) {
+  const claim = claimAgentRunContext(runId, { sessionKey }, { trackOwner: true });
+  if (!claim) {
+    throw new Error("Expected a current execution claim for the controlled child fixture");
+  }
+  return { [Symbol.dispose]: () => releaseAgentRunContext(runId, claim) };
 }
 
 export function holdForeground() {

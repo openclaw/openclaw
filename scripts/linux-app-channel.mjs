@@ -359,10 +359,10 @@ class GitHub {
       "Invalid asset digest",
     );
     const expected = expectedHash ?? entry.digest?.slice(7);
-    // Only API-confirmed mutable metadata gets a convergence window. Immutable
-    // bundles and uncertain uploads remain fail-fast; these reads never repeat a write.
+    // Allow API-confirmed metadata up to two minutes of scheduled CDN backoff.
+    // Immutable bundles and uncertain uploads stay fail-fast; reads never repeat writes.
     const converging = entry.digest != null && limit === METADATA_LIMIT;
-    const delays = converging ? [0, 2, 5, 10] : [0];
+    const delays = converging ? [0, 2, 5, 10, 15, 20, 30, 38] : [0];
     let observed;
     for (const delay of delays) {
       if (delay) {

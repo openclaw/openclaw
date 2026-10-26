@@ -136,9 +136,7 @@ it.runIf(process.platform !== "win32")(
       expect(() => process.kill(child.pid, 0)).toThrow();
     } finally {
       await reader.dispose();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   },
 );

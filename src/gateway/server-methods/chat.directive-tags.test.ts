@@ -17,6 +17,7 @@ import {
   type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type {
   GetReplyOptions,
@@ -757,20 +758,7 @@ async function appendSourceReplyMirrorEntry(params: {
       model: params.model ?? "delivery-mirror",
       ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
       ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: now,
     },
@@ -1587,14 +1575,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("starts captured-operation injection before ACK and does not dispatch after owner clear", async () => {
+  it("acknowledges captured-operation input before injection and does not dispatch after owner clear", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-steer-before-ack-",
     );
     const delivery = createDeferred();
     let reportAcceptance: ((accepted: boolean) => void) | undefined;
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
-      expect(respond).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledOnce();
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
@@ -1612,8 +1600,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     try {
       await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
-      expect(respond).not.toHaveBeenCalled();
-      reportAcceptance?.(true);
       await pendingSend;
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -1622,6 +1608,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect.any(Object),
       );
       expect(mockState.lastDispatchCtx).toBeUndefined();
+      reportAcceptance?.(true);
       operation.complete();
       delivery.resolve();
       await waitForAssertion(() => {
@@ -1780,7 +1767,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
+  it("hydrates durable reply input before ACK without waiting for runtime acceptance or delivery", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-reply-steer-",
     );
@@ -1825,9 +1812,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
       expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
       expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
-      expect(respond).not.toHaveBeenCalled();
-
-      reportAcceptance?.(true);
       await pendingSend;
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -1837,7 +1821,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       );
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(mockState.lastDispatchCtx).toBeUndefined();
-
+      reportAcceptance?.(true);
       delivery.resolve();
       await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
     } finally {
@@ -1936,7 +1920,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     try {
       await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
       // A negative callback is provisional; only the terminal rejection permits fallback.
-      expect(respond).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledOnce();
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
       delivery.reject(rejection);
       await pendingSend;
@@ -4753,20 +4737,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-replay-");
     mockState.dispatchError = new Error("upstream unavailable");
 
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
+    const request = {
       idempotencyKey: "idem-user-transcript-error-replay",
       message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-replay",
-      message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
+    };
+    await sendNewChatRequest({ ...request, expectBroadcast: false });
+    const dispatchCallsBeforeReplay = dispatchInboundMessageMock.mock.calls.length;
+    const { respond } = await sendNewChatRequest({ ...request, waitFor: "none" });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { runId: "idem-user-transcript-error-replay", status: "ok", messageSeq: 1 },
+      undefined,
+      { cached: true, runId: "idem-user-transcript-error-replay" },
+    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBeforeReplay);
 
     expect(readPersistedUserMessages()).toEqual([
       expect.objectContaining({

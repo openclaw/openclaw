@@ -3,7 +3,8 @@ import { For, Show, createMemo, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { registerMenuShortcuts } from "../menu-shortcuts.ts";
+import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
@@ -13,6 +14,7 @@ import { useMenuMachine, type MenuBinding, type MenuControls } from "./menu-mach
 import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
+import kbdStyles from "../kbd.css?inline";
 import overlayStyles from "./overlay.css?inline";
 import "./overlay.css";
 
@@ -51,6 +53,8 @@ export type MenuItem = {
   details?: JSX.Element;
   labelClass?: string;
   disabled?: boolean;
+  /** A disabled leaf can receive focus to explain its state; activation remains blocked. */
+  focusableWhenDisabled?: boolean;
   checked?: boolean;
   type?: "checkbox" | "radio";
   class?: JSX.ClassValue;
@@ -190,7 +194,7 @@ export function Menu(props: BranchProps): JSX.Element {
       ),
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
-      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
+      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles, kbdStyles]) : undefined,
     onInitialFocus: (intent) => focusItem(intent),
     onEscape(event) {
       if (props.onEscape?.(event)) {
@@ -281,13 +285,56 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
+  const searchInput = () =>
+    registeredElements().find(
+      (node): node is HTMLInputElement =>
+        node instanceof HTMLInputElement &&
+        node.hasAttribute("data-search") &&
+        node.closest('[role="menu"]') === overlay.surface,
+    );
   onSettled(() =>
-    registerMenuShortcuts(overlay.surface, () =>
-      binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
+    registerMenuShortcuts(
+      overlay.surface,
+      () => binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
+      searchInput,
     ),
   );
+  const searchKeydown = nativeListener(
+    "keydown",
+    (event) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.key.length !== 1 ||
+        event.key === " " ||
+        event
+          .composedPath()
+          .some(
+            (node) =>
+              node instanceof HTMLElement &&
+              node.matches("input, textarea, select, [contenteditable=true]"),
+          )
+      ) {
+        return;
+      }
+      const search = findMenuSearch(overlay.surface);
+      if (search) {
+        search.focus({ preventScroll: true });
+        // Keep native text insertion, but do not activate a parent shortcut or typeahead.
+        event.stopImmediatePropagation();
+      }
+    },
+    true,
+  );
   const ownItems = () =>
-    binding.items().filter((item) => !item.matches(':disabled, [aria-disabled="true"]'));
+    binding
+      .items()
+      .filter(
+        (item) => !item.matches(':disabled, [aria-disabled="true"]:not([data-disabled-focusable])'),
+      );
   const triggerItemRef = initialIdentity.binding?.itemRef();
   const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
   const control = useOverlayControl(overlay, initialLazy, props, () => body());
@@ -295,7 +342,7 @@ export function Menu(props: BranchProps): JSX.Element {
     overlay,
     () => trigger,
     () => ({ placement: placement() }),
-    { sameRoot: true, parent: initialIdentity.parent },
+    { sameRoot: true, parent: initialIdentity.parent, lazy: Boolean(initialLazy) },
   );
   const keydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing) {
@@ -309,12 +356,7 @@ export function Menu(props: BranchProps): JSX.Element {
     ) {
       return;
     }
-    const search = registeredElements().find(
-      (node): node is HTMLInputElement =>
-        node instanceof HTMLInputElement &&
-        node.hasAttribute("data-search") &&
-        node.closest('[role="menu"]') === overlay.surface,
-    );
+    const search = searchInput();
     const first = ownItems().find(
       (item) =>
         !search || Boolean(search.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -432,10 +474,11 @@ export function Menu(props: BranchProps): JSX.Element {
                 // The keyed leaf retains its renderer; its live bindings carry item changes.
                 const initialRenderCustom = untrack(() => item().render);
                 const itemRef = binding.itemRef();
+                const focusableDisabled = () => item().disabled && item().focusableWhenDisabled;
                 const attributes = merge((): MenuItemBindings => ({
                   ...binding.item(
                     item().id,
-                    item().disabled,
+                    item().disabled && !focusableDisabled(),
                     item().type,
                     item().checked,
                     item().label,
@@ -444,6 +487,7 @@ export function Menu(props: BranchProps): JSX.Element {
                   "aria-label": item().label,
                   "aria-checked": item().type ? (item().checked ? "true" : "false") : undefined,
                   "aria-disabled": item().disabled ? "true" : undefined,
+                  "data-disabled-focusable": focusableDisabled() ? "" : undefined,
                   "data-value": item().id,
                   ref: itemRef,
                 }));
@@ -454,6 +498,10 @@ export function Menu(props: BranchProps): JSX.Element {
                     {...item().attributes}
                     {...attributes}
                     onClick={(event: MouseEvent) => {
+                      if (focusableDisabled()) {
+                        event.preventDefault();
+                        return;
+                      }
                       item().attributes?.onClick?.(event);
                       if (!event.defaultPrevented) {
                         attributes.onClick?.(event);
@@ -470,7 +518,11 @@ export function Menu(props: BranchProps): JSX.Element {
                     class={["oc-menu-item", item().class]}
                     value={item().attributes?.value ?? item().id}
                     data-variant={item().variant}
-                    disabled={item().href === undefined ? item().disabled : undefined}
+                    disabled={
+                      item().href === undefined
+                        ? item().disabled && !focusableDisabled()
+                        : undefined
+                    }
                   >
                     <Show when={item().type}>
                       <span class="oc-menu-item__check" aria-hidden="true">
@@ -609,9 +661,12 @@ export function Menu(props: BranchProps): JSX.Element {
             binding.content().onKeyDown(event);
           }
         }}
-        ref={(node) => {
-          surface = node;
-        }}
+        ref={[
+          (node) => {
+            surface = node;
+          },
+          searchKeydown,
+        ]}
         id={`${initialIdentity.id}:content`}
         class={["oc-overlay oc-menu", props.panelClass]}
         popover="manual"

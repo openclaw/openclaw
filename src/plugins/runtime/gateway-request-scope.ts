@@ -5,10 +5,8 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
-import { withAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
 import {
   getPluginExecutionFrame,
-  pluginInstanceInvocation,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
@@ -38,35 +36,30 @@ type PluginRuntimePluginScope = {
   pluginTrustedOfficialInstall?: boolean;
 };
 
-// Native async resources retain this resolver; do not capture the execution callback's frame.
-function createAgentInputRecoveryResolver(gatewayScope: PluginRuntimeGatewayRequestScope) {
-  return () =>
-    (gatewayScope.resolveGatewayContext
-      ? gatewayScope.resolveGatewayContext()
-      : gatewayScope.context
-    )?.inputRecovery;
-}
-
 function runWithPluginGatewayScope<T>(
   gatewayScope: PluginRuntimeGatewayRequestScope,
   run: () => T,
-  invocation = pluginInstanceInvocation.getStore(),
+  invocation?: PluginInstanceInvocation,
 ): T {
   const current = getPluginExecutionFrame();
+  const call = invocation ?? current?.invocation;
   const runtime = getPluginRuntimeExecutionFrame(current);
-  return withAgentInputRecoveryContext(createAgentInputRecoveryResolver(gatewayScope), () =>
-    runWithPluginExecutionFrame(
-      runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
-        ? runtime
-        : new PluginRuntimeExecutionFrame(
-            // Reuse prepared frame facts; the mutable Gateway view remains call-local.
-            current ?? {},
-            gatewayScope,
-            runtime?.generationRegistry,
-            invocation,
-          ),
-      run,
+  if (
+    runtime?.gatewayScope === gatewayScope &&
+    runtime.invocation === call &&
+    runtime.inputRecoveryContext === gatewayScope
+  ) {
+    return run();
+  }
+  return runWithPluginExecutionFrame(
+    new PluginRuntimeExecutionFrame(
+      current ?? {},
+      gatewayScope,
+      runtime?.generationRegistry,
+      call,
+      gatewayScope,
     ),
+    run,
   );
 }
 
@@ -131,8 +124,13 @@ function copyGatewayScope(
     return scoped;
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
-  for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.prototype.propertyIsEnumerable.call(current, key)) {
+  for (const key of Object.keys(current)) {
+    if (key !== "pluginRegistry") {
+      Reflect.set(scoped, key, Reflect.get(current, key));
+    }
+  }
+  for (const key of Object.getOwnPropertySymbols(current)) {
+    if (Object.prototype.propertyIsEnumerable.call(current, key)) {
       Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }

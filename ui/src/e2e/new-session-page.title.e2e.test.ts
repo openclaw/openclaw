@@ -53,6 +53,7 @@ suite.define(() => {
         } else {
           expect(created.params).toMatchObject({
             displayName: "Repair sidebar naming",
+            displayNameGenerated: true,
             message: "repair the sidebar naming",
           });
         }

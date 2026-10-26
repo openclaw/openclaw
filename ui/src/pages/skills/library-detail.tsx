@@ -1,3 +1,4 @@
+import "../../styles/skill-reader-dialog.css";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillsLibraryReadResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { Icon } from "../../components/solid/icon.tsx";

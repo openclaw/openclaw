@@ -62,7 +62,10 @@ export const claude5ContractCases: Claude5ContractCase[] = [
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-type TestModel = ProviderRuntimeModel & { api: "anthropic-messages" };
+type TestModel = ProviderRuntimeModel & {
+  api: "anthropic-messages";
+  headers?: Record<string, string>;
+};
 export function makeModel(id: string, overrides: Partial<TestModel> = {}): TestModel {
   return {
     id,

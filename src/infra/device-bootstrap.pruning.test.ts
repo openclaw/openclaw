@@ -1,10 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import * as state from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as schedulers from "../test-utils/gateway-scheduler-clock.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   consumeDeviceBootstrapTokenWithSetupCompletion as consumeSetup,
@@ -14,7 +12,6 @@ import {
   verifyDeviceBootstrapToken as verify,
 } from "./device-bootstrap.js";
 import { deviceBootstrapOperations as operations } from "./device-bootstrap.worker-kernel.js";
-import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -30,34 +27,16 @@ it("keeps idle setup cleanup read-only and reports its expiry fact", async () =>
   const baseDir = await createTempDir();
   const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
   const database = state.openOpenClawStateDatabase({ env });
-  const options = { database, env };
-  const statements = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["expiry", "prune"],
-    (sql) =>
-      /^select "retain_until_ms" from "device_pair_setup_completions"/iu.test(sql)
-        ? "expiry"
-        : /^delete from "device_pair_setup_completions"/iu.test(sql)
-          ? "prune"
-          : null,
-  );
-  using cleanup = new DisposableStack();
-  cleanup.defer(statements.restore);
-  const execute = cleanup.use(vi.spyOn(database.db, "exec"));
-  // Observe command SQL locally; the worker cases below exercise the live host port.
-  for (const method of [
-    "requestSqliteWorkerOperationAdmission",
-    "deferSqliteWorkerCommitReceipt",
-  ] as const) {
-    cleanup.use(vi.spyOn(workerAdmission, method).mockImplementation(() => undefined));
-  }
+  const write = vi.fn(() => {
+    throw new Error("Idle pruning must not acquire a writer");
+  });
   const result = runWithSqliteWorkerStateContext({ environment: env }, () =>
     operations["bootstrap.prune"](
       { nowMs: 1_000 },
       {
-        open: () => state.openOpenClawStateDatabase(options),
+        open: () => database,
         stateOptions: () => ({ path: database.path, env }),
-        write: (operation) => state.runOpenClawStateWriteTransaction(operation, options),
+        write,
         writeAdmitted: () => {
           throw new Error("Bootstrap pruning retains its custom admission");
         },
@@ -65,8 +44,7 @@ it("keeps idle setup cleanup read-only and reports its expiry fact", async () =>
     ),
   );
   expect(result).toMatchObject({ removed: 0, nextExpiryAtMs: null });
-  expect(statements.counts).toEqual({ expiry: 1, prune: 0 });
-  expect(execute.mock.calls.some(([sql]) => /^(?:BEGIN|SAVEPOINT)\b/iu.test(sql))).toBe(false);
+  expect(write).not.toHaveBeenCalled();
 });
 
 it("refreshes the host expiry cache after a worker write and prunes at its deadline", async () => {

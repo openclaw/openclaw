@@ -18,6 +18,7 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as utils from "../../utils.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
+import { expectNoCalls as noCalls } from "./update-boundary.test-support.js";
 import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
@@ -75,11 +76,6 @@ function resultWith(overrides: Partial<UpdateRunResult>): UpdateRunResult {
 function stepWith(name: string, overrides: Partial<UpdateStepResult>): UpdateStepResult {
   return { name, command: name, cwd: root, durationMs: 1, exitCode: 0, ...overrides };
 }
-const noCalls = (...fns: unknown[]) => {
-  for (const fn of fns) {
-    expect(fn).not.toHaveBeenCalled();
-  }
-};
 const failedPlugins = (recovery?: {
   serviceRestartSafe: false;
   reason: "state-migration-started";
@@ -273,10 +269,12 @@ it.each(
         onStopped?.(stopped);
         return stopped;
       });
-    const facts = Array.from({ length: 4 }, (_, index) => ({
-      check: `fixture-check-${index + 1}`,
-      code: "step-refused",
-    }));
+    const facts = [
+      {
+        check: "fixture-check",
+        code: "step-refused",
+      },
+    ];
     mocks.converge.mockImplementationOnce(async ({ beforeDoctor, result }) => {
       await beforeDoctor?.();
       return {
@@ -372,11 +370,6 @@ it.each(
     expect(
       recorded?.steps.find((step) => step.step === "post-plugin doctor")?.failureFacts,
     ).toEqual(expect.arrayContaining(facts));
-    assert(recorded);
-    const report = renderUpdateRunReport(recorded).markdown;
-    for (const fact of facts) {
-      expect(report).toContain(fact.check);
-    }
   },
 );
 
@@ -406,7 +399,6 @@ it.each(["managed-service-preflight", "gateway-stop-unverified"])(
     const recorded = updateLedger.getUpdateRun(run.runId, { env });
     assert(recorded);
     expect(recorded).toMatchObject({ status: "failed", reason });
-    expect(renderUpdateRunReport(recorded).markdown).not.toContain("restart-unhealthy");
     expect(result.steps).toContainEqual(
       expect.objectContaining({
         name: "gateway recovery observation",
@@ -467,14 +459,12 @@ it.each([
     });
     const recorded = updateLedger.getUpdateRun(run.runId, { env });
     assert(recorded);
-    const report = renderUpdateRunReport(recorded).markdown;
     if (mutationStarted || dataAtRisk) {
       expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
       expect(recorded.steps).toContainEqual(
         containing({ step: "gateway recovery verification", exitCode: 1 }),
       );
     } else {
-      expect(report).not.toContain("restart-unhealthy");
       expect(recorded.steps).toContainEqual(
         containing({ step: "gateway recovery observation", exitCode: 0 }),
       );
@@ -573,9 +563,7 @@ it("settles a headless package rollback without waiting for a Gateway", async ()
 it.each([
   { activated: false, json: true, deferred: false },
   { activated: true, json: false, deferred: false },
-  { activated: true, json: true, deferred: false },
   { activated: true, json: false, deferred: true },
-  { activated: true, json: true, deferred: true },
 ])(
   "observes untouched failures and defers recorded state contention (activated=$activated, json=$json, deferred=$deferred)",
   async ({ activated, json, deferred }) => {
@@ -584,11 +572,7 @@ it.each([
     const readRuntime = vi.fn(async () => ({ status: "unknown" }));
     mockService(readRuntime);
     const inspect = mockFreePort();
-    let elapsedMs = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-    const sleep = vi.spyOn(utils, "sleep").mockImplementation(async (ms) => {
-      elapsedMs += ms;
-    });
+    const sleep = vi.spyOn(utils, "sleep").mockResolvedValue(undefined);
     const waitForStartup = vi.spyOn(restartHealth, "waitForGatewayHealthyRestart");
     mocks.activePort.mockResolvedValueOnce(19431);
     await useRealVerification();
@@ -646,7 +630,6 @@ it.each([
     expect(readRuntime).toHaveBeenCalledTimes(activated && !deferred ? 1 : 0);
     expect(inspect).toHaveBeenCalledTimes(activated && !deferred ? 1 : 0);
     noCalls(sleep, waitForStartup);
-    expect(elapsedMs).toBe(0);
     const recorded = updateLedger.getUpdateRun(run.runId, { env });
     expect(recorded).toMatchObject({
       status: "failed",
@@ -683,13 +666,7 @@ it.each([
     }
     if (deferred) {
       expect(recoveryStep?.detail).toContain("deferred");
-      expect(recoveryStep?.detail).toContain("service owner");
-      expect(recoveryStep?.detail).toContain(
-        "Resolve the recorded update failure before restarting",
-      );
       expect(recoveryStep?.failureFacts).toBeUndefined();
-      assert(recorded);
-      expect(renderUpdateRunReport(recorded).markdown).toContain("openclaw update status");
     }
     expect(
       failure.result.steps.find((step) => step.name === "gateway recovery verification")

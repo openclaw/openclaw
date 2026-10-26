@@ -987,7 +987,6 @@ describe("state migrations", () => {
     const detectionMutableLanes: unknown[] = [];
     const detectionPending: number[] = [];
     const detectionMutatorsReachable: string[] = [];
-    const detectionWriteOutcomes: string[] = [];
     // Detection is now read-only, so the account has to already exist. Seeding it
     // directly is also what makes the inspection assertion meaningful.
     await native
@@ -1037,19 +1036,6 @@ describe("state migrations", () => {
               );
             }
             detectionPending.push((await inspection?.listPending({ limit: "all" }))?.length ?? -1);
-            // Direct mutation attempt: cast the projection back and actually call a
-            // writer. There is no method to call, so the attempt cannot reach SQLite.
-            try {
-              const forced = inspection as unknown as {
-                enqueue?: (id: string, payload: unknown) => Promise<unknown>;
-              };
-              await forced.enqueue?.("detection-write", { note: "leaked" });
-              detectionWriteOutcomes.push("no-throw");
-            } catch (error) {
-              detectionWriteOutcomes.push(
-                error instanceof TypeError ? "type-error" : `other:${String(error)}`,
-              );
-            }
             discovered.push(...((await line?.listChannelIngressQueueAccountIds()) ?? []));
             return null;
           },
@@ -1079,12 +1065,11 @@ describe("state migrations", () => {
     // inspection projection still answered on the same access entry.
     expect(detectionMutableLanes.length).toBeGreaterThan(0);
     expect(detectionMutableLanes.every((lane) => lane === undefined)).toBe(true);
-    expect(detectionPending.every((count) => count >= 0)).toBe(true);
+    expect(detectionPending.length).toBeGreaterThan(0);
+    expect(detectionPending.every((count) => count === 1)).toBe(true);
     // Not one mutating method is present on the inspection object at runtime.
     expect(detectionMutatorsReachable.length).toBeGreaterThan(0);
     expect([...new Set(detectionMutatorsReachable)]).toStrictEqual(["undefined"]);
-    // The forced call is optional-chained past a missing method, so it never runs.
-    expect([...new Set(detectionWriteOutcomes)]).toStrictEqual(["no-throw"]);
     // And nothing detection did reached durable state: the seeded row is still the
     // only row, so no detection-time write landed.
     const afterDetection = await native
@@ -2320,8 +2305,10 @@ describe("state migrations", () => {
     await fs.writeFile(sourcePath, original);
     const params = { cfg: native.createConfig(), env, homedir: () => root };
 
-    await expect(detectLegacyStateMigrations(params)).resolves.toBeDefined();
-    await expect(autoMigrateLegacyState(params)).resolves.toBeDefined();
+    const detected = await detectLegacyStateMigrations(params);
+    expect(detected.warnings).toEqual([]);
+    const migrated = await autoMigrateLegacyState(params);
+    expect(migrated.warnings).toEqual([]);
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(original);
   });
 
@@ -2331,22 +2318,22 @@ describe("state migrations", () => {
     const cfg = native.createConfig();
 
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
-      "- Shared SQLite schema: subagent recovery → original operator authority required",
-      "- Shared SQLite schema: replay, skill usage, and lease writes → smaller index maintenance",
-      "- Shared SQLite schema: GitHub publication requests → durable draft choice",
-      "- Shared SQLite schema: client credentials and native socket material → local owner",
+    expect(detected.stateSchema.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
-      "- Shared SQLite schema: tables → SQLite STRICT typing",
-    ]);
+    );
 
     const result = await native.withStateMigrationBackupForTest({ env }, () =>
       runLegacyStateMigrations({ detected, config: cfg, env }),
     );
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(
-      "Migrated shared state audit event ledger → versioned message lifecycle schema",
-    );
+    expect(result.stepReceipts[0]).toMatchObject({
+      id: "state-schema",
+      outcome: "completed",
+      changes: expect.arrayContaining([
+        "Migrated shared state audit event ledger → versioned message lifecycle schema",
+      ]),
+    });
 
     native.closeOpenClawStateDatabaseForTest();
     const db = new DatabaseSync(databasePath);
@@ -2653,27 +2640,9 @@ describe("state migrations", () => {
         },
       },
     ];
-    const gatewayLock = await native.acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_791,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-
-    let result: Awaited<ReturnType<typeof native.autoMigrateLegacyPluginDoctorState>>;
-    try {
-      result = await native.autoMigrateLegacyPluginDoctorState({
-        config: cfg,
-        env,
-        homedir: () => root,
-      });
-    } finally {
-      await gatewayLock.release();
-    }
+    const result = await native.withGatewayLockHeld(env, 18_791, () =>
+      native.autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
+    );
 
     expect(result.changes).not.toContain("plugin state migrated");
     expect(result.warnings.join("\n")).toContain("exclusive state ownership is unavailable");

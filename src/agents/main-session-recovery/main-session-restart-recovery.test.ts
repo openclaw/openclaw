@@ -168,6 +168,7 @@ import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js"
 import { registerReplayBoundaryRecoveryCases } from "./main-session-recovery-replay-boundary.test-harness.js";
 import {
   createRecoveryRuntimeFixture,
+  observeRecoveryRoots,
   runRecoveryCommandDuringStop,
 } from "./main-session-recovery-runtime.test-support.js";
 import * as recoveryStore from "./main-session-recovery-store.js";
@@ -512,38 +513,6 @@ async function loadTestTranscript(
   })) as Array<{ message?: Record<string, unknown> }>;
 }
 
-function observeRecoveryRoots(
-  expectedOrigin: "main-session:startup-recovery" | "main-session:restart-recovery",
-  expectedCount: number,
-) {
-  const requested = createDeferred();
-  const completed = createDeferred();
-  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-  let count = 0;
-  const spy = vi
-    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
-        try {
-          const result = admit(run, origin, signal);
-          if (origin === expectedOrigin) {
-            requested.resolve();
-          }
-          return await result;
-        } finally {
-          if (origin === expectedOrigin && ++count === expectedCount) {
-            completed.resolve();
-          }
-        }
-      },
-    );
-  return {
-    requested: requested.promise,
-    completed: completed.promise,
-    restore: () => spy.mockRestore(),
-  };
-}
-
 async function deliverRecoveryReply(
   request: Record<string, unknown>,
   sessionEntry: SessionEntry | undefined,
@@ -750,8 +719,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("marks only recoverable sessions owned by active runs", async () => {
-    // Only top-level admitted main sessions are restart-recoverable. Completed,
-    // child, cron, and non-active sessions must not be marked.
+    // Session history does not exclude an independent child turn. Completed,
+    // cron, and non-active sessions must not be marked.
 
     const { sessionsDir } = await makeStoreFixture({
       "agent:main:main": runningSessionEntry("main-session"),
@@ -782,10 +751,10 @@ describe("main-session-restart-recovery", () => {
     });
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked: 1, skipped: 1 });
+    expect(result).toEqual({ marked: 2, skipped: 0 });
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBe(true);
     expect(store["cron:nightly"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

@@ -20,7 +20,6 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../..
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
-import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import {
@@ -94,7 +93,7 @@ export async function runAnnounceAgentCall(params: {
           () => deadline.abort(new Error("gateway request timeout for agent")),
           params.timeoutMs,
         );
-  timer?.unref?.();
+  timer?.unref();
   try {
     signal.throwIfAborted();
     const dispatch = async () => {
@@ -268,7 +267,7 @@ export function resolvePrivateCompletionDeliveryResult(
   // Successful internal consumption may be silent or start the next child.
   // Queue acceptance alone is not consumption, and no external receipt is owed.
   const delivery: SubagentAnnounceDeliveryResult =
-    response?.status === "ok" && response?.inputProcessingCompleted === true
+    response?.status === "ok" && response.inputProcessingCompleted === true
       ? { delivered: true, path: "direct" }
       : {
           delivered: false,
@@ -415,6 +414,7 @@ export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   requesterSessionId?: string;
+  requesterLifecycleRevision?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -481,6 +481,8 @@ export async function deliverCompletionDirect(params: {
       accountId: params.deliveryTarget.accountId,
       threadId: params.deliveryTarget.threadId,
       requesterSessionKey: params.requesterSessionKey,
+      // The child produced this result; the requester key scopes policy only.
+      session: { agentId, policyKey: params.requesterSessionKey },
       agentId,
       conversationType: "direct",
       content: content ?? "",
@@ -496,7 +498,7 @@ export async function deliverCompletionDirect(params: {
           return;
         }
         // This single payload must finish every chunk and attachment before settling,
-        // still ahead of potentially blocked transcript mirroring.
+        // still ahead of potentially blocked conversation history.
         committedDelivery = { delivered: true, path: "direct", deliveredAt: Date.now() };
         deliveryResultReported = Promise.resolve(
           params.onDeliveryResult?.(committedDelivery),
@@ -504,15 +506,17 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
-      // The requester lane may already belong to its next turn.
-      mirror: {
-        sessionKey: params.requesterSessionKey,
-        agentId,
-        idempotencyKey,
-        expectedSessionId: params.requesterSessionId,
-        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
-        deferToSessionLane: true,
-      },
+      // Pin history to the requester generation that spawned the child.
+      ...(params.requesterSessionId
+        ? {
+            transcriptExpectedGeneration: {
+              sessionKey: params.requesterSessionKey,
+              sessionId: params.requesterSessionId,
+              lifecycleRevision: params.requesterLifecycleRevision,
+            },
+          }
+        : {}),
+      transcriptProvenance: { kind: "subagent-completion" },
     });
     if (committedDelivery) {
       return committedDelivery;

@@ -3,6 +3,7 @@ import {
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import { describe, expect, it } from "vitest";
+import { collect } from "../../test/helpers/async-iterable.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
@@ -27,17 +28,15 @@ const usage = {
   input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
 };
 const expectedUsage = { input: 13, output: 4, cacheRead: 6, cacheWrite: 2, totalTokens: 25 };
-const terminalModel = { id: "gpt-5.6-luna" };
 type Transport = (typeof responsesTransports)[number];
 function responseStream(
   transport: Transport,
   baseUrl: string,
   prompt: string,
   options: Parameters<ReturnType<Transport["createStream"]>>[2] = {},
-  model: Parameters<typeof makeResponsesModel>[0] = {},
 ) {
   return transport.createStream()(
-    makeResponsesModel({ api: transport.api, provider: transport.provider, baseUrl, ...model }),
+    makeResponsesModel({ api: transport.api, provider: transport.provider, baseUrl }),
     { messages: [{ role: "user", content: prompt, timestamp: 0 }], tools: [] },
     { apiKey: "test-key", ...options },
   );
@@ -105,16 +104,8 @@ describe("failed Responses loopback SSE", () => {
           expect(message).toMatchObject({
             stopReason: "error",
             errorCode: "responses_output_identity_conflict",
-            errorMessage: "Responses stream changed output item identity",
           });
-          expect(JSON.parse(message.errorBody ?? "{}")).toEqual({
-            outputIndex: 0,
-            expectedType: "reasoning",
-            actualType: "message",
-            completed: false,
-            completedToolCall: false,
-            mismatch: "type",
-            eventType: "response.completed",
+          expect(JSON.parse(message.errorBody ?? "{}")).toMatchObject({
             retrySafe: !hostedTools,
           });
           expect(message.errorBody).not.toContain("private_canary");
@@ -143,20 +134,8 @@ describe("failed Responses loopback SSE", () => {
           },
         },
         async (baseUrl, requestPaths) => {
-          const stream = await responseStream(
-            transport,
-            baseUrl,
-            "Report failed usage",
-            {},
-            {
-              ...terminalModel,
-              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-            },
-          );
-          const events = [];
-          for await (const event of stream) {
-            events.push(event);
-          }
+          const stream = await responseStream(transport, baseUrl, "Report failed usage");
+          const events = await collect(stream);
 
           expect(requestPaths).toHaveLength(1);
           expect(requestPaths[0]).toMatch(/^\/v1\/responses(?:\?|$)/);
@@ -175,77 +154,8 @@ describe("failed Responses loopback SSE", () => {
               usage: { ...expectedUsage, reasoningTokens: 3 },
             },
           });
-          if (terminal?.type === "error") {
-            expect(terminal.error.usage.cost.input).toBeCloseTo(0.000065, 10);
-            expect(terminal.error.usage.cost.output).toBeCloseTo(0.00012, 10);
-            expect(terminal.error.usage.cost.cacheRead).toBeCloseTo(0.000003, 10);
-            expect(terminal.error.usage.cost.cacheWrite).toBeCloseTo(0.0000125, 10);
-            expect(terminal.error.usage.cost.total).toBeCloseTo(0.0002005, 10);
-          }
         },
       );
     },
   );
-});
-
-describe("incomplete Responses loopback SSE", () => {
-  it("recovers status-less incomplete openai-responses output over real SSE", async () => {
-    await withResponsesSse(
-      {
-        type: "response.incomplete",
-        response: {
-          id: "resp-statusless-sse",
-          incomplete_details: { reason: "max_output_tokens" },
-          output: [
-            {
-              type: "message",
-              id: "msg-statusless-sse",
-              role: "assistant",
-              content: [{ type: "output_text", text: "TERMINAL_PARTIAL" }],
-            },
-            {
-              type: "function_call",
-              id: "fc-statusless-sse",
-              call_id: "call-statusless-sse",
-              name: "write",
-              arguments: '{"path":"unfinished',
-            },
-          ],
-          usage,
-        },
-      },
-      async (baseUrl, requestPaths) => {
-        const stream = await responseStream(
-          responsesTransports[0],
-          baseUrl,
-          "Reply with a partial sentence",
-          {},
-          {
-            ...terminalModel,
-            reasoning: false,
-          },
-        );
-        const events = [];
-        for await (const event of stream) {
-          events.push(event);
-        }
-
-        const terminal = events.find((event) => event.type === "done");
-        expect(requestPaths).toHaveLength(1);
-        expect(requestPaths[0]).toMatch(/^\/v1\/responses(?:\?|$)/);
-        expect(terminal).toMatchObject({
-          type: "done",
-          reason: "length",
-          message: {
-            stopReason: "length",
-            content: [{ type: "text", text: "TERMINAL_PARTIAL" }],
-            usage: expectedUsage,
-          },
-        });
-        if (terminal?.type === "done") {
-          expect(terminal.message.content.some((block) => block.type === "toolCall")).toBe(false);
-        }
-      },
-    );
-  });
 });

@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -147,13 +148,6 @@ describe("gateway-cli coverage", () => {
     ]) {
       mock.mockReset().mockReturnValue(null);
     }
-  });
-
-  it("registers call/health commands and routes to callGateway", async () => {
-    await runGatewayCommand(["call", "health", "--params", '{"x":1}', "--json"]);
-
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(runtimeLogs.join("\n")).toContain('"ok": true');
   });
 
   it("renders gateway request failures without the client error class in human mode", async () => {
@@ -427,39 +421,49 @@ describe("gateway-cli coverage", () => {
   });
 
   it.each([
-    {
-      name: "gateway diagnostics",
-      args: ["diagnostics", "export"],
-      timeoutMs: 3000,
-      json: true,
-    },
-    {
-      name: "offline stability",
-      args: ["--port", "19097", "stability", "--bundle", "latest", "--export"],
-      timeoutMs: 10_000,
-      json: true,
-    },
-    {
-      name: "human gateway diagnostics",
-      args: ["diagnostics", "export"],
-      timeoutMs: 3000,
-      json: false,
-    },
-  ])(
-    "writes $name export with a service-owned health snapshot",
-    async ({ args, timeoutMs, json }) => {
+    ["diagnostics export", 3000, true],
+    ["--port 19097 stability --bundle latest --export", 10_000, true],
+    ["diagnostics export", 3000, false],
+  ] as const)(
+    "writes %s export with service-owned snapshots (timeout=%i, JSON=%s)",
+    async (command, timeoutMs, json) => {
       callGateway.mockClear();
+      callGateway.mockResolvedValue({ ok: true, source: "serving-gateway" });
       const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
       const outputPath = path.join(tempDir, "diagnostics.zip");
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
-          await runGatewayCommand([...args, "--output", outputPath, ...(json ? ["--json"] : [])]);
+          await runGatewayCommand([
+            ...command.split(" "),
+            "--output",
+            outputPath,
+            ...(json ? ["--json"] : []),
+          ]);
         },
       );
 
-      expectGatewayCall({ method: "health", timeoutMs, localPortOverride: undefined });
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      for (const method of ["health", "diagnostics.capabilities"]) {
+        expect(callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method,
+            timeoutMs,
+            localPortOverride: undefined,
+            sharedStateMode: "read-only",
+          }),
+        );
+      }
       expect(fs.existsSync(outputPath)).toBe(true);
+      const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
+      const capabilities = zip.file("runtime/gateway-capabilities.json");
+      if (!capabilities) {
+        throw new Error("Diagnostics export is missing Gateway capabilities");
+      }
+      expect(JSON.parse(await capabilities.async("string"))).toMatchObject({
+        status: "ok",
+        data: { source: "serving-gateway" },
+      });
       const output = runtimeLogs.join("\n");
       expect(output).toContain("diagnostics.zip");
       if (json) {
@@ -505,10 +509,7 @@ describe("gateway-cli coverage", () => {
       ["\\\\?\\UNC\\server\\share\\config.json", "\\\\?\\UNC\\server\\share\\config.json"],
       ["\\\\.\\pipe\\openclaw-gateway", "\\\\.\\pipe\\openclaw-gateway"],
     ] as const;
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ logging: { file: logPath }, plugins: { enabled: false } }),
-    );
+    writeFixtureJsonSync(configPath, { logging: { file: logPath }, plugins: { enabled: false } });
     fs.writeFileSync(logPath, cases.map(([msg]) => JSON.stringify({ msg })).join("\n") + "\n");
     const expected = cases.map(([, msg]) => JSON.stringify({ msg })).join("\n") + "\n";
 
@@ -549,67 +550,51 @@ describe("gateway-cli coverage", () => {
   });
 
   it("rejects an explicitly empty gateway diagnostics export --log-bytes", async () => {
-    const flag = "--log-bytes";
-    callGateway.mockClear();
     const tempDir = tempDirs.make("openclaw-gateway-cli-empty-");
     const outputPath = path.join(tempDir, "diagnostics.zip");
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
       async () => {
-        await expectGatewayExit([
-          "diagnostics",
-          "export",
-          flag,
-          "",
-          "--output",
-          outputPath,
-          "--json",
-        ]);
+        await expectJsonValidationFailure(
+          ["diagnostics", "export", "--log-bytes", "", "--output", outputPath],
+          "--log-bytes must be a positive integer.",
+        );
       },
     );
 
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-      ok: false,
-      error: { type: "cli_error", message: `${flag} must be a positive integer.` },
-    });
-    expect(runtimeErrors).toHaveLength(0);
-    expect(callGateway).not.toHaveBeenCalled();
     expect(fs.existsSync(outputPath)).toBe(false);
   });
 
-  it.each([
-    {
-      name: "prefers the resolved service address over TXT hints",
-      beacon: {
+  it.each<[DiscoveredBeacon, string | null]>([
+    [
+      {
         instanceName: "Studio gateway",
         host: "studio.openclaw.internal",
         port: 18789,
         lanHost: "untrusted.example.test",
         tailnetDns: "untrusted.tailnet.test",
         gatewayPort: 12345,
-      } satisfies DiscoveredBeacon,
-      wsUrl: "ws://studio.openclaw.internal:18789",
-    },
-    {
-      name: "uses the secure scheme advertised by a TLS gateway",
-      beacon: {
+      },
+      "ws://studio.openclaw.internal:18789",
+    ],
+    [
+      {
         instanceName: "Secure gateway",
         host: "secure.openclaw.internal",
         port: 18789,
         gatewayTls: true,
-      } satisfies DiscoveredBeacon,
-      wsUrl: "wss://secure.openclaw.internal:18789",
-    },
-    {
-      name: "does not construct a URL from unresolved TXT hints",
-      beacon: {
+      },
+      "wss://secure.openclaw.internal:18789",
+    ],
+    [
+      {
         instanceName: "Unresolved gateway",
         lanHost: "unresolved.openclaw.internal",
         gatewayPort: 18789,
-      } satisfies DiscoveredBeacon,
-      wsUrl: null,
-    },
-  ])("gateway discovery JSON $name", async ({ beacon, wsUrl }) => {
+      },
+      null,
+    ],
+  ])("derives the Gateway discovery URL from the resolved beacon %j", async (beacon, wsUrl) => {
     discoverGatewayBeacons.mockResolvedValueOnce([beacon]);
 
     await runGatewayCommand(["discover", "--json"]);

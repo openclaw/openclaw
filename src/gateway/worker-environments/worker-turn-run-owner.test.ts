@@ -7,8 +7,6 @@ import {
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunOwnerForOperation,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   onAgentEventForRun,
   rotateAgentEventLifecycleGeneration,
@@ -20,13 +18,13 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { logSessionStateChange } from "../../logging/diagnostic.js";
-import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state.js";
 import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
@@ -139,16 +137,12 @@ describe("cloud worker run ownership", () => {
             request.onDispatchReady?.();
             workerSignal = request.signal;
             launched.resolve();
-            await Promise.race([
-              finishLaunch.promise,
-              new Promise<void>((resolve) => {
-                request.signal?.addEventListener("abort", () => resolve(), { once: true });
-              }),
-            ]);
-            if (cancellation === "user") {
-              // Keep producer custody until its final worker receipt has been acknowledged.
-              await finishLaunch.promise;
-            }
+            // User cancellation retains producer custody through its final receipt.
+            await (cancellation === "user"
+              ? finishLaunch.promise
+              : new Promise<void>((resolve) => {
+                  request.signal?.addEventListener("abort", () => resolve(), { once: true });
+                }));
             throw new Error("worker turn cancelled");
           },
         }),
@@ -191,18 +185,10 @@ describe("cloud worker run ownership", () => {
         getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
         "expected worker turn capability",
       );
-      const identity: WorkerConnectionIdentity = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        sessionId: SESSION_ID,
-        runId,
-        turnClaim,
-        credentialHash: "worker-test-credential-hash",
-        bundleHash: "a".repeat(64),
-        rpcSetVersion: 1,
+      const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
         protocolFeatures: ["worker-live-event-v1"],
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
-      };
+      });
       const receiver = createWorkerLiveEventReceiver();
       const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
         receiver.apply({
@@ -280,7 +266,6 @@ describe("cloud worker run ownership", () => {
         expect(otherOperation?.abortSignal.aborted).toBe(false);
         finishLaunch.resolve();
         await attempt;
-        operation.complete();
         await operation.ownerSettlement;
         expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
         expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
@@ -293,7 +278,6 @@ describe("cloud worker run ownership", () => {
         finishLaunch.resolve();
         operation.abortByUser();
         await attempt;
-        operation.complete();
         otherOperation?.complete();
         receiver.clear();
         clock.mockRestore();
@@ -366,28 +350,7 @@ describe("cloud worker run ownership", () => {
       const input = claimInput(runId);
       const firstClaim = await claimTurn(runId, "first-claim");
       const operation = replyOperation({ agentId: "main" });
-      let assertSettlementCurrent: (() => void) | undefined;
-      const first = await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: SESSION_KEY,
-          embeddedRunToolAuthorityBinding: () => {
-            assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
-            const project = (_overlay: ReplyToolAuthorityOverlay) => "worker-turn-authority";
-            return {
-              source: "reply",
-              acceptsRequesterOrigin: () => false,
-              project,
-              projectAsync: async (overlay) => project(overlay),
-              assertRegistrationActive: () => {},
-              assertActive: () => {},
-            };
-          },
-        },
-        () => makeOwner(firstClaim, operation),
-      );
-      expect(assertSettlementCurrent).toBeTypeOf("function");
-      assertSettlementCurrent?.();
+      const first = await makeOwner(firstClaim, operation);
       const identity = { sessionId: SESSION_ID, turnClaim: firstClaim };
       const eventOwner = captureWorkerTurnLiveEventOwner(identity);
       expect(eventOwner?.record).toBeTypeOf("function");

@@ -29,10 +29,9 @@ import {
   withBtwPreparedRuntime,
   type RunBtwSideQuestionParams,
 } from "./btw-runtime.js";
-import { runLightweightBtwStream } from "./btw-stream.js";
+import { runBtwSessionFork, runLightweightBtwStream } from "./btw-stream.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -476,12 +475,12 @@ export async function runBtwSideQuestion(
       );
     }
 
-    const cacheParityFork = harness.id === "openclaw" && params.toolCalls === "deny";
+    const sessionFork = harness.id === "openclaw" && params.toolCalls === "deny";
     const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionFile);
     const imageLimits = resolveImageSanitizationLimits(params.cfg);
     let messages: Message[] = [];
     const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
-    if (!cacheParityFork) {
+    if (!sessionFork) {
       if (activeRunSnapshot?.messages?.length) {
         messages = await toSimpleContextMessages({
           messages: activeRunSnapshot.messages,
@@ -503,7 +502,7 @@ export async function runBtwSideQuestion(
       }
     }
     params.opts?.abortSignal?.throwIfAborted();
-    if (!cacheParityFork && messages.length === 0 && !inFlightPrompt?.trim()) {
+    if (!sessionFork && messages.length === 0 && !inFlightPrompt?.trim()) {
       throw new Error("No active session context.");
     }
 
@@ -675,15 +674,17 @@ export async function runBtwSideQuestion(
           throw new Error("Session fork admission is no longer active.");
         }
         assertCurrent();
-        const text = await runEmbeddedSessionFork({
-          sessionId,
-          agentId: sessionAgentId,
-          question: params.question,
-          model: runtimeModel,
+        const text = await runBtwSessionFork({
+          params: { ...params, agentId: sessionAgentId },
+          modelRegistry,
+          runtimeModel,
+          auth: { mode: apiKeyInfo.mode, authFlow: apiKeyInfo.authFlow },
           apiKey,
-          signal: params.opts?.abortSignal,
+          resolvedAuthProfileId,
+          sessionId,
+          sessionFile,
+          workspaceDir,
           assertCurrent,
-          onUsage: params.onUsage,
         });
         assertCurrent();
         return { text };

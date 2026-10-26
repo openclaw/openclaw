@@ -86,13 +86,10 @@ async function createFixture(
   const unsubscribe = vi.fn(() => {
     listener = undefined;
   });
-  const gateway = {
+  const gateway: ServiceParams["gateway"] = {
     readSessionFacts,
-    withSessionFacts: async <T>(
-      select: FactsSelection,
-      run: (snapshot: SelectedFacts) => Promise<T>,
-    ): Promise<T> => run(await selectSessionFacts(select)),
-    subscribeSessionChanges: (callback: NonNullable<typeof listener>) => {
+    withSessionFacts: async (select, run) => run(await selectSessionFacts(select)),
+    subscribeSessionChanges: (callback) => {
       listener = callback;
       return unsubscribe;
     },
@@ -149,30 +146,36 @@ function pr(number: number, state: "open" | "merged" = "open") {
 function observed(health: NonNullable<WorkboardSessionFacts["observerDigest"]>["health"]) {
   return { health, headline: health, revision: 1 };
 }
-function authority(isActive: () => boolean, message = "Caller authority expired") {
+function authority(isActive: () => boolean) {
   return {
     assertCurrent() {
       if (!isActive()) {
-        throw new Error(message);
+        throw new Error("Caller authority expired");
       }
     },
   };
 }
-function classification(
-  name: string,
+async function expectClassification(
   spec: Partial<WorkboardSessionsBoardSpec>,
-  columns: string[],
   rows: [string, Partial<WorkboardSessionFacts>, string][],
-  warning?: string,
 ) {
-  return {
-    name,
-    spec,
-    columns,
-    warning,
-    facts: rows.map(([id, overrides]) => facts(id, overrides)),
-    placements: rows.map(([id, , target]) => [id, target, "state"]),
-  };
+  const board = await createFixture(
+    rows.map(([id, overrides]) => facts(id, overrides)),
+    { spec },
+  );
+  const read = await board.read();
+  expect(read.sessions.map(({ label, columnId, source }) => [label, columnId, source])).toEqual(
+    rows.map(([id, , target]) => [id, target, "state"]),
+  );
+  expect(await board.pins()).toEqual([]);
+  expect(board.selectFacts).toHaveBeenCalledWith(
+    expect.objectContaining({
+      configuredAgentsOnly: true,
+      includeGlobal: false,
+      includeUnknown: false,
+    }),
+  );
+  return read;
 }
 
 it("always excludes dock conversations and filters automation unless the scope opts in", async () => {
@@ -238,9 +241,9 @@ it("rejects a move when caller authority ends during the facts read", async () =
     await release.promise;
     return { sessions: [facts("one")] };
   });
-  const caller = authority(() => active, "Caller authority is no longer active.");
+  const caller = authority(() => active);
   const pending = board.move(facts("one").key, "other", caller);
-  const rejected = expect(pending).rejects.toThrow("Caller authority is no longer active.");
+  const rejected = expect(pending).rejects.toThrow("Caller authority expired");
   await entered.promise;
   active = false;
   release.resolve();
@@ -248,10 +251,9 @@ it("rejects a move when caller authority ends during the facts read", async () =
   expect(await board.pins()).toEqual([]);
 });
 
-const digest = observed("on-track");
-it.each([
-  classification(
-    "custom rules with conjunctions, alternatives, and unknown PR state",
+it("classifies custom conjunctions, alternatives, and unknown PR state", async () => {
+  const digest = observed("on-track");
+  const read = await expectClassification(
     {
       scope: { includeArchived: true },
       columns: [
@@ -264,7 +266,6 @@ it.each([
         OTHER_COLUMN,
       ],
     },
-    ["review", "active", "no-pr", "other"],
     [
       ["all", { run: "active", observerDigest: digest, pullRequests: pr(1) }, "review"],
       ["no-digest", { run: "active", pullRequests: pr(2) }, "active"],
@@ -279,53 +280,27 @@ it.each([
       ["unknown", { pullRequestsUnavailable: true }, "other"],
       ["failed", { run: "failed" }, "review"],
     ],
-    "Pull-request facts for 1 session are not loaded yet.",
-  ),
-  classification(
-    "default rule priority for unobserved runs and PRs",
-    createDefaultWorkboardSessionsBoardSpec(),
-    DEFAULT_COLUMNS,
-    [
-      ["active", { run: "active" }, "working"],
-      ["failed", { run: "failed" }, "stuck"],
-      ["unhealthy-active", { run: "active", observerDigest: observed("stuck") }, "stuck"],
-      [
-        "needs-input",
-        { run: "active", observerDigest: observed("waiting-on-user") },
-        "needs-input",
-      ],
-      ["review", { pullRequests: pr(1) }, "in-review"],
-      ["merged", { pullRequests: pr(2, "merged") }, "merged"],
-      ["idle", {}, "done"],
-    ],
-  ),
-])(
-  "classifies sessions using $name",
-  async ({ spec, facts: rows, placements, columns, warning }) => {
-    const board = await createFixture(rows, { spec });
-    const read = await board.read();
-    expect(read.columns.map((column) => column.id)).toEqual(columns);
-    expect(read.sessions.map(({ label, columnId, source }) => [label, columnId, source])).toEqual(
-      placements,
-    );
-    expect(await board.pins()).toEqual([]);
-    if (warning) {
-      expect(read.warning).toContain(warning);
-      expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
-        "facts-unavailable",
-      );
-    } else {
-      expect(read.warning).toBeUndefined();
-    }
-    expect(board.selectFacts).toHaveBeenCalledWith(
-      expect.objectContaining({
-        configuredAgentsOnly: true,
-        includeGlobal: false,
-        includeUnknown: false,
-      }),
-    );
-  },
-);
+  );
+  expect(read.columns.map((column) => column.id)).toEqual(["review", "active", "no-pr", "other"]);
+  expect(read.warning).toContain("Pull-request facts for 1 session are not loaded yet.");
+  expect(read.sessions.find((session) => session.label === "unknown")?.reason).toBe(
+    "facts-unavailable",
+  );
+});
+
+it("classifies default rule priority for unobserved runs and PRs", async () => {
+  const read = await expectClassification(createDefaultWorkboardSessionsBoardSpec(), [
+    ["active", { run: "active" }, "working"],
+    ["failed", { run: "failed" }, "stuck"],
+    ["unhealthy-active", { run: "active", observerDigest: observed("stuck") }, "stuck"],
+    ["needs-input", { run: "active", observerDigest: observed("waiting-on-user") }, "needs-input"],
+    ["review", { pullRequests: pr(1) }, "in-review"],
+    ["merged", { pullRequests: pr(2, "merged") }, "merged"],
+    ["idle", {}, "done"],
+  ]);
+  expect(read.columns.map((column) => column.id)).toEqual(DEFAULT_COLUMNS);
+  expect(read.warning).toBeUndefined();
+});
 
 it.each([false, true])(
   "waits for placement repair on first use and drains it on stop (stop early: %s)",
@@ -340,7 +315,7 @@ it.each([false, true])(
     const stopped = vi.fn();
     const stopping = stopEarly ? board.service.stop().then(stopped) : undefined;
     expect([readDone, updateDone, stopped].map((done) => done.mock.calls)).toEqual([[], [], []]);
-    repair.resolve({ placements: 0, boards: 0 });
+    repair.resolve({ placements: 3, boards: 0 });
     if (stopEarly) {
       const rejected = {
         status: "rejected",
@@ -353,6 +328,9 @@ it.each([false, true])(
       expect((await results).map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
       expect((await board.stored()).sessions.scope?.maxAgeHours).toBe(48);
     }
+    expect(board.logger.info).toHaveBeenCalledExactlyOnceWith(
+      "Sessions board removed 3 non-operator placements.",
+    );
   },
 );
 
@@ -407,21 +385,10 @@ it("repairs only old-default rules at startup, preserves custom boards and order
   expect((await board.stored("custom-order")).sessions.columns.map((column) => column.id)).toEqual(
     oldOrder.toReversed(),
   );
-  expect(board.logger.info).toHaveBeenCalledExactlyOnceWith(
-    "Sessions board updated default rules on 2 boards.",
-  );
   await board.service.stop();
   await board.service.start(board.context);
   expect(await board.stored()).toEqual(repaired);
   expect(board.logger.info).toHaveBeenCalledOnce();
-  await board.service.stop();
-  board.repair.mockResolvedValueOnce({ placements: 3, boards: 0 });
-  board.logger.info.mockClear();
-  await board.service.start(board.context);
-  await board.read();
-  expect(board.logger.info).toHaveBeenCalledExactlyOnceWith(
-    "Sessions board removed 3 non-operator placements.",
-  );
 });
 
 it("coalesces notifications and refreshes board facts after publications", async () => {
@@ -479,19 +446,13 @@ it.each([false, true])(
       { ...facts("none", availability), pullRequestsStale: true as const },
       facts("unknown", availability),
     ];
-    const board = await createFixture(rows, {
-      spec: createDefaultWorkboardSessionsBoardSpec(),
-    });
+    const board = await createFixture(rows, { spec: createDefaultWorkboardSessionsBoardSpec() });
     const read = await board.read();
-    expect(read.sessions.map(({ columnId }) => columnId)).toEqual([
-      "in-review",
-      "merged",
-      "done",
-      "done",
-    ]);
-    expect(read.sessions.slice(2).map(({ reason }) => reason)).toEqual([
-      "fallback",
-      "facts-unavailable",
+    expect(read.sessions).toMatchObject([
+      { columnId: "in-review" },
+      { columnId: "merged" },
+      { columnId: "done", reason: "fallback" },
+      { columnId: "done", reason: "facts-unavailable" },
     ]);
     const suffix = rateLimited ? " (GitHub rate limited)" : "";
     expect(read.warning).toBe(
@@ -499,10 +460,7 @@ it.each([false, true])(
     );
     board.state.sessions = [
       { ...rows[0]!, run: "active" },
-      {
-        ...rows[1]!,
-        observerDigest: observed("waiting-on-user"),
-      },
+      { ...rows[1]!, observerDigest: observed("waiting-on-user") },
       ...rows.slice(2),
     ];
     board.state.revision = "new-run-and-health";

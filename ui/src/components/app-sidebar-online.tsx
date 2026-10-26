@@ -1,77 +1,25 @@
-import type { JSX } from "@solidjs/web";
 import { Dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import {
   presenceViewerActivity,
   presenceActivityLabel,
   presenceViewerLabel,
-  projectOnlinePresenceViewers,
-  profilePresenceViewer,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
-import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
+import { sidebarOnlineCountFor } from "./sidebar-online-order.ts";
+import { resolveSidebarOnline } from "./sidebar-online-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 
-const onlineOrders = new WeakMap<
-  HTMLElement,
-  {
-    gateway: ApplicationGateway | undefined;
-    revision: number | undefined;
-    viewerId: string | undefined;
-    order: SidebarOnlineOrder;
-  }
->();
-
-export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
-  const element = host.hostElement;
-  const gateway = host.sessionDataContext?.gateway;
-  const revision = gateway?.connectionRevision;
-  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
-  let cached = onlineOrders.get(element);
-  if (
-    !cached ||
-    cached.gateway !== gateway ||
-    cached.revision !== revision ||
-    cached.viewerId !== viewerId
-  ) {
-    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
-    onlineOrders.set(element, cached);
-  }
-  return cached.order;
-}
-
-export function resolveSidebarOnline(host: AppSidebarRenderHost) {
-  const saved = host.sidebarSnapshot;
-  return sidebarOnlineOrder(host).resolve({
-    users:
-      saved?.onlineUsers ??
-      (host.sessionData.presencePayload
-        ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
-        : null),
-    counts: saved ? new Map(saved.onlineCounts) : host.sessionData.ownerCounts.counts,
-    countsFailed: !saved && host.sessionData.ownerCounts.error !== null,
-    presentation: saved ? "snapshot" : "live",
-    sortMode: host.people.sortMode,
-    statusFilter: host.people.statusFilter,
-    offlineUsers:
-      saved?.offlineUsers ??
-      (host.peopleView?.directory()?.result?.profiles ?? [])
-        .filter((profile) => !profile.mergedInto)
-        .map(profilePresenceViewer),
-    presenceFilter: host.people.presenceFilter,
-  });
-}
-
-export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element {
+export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
+  const host = props.host;
   const sectionId = "online";
   const snapshot = () => host.sidebarSnapshot;
   const online = createMemo(() => resolveSidebarOnline(host));

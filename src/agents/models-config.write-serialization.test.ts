@@ -9,7 +9,6 @@ import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
-import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { configFor as modelConfig, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -57,6 +56,27 @@ function catalog(providers: Record<string, unknown>) {
 function catalogWrites(pluginId: string, contents: string) {
   return { [encodePluginModelCatalogRelativePath(pluginId)]: contents };
 }
+
+function publishCatalog(agentDir: string, pluginId: string, contents: string) {
+  return replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: catalogWrites(pluginId, contents),
+  });
+}
+
+function planCatalog(pluginId: string, contents: string) {
+  planOpenClawModelsJsonMock.mockResolvedValue({
+    action: "write",
+    contents: emptyModelsJson,
+    pluginCatalogWrites: catalogWrites(pluginId, contents),
+  });
+}
+
+const cachedProvider = (baseUrl: string, api = "ollama") => ({
+  baseUrl,
+  api,
+  models: [{ id: "cached-model", name: "Cached model" }],
+});
 
 const it = baseIt.extend<{ home: string; agentDir: string }>({
   home: async ({ task: _task }, use) => withModelsTempHome(use),
@@ -123,11 +143,7 @@ it.for<[string, string, boolean]>([
 ])(
   "prunes only matching endpoint %s (removed=%s, changed=%s)",
   async ([persistedBaseUrl, removedBaseUrl, removed], { agentDir }) => {
-    const provider = {
-      baseUrl: persistedBaseUrl,
-      api: "ollama",
-      models: [{ id: "cached-model", name: "Cached model" }],
-    };
+    const provider = cachedProvider(persistedBaseUrl);
     const contents = catalog({ ollama: provider, sibling: provider });
     const otherCatalog = catalog({ other: provider });
     await replacePersistedPluginModelCatalogs({
@@ -147,10 +163,7 @@ it.for<[string, string, boolean]>([
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(
       removed
         ? [
-            {
-              pluginId: "ollama",
-              contents: catalog({ sibling: provider }),
-            },
+            { pluginId: "ollama", contents: catalog({ sibling: provider }) },
             { pluginId: "other", contents: otherCatalog },
           ]
         : before,
@@ -160,13 +173,7 @@ it.for<[string, string, boolean]>([
 );
 
 it("prunes after pending discovery publishes", async ({ agentDir }) => {
-  const contents = catalog({
-    ollama: {
-      baseUrl: "https://ollama.com",
-      api: "ollama",
-      models: [{ id: "cached-model", name: "Cached model" }],
-    },
-  });
+  const contents = catalog({ ollama: cachedProvider("https://ollama.com") });
   const pluginCatalogWrites = catalogWrites("ollama", contents);
   await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites });
   const entered = createDeferredCore();
@@ -190,10 +197,7 @@ it("prunes after pending discovery publishes", async ({ agentDir }) => {
   expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(expected);
   planOpenClawModelsJsonMock.mockImplementationOnce(async ({ pluginCatalogs }) => {
     expect(pluginCatalogs).toEqual(expected);
-    return {
-      action: "noop",
-      pluginCatalogWrites: catalogWrites("ollama", pruned),
-    };
+    return { action: "noop", pluginCatalogWrites: catalogWrites("ollama", pruned) };
   });
   const next = await ensureOpenClawModelsJson({}, agentDir);
   expect(next.publishedSource?.pluginCatalogs).toEqual(expected);
@@ -237,7 +241,9 @@ it("refreshes prices only for the published agent", async ({ home }) => {
   expect(resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
 });
 
-it("writes privately into the configured default agent dir", async ({ home }) => {
+it("maintains private cached models in the configured default agent dir", async ({ home }) => {
+  const contents = catalog({});
+  planCatalog("fixture", contents);
   let modeAfterWrite: number | undefined;
   writePrivateStoreTextWriteMock.mockImplementationOnce(async (params: StoreWrite) => {
     await writeActual(params);
@@ -252,7 +258,11 @@ it("writes privately into the configured default agent dir", async ({ home }) =>
     },
   };
 
-  await ensureOpenClawModelsJson(cfg);
+  const first = await ensureOpenClawModelsJson(cfg);
+  expect(first.publishedSource).toEqual({
+    modelsJsonContents: emptyModelsJson,
+    pluginCatalogs: [{ pluginId: "fixture", contents }],
+  });
 
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
   const modelsPath = path.join(home, ".openclaw", "agents", "ops", "agent", "models.json");
@@ -265,22 +275,29 @@ it("writes privately into the configured default agent dir", async ({ home }) =>
   await expect(
     fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
   ).rejects.toMatchObject({ code: "ENOENT" });
+  if (process.platform !== "win32") {
+    await fs.chmod(modelsPath, 0o644);
+  }
+  expect(await ensureOpenClawModelsJson(cfg)).toEqual({});
+  expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+  expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
+  expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
+  await expectPrivate(modelsPath);
+  await fs.writeFile(modelsPath, '{"external":true}\n', "utf8");
+  const externalMtime = new Date(Date.now() + 2000);
+  await fs.utimes(modelsPath, externalMtime, externalMtime);
+  await ensureOpenClawModelsJson(cfg);
+  expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
 });
 
 it("writes plugin catalogs into SQLite, not files", async ({ agentDir }) => {
   const contents = catalog({
     zai: {
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      api: "openai-completions",
+      ...cachedProvider("https://api.z.ai/api/paas/v4", "openai-completions"),
       apiKey: "ZAI_API_KEY",
-      models: [{ id: "glm-5.1", name: "GLM 5.1" }],
     },
   });
-  planOpenClawModelsJsonMock.mockImplementation(async () => ({
-    action: "write",
-    contents: emptyModelsJson,
-    pluginCatalogWrites: catalogWrites("zai", contents),
-  }));
+  planCatalog("zai", contents);
 
   await ensureOpenClawModelsJson({}, agentDir);
 
@@ -289,20 +306,12 @@ it("writes plugin catalogs into SQLite, not files", async ({ agentDir }) => {
   expect(
     stored.map(({ pluginId, contents: raw }) => [pluginId, Object.keys(JSON.parse(raw).providers)]),
   ).toEqual([["zai", ["zai"]]]);
-  await expect(fs.access(path.join(agentDir, "plugins"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expect(fs.access(path.join(agentDir, "plugins"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("removes stale plugin catalogs from SQLite", async ({ agentDir }) => {
-  await replacePersistedPluginModelCatalogs({
-    agentDir,
-    pluginCatalogWrites: catalogWrites("old-provider", `${catalog({})}\n`),
-  });
-  planOpenClawModelsJsonMock.mockImplementation(async () => ({
-    action: "noop",
-    pluginCatalogWrites: {},
-  }));
+  await publishCatalog(agentDir, "old-provider", `${catalog({})}\n`);
+  planOpenClawModelsJsonMock.mockResolvedValue({ action: "noop", pluginCatalogWrites: {} });
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(path.join(agentDir, "models.json"), emptyModelsJson);
 
@@ -318,13 +327,11 @@ it("plans persisted bytes without repair or fingerprint churn", async ({ agentDi
     apiKey: "NVIDIA_API_KEY",
     models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
   };
-  await replacePersistedPluginModelCatalogs({
+  await publishCatalog(
     agentDir,
-    pluginCatalogWrites: catalogWrites(
-      "nvidia",
-      catalog({ nvidia: { ...nvidia, api: "openai-completions" } }),
-    ),
-  });
+    "nvidia",
+    catalog({ nvidia: { ...nvidia, api: "openai-completions" } }),
+  );
   const malformed = catalog({ nvidia });
   const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
   try {
@@ -350,32 +357,6 @@ it("plans persisted bytes without repair or fingerprint churn", async ({ agentDi
   expect(readRawCatalogCacheRow(agentDir, "nvidia")).toEqual(unchanged);
 });
 
-it("repairs permissions without cooling the ready cache", async ({ home: _home }) => {
-  const contents = catalog({});
-  planOpenClawModelsJsonMock.mockResolvedValue({
-    action: "write",
-    contents: emptyModelsJson,
-    pluginCatalogWrites: catalogWrites("fixture", contents),
-  });
-  const first = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-  expect(first.publishedSource).toEqual({
-    modelsJsonContents: emptyModelsJson,
-    pluginCatalogs: [{ pluginId: "fixture", contents }],
-  });
-  const modelsPath = path.join(resolveDefaultAgentDir(CUSTOM_PROXY_MODELS_CONFIG), "models.json");
-  const rootContents = await fs.readFile(modelsPath, "utf8");
-  if (process.platform !== "win32") {
-    await fs.chmod(modelsPath, 0o644);
-  }
-  const cached = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-
-  expect(cached).toEqual({});
-  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
-  expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
-  expect(await fs.readFile(modelsPath, "utf8")).toBe(rootContents);
-  await expectPrivate(modelsPath);
-});
-
 it.for(["noop", "write"] as const)(
   "repairs models.json permissions without rewriting an unchanged %s plan",
   async (action, { agentDir }) => {
@@ -399,41 +380,24 @@ it.for(["noop", "write"] as const)(
   },
 );
 
-it("invalidates the ready cache after external writes", async ({ home: _home }) => {
-  await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-  await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-
-  const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
-  await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
-  const externalMtime = new Date(Date.now() + 2000);
-  await fs.utimes(modelPath, externalMtime, externalMtime);
-  await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-
-  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-});
-
 it("serializes concurrent models.json writes", async ({ home: _home }) => {
-  const configs = ["Proxy A", "Proxy B with longer name"].map((name) => {
-    const cfg = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
-    expectDefined(cfg.models?.providers?.["custom-proxy"]?.models[0], "custom-proxy model").name =
-      name;
-    return cfg;
-  });
+  const names = ["Proxy A", "Proxy B with longer name"];
+  const configs = names.map((name) =>
+    modelConfig("custom-proxy", "https://proxy.test/v1", {
+      models: [modelDefinition("model", { name })],
+    }),
+  );
 
   let inFlightWrites = 0;
   let maxInFlightWrites = 0;
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  let modelsWriteCount = 0;
   writePrivateStoreTextWriteMock.mockImplementation(async (params: StoreWrite) => {
     const isModelsWrite = path.basename(params.filePath) === "models.json";
     if (isModelsWrite) {
-      modelsWriteCount += 1;
       inFlightWrites += 1;
       maxInFlightWrites = Math.max(inFlightWrites, maxInFlightWrites);
-      if (modelsWriteCount === 1) {
-        entered.resolve();
-      }
+      entered.resolve();
       await release.promise;
     }
     try {
@@ -452,10 +416,6 @@ it("serializes concurrent models.json writes", async ({ home: _home }) => {
   await writes;
 
   expect(maxInFlightWrites).toBe(1);
-  const parsed = await readGeneratedModelsJson<{
-    providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
-  }>();
-  expect(["Proxy A", "Proxy B with longer name"]).toContain(
-    parsed.providers["custom-proxy"]?.models?.[0]?.name,
-  );
+  const parsed = await readGeneratedModelsJson<(typeof configs)[number]["models"]>();
+  expect(names).toContain(parsed.providers["custom-proxy"]?.models[0]?.name);
 }, 60_000);

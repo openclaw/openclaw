@@ -32,11 +32,15 @@ export type ModelPickerParams = {
   onChange: (value: string) => void;
 };
 
-export function modelPickerOptions(params: ModelPickerParams) {
+export function modelPickerOptions(
+  params: Pick<ModelPickerParams, "value" | "options" | "custom">,
+) {
   let customValue = "__openclaw_custom_model__";
-  const values = new Set([params.value, ...params.options.map((option) => option.value)]);
-  while (values.has(customValue)) {
-    customValue += "_";
+  if (params.custom) {
+    const values = new Set([params.value, ...params.options.map((option) => option.value)]);
+    while (values.has(customValue)) {
+      customValue += "_";
+    }
   }
   const options: Array<ModelPickerOption & { description?: string }> = [
     ...params.options.map((option) => ({ ...option, description: option.detail })),

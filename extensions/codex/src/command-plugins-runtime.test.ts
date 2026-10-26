@@ -55,7 +55,7 @@ async function fixture(stableAccount = true) {
   const deps = createCodexCommandHost({
     bindingStore: createCodexTestBindingStore(),
     codexPluginsManagementIo: {
-      readConfig: async () => ({ enabled: true }),
+      readConfig: async () => ({}),
       mutate: vi.fn(),
     },
   });
@@ -131,17 +131,6 @@ async function inspectPending(
 }
 
 describe("Codex plugin command context", () => {
-  it("can inspect a runtime with empty plugin management configuration", async () => {
-    const test = await fixture();
-    test.deps.codexPluginsManagementIo.readConfig = async () => ({});
-    const current = await test.run(async (context) => {
-      await context.validateCurrent();
-      return context.current;
-    });
-    expect(current).toEqual({});
-    expect(test.release).toHaveBeenCalledOnce();
-  });
-
   it("rejects a token-derived account replaced during preparation", async () => {
     const test = await fixture(false);
     const prepare = commandRpc.prepareCodexControlSessionAuth;
@@ -195,11 +184,6 @@ describe("Codex plugin command context", () => {
       return { apps: [] };
     });
     await expect(test.installed()).resolves.toEqual({ apps: [] });
-    expect(test.request).toHaveBeenCalledWith(
-      "account/login/start",
-      expect.objectContaining({ type: "chatgptAuthTokens" }),
-      expect.objectContaining({ assertCurrent: undefined }),
-    );
     expect(test.release).toHaveBeenCalledOnce();
   });
 

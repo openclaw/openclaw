@@ -129,7 +129,7 @@ function accountLooksDegraded(account: Record<string, unknown>): boolean {
 }
 
 /** Extract only degraded channel labels from the gateway's existing cached health aggregate. */
-export function systemAgentGreetingChannelHealth(
+function systemAgentGreetingChannelHealth(
   health: HealthSummary | null,
 ): SystemAgentGreetingFacts["channelHealth"] {
   if (!health) {
@@ -382,7 +382,6 @@ type ResolveSystemAgentGreetingParams = {
   cacheStore: SystemAgentGreetingCacheStore;
   /** The Gateway session owner retains flight/backoff identity across captured reads. */
   cacheOwner?: object;
-  now?: () => number;
 };
 
 export async function resolveSystemAgentGreeting(
@@ -426,7 +425,7 @@ async function resolveSystemAgentGreetingText(
 
   cacheStore.assertCurrent();
   const cacheKey = params.cacheOwner ?? cacheStore;
-  const at = (params.now ?? Date.now)();
+  const at = Date.now();
   // Audit acknowledgement uses the captured monotonic sequence, not this cache timestamp.
   const failure = greetingFailures.get(cacheKey);
   if (failure?.factsHash === factsHash && failure.retryAfter > at) {

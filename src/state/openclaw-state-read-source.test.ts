@@ -3,6 +3,7 @@
 import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import * as processRole from "../infra/database-engine/admission-scope.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -51,6 +52,57 @@ function readFixture() {
     authority: { signal: new AbortController().signal, assertCurrent: () => {} },
   };
 }
+
+it.each(["gateway", "cli-oneshot", undefined] as const)(
+  "uses the %s process lifetime for early awaited reads",
+  async (role) => {
+    const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue(role);
+    const { location, authority } = readFixture();
+    try {
+      for (const awaitedOnly of [true, true, true, false]) {
+        const transport = captureOpenClawStateReadSource().createTransport(
+          backupRead,
+          undefined,
+          undefined,
+          awaitedOnly,
+        );
+        const task = readyTask();
+        await expect(transport.startRead(location, authority)).resolves.toEqual({
+          value: emptyReply,
+        });
+        await transport.startClose();
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(
+          awaitedOnly && role !== "gateway" ? { retire: true } : undefined,
+        );
+      }
+      expect(mock.create).toHaveBeenCalledTimes(role === "gateway" ? 1 : 2);
+    } finally {
+      roleSpy.mockRestore();
+    }
+  },
+);
+
+it("shares read setup methods while each read retains independent task custody", async () => {
+  const { location, authority } = readFixture();
+  const factories = new Set();
+  const readers = new Set();
+  const validators = new Set();
+  const closers = new Set();
+  for (let index = 0; index < 16; index += 1) {
+    const captured = captureOpenClawStateReadSource();
+    const transport = captured.createTransport(backupRead);
+    factories.add(captured.createTransport);
+    readers.add(transport.startRead);
+    validators.add(transport.startValidateFresh);
+    closers.add(transport.startClose);
+    const task = readyTask();
+    await expect(transport.startRead(location, authority)).resolves.toEqual({ value: emptyReply });
+    await transport.startClose();
+    expect(task.close).toHaveBeenCalledOnce();
+  }
+  expect(mock.create).toHaveBeenCalledOnce();
+  expect([factories.size, readers.size, validators.size, closers.size]).toEqual([1, 1, 1, 1]);
+});
 
 it("retires cached readers after independent custody joins and permits reuse", async () => {
   const { read } = readFixture();
@@ -186,44 +238,3 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     "generation released",
   ]);
 });
-
-it.each(["workerPlacements.changeSnapshot", "agentDeletionJournal.status"] as const)(
-  "captures and charges selectors before queued dispatch (%s)",
-  async (type) => {
-    const { location, authority } = readFixture();
-    const selector = "选择🦞".repeat(512);
-    const command =
-      type === "workerPlacements.changeSnapshot"
-        ? { type, profileIds: [selector, selector] }
-        : { type, agentId: selector };
-    const expected = structuredClone(command);
-    const transport = captureOpenClawStateReadSource().createTransport(command);
-    if (command.type === "workerPlacements.changeSnapshot") {
-      command.profileIds.splice(0);
-    } else {
-      command.agentId = "different agent before preparation";
-    }
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const read = transport.startRead(location, authority);
-    try {
-      const submitted = await task.submitted;
-      dispatch.resolve();
-      expect.soft((await task.captured).command).toEqual(expected);
-      expect
-        .soft(submitted.inputBytes)
-        .toBeGreaterThanOrEqual(
-          Buffer.byteLength(selector) * (type === "workerPlacements.changeSnapshot" ? 2 : 1),
-        );
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(
-        type === "workerPlacements.changeSnapshot"
-          ? { ok: true, type, sourceAdmitted: true, placements: [] }
-          : { ok: true, type, sourceAdmitted: true, status: "absent" },
-      );
-      await read;
-      await transport.startClose();
-    }
-  },
-);

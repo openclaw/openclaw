@@ -10,6 +10,7 @@ import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
 } from "../../admitted-run-context.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import { isAgentRunRestartAbortReason } from "../../run-termination.js";
@@ -20,8 +21,10 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
 import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
 type QuestionDispatcher = Extract<
   Parameters<typeof registerPendingAgentQuestion>[0]["gatewayCall"],
@@ -120,6 +123,180 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
 
+  it("projects only subscriber facts while preserving real stream reads and effects", async () => {
+    const { session, listeners } = await trackPreparedStreamSubscriptions((subscribe) => {
+      mocks.subscribe.mockImplementation(subscribe);
+    });
+    const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
+      "../../embedded-agent-subscribe.js",
+    );
+    let effects: unknown[] = [];
+    const record = (...values: unknown[]) => {
+      effects.push(values);
+    };
+    // Populate all inherited subscriber facts, including optional undefined values,
+    // so the legacy spread and projection can compare property presence as well.
+    const attempt = {
+      runId: "stream-projection",
+      sessionId: "stream-projection-session",
+      lifecycleGeneration: undefined,
+      initialReplayState: undefined,
+      assistantErrorTranscript: undefined,
+      verboseLevel: "full" as const,
+      toolResultFormat: "markdown" as const,
+      toolProgressDetail: "raw" as const,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => true,
+      sourceReplyDeliveryMode: undefined,
+      messageToolFinalByDefault: undefined,
+      onToolResult: record,
+      onAgentToolResult: record,
+      observeToolTerminal: undefined,
+      onReasoningStream: record,
+      streamReasoningInNonStreamModes: true,
+      onReasoningEnd: record,
+      blockReplyBreak: "message_end" as const,
+      blockReplyChunking: undefined,
+      onPartialReply: record,
+      onAssistantMessageStart: record,
+      // A callback here causes the real subscriber to spread its input again;
+      // keeping it absent lets the Proxy observe the nested event consumers.
+      onAgentEvent: undefined,
+      onExecutionPhase: record,
+      onToolStreamBoundary: record,
+      enforceFinalTag: false,
+      silentExpected: false,
+      suppressLiveStreamOutput: false,
+      config: {},
+      sessionPersistence: "detached" as const,
+      sessionKey: "agent:main:stream-projection",
+      currentChannelId: "synthetic-channel",
+      currentMessagingTarget: undefined,
+      currentMessageId: "synthetic-message",
+      replyToMode: undefined,
+      hasRepliedRef: { value: false },
+      internalEvents: undefined,
+      compactionCountOwner: "caller" as const,
+      onContextAccountingEvent: record,
+      prompt: "Unrelated attempt state must not enter the subscriber",
+    } satisfies Partial<EmbeddedRunAttemptInternalParams>;
+    const captured: SubscribeEmbeddedAgentSessionParams[] = [];
+    mocks.subscribe.mockImplementation((params: SubscribeEmbeddedAgentSessionParams) => {
+      captured.push(params);
+      return createCatalogSubscription();
+    });
+    const prepared = prepareCatalogExecutor({ activeSession: session, attempt });
+    const projected = captured[0];
+    if (!projected) {
+      throw new Error("expected stream preparation to subscribe");
+    }
+    expect(Object.hasOwn(projected, "prompt")).toBe(false);
+    expect(Object.hasOwn(projected, "activeSession")).toBe(false);
+    expect(projected.config).toBe(attempt.config);
+    expect(projected.builtinToolNames).toBe(prepared.input.agentSession.builtinToolNames);
+
+    // These are precisely the explicit overrides of the former spread caller.
+    const legacy: SubscribeEmbeddedAgentSessionParams = {
+      ...prepared.input.attempt,
+      ...prepared.input.agentSession,
+      session: projected.session,
+      onModelUsage: projected.onModelUsage,
+      messageChannel: projected.messageChannel,
+      hookRunner: projected.hookRunner,
+      reasoningMode: projected.reasoningMode,
+      thinkingLevel: projected.thinkingLevel,
+      hasDeliveredMessageToolOnlySourceReply: projected.hasDeliveredMessageToolOnlySourceReply,
+      onDeliveredMessageToolOnlySourceReply: projected.onDeliveredMessageToolOnlySourceReply,
+      trajectoryRecorder: projected.trajectoryRecorder,
+      onBlockReply: projected.onBlockReply,
+      onBlockReplyFlush: projected.onBlockReplyFlush,
+      onBeforeTerminalDelivery: projected.onBeforeTerminalDelivery,
+      deferTerminalDelivery: projected.deferTerminalDelivery,
+      terminalLifecyclePhase: projected.terminalLifecyclePhase,
+      isTerminalAborted: projected.isTerminalAborted,
+      resolveTerminalStopReason: projected.resolveTerminalStopReason,
+      onBeforeLifecycleTerminal: projected.onBeforeLifecycleTerminal,
+      providerOwner: projected.providerOwner,
+      currentAccountId: projected.currentAccountId,
+      currentThreadId: projected.currentThreadId,
+      agentId: projected.agentId,
+    };
+    type Read = { key: PropertyKey; present: boolean; value: unknown };
+    const observe = (input: SubscribeEmbeddedAgentSessionParams, reads: Read[]) =>
+      new Proxy(input, {
+        get(target, key, receiver) {
+          const value: unknown = Reflect.get(target, key, receiver);
+          reads.push({ key, present: Object.hasOwn(target, key), value });
+          return value;
+        },
+      });
+    const exercise = async (input: SubscribeEmbeddedAgentSessionParams) => {
+      const reads: Read[] = [];
+      effects = [];
+      const subscription = actual.subscribeEmbeddedAgentSession(observe(input, reads));
+      const emit = async (event: Parameters<Parameters<typeof session.subscribe>[0]>[0]) => {
+        for (const listener of listeners) {
+          await listener(event);
+        }
+        await subscription.waitForPendingEvents();
+      };
+      try {
+        const message = makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Projected stream answer" }],
+          timestamp: 1,
+        });
+        await emit({ type: "agent_start" });
+        await emit({ type: "message_start", message });
+        await emit({
+          type: "message_update",
+          message,
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "Projected stream answer",
+            partial: message,
+          },
+        });
+        await emit({ type: "message_end", message });
+        await subscription.runToolLifecycle({
+          toolName: "read",
+          toolCallId: "projection-tool",
+          args: { path: "synthetic.txt" },
+          execute: async (started) => {
+            started();
+            return { content: [{ type: "text", text: "synthetic tool output" }] };
+          },
+        });
+        await emit({
+          type: "compaction_end",
+          reason: "threshold",
+          outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: false },
+        });
+        await emit({ type: "agent_end", messages: [message], willRetry: false });
+        return {
+          reads,
+          effects: effects.slice(),
+          assistantTexts: subscription.assistantTexts.slice(),
+          compactions: subscription.getCompactionCount(),
+        };
+      } finally {
+        subscription.unsubscribe();
+      }
+    };
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const legacyResult = await exercise(legacy);
+    const projectedResult = await exercise(projected);
+    expect(projectedResult).toEqual(legacyResult);
+    expect(projectedResult.effects.length).toBeGreaterThan(0);
+    expect(projectedResult.assistantTexts).toEqual(["Projected stream answer"]);
+    expect(projectedResult.compactions).toBe(1);
+    // Every real callee read is present, including inherited attempt callbacks.
+    expect([
+      ...new Set(projectedResult.reads.filter((read) => !read.present).map((read) => read.key)),
+    ]).toEqual([]);
+    prepared.subscription.unsubscribe();
+  });
+
   it("keeps exact stream owners current when physical stores share a session ID", async () => {
     const sessionId = "shared-stream-session";
     const runs = await vi.importActual<typeof import("../runs.js")>("../runs.js");
@@ -206,6 +383,43 @@ describe("prepareEmbeddedAttemptStream", () => {
   });
 
   registerReplyPromotionTests();
+
+  it("borrows live fork history until the fork owner creates an isolated context", async () => {
+    const { session } = await createTestSession();
+    const model = session.model!;
+    const content = [{ type: "text" as const, text: "parent history" }];
+    const message = createAssistant(model, content);
+    session.agent.state.messages = [message];
+    const prepared = prepareCatalogExecutor({
+      activeSession: session,
+      attempt: { model, sessionFile: "agent:main:main" },
+    });
+    expect(prepared.queueHandle.readSessionForkContext?.()?.messages).toBe(session.messages);
+
+    const { prepareEmbeddedSessionForkContext } = await import("../session-fork-context.js");
+    const context = await prepareEmbeddedSessionForkContext({
+      target: {
+        agentId: "main",
+        sessionId: "session-output-schema",
+        sessionKey: "agent:main:main",
+      },
+      sessionFile: "agent:main:main",
+      model,
+      workspaceDir: "/synthetic/fork",
+      agentDir: "/synthetic/fork/agent",
+      agentId: "main",
+      assertCurrent() {},
+    });
+    expect(context.messages).toEqual([message]);
+    const forkContent = context.messages[0]?.content;
+    if (!Array.isArray(forkContent) || forkContent[0]?.type !== "text") {
+      throw new Error("expected fork text content");
+    }
+    forkContent[0].text = "child edit";
+    context.messages.push({ role: "user", content: "child turn", timestamp: 2 });
+    expect(session.messages).toEqual([message]);
+    expect(content[0]?.text).toBe("parent history");
+  });
 
   it.each([
     ["replacement", "steering"],

@@ -13,6 +13,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "./boundary-file-read.js";
 import { FsSafeError } from "./fs-safe.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
   const directory = process.platform === "win32" ? quotePowerShellArg(root) : quoteCliArg(root);
@@ -35,26 +36,6 @@ export async function resolveControlUiAssetHealth(opts: {
 }): Promise<ControlUiAssetHealth> {
   const indexPath = resolveControlUiDistIndexPathForRoot(opts.root);
   return inspectControlUiAssetHealth(indexPath, opts.expectedBuildId);
-}
-
-function resolveControlUiRepoRoot(opts: { root?: string; moduleUrl?: string }): string | null {
-  const cwd = process.cwd();
-  const roots = opts.root
-    ? [path.resolve(opts.root)]
-    : [
-        resolveOpenClawPackageRootSync({
-          argv1: process.argv[1],
-          moduleUrl: opts.moduleUrl ?? import.meta.url,
-          cwd,
-        }),
-        resolveOpenClawPackageRootSync({ cwd }),
-      ];
-  return (
-    roots.find(
-      (root): root is string =>
-        root !== null && fs.existsSync(path.join(root, "ui", "vite.config.ts")),
-    ) ?? null
-  );
 }
 
 function tryRealpath(value: string): string | null {
@@ -189,16 +170,6 @@ type EnsureControlUiAssetsResult =
   | { ok: true; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
   | { ok: false; message: string };
 
-type EnsureControlUiAssetsOptions = {
-  moduleUrl?: string;
-  root?: string;
-  assetRoot?: string;
-  expectedBuildId?: string | null;
-  force?: boolean;
-  signal?: AbortSignal;
-  onBuildStart?: () => void;
-};
-
 export const CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS = 10 * 60_000;
 
 function controlUiAssetsFailure(message: string): EnsureControlUiAssetsResult {
@@ -310,7 +281,15 @@ function summarizeCommandOutput(text: string): string | undefined {
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts: EnsureControlUiAssetsOptions = {},
+  opts: {
+    moduleUrl?: string;
+    root?: string;
+    assetRoot?: string;
+    expectedBuildId?: string | null;
+    force?: boolean;
+    signal?: AbortSignal;
+    onBuildStart?: () => void;
+  } = {},
 ): Promise<EnsureControlUiAssetsResult> {
   const assetRoot =
     opts.assetRoot ??
@@ -325,7 +304,22 @@ export async function ensureControlUiAssetsBuilt(
     return { ok: true, assets: health };
   }
 
-  const repoRoot = resolveControlUiRepoRoot(opts);
+  const cwd = process.cwd();
+  const roots = opts.root
+    ? [path.resolve(opts.root)]
+    : [
+        resolveOpenClawPackageRootSync({
+          argv1: process.argv[1],
+          moduleUrl: opts.moduleUrl ?? import.meta.url,
+          cwd,
+        }),
+        resolveOpenClawPackageRootSync({ cwd }),
+      ];
+  const repoRoot =
+    roots.find(
+      (root): root is string =>
+        root !== null && fs.existsSync(path.join(root, "ui", "vite.config.ts")),
+    ) ?? null;
   const indexPath = repoRoot ? resolveControlUiDistIndexPathForRoot(repoRoot) : null;
   // Only the selected source tree owns its output. A healthy checkout beside a
   // damaged app's Resources directory cannot repair the assets that app serves.
@@ -346,7 +340,9 @@ export async function ensureControlUiAssetsBuilt(
     );
   }
 
-  const uiScript = path.join(repoRoot, "scripts", "ui.js");
+  const uiScript = fileURLToPath(
+    resolveExternalPackageRuntimeEntrypointUrl("sourceUiBuild", repoRoot),
+  );
   if (!fs.existsSync(uiScript)) {
     return controlUiAssetsFailure(`Control UI assets missing but ${uiScript} is unavailable.`);
   }

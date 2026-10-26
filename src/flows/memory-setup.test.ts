@@ -123,10 +123,7 @@ it("preserves per-agent multimodal config for an incompatible provider", async (
     },
   };
   const original = structuredClone(config);
-  const prompt = prompter({
-    selects: ["openai", "existing"],
-    texts: ["text-embedding-3-small"],
-  });
+  const prompt = prompter({ selects: ["openai", "existing"], texts: ["text-embedding-3-small"] });
   const result = await runMemorySetupFlow(config, prompt);
   expect(result).toBe(config);
   expect(config).toEqual(original);
@@ -165,13 +162,19 @@ it.each([
       selects: ["remote-a", mode],
       texts: ["embed-default", "typed-key"],
     });
-    const result = await runMemorySetupFlow(config, prompts);
+    const result = await runMemorySetupFlow(config, prompts, {
+      secretInputMode: mode === "existing" ? "ref" : "plaintext",
+    });
     expect(result.memory?.search?.remote?.apiKey).toEqual(key);
     expect(chosen.create).toHaveBeenCalledWith(
       expect.objectContaining({ remote: { apiKey: resolved } }),
     );
     if (mode === "ref") {
       expect(mocks.resolveRef).not.toHaveBeenCalled();
+    } else if (mode === "existing") {
+      const credentialPrompt = vi.mocked(prompts.select).mock.calls[1]?.[0];
+      expect(credentialPrompt?.initialValue).toBe("existing");
+      expect(credentialPrompt?.options.map((entry) => entry.value)).toEqual(["existing", "ref"]);
     } else if (mode === "key") {
       expect(vi.mocked(prompts.text).mock.calls[1]?.[0]).toMatchObject({ sensitive: true });
       expect(mocks.get.mock.calls.every(([id]) => id === "remote-a")).toBe(true);
@@ -200,15 +203,6 @@ it("offers configured native aliases only for available HTTP embedding owners", 
     "local-box",
     "ollama",
   ]);
-});
-
-it("keeps existing credentials as the ref-mode default and offers no plaintext entry", async () => {
-  const prompts = prompter();
-  const config = memoryConfig({ provider: "remote-a", remote: { apiKey: "saved-key" } });
-  await runMemorySetupFlow(config, prompts, { secretInputMode: "ref" });
-  const credentialPrompt = vi.mocked(prompts.select).mock.calls[1]?.[0];
-  expect(credentialPrompt?.initialValue).toBe("existing");
-  expect(credentialPrompt?.options.map((entry) => entry.value)).toEqual(["existing", "ref"]);
 });
 
 it.each([

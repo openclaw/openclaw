@@ -517,6 +517,17 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(shards)).not.toContain(unrelated);
   });
 
+  it("keeps both pending-input contracts protected by their worker-source policy", () => {
+    const pendingInputTests = [
+      "src/config/sessions/session-accessor.pending-input-retention.test.ts",
+      "src/config/sessions/session-accessor.pending-inputs.test.ts",
+    ];
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toEqual(expect.arrayContaining(pendingInputTests));
+    expect(resolvePolicyTestTargets(["src/config/sessions/session-transcript.worker.ts"])).toEqual(
+      expect.arrayContaining(pendingInputTests),
+    );
+  });
+
   it("keeps policy scanners beside ordinary importers without claiming complete source ownership", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";

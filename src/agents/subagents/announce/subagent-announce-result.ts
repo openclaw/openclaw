@@ -1,6 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../../utils/directive-tags.js";
+import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
@@ -117,7 +123,24 @@ export async function readSubagentRunFinalAnswerUsing(
         ?.event;
     }
     assertCurrent?.();
-    return (isRecord(event) ? extractStoredAssistantText(event.message) : undefined) || undefined;
+    const message = isRecord(event) ? asOptionalObjectRecord(event.message) : undefined;
+    // Explicit delivery records already own their display text, including literal NO_REPLY.
+    // Parent review keeps media references as data rather than extracting channel attachments.
+    const answer =
+      message?.display === true || readTerminalSourceReplyDeliveryMirror(message)
+        ? extractStoredAssistantText(message)
+        : stripInlineDirectiveTagsForDelivery(
+            parseInlineDirectives(
+              prepareTerminalAssistantReply(
+                message && {
+                  content: typeof message.text === "string" ? message.text : message.content,
+                  stopReason: message.stopReason,
+                  phase: message.phase,
+                },
+              ).text,
+            ).text,
+          ).text;
+    return answer || undefined;
   });
 }
 
@@ -205,9 +228,11 @@ export function buildChildCompletionFindings(
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
     const displayIndex: number = sections.length + 1;
+    // Requesters may quote results verbatim, so keep the child's characters.
     const result = {
       label: "Child result",
       text: resultText?.trim() || "(no output)",
+      encoding: "verbatim" as const,
       truncationMarker: `[result truncated; sessions_history sessionKey=${JSON.stringify(child.childSessionKey)} (text fields truncated to 4,000 characters)]`,
     };
     const resultBlock = wrapPromptDataBlock(result) || "Child result: (no output)";

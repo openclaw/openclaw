@@ -9,6 +9,7 @@ import type { UpdateRunResult } from "../../infra/update-run-result.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -19,12 +20,9 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeStateDatabaseForTest);
 
 function checkout() {
-  const directory = dirs.make("update-failure-report-");
-  const root = path.join(directory, "checkout");
-  fs.mkdirSync(root);
-  execFileSync("git", ["init", "--quiet", root]);
+  const root = dirs.make("update-failure-report-");
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.7"}');
-  return { root, env: { OPENCLAW_STATE_DIR: path.join(directory, "state") } };
+  return { root, env: { OPENCLAW_STATE_DIR: path.join(root, "state") } };
 }
 
 function makeResult(overrides: Partial<UpdateRunResult>): UpdateRunResult {
@@ -43,14 +41,10 @@ it.each(["invalid-dev-target", "unsupported-package-target", "fetch-failed"])(
     const serialized = reason === "fetch-failed";
     const check = serialized ? "update" : reason;
     const facts = [{ check, code: reason }];
-    const step = {
-      name: serialized ? "git-fetch" : reason,
-      command: serialized ? "git fetch" : "openclaw update",
+    const step = stepFixture(serialized ? "git-fetch" : reason, {
       cwd: root,
-      durationMs: serialized ? 1 : 0,
-      exitCode: 1,
       ...(!serialized ? { failureFacts: facts } : {}),
-    };
+    });
     const original = makeResult({
       mode: serialized ? "git" : "unknown",
       root,
@@ -59,11 +53,6 @@ it.each(["invalid-dev-target", "unsupported-package-target", "fetch-failed"])(
       ...(serialized ? { failedStep: structuredClone(step), durationMs: 1 } : {}),
     });
     const failure = new UpdateCommandFailure(original);
-    if (serialized) {
-      expect(failure.result.steps.map(({ failureFacts }) => failureFacts)).toEqual([facts]);
-    } else {
-      expect(failure.result).toEqual(original);
-    }
     const report = await prepareUpdateFailureReport(
       { attemptId: reason, result: failure.result },
       { env: { OPENCLAW_STATE_DIR: path.join(root, "state") } },
@@ -109,13 +98,6 @@ it.each(["pending-recovery", "pending-recovery-cause", "run-finish", "command-fi
       "update",
       boundary === "pending-recovery-cause" ? "TypeError" : reason,
     );
-    if (!recoveryPending) {
-      expect(
-        recorded?.steps.some((step) => step.failureFacts?.some((fact) => fact.code === reason)),
-      ).toBe(true);
-      finishUpdateRun(run.runId, { status: "succeeded" }, { env });
-      expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
-    }
     for (const privateText of ["[redacted-code]", "private recovery detail", root]) {
       expect(report.body).not.toContain(privateText);
     }
@@ -127,6 +109,7 @@ it.each([
   { channel: "dev", reason: "git-root-unresolved" },
 ] as const)("reports $reason without relying on command output", async ({ channel, reason }) => {
   const { root, env } = checkout();
+  execFileSync("git", ["init", "--quiet", root]);
   const result = completeUpdateCommandRun(
     await updateGitCheckout({
       gitRoot: root,

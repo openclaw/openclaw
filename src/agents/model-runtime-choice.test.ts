@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
+import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { prepareModelChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
@@ -48,6 +52,20 @@ function publish(
   const owner = createModelRuntimeChoiceOwnerFixture(config, isCurrent, facts);
   published.owner = owner;
   return owner;
+}
+
+function createSpawnReachingGateway(config: OpenClawConfig) {
+  const callGateway = vi.fn(async () => {
+    throw new Error("Reached session creation");
+  });
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config,
+    callGateway,
+    registerRun: vi.fn(),
+    countActiveRuns: () => 0,
+  });
+  return { callGateway, tool };
 }
 
 function renderPublishedAliases(owner: PreparedModelRuntimeSnapshot) {
@@ -99,11 +117,7 @@ describe("prepared model support admission", () => {
   const selection = { agentId: "main", raw: "fixture/new-model", source: "override" as const };
   const custom: OpenClawConfig = {
     ...cfg,
-    models: {
-      providers: {
-        fixture: { api: "openai-completions", baseUrl: "https://custom.invalid/v1", models: [] },
-      },
-    },
+    ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
   };
 
   const manualPolicy: OpenClawConfig = {
@@ -276,16 +290,7 @@ describe("prepared model support admission", () => {
             profiles: { personal: { provider: "personal", type: "api_key", key: "synthetic-key" } },
           },
         });
-        const callGateway = vi.fn(async () => {
-          throw new Error("Reached session creation");
-        });
-        const tool = createSessionsSpawnTool({
-          agentSessionKey: "agent:main:main",
-          config,
-          callGateway,
-          registerRun: vi.fn(),
-          countActiveRuns: () => 0,
-        });
+        const { callGateway, tool } = createSpawnReachingGateway(config);
         const model = `personal/${testCase.model}`;
         if (testCase.authored && testCase.admitted) {
           expect(
@@ -321,11 +326,7 @@ describe("prepared model support admission", () => {
   it("does not lend a native descriptor to another native endpoint", async () => {
     const config: OpenClawConfig = {
       ...cfg,
-      models: {
-        providers: {
-          fixture: { api: "openai-responses", baseUrl: "https://b.native.invalid/v1", models: [] },
-        },
-      },
+      ...configFor("fixture", "https://b.native.invalid/v1", { api: "openai-responses" }),
     };
     publish(() => true, config, {
       metadataSnapshot: createPluginMetadataSnapshotFixture({
@@ -371,11 +372,7 @@ describe("prepared model support admission", () => {
     });
     const config: OpenClawConfig = {
       plugins: { entries: { "workspace-override": { enabled: true } } },
-      models: {
-        providers: {
-          [provider]: { api: "azure-openai-responses", baseUrl: model.baseUrl, models: [model] },
-        },
-      },
+      ...configFor(provider, model.baseUrl, { api: "azure-openai-responses", models: [model] }),
       agents: { defaults: { models: { [`${provider}/deployment`]: { alias: "Azure" } } } },
     };
     const owner = publish(() => true, config, {
@@ -484,25 +481,15 @@ describe("prepared model support admission", () => {
       model: dynamicModel,
     });
     expect(prepareDynamicModel).toHaveBeenCalledOnce();
-    const incompleteConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://dynamic.invalid/v1",
-            models: [
-              {
-                id: "retired",
-                name: "Retired fixture",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
-      },
-    };
+    const incompleteConfig: OpenClawConfig = configFor("fixture", "https://dynamic.invalid/v1", {
+      models: [
+        modelDefinition("retired", {
+          name: "Retired fixture",
+          reasoning: false,
+          maxTokens: 1024,
+        }),
+      ],
+    });
     publish(() => true, incompleteConfig, {
       pluginRegistry: registry,
       metadataSnapshot: owner.metadataSnapshot,
@@ -631,16 +618,7 @@ describe("prepared model support admission", () => {
           },
         },
       };
-      const callGateway = vi.fn(async () => {
-        throw new Error("Reached session creation");
-      });
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config,
-        callGateway,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
+      const { callGateway, tool } = createSpawnReachingGateway(config);
       await expect(
         tool.execute("retired-fallback", { task: "test", visible: true }),
       ).rejects.toThrow("Reached session creation");
@@ -671,9 +649,7 @@ describe("prepared model support admission", () => {
     });
     const config: OpenClawConfig = {
       agents: { defaults: { models: { "xai/grok-4.6": { alias: "Grok" } } } },
-      models: {
-        providers: { xai: { api: "openai-completions", baseUrl: model.baseUrl, models: [] } },
-      },
+      ...configFor("xai", model.baseUrl, { api: "openai-completions" }),
     };
     const registry = createEmptyPluginRegistry();
     const prepareDynamicModel = vi.fn(async () => undefined);
@@ -717,15 +693,9 @@ describe("prepared model support admission", () => {
   it("does not certify a Platform-only model on a pinned subscription route", async () => {
     const config: OpenClawConfig = {
       ...cfg,
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            models: [],
-          },
-        },
-      },
+      ...configFor("openai", "https://chatgpt.com/backend-api/codex", {
+        api: "openai-chatgpt-responses",
+      }),
     };
     const row = {
       provider: "openai",
@@ -833,14 +803,7 @@ describe("prepared model support admission", () => {
     "rechecks recovered native auth before admitting %s without a catalog refresh",
     async (provider) => {
       cliBackendsTesting.setDepsForTest({
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            pluginId: "anthropic",
-            config: { command: "claude" },
-          },
-        ],
+        resolveRuntimeCliBackends: createClaudeCliBackends,
       });
       try {
         const raw = `${provider}/claude-opus-5-5`;

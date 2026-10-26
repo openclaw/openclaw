@@ -5,16 +5,27 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { registerAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
-import { claimForeground, recoveryEntry } from "./main-session-recovery-state.test-support.js";
+import {
+  claimForeground,
+  observeRecovery,
+  recoveryEntry,
+  recoveryState,
+} from "./main-session-recovery-state.test-support.js";
 import { markStartupOrphanedMainSessionsForRecovery as markOrphans } from "./main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 // #118873: terminal-only custody must not block foreground admission forever.
 
 const sessionKey = "agent:main:main";
+const fence = (runId: string, lifecycleGeneration = "dead-generation") => ({
+  runId,
+  lifecycleGeneration,
+});
 function expectRetired(entry: SessionEntry | undefined) {
   expect(entry).toBeDefined();
   expect(entry?.mainRestartRecovery).toBeUndefined();
@@ -25,6 +36,7 @@ const unexpectedRuntimeCall = async (): Promise<never> => {
   throw new Error("terminal residue must not dispatch, wait, or send a notice");
 };
 const unusedGatewayRuntime: GatewayRecoveryRuntime = {
+  prepareFailedWorkerPlacement: async () => undefined,
   prepareRestartRecovery: () => undefined,
   dispatchSessionMethod: unexpectedRuntimeCall,
   dispatchAgent: unexpectedRuntimeCall,
@@ -35,7 +47,7 @@ const unusedGatewayRuntime: GatewayRecoveryRuntime = {
 
 function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return recoveryEntry({
-    restartRecoveryRuns: [{ runId: "settled-run", lifecycleGeneration: "dead-generation" }],
+    restartRecoveryRuns: [fence("settled-run")],
     restartRecoveryTerminalRunIds: ["settled-run"],
     ...overrides,
   });
@@ -44,8 +56,8 @@ function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
 function fencedEntry(live: boolean) {
   return settledEntry({
     restartRecoveryRuns: [
-      { runId: "settled-run", lifecycleGeneration: "dead-generation" },
-      { runId: "second-run", lifecycleGeneration: live ? "generation-1" : "dead-generation-2" },
+      fence("settled-run"),
+      fence("second-run", live ? "generation-1" : "dead-generation-2"),
     ],
     restartRecoveryTerminalRunIds: live ? ["settled-run"] : ["settled-run", "second-run"],
   });
@@ -80,17 +92,122 @@ function unfinishedEntry(overrides: Partial<SessionEntry> = {}) {
     lastRunId: "rejected-foreground",
     restartRecoveryDeliveryRunId: "rejected-foreground",
     restartRecoveryDeliverySourceRunId: "rejected-foreground",
-    restartRecoveryRuns: [{ runId: "older-recovery", lifecycleGeneration: "dead-generation" }],
+    restartRecoveryRuns: [fence("older-recovery")],
     restartRecoveryTerminalRunIds: ["rejected-foreground"],
     ...overrides,
   });
 }
 
 describe("main session recovery terminal-only residue", () => {
+  it("releases an ownerless killed fence without reviving it or discarding delivery custody", async () => {
+    const startupCheckedStorePaths = new Set<string>();
+    await withStore(async ({ read, write, mark, storePath }) => {
+      const killed: SessionEntry = {
+        sessionId: "killed-session",
+        updatedAt: 100,
+        status: "killed",
+        abortedLastRun: false,
+        restartRecoveryRuns: [fence("stopped-run")],
+        restartRecoveryTerminalRunIds: Array.from({ length: 8 }, (_, index) => `other-${index}`),
+      };
+      const cases: Record<string, Partial<SessionEntry>> = {
+        orphan: {},
+        live: {},
+        aborted: { abortedLastRun: true },
+        "agent-live": { restartRecoveryRuns: [fence("active-run")] },
+        harness: {
+          restartRecoveryHarnessCompletion: {
+            taskId: "task",
+            taskStatus: "succeeded",
+            taskRunId: "task-run",
+            sourceRunId: "stopped-run",
+            requesterSessionKey: "agent:main:harness",
+            requesterAgentId: "main",
+            sessionId: "harness",
+          },
+        },
+        tombstone: {
+          mainRestartRecovery: recoveryState({
+            cycleId: "stopped",
+            tombstone: { reason: "exhausted" },
+          }),
+        },
+        pending: { pendingFinalDelivery: { kind: "replayable", text: "owed", createdAt: 1 } },
+        delivery: { restartRecoveryDeliveryRunId: "delivery-run" },
+        reserved: {
+          mainRestartRecovery: recoveryState({
+            cycleId: "reserved",
+            chargedAttempts: 1,
+            reservation: {
+              attempt: 1,
+              runId: "reserved-run",
+              lifecycleGeneration: "current-generation",
+            },
+          }),
+        },
+        claimed: {
+          mainRestartRecovery: recoveryState({
+            cycleId: "claimed",
+            foregroundClaims: { tokens: ["owner"], lifecycleGeneration: "current-generation" },
+          }),
+        },
+      };
+      const before = new Map<string, SessionEntry | undefined>();
+      for (const [key, patch] of Object.entries(cases)) {
+        await write({ ...killed, sessionId: key, ...patch }, `agent:main:${key}`);
+        before.set(key, read(`agent:main:${key}`));
+      }
+      const work = await beginSessionEffect({
+        scope: storePath,
+        identities: ["agent:main:live", "live"],
+        assertAllowed: () => {},
+      });
+      registerAgentRunContext("active-run", {
+        sessionKey: "agent:main:agent-live",
+        sessionId: "agent-live",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        projectSessionActive: true,
+      });
+      try {
+        await mark({ startupCheckedStorePaths });
+        expect(read("agent:main:orphan")).toMatchObject({
+          sessionId: "orphan",
+          status: "killed",
+          abortedLastRun: false,
+          restartRecoveryTerminalRunIds: killed.restartRecoveryTerminalRunIds,
+        });
+        expectRetired(read("agent:main:orphan"));
+        expectRetired(read("agent:main:aborted"));
+        expect(read("agent:main:pending")).toMatchObject({
+          pendingFinalDelivery: before.get("pending")?.pendingFinalDelivery,
+          restartRecoveryRuns: killed.restartRecoveryRuns,
+          abortedLastRun: true,
+        });
+        for (const key of Object.keys(cases)) {
+          if (!["orphan", "aborted", "pending"].includes(key)) {
+            expect(read(`agent:main:${key}`)).toEqual(before.get(key));
+          }
+        }
+      } finally {
+        clearAgentRunContext("active-run");
+        work.release();
+      }
+      await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({ marked: 0, skipped: 0 });
+      expect(read("agent:main:live")).toEqual(before.get("live"));
+    });
+  });
+
   it.each([false, true])(
-    "retires foreground residue only if every fence is terminal (%s)",
+    "inspects and retires foreground residue only if every fence is terminal (%s)",
     (live) => {
       const entry = fencedEntry(live);
+      expect(
+        transition(entry, {
+          kind: "inspect",
+          lifecycleGeneration: "standalone-generation",
+          sessionKey,
+        }),
+      ).toEqual({ kind: "observed", view: { status: live ? "blocked" : "inactive" } });
       expect(claimForeground(entry)).toEqual({ kind: live ? "no_change" : "applied" });
       if (live) {
         expect(entry.mainRestartRecovery).toBeDefined();
@@ -114,12 +231,7 @@ describe("main session recovery terminal-only residue", () => {
       });
       const before = structuredClone(entry);
 
-      transition(entry, {
-        kind: "observe",
-        cycleId: "unused-cycle",
-        lifecycleGeneration: "generation-1",
-        sessionKey,
-      });
+      observeRecovery(entry, "generation-1");
 
       if (terminal) {
         expect(entry.status).toBe("failed");
@@ -220,60 +332,4 @@ describe("main session recovery terminal-only residue", () => {
       });
     },
   );
-
-  it("retires terminal residue before orphan marking without touching a current owner", async () => {
-    const liveSessionKey = "agent:main:live";
-    const startupCheckedStorePaths = new Set<string>();
-    await withStore(async ({ storePath, read, write, mark }) => {
-      await write(settledEntry());
-      await write(
-        settledEntry({
-          sessionId: "live-session",
-          restartRecoveryDeliveryRunId: "live-run",
-          restartRecoveryRuns: [{ runId: "live-run", lifecycleGeneration: "current-generation" }],
-          restartRecoveryTerminalRunIds: [],
-        }),
-        liveSessionKey,
-      );
-
-      const liveWork = await beginSessionEffect({
-        scope: storePath,
-        identities: [liveSessionKey, "live-session"],
-        assertAllowed: () => {},
-      });
-      try {
-        await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({
-          marked: 0,
-          skipped: 1,
-        });
-      } finally {
-        liveWork.release();
-      }
-      await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({ marked: 0, skipped: 0 });
-
-      const terminal = read();
-      const live = read(liveSessionKey);
-      expectRetired(terminal);
-      expect(live).toMatchObject({
-        sessionId: "live-session",
-        restartRecoveryDeliveryRunId: "live-run",
-        restartRecoveryRuns: [{ runId: "live-run" }],
-      });
-    });
-  });
-
-  it.each([false, true])("standalone inspect blocks only live recovery fences (%s)", (live) => {
-    const entry = live ? fencedEntry(true) : settledEntry();
-
-    const result = transition(entry, {
-      kind: "inspect",
-      lifecycleGeneration: "standalone-generation",
-      sessionKey,
-    });
-
-    expect(result).toMatchObject({
-      kind: "observed",
-      view: { status: live ? "blocked" : "inactive" },
-    });
-  });
 });

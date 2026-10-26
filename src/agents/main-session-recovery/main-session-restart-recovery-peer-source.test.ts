@@ -87,6 +87,7 @@ const withPeerState = (run: (fixture: ReturnType<typeof peerFixture>) => Promise
 
 function idleRuntime(): GatewayRecoveryRuntime {
   return {
+    prepareFailedWorkerPlacement: async () => undefined,
     resumeChatInput: vi.fn(),
     prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),

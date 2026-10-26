@@ -1,8 +1,10 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   releaseSessionControllerClaim,
@@ -15,7 +17,10 @@ import { bindSessionControllerEntryTarget } from "../../../sessions/session-cont
 import { resetSessionControllerStateForTest } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { reserveSubagentCompletionControllerSource as reserveCompletion } from "../announce/subagent-announce-controller-source.js";
+import {
+  reserveRestoredSubagentControllerSources,
+  reserveSubagentCompletionControllerSource as reserveCompletion,
+} from "../announce/subagent-announce-controller-source.js";
 import {
   hasSubagentControllerInput as hasInput,
   retireSubagentControllerInputs as retireInputs,
@@ -217,4 +222,172 @@ it("retires unclaimed reservations while a selected turn retains its input", asy
   releaseSessionControllerClaim(claim);
   await claim.settlement.promise;
   expect(hasInput(entry)).toBe(false);
+});
+
+it.for(["child", "descendant"] as const)(
+  "runs user input in FIFO order while a restored yielded cohort awaits a %s",
+  { timeout: 5_000 },
+  async (waitingFor, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:main";
+      const logicalStore = path.join(state.sessionsDir(), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath: logicalStore },
+        { sessionId: "requester-session", updatedAt: 1 },
+      );
+      const wake = { ...pendingWake(["child-a", "child-b"]), requesterYieldBatch: true as const };
+      const now = Date.now();
+      const completed = child({
+        requesterSessionKey: sessionKey,
+        requesterStorePath: path.join(
+          state.statePath("agents", "main", "agent"),
+          "openclaw-agent.sqlite",
+        ),
+        createdAt: now - 30,
+        execution: { status: "terminal", endedAt: now - 10, outcome: { status: "ok" } },
+        requesterSettleWake: wake,
+      });
+      const running = child({
+        ...completed,
+        runId: "child-b",
+        childSessionKey: "agent:main:subagent:child-b",
+        execution: { status: "running", startedAt: now - 20 },
+        requesterSettleWake: { ...wake },
+      });
+      const rows = [completed, running];
+      if (waitingFor === "descendant") {
+        running.execution = completed.execution;
+        rows.push(
+          child({
+            ...running,
+            runId: "grandchild",
+            childSessionKey: "agent:main:subagent:grandchild",
+            requesterSessionKey: running.childSessionKey,
+            execution: { status: "running", startedAt: now - 20 },
+            requesterSettleWake: undefined,
+          }),
+        );
+      }
+      for (const entry of rows) {
+        subagentRuns.set(entry.runId, entry);
+      }
+      inputs.push(...(await reserveRestoredSubagentControllerSources(rows)));
+
+      const controller = new AbortController();
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
+      const order: string[] = [];
+      const turn = {
+        sessionKey,
+        sessionId: "requester-session",
+        storePath: logicalStore,
+        agentId: "main",
+        abortSignal: controller.signal,
+      };
+      const first = withSessionTurn(turn, async () => {
+        order.push("first");
+        firstEntered.resolve();
+        await releaseFirst.promise;
+      });
+      const second = withSessionTurn(turn, async () => {
+        order.push("second");
+      });
+      try {
+        await withinTest(firstEntered.promise, signal);
+        expect(order).toEqual(["first"]);
+        releaseFirst.resolve();
+        await withinTest(Promise.all([first, second]), signal);
+        expect(order).toEqual(["first", "second"]);
+        expect(completed.requesterSettleWake).toEqual(wake);
+        expect(running.requesterSettleWake).toEqual(wake);
+        const terminalRows = rows.map((entry) =>
+          child({
+            ...entry,
+            execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
+            delivery: { status: "delivered" },
+            cleanupCompletedAt: Date.now(),
+          }),
+        );
+        for (const entry of terminalRows) {
+          subagentRuns.set(entry.runId, entry);
+        }
+        const restored = await reserveRestoredSubagentControllerSources(terminalRows);
+        inputs.push(...restored);
+        const completion = expectDefined(restored[0], "ready completion reservation");
+        await withSessionTurn({ ...turn, controllerInput: completion }, async () => {
+          order.push("completion");
+        });
+        expect(order).toEqual(["first", "second", "completion"]);
+      } finally {
+        controller.abort();
+        releaseFirst.resolve();
+        for (const input of inputs) {
+          retireSessionControllerInput(input);
+        }
+        await Promise.allSettled([first, second]);
+      }
+    });
+  },
+);
+
+it("restores a ready continuation without reserving an interrupted predecessor's delivery", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const sessionKey = "agent:main:main";
+    const logicalStore = path.join(state.sessionsDir(), "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath: logicalStore },
+      { sessionId: "requester-session", updatedAt: 1 },
+    );
+    const interrupted = child({
+      runId: "interrupted-child",
+      generation: 1,
+      requesterSessionKey: sessionKey,
+      requesterStorePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      createdAt: 1,
+      terminalOwner: "interrupted-recovery",
+      execution: { status: "terminal", endedAt: 2, outcome: { status: "error" } },
+      delivery: { status: "pending" },
+      cleanupHandled: false,
+    });
+    const completed = child({
+      ...interrupted,
+      runId: "completed-child",
+      generation: 2,
+      createdAt: 3,
+      terminalOwner: undefined,
+      execution: { status: "terminal", endedAt: 4, outcome: { status: "ok" } },
+      delivery: { status: "delivered" },
+      cleanupHandled: true,
+      cleanupCompletedAt: 4,
+      requesterSettleWake: {
+        ...pendingWake(["completed-child"]),
+        requesterYieldBatch: true,
+      },
+    });
+    const rows = [interrupted, completed];
+    rows.forEach((entry) => subagentRuns.set(entry.runId, entry));
+    const restored = await reserveRestoredSubagentControllerSources(rows);
+    inputs.push(...restored);
+    expect(restored).toHaveLength(1);
+    const order: string[] = [];
+    const turn = {
+      sessionKey,
+      sessionId: "requester-session",
+      storePath: logicalStore,
+      agentId: "main",
+    };
+    await Promise.all([
+      withSessionTurn({ ...turn, controllerInput: restored[0] }, async () => {
+        order.push("completion");
+      }),
+      withSessionTurn(turn, async () => {
+        order.push("user");
+      }),
+    ]);
+    expect(order).toEqual(["completion", "user"]);
+    expect(interrupted.delivery).toEqual({ status: "pending" });
+    expect(subagentRuns.get(interrupted.runId)).toBe(interrupted);
+  });
 });

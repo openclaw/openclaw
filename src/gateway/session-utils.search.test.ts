@@ -53,6 +53,21 @@ test("search matches title punctuation and spacing before selecting the result w
   }
 });
 
+test.each(["München", "한국어"])("search finds both canonical forms of %s", (title) => {
+  const decomposedTitle = title.normalize("NFD");
+  const select = selection({
+    "agent:main:composed": entry("composed", 1, { displayName: title }),
+    "agent:main:decomposed": entry("decomposed", 2, { displayName: decomposedTitle }),
+    "agent:main:unrelated": entry("unrelated", 3, { displayName: "Unrelated discussion" }),
+  });
+  for (const search of [title, decomposedTitle]) {
+    expect(select({ search, limit: 2 }), search).toEqual([
+      "agent:main:decomposed",
+      "agent:main:composed",
+    ]);
+  }
+});
+
 test("ranks by real interaction without heartbeat or cron noise", () => {
   const now = Date.now();
   const select = selection(

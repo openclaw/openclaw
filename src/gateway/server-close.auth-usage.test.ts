@@ -25,7 +25,18 @@ import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 
 async function closeRace(label: string, signal: AbortSignal) {
   const race = await createGatewayCloseRace(label, signal);
-  return Object.assign(race, { [Symbol.asyncDispose]: () => race.dispose() });
+  return Object.assign(race, {
+    holdWrite(type: "authProfiles.usage" | "userProfiles.modelAccount.connect") {
+      const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        if (command.type === type) {
+          await race.block();
+        }
+        return scope.execute(command, executeOptions);
+      });
+      race.onCleanup(() => recording.mockRestore());
+    },
+    [Symbol.asyncDispose]: () => race.dispose(),
+  });
 }
 
 it("settles accepted auth bookkeeping across the close prelude and refuses new usage", async ({
@@ -43,13 +54,7 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
   };
   saveAuthProfileStore(store, undefined, { syncExternalCli: false });
   const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-  const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
-    if (command.type === "authProfiles.usage") {
-      await race.block();
-    }
-    return scope.execute(command, executeOptions);
-  });
-  race.onCleanup(() => recording.mockRestore());
+  race.holdWrite("authProfiles.usage");
   const inGateway = <T>(operation: () => T) =>
     withPluginRuntimeGatewayContextResolver(kernel.resolvePluginGatewayContext, operation);
   inGateway(() =>
@@ -108,11 +113,7 @@ it("settles an accepted personal account write across the real close prelude", a
           profiles: [
             {
               profileId: "ignored",
-              credential: {
-                type: "api_key",
-                provider: "example",
-                key: "synthetic-close-key",
-              },
+              credential: { type: "api_key", provider: "example", key: "synthetic-close-key" },
             },
           ],
         };
@@ -126,13 +127,7 @@ it("settles an accepted personal account write across the real close prelude", a
   const owner = ensureProfileForEmail("account-close@example.test", { env: fixture.state.env });
   const action = { owner: owner.id, assertCurrent() {} };
   const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-  const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
-    if (command.type === "userProfiles.modelAccount.connect") {
-      await race.block();
-    }
-    return scope.execute(command, executeOptions);
-  });
-  race.onCleanup(() => worker.mockRestore());
+  race.holdWrite("userProfiles.modelAccount.connect");
   // The Wizard outlives its initiating request but inherits that request's work scope.
   await kernel.gatewayRequestContext.trackExecution(() =>
     service.start(action, "example", "api-key"),

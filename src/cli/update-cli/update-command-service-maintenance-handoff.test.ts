@@ -66,14 +66,10 @@ function handoffService(home: string, overrides: Partial<GatewayService> = {}, p
 }
 
 function replaceExecutorIdentity(home: string, root: string, identity: string) {
-  const db = nodeSqlite.openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-  try {
-    db.prepare(
-      "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', ?) WHERE install_root = ?",
-    ).run(identity, root);
-  } finally {
-    db.close();
-  }
+  using db = nodeSqlite.openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
+  db.prepare(
+    "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', ?) WHERE install_root = ?",
+  ).run(identity, root);
 }
 
 const servingAncestorMaintenanceCases = [

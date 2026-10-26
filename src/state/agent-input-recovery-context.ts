@@ -1,25 +1,15 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import type { AgentInputRecoveryAdmission } from "./agent-input-recovery.types.js";
 
-export type AgentInputRecoveryAdmission = {
-  isPending: (agentId: string) => boolean;
-  waitForAgentInputRecovery: (
-    agentId: string,
-    options?: { signal?: AbortSignal },
-  ) => Promise<void> | undefined;
-};
-
-const recovery = new AsyncLocalStorage<() => AgentInputRecoveryAdmission | undefined>();
-
-export function withAgentInputRecoveryContext<T>(
-  resolveOwner: () => AgentInputRecoveryAdmission | undefined,
-  run: () => T,
-): T {
-  return recovery.run(resolveOwner, run);
+function resolveOwner(): AgentInputRecoveryAdmission | undefined {
+  const scope = getPluginExecutionFrame()?.inputRecoveryContext;
+  return (scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context)
+    ?.inputRecovery;
 }
 
 export function isAgentInputRecoveryPending(agentId: string): boolean {
-  return recovery.getStore()?.()?.isPending(agentId) ?? false;
+  return resolveOwner()?.isPending(agentId) ?? false;
 }
 
 /** Fresh sources wait before reservation; recovery itself never borrows this gate. */
@@ -30,7 +20,7 @@ export function waitForAgentInputRecovery(
   const signals = [options.signal, getAsyncWorkSignal()].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
-  return (options.owner ?? recovery.getStore()?.())?.waitForAgentInputRecovery(agentId, {
+  return (options.owner ?? resolveOwner())?.waitForAgentInputRecovery(agentId, {
     signal: signals.length ? AbortSignal.any(signals) : undefined,
   });
 }

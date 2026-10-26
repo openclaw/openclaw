@@ -20,7 +20,6 @@ import {
   captureSessionMutationScope,
   isSessionMutationScopeCurrent,
 } from "../../components/session-mutation-scope.ts";
-import type * as SessionOperations from "../../components/session-organizer-operations.runtime.ts";
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
@@ -50,12 +49,6 @@ import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import {
-  createHeaderSessionActionHost,
-  createHeaderSessionActionRows,
-  headerSessionMetadataPatch,
-  renameSession,
-} from "./chat-pane-session-metadata-patch.ts";
 import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
@@ -106,7 +99,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (
       event.repeat ||
       event.defaultPrevented ||
-      !state?.connected ||
+      !state ||
       !this.active ||
       !this.presented ||
       this.onboarding ||
@@ -166,7 +159,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     );
   }
 
-  private headerSessionOperationsLoad: Promise<typeof SessionOperations> | null = null;
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -276,6 +268,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         action.kind === "set-icon" ||
         action.kind === "set-color" ||
         action.kind === "reset-appearance" ||
+        action.kind === "toggle-archived" ||
+        action.kind === "delete" ||
         action.kind === "move-to-group",
     );
     if (!scope) {
@@ -302,101 +296,34 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       }
       return;
     }
-    const { session, resolveCurrentSession } = createHeaderSessionActionRows(scope, row, {
-      label: (candidate) => this.resolveHeaderSessionTitle(candidate),
-      rows: () => this.state?.sessionsResult?.sessions ?? [],
-    });
+    const capturedRow = { ...row };
     try {
-      const operations = await (this.headerSessionOperationsLoad ??=
-        import("../../components/session-organizer-operations.runtime.ts"));
-      const host = createHeaderSessionActionHost(scope, {
+      const { runHeaderSessionOperation } = await import("./chat-pane-session-operations.ts");
+      return await runHeaderSessionOperation(action, capturedRow, scope, {
         isCurrent: (candidate) => this.isHeaderSessionActionCurrent(candidate, owner),
         publishError: (error) => this.publishHeaderError(error, owner),
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
+        label: (candidate) => this.resolveHeaderSessionTitle(candidate),
+        rows: () => this.state?.sessionsResult?.sessions ?? [],
+        state: () => this.state,
+        draftSignal,
+        beginRename: (state) => {
+          if (this.state !== state || !this.presented) {
+            return null;
+          }
+          const currentScope = this.captureHeaderSessionActionScope(true);
+          if (!currentScope) {
+            return null;
+          }
+          const currentOwner = this.headerOutcomeOwner;
+          return {
+            scope: currentScope,
+            isCurrent: () =>
+              this.state === state && this.isHeaderSessionActionCurrent(currentScope, currentOwner),
+            publishError: (error) => this.publishHeaderError(error, currentOwner),
+          };
+        },
       });
-      const assignCategory = (category: string | null) =>
-        operations.assignSessionCategory(host, session, category, scope, {
-          resolveSession: resolveCurrentSession,
-        });
-      switch (action.kind) {
-        case "rename": {
-          const state = this.state;
-          if (!state) {
-            return;
-          }
-          return await renameSession(operations, host, row, scope, {
-            state,
-            signal: draftSignal,
-            begin: () => {
-              if (this.state !== state || !this.presented) {
-                return null;
-              }
-              const currentScope = this.captureHeaderSessionActionScope(true);
-              if (!currentScope) {
-                return null;
-              }
-              const currentOwner = this.headerOutcomeOwner;
-              return {
-                scope: currentScope,
-                isCurrent: () =>
-                  this.state === state &&
-                  this.isHeaderSessionActionCurrent(currentScope, currentOwner),
-                publishError: (error) => this.publishHeaderError(error, currentOwner),
-              };
-            },
-          });
-        }
-        case "toggle-involving-me":
-          await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
-          break;
-        case "toggle-unread":
-        case "set-icon":
-        case "set-color":
-        case "set-communication":
-        case "reset-appearance": {
-          const currentSession = resolveCurrentSession(true);
-          if (currentSession) {
-            const patch = headerSessionMetadataPatch(action, currentSession);
-            await operations.patchSession(host, currentSession, patch, scope, {
-              sessionScope: action.kind === "toggle-unread",
-            });
-          }
-          break;
-        }
-        case "assign-owner":
-          await operations.assignSessionOwner(host, session, action.owner, scope);
-          break;
-        case "fork":
-          await operations.forkSession(host, session, scope);
-          break;
-        case "move-to-top-level":
-          await operations.promoteSession(host, session, scope);
-          break;
-        case "move-to-group":
-          return await assignCategory(action.category);
-        case "snooze":
-          await operations.snoozeSessionWithUndo(host, session, action, scope);
-          break;
-        case "wake":
-          await operations.patchSession(host, session, { snoozedUntil: null }, scope, {
-            sessionScope: true,
-          });
-          break;
-        case "toggle-archived":
-          if (session.archived) {
-            await operations.patchSession(host, session, { archived: false }, scope, {
-              sessionScope: true,
-            });
-          } else {
-            await operations.archiveSessionWithUndo(host, session, scope);
-          }
-          break;
-        case "delete":
-          await operations.deleteSession(host, session, scope);
-          break;
-        default:
-          action satisfies never;
-      }
     } catch (error) {
       if (this.isHeaderSessionActionCurrent(scope, owner)) {
         this.publishHeaderError(error, owner);

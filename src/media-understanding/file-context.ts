@@ -11,7 +11,7 @@ import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromBuffer } from "../media/input-files.js";
 import type { MediaFact } from "../media/media-facts.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
-import { resolveAttachmentKind } from "./attachments.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import {
   type FileAttachmentOutcome,
@@ -35,18 +35,6 @@ import {
 } from "./runner.attachments.js";
 import type { MediaAttachment } from "./types.js";
 
-type ClassifiedFileAttachment = {
-  outcome: FileAttachmentOutcome;
-  filename?: string;
-  mimeType?: string;
-};
-
-export type LocalPathSelfServeUpgrade = {
-  attachmentIndex: number;
-  fallback: string;
-  render: (path?: string) => string | undefined;
-};
-
 // URL attachments may carry signed query credentials; only the pathname
 // basename is safe to surface as a model-visible display name.
 function attachmentUrlDisplayName(url: string): string | undefined {
@@ -68,9 +56,11 @@ export async function extractFileContext(params: {
   selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
-  async function classifyFileAttachment(
-    attachment: MediaAttachment,
-  ): Promise<ClassifiedFileAttachment> {
+  async function classifyFileAttachment(attachment: MediaAttachment): Promise<{
+    outcome: FileAttachmentOutcome;
+    filename?: string;
+    mimeType?: string;
+  }> {
     const assertCurrent = params.assertCurrent;
     assertCurrent?.();
     const attachmentFilename =
@@ -219,7 +209,11 @@ export async function extractFileContext(params: {
 
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
-  const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
+  const localPathSelfServeUpgrades: Array<{
+    attachmentIndex: number;
+    fallback: string;
+    render: (path?: string) => string | undefined;
+  }> = [];
   for (const attachment of attachments) {
     const { outcome, filename, mimeType } = await classifyFileAttachment(attachment).finally(() =>
       cache.releaseBuffer(attachment.index),

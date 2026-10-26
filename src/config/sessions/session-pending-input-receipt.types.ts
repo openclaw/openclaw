@@ -5,6 +5,8 @@ export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
 
 export type SessionPendingInputReceipt = {
   state: "queued" | "consumed";
+  /** This exact unfinished input outlived its Gateway execution. */
+  interruptedByRestart?: true;
   inputId: string;
   message: PersistedUserTurnMessage;
   run: <T>(operation: () => T) => T;

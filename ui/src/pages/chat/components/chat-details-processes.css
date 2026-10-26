@@ -14,10 +14,30 @@
   position: relative;
   min-width: 0;
   border-radius: 4px;
-}
 
-.chat-details-processes__row:is(:hover, :focus-within) {
-  background: var(--bg-hover);
+  &:is(:hover, :focus-within) {
+    background: var(--bg-hover);
+  }
+
+  > :where(button):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  &:is(:hover, :focus-within, [data-stopping]) {
+    &[data-actionable] .chat-details-processes__name {
+      mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
+    }
+
+    &[data-actionable] .chat-details__process-elapsed {
+      visibility: hidden;
+    }
+
+    .chat-details-processes__action {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
 }
 
 .chat-details-processes__open {
@@ -37,12 +57,6 @@
   cursor: var(--cursor-action);
 }
 
-.chat-details-processes__open:focus-visible,
-.chat-details-processes__stop:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .chat-details-processes__icon {
   position: relative;
   display: grid;
@@ -51,11 +65,11 @@
   width: 20px;
   height: 20px;
   color: var(--muted);
-}
 
-.chat-details-processes__icon > svg {
-  width: 18px;
-  height: 18px;
+  > svg {
+    width: 18px;
+    height: 18px;
+  }
 }
 
 .chat-details-processes__badge {
@@ -72,20 +86,6 @@
   box-shadow: 0 0 0 1.5px var(--details-surface, var(--card));
 }
 
-.chat-details-processes__badge > svg {
-  width: 8px;
-  height: 8px;
-  stroke-width: 2.5;
-}
-
-.chat-details-processes__badge[data-status="completed"] {
-  color: var(--ok);
-}
-
-.chat-details-processes__badge[data-status="failed"] {
-  color: var(--danger);
-}
-
 .chat-details-processes__spinner {
   display: block;
   box-sizing: border-box;
@@ -96,6 +96,10 @@
   border-radius: 50%;
   corner-shape: round;
   animation: btn-spinner-spin 1.5s linear infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
 }
 
 .chat-details-processes__name {
@@ -103,18 +107,13 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+
+  &[data-scrollable="true"] {
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  }
 }
 
-.chat-details-processes__name[data-scrollable="true"] {
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
-}
-
-.chat-details-processes__row[data-stoppable]:is(:hover, :focus-within, [data-stopping])
-  .chat-details-processes__name {
-  mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
-}
-
-.chat-details-processes__stop {
+.chat-details-processes__action {
   position: absolute;
   inset-inline-end: 4px;
   top: 50%;
@@ -126,28 +125,28 @@
   border: 0;
   border-radius: 50%;
   corner-shape: round;
-  background: color-mix(in srgb, var(--danger) 8%, var(--details-surface, var(--card)));
-  color: var(--danger);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%);
+
+  > svg {
+    width: 14px;
+    height: 14px;
+  }
 }
 
-.chat-details-processes__stop > svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-  stroke: none;
-}
+.chat-details-processes__stop {
+  background: color-mix(in srgb, var(--danger) 8%, var(--details-surface, var(--card)));
+  color: var(--danger);
 
-.chat-details-processes__row:is(:hover, :focus-within, [data-stopping])
-  .chat-details-processes__stop {
-  opacity: 1;
-  pointer-events: auto;
-}
+  > svg {
+    fill: currentColor;
+    stroke: none;
+  }
 
-.chat-details-processes__stop:hover {
-  background: color-mix(in srgb, var(--danger) 12%, var(--details-surface, var(--card)));
+  &:hover {
+    background: color-mix(in srgb, var(--danger) 12%, var(--details-surface, var(--card)));
+  }
 }
 
 .chat-details-processes__error {
@@ -155,20 +154,30 @@
   align-items: center;
   gap: 8px;
   color: var(--danger);
-}
 
-.chat-details-processes__error > button {
-  flex: none;
-  white-space: nowrap;
-}
-
-.chat-details-processes__error > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-details-processes__spinner {
-    animation: none;
+  > button {
+    flex: none;
+    white-space: nowrap;
   }
+  > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.chat-details-processes__view-all {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
+  cursor: var(--cursor-action);
+}
+
+.chat-details-processes__envelope {
+  min-width: 0;
+}
+.chat-details-processes__motion-content {
+  display: flow-root;
 }

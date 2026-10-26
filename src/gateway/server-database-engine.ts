@@ -15,19 +15,24 @@ export async function installGatewayDatabaseEngine(
   selection?: DatabaseEngineSelection,
 ): Promise<void> {
   assertDatabasePortStartupAllowed(resolveStateDir(process.env));
+  let selected = selection ?? getDatabaseEngineSelection();
   if (selection) {
     installDatabaseEngineSelection(selection);
-    return;
   }
-  if (getDatabaseEngineSelection()) {
-    return;
+  if (!selected) {
+    const source =
+      snapshot ??
+      (await readConfigFileSnapshot({
+        observe: false,
+        isolateEnv: true,
+        pluginValidation: "core-only",
+      }));
+    selected = await resolveDatabaseEngineSelection(source.config);
+    installDatabaseEngineSelection(selected);
   }
-  const selected =
-    snapshot ??
-    (await readConfigFileSnapshot({
-      observe: false,
-      isolateEnv: true,
-      pluginValidation: "core-only",
-    }));
-  installDatabaseEngineSelection(await resolveDatabaseEngineSelection(selected.config));
+  if (Object.values(selected.effectiveEngines).includes("postgres")) {
+    // Overlap service imports with subsequent Gateway config and plugin preparation.
+    const { getPostgresPool } = await import("../infra/postgres-sync/pool.js");
+    getPostgresPool();
+  }
 }

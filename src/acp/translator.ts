@@ -32,10 +32,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
-import {
-  createFixedWindowBudget,
-  type FixedWindowRateLimiter,
-} from "../infra/fixed-window-rate-limit.js";
+import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 import { parseSessionMeta } from "./session-mapper.js";
@@ -114,17 +111,12 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
-type AcpGatewayAgentOptions = AcpServerOptions & {
-  eventLedger: AcpEventLedger;
-  sessionStore?: AcpSessionStore;
-};
-
 export class AcpGatewayAgent implements Agent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
   private readonly sessionStore: AcpSessionStore;
   private readonly sessionState: AcpTranslatorSessionState;
-  private readonly sessionCreateRateLimiter: FixedWindowRateLimiter;
+  private readonly sessionCreateRateLimiter: ReturnType<typeof createFixedWindowBudget>;
   readonly prompt: AcpTranslatorPromptStream["prompt"];
   readonly cancel: AcpTranslatorPromptStream["cancel"];
   private readonly ownedSessionStore: ReturnType<typeof createInMemorySessionStore> | undefined;
@@ -134,7 +126,10 @@ export class AcpGatewayAgent implements Agent {
   constructor(
     connection: AgentSideConnection,
     private readonly gateway: GatewayClient,
-    private readonly opts: AcpGatewayAgentOptions,
+    private readonly opts: AcpServerOptions & {
+      eventLedger: AcpEventLedger;
+      sessionStore?: AcpSessionStore;
+    },
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     // Injected stores remain caller-owned; only the agent-created registry follows shutdown.

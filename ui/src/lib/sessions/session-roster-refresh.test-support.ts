@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionGateway, SessionListScope } from "./session-capability.ts";
@@ -75,8 +76,17 @@ export function rosterFixture(
   return { ...harness, ...ownRoster(harness.gateway) };
 }
 
+export function rosterReadFixture(
+  read: (params: ReturnType<typeof listParams>) => unknown,
+  ownerId?: string,
+) {
+  const request = vi.fn((method: string, params?: unknown) => read(listParams(method, params)));
+  const client = createTestGatewayClient(request);
+  return { request, ...rosterFixture(client.request.bind(client), { ownerId }) };
+}
+
 export function queuedLists(lists: Record<string, PendingList>) {
-  const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+  const request = vi.fn((method: string, params?: ReturnType<typeof listParams>) => {
     expect(method).toBe("sessions.list");
     const pending = params?.agentId ? lists[params.agentId] : undefined;
     if (!pending) {
@@ -84,20 +94,17 @@ export function queuedLists(lists: Record<string, PendingList>) {
     }
     return pending.promise;
   });
-  return { ...rosterFixture(request as unknown as GatewayBrowserClient["request"]), request };
+  const client = createTestGatewayClient((method, params) =>
+    request(method, listParams(method, params)),
+  );
+  return { request, ...rosterFixture(client.request.bind(client)) };
 }
 
 export function listRequest<P = unknown>(
   read: (params?: P) => unknown,
   subscribe: () => unknown = () => ({ subscribed: true }),
 ) {
-  return vi.fn(async (method: string, params?: P) => {
-    if (method === "sessions.subscribe") {
-      return subscribe();
-    }
-    expect(method).toBe("sessions.list");
-    return read(params);
-  });
+  return sessionRequest<P>({ "sessions.subscribe": subscribe, "sessions.list": read });
 }
 
 export function coordinated(request: Parameters<typeof createTestGatewayClient>[0]) {

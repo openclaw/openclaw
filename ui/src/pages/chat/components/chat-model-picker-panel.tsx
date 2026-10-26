@@ -21,11 +21,11 @@ import {
   modelOptionSearchRow,
 } from "./chat-model-picker-options.tsx";
 import {
-  ChatModelSearchContext,
+  createChatModelSearchView,
   handleModelSearchKeydown,
   updateModelSearch,
-  type ChatModelSearchCatalog,
-} from "./chat-model-picker-search.ts";
+} from "./chat-model-picker-search-view.ts";
+import { ChatModelSearchContext, type ChatModelSearchCatalog } from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 
@@ -133,6 +133,13 @@ export function ChatModelPickerPanel(panel: {
     const providerGroups = unlocked ? current.orderedProviderGroups : [];
     const targetGroups = unlocked ? current.targetGroups : [];
     const account = accounts();
+    const modelSearchProps = {
+      disabled: panel.params.disabled,
+      selectedModelValue: panel.params.selectedModelValue,
+      selectedAgentRuntime: panel.params.selectedAgentRuntime,
+      sessionModelPinned: panel.params.sessionModelPinned,
+      onModelSetup: panel.params.onModelSetup,
+    };
     return {
       activeProvider: current.activeProvider,
       providers: providerGroups.map(([provider]) => provider),
@@ -148,14 +155,14 @@ export function ChatModelPickerPanel(panel: {
         ...providerGroups.flatMap(([provider, group]) =>
           group.lead
             .map((entry) =>
-              Object.assign(modelOptionSearchRow({ ...panel.params, entry }), {
+              Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }), {
                 provider,
                 list: provider,
               }),
             )
             .concat(
               group.more.map((entry) =>
-                Object.assign(modelOptionSearchRow({ ...panel.params, entry }), {
+                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }), {
                   provider,
                   more: true,
                   list: `${provider}:more`,
@@ -190,7 +197,8 @@ export function ChatModelPickerPanel(panel: {
       ],
     };
   });
-  const searchView = search?.createView(catalog, (key) => window.reveal(key));
+  const searchView =
+    search && createChatModelSearchView(search, catalog, (key) => window.reveal(key));
   const layout = createMemo<string[]>(() => {
     if (searchView?.filtering()) {
       return [
@@ -635,6 +643,18 @@ export function ChatModelPickerPanel(panel: {
       {panel.params.modelSelectionLocked && panel.params.accountSection ? (
         <div class="chat-controls__model-options">
           <ChatModelAccountSectionView {...accounts()!} startIndex={0} />
+        </div>
+      ) : undefined}
+      {panel.params.accessProgramRecovery ? (
+        <div class="chat-controls__model-catalog-state">
+          <button
+            class="chat-controls__model-catalog-action"
+            type="button"
+            disabled={panel.params.accessProgramRecovery.disabled}
+            onClick={() => panel.params.accessProgramRecovery?.onClear(panel.params.sessionKey)}
+          >
+            {t("chat.modelControls.clearSavedAccess")}
+          </button>
         </div>
       ) : undefined}
       {panel.params.modelCatalogState?.modelSelectionPolicy?.restricted ? (

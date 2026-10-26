@@ -70,10 +70,6 @@ function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
 
-function isLoopbackHttpUrl(url: string): boolean {
-  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
-}
-
 function withLoopbackBrowserAuth(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
@@ -82,7 +78,7 @@ function withLoopbackBrowserAuth(
   if (
     headers.has("authorization") ||
     headers.has("x-openclaw-password") ||
-    !isLoopbackHttpUrl(url)
+    !isLoopbackHost(URL.parse(url)?.hostname ?? "")
   ) {
     return { ...init, headers };
   }
@@ -340,7 +336,7 @@ export async function fetchBrowserJson<T>(
   let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
-      if (scope) {
+      if (scope?.managedOnly) {
         throw new Error("Dashboard browser requests must stay on the local managed browser");
       }
       const httpInit = withLoopbackBrowserAuth(url, init);
@@ -353,7 +349,7 @@ export async function fetchBrowserJson<T>(
     for (const [key, value] of parsed.searchParams.entries()) {
       query[key] = value;
     }
-    if (scope) {
+    if (scope?.managedOnly) {
       query.managedOnly = true;
     }
     let body = init?.body;

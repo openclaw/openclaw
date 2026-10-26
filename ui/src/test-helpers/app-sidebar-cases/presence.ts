@@ -19,6 +19,8 @@ await import("../../components/solid/viewer-facepile.tsx");
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
   await selectSidebarView(mounted.sidebar, "online");
+  await vi.dynamicImportSettled();
+  await mounted.sidebar.updateComplete;
   return mounted;
 }
 

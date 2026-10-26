@@ -23,6 +23,7 @@ import {
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import {
   call,
   configuredCloudContext,
@@ -262,14 +263,7 @@ it.each(["none", "suggest", "restricted"] as const)(
 );
 
 it("attributes a bare source session to the persisted fixed-store owner", async () => {
-  const config = {
-    session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-    agents: {
-      ownership: "explicit",
-      entries: { ops: {}, research: {} },
-      defaults: { sessionStore: { agentId: "ops" } },
-    },
-  };
+  const config = fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite");
   const created = await createSuggestion({ sessionKey: "global" }, config);
 
   expect(created.response?.[0]).toBe(true);

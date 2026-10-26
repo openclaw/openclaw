@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -43,6 +42,15 @@ function timing(elapsedMs: number, queueWaitMs = 0, writerExecutionMs = elapsedM
   };
 }
 
+function writer(env: NodeJS.ProcessEnv, agentId = "main") {
+  return <T>(
+    run: () => Promise<T>,
+    operation: Parameters<typeof runExclusiveSqliteSessionWrite>[2] = "session.transcript.batch",
+    diagnostics?: SqliteSessionWriteDiagnostics,
+    kind?: "foreground-reentrant",
+  ) => runExclusiveSqliteSessionWrite({ agentId, env }, run, operation, diagnostics, kind);
+}
+
 async function withFileLog(run: (env: NodeJS.ProcessEnv) => Promise<void>) {
   return withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
@@ -69,13 +77,7 @@ test.each([undefined, "agent:main:dashboard:incognito-root"])(
   async (sessionKey) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const root = state.path("captured-root");
-      const storePath = path.join(
-        root,
-        "agents",
-        "main",
-        "agent",
-        "incognito-openclaw-agent.sqlite",
-      );
+      const storePath = path.join(root, "agents/main/agent/incognito-openclaw-agent.sqlite");
       const scope = { agentId: "main", storePath, sessionKey, sessionId: "captured-session" };
       const resolved = resolveSqliteReadScope(scope);
       expect(resolved).toMatchObject({
@@ -98,8 +100,7 @@ async function readFailedWriterLog(failure: unknown, diagnostics?: SqliteSession
     : "session.transcript.batch";
   const { content, record } = await withFileLog(async (env) => {
     await expect(
-      runExclusiveSqliteSessionWrite(
-        { agentId: "main", env },
+      writer(env)(
         async () => {
           throw failure;
         },
@@ -144,7 +145,7 @@ test("failed worker file logs preserve redacted error details", async () => {
 });
 
 test("artifact preparation file logs retain numeric phases without payload fields", async () => {
-  const inventory = {
+  const expected = {
     nodeRows: 8,
     windowRows: 12,
     referenceIds: 8,
@@ -152,10 +153,15 @@ test("artifact preparation file logs retain numeric phases without payload field
     markerWindows: 2,
     markerRows: 5,
     completed: false,
+    admissionMode: "async" as const,
+    admissionMs: 1200,
+    nodeInventoryMs: 21,
+    referencePlanningMs: 4,
+    orphanPlanningMs: 5,
+    markerScanMs: 20,
   };
   const artifactPreparation: SqliteSessionArtifactPreparationDiagnostics = {
-    ...inventory,
-    admissionMode: "async",
+    ...expected,
     admissionMs: 1200.4,
     nodeInventoryMs: 20.6,
     referencePlanningMs: 4.2,
@@ -169,27 +175,24 @@ test("artifact preparation file logs retain numeric phases without payload field
   const record = await readFailedWriterLog(new Error("synthetic planning failure"), {
     artifactPreparation,
   });
-  expect(record.details.artifactPreparation).toEqual({
-    admissionMode: "async",
-    admissionMs: 1200,
-    nodeInventoryMs: 21,
-    referencePlanningMs: 4,
-    orphanPlanningMs: 5,
-    markerScanMs: 20,
-    ...inventory,
-  });
+  expect(record.details.artifactPreparation).toEqual(expected);
   expect(record.content).not.toContain("synthetic-private-session");
   expect(record.content).not.toContain("synthetic-private-marker");
 });
 
 test("archive pruning file logs whitelist partial stage observations", async () => {
-  const archivePruning = {
+  const expected = {
     trigger: "initial" as const,
     checkpointCalls: 2,
     checkpointIncomplete: 1,
+    checkpointMs: 21,
+    checkpointMaxMs: 20,
+    completed: false,
+  };
+  const archivePruning = {
+    ...expected,
     checkpointMs: 20.6,
     checkpointMaxMs: 19.6,
-    completed: false,
     archiveName: "synthetic-private-archive",
     content: "synthetic-private-transcript",
   };
@@ -210,14 +213,7 @@ test("archive pruning file logs whitelist partial stage observations", async () 
   expect(details).toHaveProperty("elapsedMs", 1200);
   expect(details).not.toHaveProperty("queueWaitMs");
   expect(details).not.toHaveProperty("writerExecutionMs");
-  expect(details.archivePruning).toEqual({
-    trigger: "initial",
-    checkpointCalls: 2,
-    checkpointIncomplete: 1,
-    checkpointMs: 21,
-    checkpointMaxMs: 20,
-    completed: false,
-  });
+  expect(details.archivePruning).toEqual(expected);
   expect(content).not.toContain("synthetic-private-archive");
   expect(content).not.toContain("synthetic-private-transcript");
 });
@@ -232,10 +228,7 @@ test.each(["ok", "error"] as const)(
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const failure = new Error("synthetic writer failure");
     const message = outcome === "ok" ? "slow SQLite session write" : "SQLite session write failed";
-    const fields = {
-      operation: "session.transcript.batch",
-      ...timing(1_250),
-    };
+    const fields = { operation: "session.transcript.batch", ...timing(1_250) };
     try {
       const { record } = await withFileLog(async (env) => {
         resetDiagnosticEventsForTest();
@@ -244,17 +237,13 @@ test.each(["ok", "error"] as const)(
             received.push(event);
           }
         });
-        const write = runExclusiveSqliteSessionWrite(
-          { agentId: "main", env },
-          async () => {
-            clock = 1_250;
-            if (outcome === "error") {
-              throw failure;
-            }
-            return "written";
-          },
-          "session.transcript.batch",
-        );
+        const write = writer(env)(async () => {
+          clock = 1_250;
+          if (outcome === "error") {
+            throw failure;
+          }
+          return "written";
+        });
         if (outcome === "error") {
           await expect(write).rejects.toBe(failure);
         } else {
@@ -283,10 +272,10 @@ test("captures fast writer failure without error payloads or identities", async 
     const collect = (event: unknown) => events.push(event);
     const result = { payload: "synthetic-private-writer-result" };
     const failure = new Error("synthetic-private-writer-error");
+    const write = writer(state.env, "synthetic-private-agent");
     diagnostics.subscribe(collect);
     try {
-      const write = runExclusiveSqliteSessionWrite(
-        { agentId: "synthetic-private-agent", env: state.env },
+      const pending = write(
         async () => {
           clock += 25;
           throw failure;
@@ -294,7 +283,7 @@ test("captures fast writer failure without error payloads or identities", async 
         "session.transcript.batch",
         { reclamationAdmission: { admissionId: 98123, releaseCause: "worker-release" } },
       );
-      await expect(write).rejects.toBe(failure);
+      await expect(pending).rejects.toBe(failure);
       expect(events).toEqual([
         {
           operation: "session.transcript.batch",
@@ -308,13 +297,7 @@ test("captures fast writer failure without error payloads or identities", async 
     } finally {
       diagnostics.unsubscribe(collect);
     }
-    await expect(
-      runExclusiveSqliteSessionWrite(
-        { agentId: "synthetic-private-agent", env: state.env },
-        async () => result,
-        "session.transcript.batch",
-      ),
-    ).resolves.toBe(result);
+    await expect(write(async () => result)).resolves.toBe(result);
     expect(events).toHaveLength(1);
   });
 });
@@ -325,47 +308,39 @@ test("slow writer failure separates waiting and execution", async () => {
     const wallStart = Date.now();
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(Date, "now").mockImplementation(() => wallStart + clock);
-    const owners = new AsyncLocalStorage<string>();
-    const records: Array<{ owner: string | undefined; args: unknown[] }> = [];
-    const fieldsFor = (owner: string) => records.find((entry) => entry.owner === owner)?.args[0];
+    const records: unknown[][] = [];
+    const fieldsFor = (operation: string) =>
+      records.find(([fields]) => isRecord(fields) && fields.operation === operation)?.[0];
     const getChildLogger = logging.getChildLogger;
     vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
       const logger = getChildLogger(...args);
       vi.spyOn(logger, "warn").mockImplementation((...values) => {
-        records.push({ owner: owners.getStore(), args: values });
+        records.push(values);
         return undefined;
       });
       return logger;
     });
-    const scope = { agentId: "main", env: state.env };
-    const write = <T>(
-      fn: () => Promise<T>,
-      operation: Parameters<typeof runExclusiveSqliteSessionWrite>[2],
-      diagnostics?: SqliteSessionWriteDiagnostics,
-      writer?: "foreground-reentrant",
-    ) => runExclusiveSqliteSessionWrite(scope, fn, operation, diagnostics, writer);
+    const write = writer(state.env);
     const release = createDeferredCore();
     const entered = createDeferredCore();
     const releaseSecond = createDeferredCore();
     const order: string[] = [];
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
-    const first = owners.run("first", () =>
-      write(
-        async () => {
-          order.push("first:start");
-          entered.resolve();
-          await release.promise;
-          Object.assign(diagnostics, {
-            kind: "history-eviction",
-            workerThreadId: 7,
-            payload: "must not enter diagnostics",
-          });
-          order.push("first:end");
-          return "first";
-        },
-        "session.history.archive-prune",
-        diagnostics,
-      ),
+    const first = write(
+      async () => {
+        order.push("first:start");
+        entered.resolve();
+        await release.promise;
+        Object.assign(diagnostics, {
+          kind: "history-eviction",
+          workerThreadId: 7,
+          payload: "must not enter diagnostics",
+        });
+        order.push("first:end");
+        return "first";
+      },
+      "session.history.archive-prune",
+      diagnostics,
     );
     let second: Promise<never> | undefined;
     let queuedSuccessor: Promise<string> | undefined;
@@ -374,24 +349,20 @@ test("slow writer failure separates waiting and execution", async () => {
       expect(order).toEqual(["first:start"]);
       clock = 100;
       const failure = new Error("synthetic writer failure");
-      second = owners.run("second", () =>
-        write(async () => {
-          order.push("second:start");
-          await releaseSecond.promise;
-          clock += 400;
-          throw failure;
-        }, "session.maintenance.plan"),
-      );
+      second = write(async () => {
+        order.push("second:start");
+        await releaseSecond.promise;
+        clock += 400;
+        throw failure;
+      }, "session.maintenance.plan");
       const settled = second.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      queuedSuccessor = owners.run("queued-successor", () =>
-        write(async () => {
-          order.push("queued-successor");
-          return "queued-successor";
-        }, "session.pending-input.stage"),
-      );
+      queuedSuccessor = write(async () => {
+        order.push("queued-successor");
+        return "queued-successor";
+      }, "session.pending-input.stage");
       expect(order).toEqual(["first:start"]);
       clock = 1_600;
       release.resolve();
@@ -400,18 +371,18 @@ test("slow writer failure separates waiting and execution", async () => {
       expect(await settled).toEqual({ error: failure });
       expect(await queuedSuccessor).toBe("queued-successor");
       expect(order).toEqual(["first:start", "first:end", "second:start", "queued-successor"]);
-      expect(fieldsFor("queued-successor")).toHaveProperty(
+      expect(fieldsFor("session.pending-input.stage")).toHaveProperty(
         "operation",
         "session.pending-input.stage",
       );
-      expect(fieldsFor("first")).toMatchObject({
+      expect(fieldsFor("session.history.archive-prune")).toMatchObject({
         ...timing(1_600),
         operation: "session.history.archive-prune",
         reclamationKind: "history-eviction",
         workerThreadId: 7,
       });
-      expect(fieldsFor("first")).not.toHaveProperty("payload");
-      const record = fieldsFor("second");
+      expect(fieldsFor("session.history.archive-prune")).not.toHaveProperty("payload");
+      const record = fieldsFor("session.maintenance.plan");
       expect(record).toMatchObject({
         ...timing(1_900, 1_500, 400),
         operation: "session.maintenance.plan",
@@ -436,11 +407,11 @@ test("slow writer failure separates waiting and execution", async () => {
           ),
         "session-entry.patch",
       );
-      expect(records.slice(warningCount).map((entry) => entry.args[0])).toEqual([
+      expect(records.slice(warningCount).map(([fields]) => fields)).toEqual([
         expect.objectContaining({ operation: "session.pending-input.stage", reentrant: true }),
         expect.objectContaining({ operation: "session-entry.patch", reentrant: false }),
       ]);
-      expect(records.some((entry) => entry.args[1] === "slow agent database reservation")).toBe(
+      expect(records.some(([, message]) => message === "slow agent database reservation")).toBe(
         false,
       );
     } finally {

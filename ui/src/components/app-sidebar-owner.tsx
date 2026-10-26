@@ -11,15 +11,14 @@ import {
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
-import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/sidebar-reorder.css";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import "../styles/sidebar-pinned-agents.css";
 import "../styles/sidebar-agent-roster.css";
-import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
@@ -38,9 +37,10 @@ import {
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
-import type { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { SidebarScrollContext, type createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
+import { sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import { createSidebarRendererLoader } from "./sidebar-renderer-loader.tsx";
 import {
@@ -63,6 +63,10 @@ const SidebarPinnedSession = lazy(() => import("./sidebar-agent-roster.tsx"), {
 });
 const SidebarPages = lazy(() => import("./app-sidebar-pages.tsx"), {
   export: "SidebarPages",
+});
+
+const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
+  export: "AppSidebarOnline",
 });
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
@@ -490,7 +494,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         </SidebarViewBoundary>
       );
       const toolbar = renderSessionListToolbar(this);
-      const Online = () => renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);
       const statusVisible = () =>
         this.gatewayStatus?.kind &&
@@ -526,10 +529,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         <>
                           {toolbar}
                           <div
+                            ref={scroll.createContentRef()}
                             class="sidebar-session-content"
                             hidden={Boolean(this.contextualSidebar)}
                           >
-                            <Sessions />
+                            <SidebarScrollContext value={scroll}>
+                              <Sessions />
+                            </SidebarScrollContext>
                           </div>
                           {this.contextualSidebar?.render(
                             this.contextualSidebar.data,
@@ -539,7 +545,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         </>
                       }
                     >
-                      <Online />
+                      <SidebarViewBoundary>
+                        <SidebarOnline host={this} />
+                      </SidebarViewBoundary>
                     </Show>
                   }
                 >

@@ -25,6 +25,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const readText = async (locator: Locator) =>
   expectDefined(await locator.textContent(), "UI text").trim();
 
@@ -295,10 +296,12 @@ suite.define(() => {
                 connect: connects[0],
                 presence: [...presence],
               };
-              await row.screenshot({
-                path: path.join(suite.artifactDir, `${item.name}-before-reload.png`),
-                animations: "disabled",
-              });
+              if (captureUiProof) {
+                await row.screenshot({
+                  path: path.join(suite.artifactDir, `${item.name}-before-reload.png`),
+                  animations: "disabled",
+                });
+              }
               const script = expectDefined(
                 await page.locator('script[type="module"][src]').first().getAttribute("src"),
                 "production UI module",
@@ -318,10 +321,12 @@ suite.define(() => {
               const afterList = await listDevicePairing();
               const after = afterList.paired.find((entry) => entry.deviceId === deviceId);
               const meta = await readText(row.locator(".device-entry__body > .settings-row__desc"));
-              await row.screenshot({
-                path: path.join(suite.artifactDir, `${item.name}-after-reload.png`),
-                animations: "disabled",
-              });
+              if (captureUiProof) {
+                await row.screenshot({
+                  path: path.join(suite.artifactDir, `${item.name}-after-reload.png`),
+                  animations: "disabled",
+                });
+              }
               expect(identityFacts(after)).toEqual(identityFacts(paired));
               expect(afterList.pending).toEqual([]);
               expect(after?.platform).toBe("MacIntel");
@@ -450,20 +455,16 @@ suite.define(() => {
                 );
                 await rejectDevicePairing(request.requestId);
               }
+              expect(meta.split(" · ")[0], item.name).toBe(item.label);
+              expect(
+                connects.every((frame) => frame.client.deviceFamily === item.family),
+                item.name,
+              ).toBe(true);
+              if (!item.legacy) {
+                expect(after?.deviceFamily, item.name).toBe(item.family);
+              }
             },
           );
-        }
-        expect(
-          observations.map((row) => ({ name: row.name, label: row.meta.split(" · ")[0] })),
-        ).toEqual(cases.map((row) => ({ name: row.name, label: row.label })));
-        for (const row of observations) {
-          const frames = row.connects;
-          expect(frames.every((frame) => frame.client.deviceFamily === row.expectedFamily)).toBe(
-            true,
-          );
-          if (!row.legacy) {
-            expect(row.after?.deviceFamily).toBe(row.expectedFamily);
-          }
         }
       },
       close: async () => {

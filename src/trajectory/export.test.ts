@@ -25,6 +25,7 @@ import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./exp
 import {
   assistantMessage,
   assistantText,
+  createLargeTrajectoryUsage,
   messageEntry,
   sessionHeader,
   writeEntries,
@@ -337,13 +338,7 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("exports usage from truncated model completion runtime events", async () => {
-    const usage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
+    const usage = createLargeTrajectoryUsage();
     const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
     const artifacts = await exportRuntimeArtifacts([
       createRuntimeEvent("model.completed", {

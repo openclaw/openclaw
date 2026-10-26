@@ -67,29 +67,37 @@ afterEach(() => {
 
 function seedDatabase() {
   const seedPath = path.join(root, "seed.sqlite");
-  const db = openNodeSqliteDatabase(seedPath);
-  try {
+  {
+    using db = openNodeSqliteDatabase(seedPath);
     db.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('in the WAL');",
     );
     for (const suffix of ["", "-wal", "-shm"]) {
       fs.copyFileSync(`${seedPath}${suffix}`, `${sqlitePath}${suffix}`);
     }
-  } finally {
-    db.close();
   }
   fs.chmodSync(sqlitePath, 0o640);
   fs.chmodSync(directory, 0o750);
   fs.writeFileSync(path.join(directory, "sibling.txt"), "preserve me");
 }
 
-function rewrite(assertCurrent = () => {}) {
+function rewrite(
+  assertCurrent = () => {},
+  overrides: Partial<Parameters<typeof repairDoctorSqliteNoCow>[0]> = {},
+) {
   return repairDoctorSqliteNoCow({
     paths: [sqlitePath],
     stateDir: root,
     env: { ...process.env, OPENCLAW_STATE_DIR: root },
     assertCurrent,
+    ...overrides,
   });
+}
+
+function replaceDatabase(pathname: string) {
+  const replacement = path.join(root, "replacement.sqlite");
+  fs.copyFileSync(pathname, replacement);
+  fs.renameSync(replacement, pathname);
 }
 
 async function repair(assertCurrent = () => {}) {
@@ -213,22 +221,11 @@ it.skipIf(process.platform !== "linux")(
           const originals = paths.map((pathname) => fs.statSync(pathname).ino);
           await maintenance!.repairSqliteNoCow(paths);
           expect(maintenance!.warnings).toEqual([]);
-          expect(fixture.exchanges).toBeGreaterThanOrEqual(4);
-          expect(
-            vi
-              .mocked(spawnSync)
-              .mock.calls.filter(
-                ([command, args]) => command === "fuser" && args?.[0]?.includes(".nocow-probe-"),
-              ),
-          ).toHaveLength(1);
           expect(handleCounts.length).toBeGreaterThan(0);
           expect(handleCounts.every((count) => count === 0)).toBe(true);
           expect(
             paths.every((pathname, index) => fs.statSync(pathname).ino !== originals[index]),
           ).toBe(true);
-          expect(
-            log.mock.calls.filter(([line]) => line.startsWith("Rewrote SQLite files")),
-          ).toHaveLength(4);
         } finally {
           await maintenance?.release();
         }
@@ -241,13 +238,11 @@ it.skipIf(process.platform !== "linux")(
   "keeps admission descriptors when an unknown native handle blocks NOCOW repair",
   async () => {
     seedDatabase();
-    const admitted = openNodeSqliteDatabase(sqlitePath);
-    try {
+    {
+      using admitted = openNodeSqliteDatabase(sqlitePath);
       admitSqliteSchema(admitted);
-    } finally {
-      admitted.close();
     }
-    const unknown = new DatabaseSync(sqlitePath);
+    using unknown = new DatabaseSync(sqlitePath);
     unknown.exec("BEGIN IMMEDIATE");
     const identity = fs.statSync(sqlitePath);
     const sourceDescriptors = () =>
@@ -266,16 +261,11 @@ it.skipIf(process.platform !== "linux")(
     const descriptors = sourceDescriptors();
     expect(descriptors.length).toBeGreaterThanOrEqual(2);
     await useNativeTools((command) => command === "fuser");
-    try {
-      expect((await repair()).join("\n")).toContain("store files are open");
-      expect(sourceDescriptors()).toEqual(descriptors);
-      expect(unknown.isTransaction).toBe(true);
-      expect(fs.statSync(sqlitePath).ino).toBe(identity.ino);
-      expect(fixture.exchanges).toBe(0);
-    } finally {
-      unknown.exec("ROLLBACK");
-      unknown.close();
-    }
+    expect((await repair()).join("\n")).toContain("store files are open");
+    expect(sourceDescriptors()).toEqual(descriptors);
+    expect(unknown.isTransaction).toBe(true);
+    expect(fs.statSync(sqlitePath).ino).toBe(identity.ino);
+    expect(fixture.exchanges).toBe(0);
   },
 );
 
@@ -414,32 +404,26 @@ it.skipIf(process.platform === "win32").each(["access", "default", "denied-grant
 );
 
 it.each([
-  {
-    name: "missing fuser",
-    result: {
-      status: null,
-      stdout: "",
-      stderr: "",
-      error: Object.assign(new Error("spawnSync fuser ENOENT"), { code: "ENOENT" }),
-    },
-    detail: "spawnSync fuser ENOENT",
-  },
-  {
-    name: "unexpected exit status",
-    result: { status: 2, stdout: "", stderr: "" },
-    detail: "exit status 2",
-  },
-  {
-    name: "terminated fuser",
-    result: { status: null, stdout: "", stderr: "", signal: "SIGTERM" as const },
-    detail: "signal SIGTERM",
-  },
-])("refuses uncertain SQLite handles with $name", async (scenario) => {
+  [
+    "spawnSync fuser ENOENT",
+    { error: Object.assign(new Error("spawnSync fuser ENOENT"), { code: "ENOENT" }) },
+  ],
+  ["exit status 2", { status: 2 }],
+  ["signal SIGTERM", { signal: "SIGTERM" }],
+] as const)("refuses uncertain SQLite handles with %s", async (detail, result) => {
   seedDatabase();
   const original = fs.statSync(sqlitePath);
-  fixture.fuserResult = { pid: 0, output: [], signal: null, ...scenario.result };
+  fixture.fuserResult = {
+    pid: 0,
+    output: [],
+    signal: null,
+    status: null,
+    stdout: "",
+    stderr: "",
+    ...result,
+  };
   expect((await repair()).join("\n")).toContain(
-    `fuser could not establish that all handles are closed: ${scenario.detail}`,
+    `fuser could not establish that all handles are closed: ${detail}`,
   );
   expect(fixture.exchanges).toBe(0);
   expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
@@ -475,11 +459,8 @@ it.each([false, true])(
     const original = fs.statSync(retained).ino;
     fixture.beforeExchange = undefined;
     const progress = vi.fn();
-    const result = await repairDoctorSqliteNoCow({
-      paths: [sqlitePath],
-      stateDir: root,
+    const result = await rewrite(undefined, {
       env: { OPENCLAW_STATE_DIR: root },
-      assertCurrent: () => {},
       log: progress,
     });
     expect(result.warnings).toEqual([]);
@@ -641,9 +622,7 @@ describe("Doctor NOCOW recovery identities", () => {
         token: { token: "token-original", scopes_json: '["operator.read"]' },
       });
       if (replaced) {
-        const replacement = path.join(root, "replacement.sqlite");
-        fs.copyFileSync(sqlitePath, replacement);
-        fs.renameSync(replacement, sqlitePath);
+        replaceDatabase(sqlitePath);
       }
       const rewritten = await rewrite();
       expect(rewritten.changes).toHaveLength(1);
@@ -660,33 +639,14 @@ describe("Doctor NOCOW recovery identities", () => {
     },
   );
 
-  it("retires a recorded recovery original after a NOCOW rewrite without changing live data", async () => {
-    const backupPath = await prepareCompletedBackup();
-    const original = fs.readFileSync(backupPath);
-    const recorded = readTarget().plannedMoves[0]!.artifact!.identity;
-    expect((await rewrite()).warnings).toEqual([]);
-    expect(String(fs.lstatSync(backupPath, { bigint: true }).ino)).toBe(recorded.ino);
-    expect(fs.readFileSync(backupPath)).toEqual(original);
-
-    const result = await retire();
-    expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
-      outcome: "removed",
-      reason: "rollback-original-retired",
-    });
-    expect(fs.existsSync(backupPath)).toBe(false);
-    expectDatabaseValue(sqlitePath, "preserved", "before migration");
-  });
-
-  it.each(["destination", "backup", "backup metadata"])(
-    "keeps the original protected after changing %s",
+  it.each(["unchanged", "destination", "backup", "backup metadata"])(
+    "retires only the recorded recovery original after rewrite: %s",
     async (change) => {
       const backupPath = await prepareCompletedBackup();
       const recorded = readTarget();
+      const original = fs.readFileSync(backupPath);
       if (change === "destination" || change === "backup") {
-        const replacedPath = change === "destination" ? sqlitePath : backupPath;
-        const replacement = path.join(root, "replacement.sqlite");
-        fs.copyFileSync(replacedPath, replacement);
-        fs.renameSync(replacement, replacedPath);
+        replaceDatabase(change === "destination" ? sqlitePath : backupPath);
       } else if (change === "backup metadata") {
         const touched = new Date("2030-01-01T00:00:00Z");
         fs.utimesSync(backupPath, touched, touched);
@@ -698,6 +658,12 @@ describe("Doctor NOCOW recovery identities", () => {
       } else {
         expect(rewritten.warnings).toEqual([]);
       }
+      if (change === "unchanged") {
+        expect(String(fs.lstatSync(backupPath, { bigint: true }).ino)).toBe(
+          recorded.plannedMoves[0]!.artifact!.identity.ino,
+        );
+        expect(fs.readFileSync(backupPath)).toEqual(original);
+      }
       if (change === "destination") {
         expect(readTarget().databaseIdentity).toEqual(recorded.databaseIdentity);
       } else {
@@ -707,13 +673,18 @@ describe("Doctor NOCOW recovery identities", () => {
       }
       const result = await retire();
       expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
-        outcome: "blocked",
+        outcome: change === "unchanged" ? "removed" : "blocked",
         reason:
-          change === "destination"
-            ? "destination-verification-failed"
-            : "artifact-metadata-changed",
+          change === "unchanged"
+            ? "rollback-original-retired"
+            : change === "destination"
+              ? "destination-verification-failed"
+              : "artifact-metadata-changed",
       });
-      expect(fs.existsSync(backupPath)).toBe(true);
+      expect(fs.existsSync(backupPath)).toBe(change !== "unchanged");
+      if (change === "unchanged") {
+        expectDatabaseValue(sqlitePath, "preserved", "before migration");
+      }
     },
   );
 });

@@ -10,6 +10,7 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
+import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
@@ -19,7 +20,6 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
-  isDashboardSessionKey,
   isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -348,6 +348,24 @@ export async function loadChatRoute(
       await waitForGatewayClient(context.gateway, signal);
     }
     const sessionKey = mainSessionKey(context, target);
+    const homeSnapshot = context.gateway.snapshot;
+    if (homeSnapshot.hello?.auth?.sessionCap === "none") {
+      const available = await resolveHomeSession(homeSnapshot, {
+        sessionKey,
+        agentId: target.agentId,
+        mainKey: configuredMainKey(context),
+      });
+      signal.throwIfAborted();
+      if (
+        context.gateway.snapshot.client !== homeSnapshot.client ||
+        context.gateway.snapshot.hello !== homeSnapshot.hello
+      ) {
+        throw new Error("The Gateway connection changed while resolving Home.");
+      }
+      if (!available) {
+        return { kind: "unavailable-home", agentId: target.agentId, face };
+      }
+    }
     if (preferenceDerived) {
       const resolution = await resolveReference(sessionKey);
       if (resolution?.kind === "unique") {
@@ -373,10 +391,6 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
-    const deferSnapshotRows =
-      face === "chat" &&
-      isDashboardSessionKey(target.sessionKey) &&
-      Boolean(sessionKeyUuid(target.sessionKey));
     let defaultsKnown =
       defaultsUsable ||
       context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
@@ -446,7 +460,6 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
-      ...(deferSnapshotRows ? { deferSnapshotRows: true as const } : {}),
       ...sessionRouteHints(routeLocation),
       face,
       ...(canonicalLocation
@@ -640,16 +653,18 @@ export async function verifyChatSessionRoute(
 ): Promise<void> {
   // SAFETY: Only chat/dashboard matches loaded here reach this owner.
   const data = target.data as ChatRouteData | undefined;
-  if (
-    !current() ||
-    data?.kind !== "session" ||
-    (!verifySession && !data.sessionResolutionFromCache)
-  ) {
+  if (!current() || data?.kind !== "session") {
     return;
   }
   const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
-  // Home and explicit literal creation routes need not exist in storage.
+  // Warm Home can render before hello reveals that its access needs confirmation.
+  if (reference?.kind === "main" && context.gateway.snapshot.hello?.auth?.sessionCap === "none") {
+    await revalidate();
+    return;
+  }
+  // Other Home and explicit literal creation routes need not exist in storage.
   if (
+    (!verifySession && !data.sessionResolutionFromCache) ||
     !reference ||
     !(reference.kind === "short" || (reference.kind === "literal" && reference.slugCandidate))
   ) {
