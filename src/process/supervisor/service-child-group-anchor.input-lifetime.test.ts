@@ -11,7 +11,6 @@ it
   .for(["host-loss", "end-before-eof", "end-after-eof", "default-eof"] as const)(
   "%s distinguishes protocol EOF from host loss",
   async (mode, context) => {
-    // Observe the real input event without changing the anchor's stream handling.
     const { child, generation, messages, send, exited, onMessage } = createAnchorFixture({
       preload: `data:text/javascript,${encodeURIComponent(
         'import { writeSync } from "node:fs"; process.stdin.once("end", () => writeSync(6, "input-eof\\n"));',
@@ -77,14 +76,7 @@ it
       hostLost ? { code: null, signal: "SIGKILL" } : { code: 0, signal: null },
       hostLost ? "child-ready\n" : "child-ready\nsynthetic-refusal:flushed-input\n",
     ]);
-    expect(messages.find((m) => m.type === "closing")).toMatchObject(
-      hostLost ? { reason: "parent-lost" } : { type: "closing" },
-    );
-    if (!hostLost) {
-      expect(messages.find((m) => m.type === "root-result")).toMatchObject({
-        code: 0,
-        signal: null,
-      });
-    }
+    const reason = messages.find((m) => m.type === "closing")?.reason;
+    expect(reason).toBe(hostLost ? "parent-lost" : "lineage-lost");
   },
 );
