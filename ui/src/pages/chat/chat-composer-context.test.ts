@@ -196,7 +196,7 @@ describe("renderChatComposer context usage", () => {
   it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
     const windows: [string, number, number?][] = [
-      ["5h", 22, resetAt],
+      ["5h", 21.6, resetAt],
       ["Week", 25],
       ["Fable", 92],
     ];
@@ -247,6 +247,54 @@ describe("renderChatComposer context usage", () => {
     expect(limits[3]?.querySelector(".context-usage__limit-reset")).toBeNull();
     expect(part(container, "stats")).not.toBeNull();
     expect(part(container, "stats")?.textContent).not.toContain("Cost");
+  });
+
+  it("keeps distinct subscription accounts separate when selecting a provider", () => {
+    const providers = ["anthropic", "claude-cli"].map((id, index) =>
+      planProvider(id, "Claude", [["5h", 10]], {
+        usage: {
+          providerId: "anthropic",
+          accountEmail: ["work@example.com", "personal@example.com"][index],
+        },
+      }),
+    );
+    for (const [index, modelProvider] of ["anthropic", "claude-cli"].entries()) {
+      const container = renderComposer({
+        session: { modelProvider },
+        providerUsage: planUsage(providers),
+      });
+      expect(textContents(container, ".context-usage__account")).toEqual([
+        ["work@example.com", "personal@example.com"][index],
+      ]);
+      expect(textContents(container, ".context-usage__limit-value")).toEqual(["10%"]);
+    }
+  });
+
+  it("omits empty or invalid subscription quotas and clamps displayed window usage", () => {
+    const providers = [
+      planProvider("anthropic", "Claude", []),
+      planProvider("openrouter", "Claude", [], {
+        usage: {
+          billing: [
+            { type: "balance", amount: 10, unit: "USD" },
+            { type: "budget", used: 5, limit: 0, unit: "USD" },
+          ],
+        },
+      }),
+      planProvider("openai", "Claude", [["Week", 140]]),
+    ];
+    for (const modelProvider of ["anthropic", "openrouter", "openai"]) {
+      const container = renderComposer({
+        session: { modelProvider },
+        providerUsage: planUsage(providers),
+      });
+      expect(textContents(container, ".context-usage__limit-value")).toEqual(
+        modelProvider === "openai" ? ["100%"] : [],
+      );
+      expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(
+        modelProvider === "openai" ? 1 : 0,
+      );
+    }
   });
 
   it("uses response provenance only when the session provider is absent", () => {

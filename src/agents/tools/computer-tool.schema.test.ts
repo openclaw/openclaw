@@ -653,6 +653,12 @@ describe("createComputerTool schema", () => {
     );
     expect(tool.description).toContain("The Gateway has no computer provider configured");
     expect(tool.description).toMatch(/omit target/iu);
+    expect(tool.description).toContain("omit target or use target: node");
+    expect(tool.description).not.toContain("the Gateway desktop");
+
+    const configured = toolDescription(["screenshot"]);
+    expect(configured).toContain("the Gateway desktop");
+    expect(configured).toContain("Omit target to use");
 
     // Omitting the selector still resolves the sole paired desktop end to end.
     const screenshot = await tool.execute("paired", { action: "screenshot" });
@@ -891,5 +897,78 @@ describe("computer screenshot context binding", () => {
   ])("%s", (_name, contextEpoch, messages, imagesBlocked, expected) => {
     expect(invalidateComputerFrameIfMissing({ contextEpoch, messages, imagesBlocked })).toBe(true);
     expect(contextEpoch).toEqual(expected);
+  });
+});
+
+function toolDescription(...args: Parameters<typeof v2Descriptor>): string {
+  const capabilities = v2Descriptor(...args);
+  return createComputerTool({
+    pairedNodeComputerUse: {
+      actions: capabilities.actions,
+      guidanceCapabilities: capabilities,
+    },
+  }).description;
+}
+
+describe("computer tool guidance", () => {
+  it("stays provider-neutral and free of host setup instructions", () => {
+    const description = toolDescription([
+      "screenshot",
+      "left_click",
+      "list_windows",
+      "get_accessibility_tree",
+      "get_window_state",
+      "set_value",
+    ]);
+
+    expect(description).toContain("`list_windows`");
+    expect(description).toContain("`query`");
+    expect(description).not.toMatch(
+      /cua|peekaboo|\b(?:cli|mcp|daemon|socket|install(?:ation|ing)?)\b|verify_state|start_session|end_session|element_token|snapshot_id|window_id|delivery_mode/iu,
+    );
+    expect(description.length).toBeLessThan(2_400);
+  });
+
+  it("includes only the selected node's advertised capability families", () => {
+    const desktopOnly = toolDescription(["screenshot", "left_click"], {
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+    });
+    expect(desktopOnly).toContain("desktop coordinates");
+    expect(desktopOnly).not.toMatch(
+      /get_window_state|accessibility|elementRef|window pixels|deliveryMode:"background"|background_unavailable|without another observation call/,
+    );
+
+    const windowBackground = toolDescription(
+      ["left_click", "list_windows", "get_window_state", "set_value"],
+      {
+        targets: ["window", "element"],
+        deliveryModes: ["background"],
+      },
+    );
+    expect(windowBackground).toContain('deliveryMode:"background"');
+    expect(windowBackground).not.toMatch(/desktop coordinates|foreground|frameId/);
+
+    const discoveryOnly = toolDescription(["get_accessibility_tree"]);
+    expect(discoveryOnly).not.toMatch(/get_window_state|list_windows|unfiltered/);
+
+    const imageOnly = toolDescription(
+      ["list_windows", "get_accessibility_tree", "get_window_state"],
+      {
+        observations: ["image"],
+      },
+    );
+    expect(imageOnly).toContain("advertised image data");
+    expect(imageOnly).not.toMatch(/window subtree|`query`|`depth`|`maxElements`/);
+  });
+
+  it("distinguishes key taps from advertised held-key support", () => {
+    const taps = toolDescription(["screenshot", "key"]);
+    expect(taps).toContain("key taps only");
+    expect(taps).not.toContain("`hold_key`");
+    const holds = toolDescription(["screenshot", "key", "hold_key"]);
+    expect(holds).toContain("`hold_key`");
+    expect(holds).not.toContain("key taps only");
   });
 });
