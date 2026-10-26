@@ -220,7 +220,7 @@ it("transfers the detached async prefix directly to persistence preparation", as
   const lookup = call("lookup");
   const source = assistant([lookup], "stop", "response-lookup");
   const clone = globalThis.structuredClone;
-  const detached: AssistantMessage[] = [];
+  const detached: unknown[] = [];
   const cloneSpy = vi.spyOn(globalThis, "structuredClone").mockImplementation((value) => {
     const result = clone(value);
     detached.push(result);
