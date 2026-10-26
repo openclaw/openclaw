@@ -140,4 +140,12 @@ it.each([
   expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
     service: expect.objectContaining({ runtimeIntent }),
   });
+  if (runtimeIntent.status === "known") {
+    expect(mocks.pin).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "node" }),
+      expect.objectContaining({ programArguments }),
+    );
+  } else {
+    expect(mocks.pin).not.toHaveBeenCalled();
+  }
 });

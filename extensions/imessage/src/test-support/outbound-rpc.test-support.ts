@@ -123,6 +123,14 @@ const rejectText = (pattern: RegExp) => (requests: RpcRequest[]) => {
   }
 };
 export const expectNoRoleMarkers = rejectText(/^[ \t]*(?:user|system|assistant):[ \t]*$/im);
-export const expectScrubbedRequests = rejectText(
-  /#\+#\+#|HIDDEN_(?:RPC|FUNCTION|RUNTIME)_|[\ue000-\uf8ff]|system-reminder|previous_response|INTERNAL_CONTEXT|<(?:thinking|relevant[-_]memories)\b|assistant\s+to\s*=\s*\w+/i,
-);
+export function expectScrubbedRequests(requests: RpcRequest[]) {
+  rejectText(
+    /#\+#\+#|HIDDEN_(?:RPC|FUNCTION|RUNTIME)_|[\ue000-\uf8ff]|system-reminder|previous_response|INTERNAL_CONTEXT|<(?:thinking|relevant[-_]memories)\b|assistant\s+to\s*=\s*\w+/i,
+  )(requests);
+  for (const { params } of requests) {
+    for (const range of params.formatting ?? []) {
+      expect(range.start).toBeGreaterThanOrEqual(0);
+      expect(range.start + range.length).toBeLessThanOrEqual(params.text.length);
+    }
+  }
+}

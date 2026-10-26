@@ -92,7 +92,10 @@ it("lazily registers warm-image commands through the plugin CLI", async () => {
   const program = new Command().exitOverride();
   await registrars[0]!({ program, parentPath: [], config: {}, logger: console });
   const crabbox = program.commands.find((command) => command.name() === "crabbox");
-  expect(crabbox?.commands.map((command) => command.name())).toContain("warm-images");
+  const warmImages = crabbox?.commands.find((command) => command.name() === "warm-images");
+  expect(warmImages?.options.map((option) => option.flags)).toEqual(
+    expect.arrayContaining(["--json", "--recover <selector>", "--acknowledge-provider-cleanup"]),
+  );
 });
 
 it.each([
