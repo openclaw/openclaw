@@ -430,7 +430,6 @@ it("shares immutable committed entry publications with replica readers", ({ fixt
     });
     const prepared = published.at(-1)?.fullEntry;
     assert(prepared, "Expected a committed full-entry publication");
-    expect(Object.isFrozen(prepared.skillsSnapshot)).toBe(true);
     const retained = readSessionActorEntryFacts(target)?.entry;
     expect(retained).toBe(prepared);
     expectFrozen(retained!.skillsSnapshot!, "prompt", "Listener mutation");

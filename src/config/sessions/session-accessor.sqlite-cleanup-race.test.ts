@@ -481,7 +481,6 @@ describe("generation cleanup races", () => {
       let plannedId: string | undefined;
       let injected = false;
       let mutation: { sessionId: string; rowsChanged: number } | undefined;
-      let mutationError: unknown;
       hooks.observe = (ids) => {
         [plannedId] = ids;
       };
@@ -499,33 +498,27 @@ describe("generation cleanup races", () => {
                 ? historicalIds.find((id) => id !== plannedId)!
                 : plannedId;
         // Extraction has finished; the final transactional generation check has not run.
-        try {
-          mutation = write((database) => {
-            const rowsChanged =
-              changed === "new history"
-                ? Number(
-                    appendTranscriptEventInTransaction(
-                      database,
-                      { ...databaseOptions, sessionKey, sessionId },
-                      event(sessionId),
-                    ) !== false,
-                  )
-                : Number(
-                    database.db
-                      .prepare(
-                        "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = 'answer'",
-                      )
-                      .run(sessionId).changes,
-                  );
-            return { sessionId, rowsChanged };
-          });
-        } catch (error) {
-          // Keep injection failure separate from the lifecycle result asserted below.
-          mutationError = error;
-        }
+        mutation = write((database) => {
+          const rowsChanged =
+            changed === "new history"
+              ? Number(
+                  appendTranscriptEventInTransaction(
+                    database,
+                    { ...databaseOptions, sessionKey, sessionId },
+                    event(sessionId),
+                  ) !== false,
+                )
+              : Number(
+                  database.db
+                    .prepare(
+                      "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = 'answer'",
+                    )
+                    .run(sessionId).changes,
+                );
+          return { sessionId, rowsChanged };
+        });
       };
       const result = await remove(false);
-      expect(mutationError).toBeUndefined();
       expect(mutation, JSON.stringify({ plannedId, injected, result })).toMatchObject({
         rowsChanged: 1,
       });
