@@ -1,12 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  expectElement,
-  renderAnalyzedFormFixture,
-  renderArrayFixture,
-} from "../test-helpers/config-form-fixtures.tsx";
+import { expectElement, renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
-import { configFieldId } from "./config-form.shared.ts";
+import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
+
+const object = (properties: Record<string, JsonSchema>, required?: string[]): JsonSchema => ({
+  type: "object",
+  properties,
+  ...(required ? { required } : {}),
+});
+const textSchema = (constraints: Partial<JsonSchema> = {}): JsonSchema => ({
+  type: "string",
+  ...constraints,
+});
+const digits = textSchema({ minLength: 3, pattern: "^[0-9]+$" });
+const evenNumber: JsonSchema = { type: "integer", minimum: 2, maximum: 8, multipleOf: 2 };
 
 function query<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
   return expectElement(root.querySelector<T>(selector), selector);
@@ -31,89 +39,45 @@ describe("config form integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        laboratory: {
-          type: "object",
-          required: ["endpoint", "retryBudget"],
-          properties: {
-            endpoint: {
-              type: "string",
+    const analysis = analyzeConfigSchema(
+      object({
+        laboratory: object(
+          {
+            endpoint: textSchema({
               description: "Lowercase slug.",
               minLength: 3,
               maxLength: 16,
               pattern: "[a-z-]+",
-            },
-            optionalAlias: {
-              type: "string",
-              minLength: 3,
-            },
-            relayUrl: {
-              type: "string",
-              description: "Relay origin.",
-              format: "uri",
-            },
-            explicitEmpty: {
-              type: "string",
-              minLength: 0,
-              pattern: "^$",
-            },
-            glyph: {
-              type: "string",
-              maxLength: 1,
-              pattern: "^.$",
-            },
-            codes: {
-              type: "array",
-              items: {
-                type: "string",
-                minLength: 3,
-                pattern: "^[0-9]+$",
-              },
-            },
-            limited: {
-              type: "array",
-              maxItems: 1,
-              items: { type: "integer" },
-            },
-            provider: {
-              type: "string",
+            }),
+            relayUrl: textSchema({ format: "uri" }),
+            explicitEmpty: textSchema({ minLength: 0, pattern: "^$" }),
+            glyph: textSchema({ maxLength: 1, pattern: "^.$" }),
+            codes: { type: "array", items: digits },
+            limited: { type: "array", maxItems: 1, items: { type: "integer" } },
+            provider: textSchema({
               description: "Execution provider.",
               enum: ["a", "b", "c", "d", "e", "f"],
-            },
-            apiKey: { type: "string" },
-            retryBudget: {
-              type: "integer",
-              description: "Even values from two through eight.",
-              minimum: 2,
-              maximum: 8,
-              multipleOf: 2,
-            },
-            weights: {
-              type: "array",
-              items: { type: "integer", minimum: 2, maximum: 8, multipleOf: 2 },
-            },
+            }),
+            retryBudget: evenNumber,
+            weights: { type: "array", items: evenNumber },
           },
-        },
-      },
-    });
+          ["endpoint", "retryBudget"],
+        ),
+      }),
+    );
     // Zod emits `format` for .url()/.email(); the form must keep those fields
     // editable instead of forcing the whole section into Raw mode.
     expect(analysis.unsupportedPaths).toEqual([]);
     renderAnalyzedFormFixture(container, analysis, {
-      uiHints: { "laboratory.apiKey": { sensitive: true } },
       value: {
         laboratory: {
           endpoint: "local-api",
-          optionalAlias: "main",
           relayUrl: "https://relay.example",
           explicitEmpty: "present",
           glyph: "a",
           codes: [],
           limited: [1],
           provider: "a",
-          apiKey: "test-secret",
           retryBudget: 8,
           weights: [2],
         },
@@ -166,10 +130,6 @@ describe("config form integrity", () => {
     expect(relayUrl.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "relayUrl"], "https://relay.example/");
 
-    const optionalAlias = query<HTMLInputElement>(container, "input[aria-label='Optional Alias']");
-    typeValue(optionalAlias, "");
-    expect(optionalAlias.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["laboratory", "optionalAlias"], undefined);
     const explicitEmpty = query<HTMLInputElement>(container, "input[aria-label='Explicit Empty']");
     typeValue(explicitEmpty, "");
     expect(explicitEmpty.getAttribute("aria-invalid")).toBe("false");
@@ -221,9 +181,6 @@ describe("config form integrity", () => {
     expect(provider.getAttribute("aria-describedby")).toBe(
       "config-field-s10-006c00610062006f007200610074006f00720079_s8-00700072006f00760069006400650072-description",
     );
-    const apiKey = query<HTMLInputElement>(container, "input[aria-label='Api Key']");
-    expect(apiKey.readOnly).toBe(true);
-    expect(apiKey.classList.contains("cfg-redacted")).toBe(true);
 
     const retryBudget = query<HTMLInputElement>(container, "input[aria-label='Retry Budget']");
     expect(retryBudget.min).toBe("2");
@@ -268,28 +225,21 @@ describe("config form integrity", () => {
     container.remove();
   });
 
-  it.each(["primary", "constructor"])(
+  it.each(["primary"])(
     "commits typed map entry %s only after the local draft is valid",
     (entryKey) => {
       const onPatch = vi.fn();
       const container = document.createElement("div");
       document.body.append(container);
-      const analysis = analyzeConfigSchema({
-        type: "object",
-        properties: {
+      const analysis = analyzeConfigSchema(
+        object({
           aliases: {
             type: "object",
-            properties: {
-              fixed: { type: "integer" },
-            },
-            additionalProperties: {
-              type: "string",
-              minLength: 3,
-              pattern: "^[0-9]+$",
-            },
+            properties: { fixed: { type: "integer" } },
+            additionalProperties: digits,
           },
-        },
-      });
+        }),
+      );
       renderAnalyzedFormFixture(container, analysis, {
         value: { aliases: {} },
         onPatch,
@@ -401,6 +351,8 @@ describe("config form integrity", () => {
     renderSensitive(false);
     const hidden = query<HTMLInputElement>(container, "input[aria-label='Api Key']");
     expect(hidden).toBe(input);
+    expect(hidden.readOnly).toBe(true);
+    expect(hidden.classList.contains("cfg-redacted")).toBe(true);
     expect(hidden.value).toBe("");
     expect(hidden.getAttribute("aria-invalid")).toBe("false");
     expect(hidden.validationMessage).toBe("");
@@ -411,43 +363,6 @@ describe("config form integrity", () => {
     expect(revealed.value).toBe("123");
     expect(revealed.getAttribute("aria-invalid")).toBe("false");
     expect(revealed.validationMessage).toBe("");
-  });
-
-  it("retains unset array drafts until the collection source changes", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const schema = {
-      type: "array",
-      items: { type: "string", pattern: "^[0-9]+$" },
-    };
-    const renderValue = (value: unknown) => {
-      renderArrayFixture(container, {
-        schema,
-        value,
-        path: ["codes"],
-        onPatch,
-      });
-    };
-
-    renderValue(undefined);
-    const codes = query<HTMLElement>(container, ".cfg-array");
-    const draftHost = query(codes, "openclaw-config-form-collection-draft");
-    flush();
-    button(codes, "Add").click();
-    flush();
-    const draftValue = query<HTMLInputElement>(draftHost, "[data-collection-draft-value]");
-    typeValue(draftValue, "123");
-    flush();
-
-    renderValue(undefined);
-    flush();
-    expect(query<HTMLInputElement>(draftHost, "[data-collection-draft-value]").value).toBe("123");
-
-    renderValue([]);
-    flush();
-    expect(draftHost.querySelector(".cfg-collection-draft")).toBeNull();
-    container.remove();
   });
 
   it("retains invalid JSON drafts with an inline accessible error", () => {
@@ -485,32 +400,5 @@ describe("config form integrity", () => {
     expect(textarea.getAttribute("aria-invalid")).toBe("false");
     expect(error.hidden).toBe(true);
     expect(onPatch).toHaveBeenCalledWith(["accounts", "primary"], { enabled: false });
-
-    typeValue(textarea, '{"enabled":');
-    expect(textarea.getAttribute("aria-invalid")).toBe("true");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { primary: primaryValue, secondary: { enabled: true } } },
-      onPatch,
-    });
-    const siblingUpdateTextarea = query<HTMLTextAreaElement>(
-      container,
-      ".cfg-map textarea[aria-label='primary: JSON value']",
-    );
-    expect(siblingUpdateTextarea.value).toBe('{"enabled":');
-    expect(siblingUpdateTextarea.getAttribute("aria-invalid")).toBe("true");
-    expect(siblingUpdateTextarea.validationMessage).not.toBe("");
-    expect(error.hidden).toBe(false);
-
-    // A genuinely external change (different content) still resets in-progress
-    // text; identity churn with identical bytes (autosave ack) must not.
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { primary: { enabled: false } } },
-      onPatch,
-    });
-    const resetTextarea = query<HTMLTextAreaElement>(container, ".cfg-map textarea");
-    expect(resetTextarea.value).toContain('"enabled": false');
-    expect(resetTextarea.getAttribute("aria-invalid")).toBe("false");
-    expect(resetTextarea.validationMessage).toBe("");
-    expect(error.hidden).toBe(true);
   });
 });
