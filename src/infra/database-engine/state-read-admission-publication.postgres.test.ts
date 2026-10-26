@@ -39,6 +39,12 @@ type ReadResult = {
   elapsedMs: number;
 };
 
+async function expectPhase(gate: Promise<unknown>, operation: Promise<unknown>, phase: string) {
+  expect(
+    await awaitGateBeforeSettlement(gate, operation, `Worker settled before ${phase}`),
+  ).toMatchObject({ phase });
+}
+
 it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
   const options = {
     release: false,
@@ -92,13 +98,11 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
       );
       publisher.worker.postMessage({ admissionPort: publisherRelay.port }, [publisherRelay.port]);
       const published = conformanceWorkerResult<{ ok: boolean }>(publisher.worker, "Publisher");
-      expect(
-        await awaitGateBeforeSettlement(
-          once(publisher.worker, "message").then(([message]) => message),
-          published,
-          "Publisher exited before ready",
-        ),
-      ).toMatchObject({ phase: "publisher-ready" });
+      await expectPhase(
+        once(publisher.worker, "message").then(([message]) => message),
+        published,
+        "publisher-ready",
+      );
       const reader = spawnConformanceWorker(
         {
           currentModuleUrl: import.meta.url,
@@ -120,31 +124,17 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
       reader.worker.postMessage({ admissionPort: readerRelay.port }, [readerRelay.port]);
       const read = conformanceWorkerResult<ReadResult>(reader.worker, "Reader");
       try {
-        expect(
-          await awaitGateBeforeSettlement(
-            once(reader.worker, "message").then(([message]) => message),
-            read,
-            "Reader exited before BEGIN",
-          ),
-        ).toMatchObject({ phase: "reader-begun" });
+        await expectPhase(
+          once(reader.worker, "message").then(([message]) => message),
+          read,
+          "reader-begun",
+        );
         const pending = once(publisher.worker, "message").then(([message]) => message);
         release(publisherGate, 0);
-        expect(
-          await awaitGateBeforeSettlement(
-            pending,
-            published,
-            "Publisher exited before publication",
-          ),
-        ).toMatchObject({ phase: "publication-pending" });
+        await expectPhase(pending, published, "publication-pending");
         const refreshed = once(reader.worker, "message").then(([message]) => message);
         release(readerGate, 0);
-        expect(
-          await awaitGateBeforeSettlement(
-            refreshed,
-            read,
-            "Reader exited before refreshing admission",
-          ),
-        ).toMatchObject({ phase: "reader-refreshed" });
+        await expectPhase(refreshed, read, "reader-refreshed");
         if (options.release || options.cancellable) {
           // Real worker clocks prove bounded waiting while the publication transport stays held.
           await delay(50);
@@ -157,20 +147,8 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
           release(options.release ? publisherGate : readerGate, 1);
           if (physical && retried) {
             // Physical facts can arrive before the version facts required inside the read.
-            expect(
-              await awaitGateBeforeSettlement(
-                physical,
-                published,
-                "Publisher exited before physical facts",
-              ),
-            ).toMatchObject({ phase: "physical-published" });
-            expect(
-              await awaitGateBeforeSettlement(
-                retried,
-                read,
-                "Reader exited before partial-publication retry",
-              ),
-            ).toMatchObject({ phase: "reader-retried" });
+            await expectPhase(physical, published, "physical-published");
+            await expectPhase(retried, read, "reader-retried");
             await delay(50);
             release(publisherGate, 2);
           }

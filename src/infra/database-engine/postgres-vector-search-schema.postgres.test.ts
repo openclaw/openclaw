@@ -58,6 +58,49 @@ const embedding = (dim: number, value: number) => {
   return bytes;
 };
 
+function storeFixture() {
+  const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-vector-search-"), "anchor.sqlite"));
+  const opened: PostgresSyncConnection[] = [];
+  return {
+    anchor,
+    open(schema: StoreSchema, existingVersion = false) {
+      const db = openPostgresEngineTestStore({
+        anchor,
+        schema,
+        existingVersion,
+        input: { connection: connection!, schemaPrefix: "binary_vector_test" },
+        openSqlite() {
+          throw new Error("Expected PostgreSQL");
+        },
+      });
+      if (!(db instanceof PostgresSyncConnection)) {
+        throw new Error("Expected PostgreSQL");
+      }
+      opened.push(db);
+      return db;
+    },
+    close() {
+      try {
+        if (opened[0]) {
+          opened[0].exec(`DROP SCHEMA "${opened[0].schema}" CASCADE`);
+        }
+      } finally {
+        opened.forEach((db) => db.close());
+        anchor.close();
+      }
+    },
+  };
+}
+
+const version = (db: PostgresSyncConnection) =>
+  db.prepare("SELECT version FROM openclaw_schema_meta").get()?.version;
+const bitColumns = (db: PostgresSyncConnection) =>
+  db
+    .prepare(
+      "SELECT count(*) AS count FROM information_schema.columns WHERE table_schema = ? AND column_name = 'embedding_bits'",
+    )
+    .get(db.schema)?.count;
+
 describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
   it("migrates existing optional projections, preserves historical admission and maintains zero eligibility", async () => {
     const pending: Array<Promise<{ rows: { id: string }[] }>> = [];
@@ -65,39 +108,9 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
     let close: (() => void) | undefined;
     try {
       withEngineStoreAdmission(() => {
-        const anchor = openNodeSqliteDatabase(
-          path.join(dirs.make("pg-vector-search-"), "anchor.sqlite"),
-        );
-        const opened: PostgresSyncConnection[] = [];
-        close = () => {
-          try {
-            const original = opened[0];
-            if (original) {
-              original.exec(`DROP SCHEMA "${original.schema}" CASCADE`);
-            }
-          } finally {
-            for (const db of opened) {
-              db.close();
-            }
-            anchor.close();
-          }
-        };
-        const open = (schema: StoreSchema, existingVersion = false) => {
-          const db = openPostgresEngineTestStore({
-            anchor,
-            schema,
-            existingVersion,
-            input: { connection: connection!, schemaPrefix: "binary_vector_test" },
-            openSqlite() {
-              throw new Error("Expected PostgreSQL");
-            },
-          });
-          if (!(db instanceof PostgresSyncConnection)) {
-            throw new Error("Expected PostgreSQL");
-          }
-          opened.push(db);
-          return db;
-        };
+        const fixture = storeFixture();
+        const { anchor, open } = fixture;
+        close = fixture.close;
         const original = open(source);
         original.runTransaction(() => {
           for (const dim of dimensions) {
@@ -126,16 +139,8 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
         ).toThrow(
           "PostgreSQL binary vector search requires pgvector 0.7 or newer. Upgrade the server extension package, then have a database administrator run ALTER EXTENSION vector UPDATE before reopening the store.",
         );
-        expect(original.prepare("SELECT version FROM openclaw_schema_meta").get()?.version).toBe(
-          32,
-        );
-        expect(
-          original
-            .prepare(
-              "SELECT count(*) AS count FROM information_schema.columns WHERE table_schema = ? AND column_name = 'embedding_bits'",
-            )
-            .get(original.schema)?.count,
-        ).toBe(0);
+        expect(version(original)).toBe(32);
+        expect(bitColumns(original)).toBe(0);
         publishSqliteDatabaseSchemaChange(anchor);
         // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted connection as receiver.
         const prepare = PostgresSyncConnection.prototype.prepare;
@@ -155,24 +160,14 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
           });
         try {
           const historical = open(destination, true);
-          expect(
-            historical.prepare("SELECT version FROM openclaw_schema_meta").get()?.version,
-          ).toBe(32);
-          expect(
-            historical
-              .prepare(
-                "SELECT count(*) AS count FROM information_schema.columns WHERE table_schema = ? AND column_name = 'embedding_bits'",
-              )
-              .get(historical.schema)?.count,
-          ).toBe(0);
+          expect(version(historical)).toBe(32);
+          expect(bitColumns(historical)).toBe(0);
           expect(() => open(destination)).toThrow(/requires pgvector 0.7 or newer/);
         } finally {
           oldVector.mockRestore();
         }
         const migrated = open(destination);
-        expect(migrated.prepare("SELECT version FROM openclaw_schema_meta").get()?.version).toBe(
-          33,
-        );
+        expect(version(migrated)).toBe(33);
         migrated.runTransaction(() => {
           for (const dim of dimensions) {
             expect(
@@ -268,33 +263,13 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
 
   it("migrates stores without optional vectors without creating vector projections", () => {
     withEngineStoreAdmission(() => {
-      using anchor = openNodeSqliteDatabase(
-        path.join(dirs.make("pg-vector-empty-"), "anchor.sqlite"),
-      );
-      const open = (schema: StoreSchema) =>
-        openPostgresEngineTestStore({
-          anchor,
-          schema,
-          input: { connection: connection!, schemaPrefix: "binary_vector_empty_test" },
-          openSqlite() {
-            throw new Error("Expected PostgreSQL");
-          },
-        });
-      const original = open(source);
+      const { open, close } = storeFixture();
       try {
+        open(source);
         const migrated = open(destination);
-        try {
-          expect(migrated.prepare("SELECT version FROM openclaw_schema_meta").get()?.version).toBe(
-            33,
-          );
-        } finally {
-          migrated.close();
-        }
+        expect(version(migrated)).toBe(33);
       } finally {
-        if (original instanceof PostgresSyncConnection) {
-          original.exec(`DROP SCHEMA "${original.schema}" CASCADE`);
-        }
-        original.close();
+        close();
       }
     });
   });

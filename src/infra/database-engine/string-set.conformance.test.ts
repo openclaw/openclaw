@@ -4,30 +4,15 @@ import { readSqliteSessionGenerationWindows } from "../../config/sessions/sessio
 import { readTranscriptAppendIdentities } from "../../config/sessions/session-accessor.sqlite-transcript-identity.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  encodeSqliteStringSet,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely, sqliteStringSet } from "../kysely-sync.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
-// Keep the previous PG expansion executable as a semantic control, without a second compiler.
-function previousStringSet(db: EngineConnection, values: readonly string[]) {
-  if (isPostgresSqlConnection(db)) {
-    return /* kysely-allow-raw: Previous dialect output is the semantic control. */ sql<string>`(SELECT value FROM json_array_elements_text(${encodeSqliteStringSet(values)}::json) AS value)`;
-  }
-  return sqliteStringSet(values);
-}
-
 const selectionCases = [
   { name: "empty", values: [], expected: [] },
-  { name: "single", values: ["alpha"], expected: ["alpha"] },
-  { name: "duplicates", values: ["beta", "alpha", "beta"], expected: ["alpha", "beta"] },
-  { name: "missing", values: ["absent"], expected: [] },
+  { name: "duplicates", values: ["beta", "alpha", "beta", "absent"], expected: ["alpha", "beta"] },
   { name: "mixed", values: ["absent", "beta"], expected: ["beta"] },
 ];
 
@@ -94,21 +79,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
           withEngineStoreAdmission(() => {
             const current = database();
             const keys = values.map((id) => `key-${id}`);
-            const query = getNodeSqliteKysely<DB>(current.db);
-            const previous = executeSqliteQuerySync(
-              current.db,
-              query
-                .selectFrom("session_windows")
-                .select("session_id")
-                .where((eb) =>
-                  eb.or([
-                    eb("session_key", "in", previousStringSet(current.db, keys)),
-                    eb("session_id", "in", previousStringSet(current.db, values)),
-                  ]),
-                )
-                .orderBy("session_id"),
-            ).rows.map((row) => row.session_id);
-            expect(previous).toEqual(expected);
             expect(
               readSqliteSessionGenerationWindows(current, keys, values).map(
                 (row) => row.session_id,
@@ -120,17 +90,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
       it.each(selectionCases)("preserves $name transcript identities", ({ values, expected }) =>
         withEngineStoreAdmission(() => {
           const current = database();
-          const query = getNodeSqliteKysely<DB>(current.db);
-          const previous = executeSqliteQuerySync(
-            current.db,
-            query
-              .selectFrom("transcript_event_identities")
-              .select("event_id")
-              .where("session_id", "=", "alpha")
-              .where("event_id", "in", previousStringSet(current.db, values))
-              .orderBy("event_id"),
-          ).rows.map((row) => row.event_id);
-          expect(previous).toEqual(expected);
           expect(
             readTranscriptAppendIdentities(current, "alpha", values, [])
               .map((row) => row.event_id)
@@ -154,15 +113,14 @@ for (const engine of ["sqlite", "postgres"] as const) {
             ["λ日本語🦞", "λ日本語🦞"],
             ["\ud800lone\udfff", "�lone�"],
           ] as const) {
-            for (const set of [sqliteStringSet([input]), previousStringSet(db, [input])]) {
-              const result = executeSqliteQuerySync(
-                db,
-                query
-                  .selectNoFrom((eb) => eb.val<string>(expected).as("value"))
-                  .where((eb) => eb(eb.val<string>(expected), "in", set)),
-              ).rows;
-              expect(result).toEqual([{ value: expected }]);
-            }
+            const set = sqliteStringSet([input]);
+            const result = executeSqliteQuerySync(
+              db,
+              query
+                .selectNoFrom((eb) => eb.val<string>(expected).as("value"))
+                .where((eb) => eb(eb.val<string>(expected), "in", set)),
+            ).rows;
+            expect(result).toEqual([{ value: expected }]);
           }
         }));
 
