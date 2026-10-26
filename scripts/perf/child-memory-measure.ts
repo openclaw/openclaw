@@ -2,7 +2,7 @@
 // node --import ./scripts/tsx.mjs scripts/perf/child-memory-measure.ts --owner <module> --seconds 120 --output <json>
 // Pair baseline/candidate on interleaved CPUs, then swap placement. Run --allocations
 // and --work-counts separately: their instrumentation is not timing-gate evidence.
-// --work-counts --assert-no-filehandles checks the removed per-read handle lifecycle.
+// On Node 26, --work-counts --assert-promise-budget checks promises per native read job.
 import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -29,7 +29,7 @@ const { values } = parseArgs({
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
     "work-counts": { type: "boolean", default: false },
-    "assert-no-filehandles": { type: "boolean", default: false },
+    "assert-promise-budget": { type: "boolean", default: false },
     runaway: { type: "boolean", default: false },
     output: { type: "string" },
   },
@@ -42,8 +42,8 @@ assert.ok(
   "Count async resources separately from allocation and promotion profiles",
 );
 assert.ok(
-  !values["assert-no-filehandles"] || values["work-counts"],
-  "--assert-no-filehandles requires --work-counts",
+  !values["assert-promise-budget"] || values["work-counts"],
+  "--assert-promise-budget requires --work-counts",
 );
 const integer = (name: "trees" | "seconds", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
@@ -252,15 +252,15 @@ try {
   }
   fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
   fs.writeSync(1, `${JSON.stringify(result)}\n`);
-  if (values["assert-no-filehandles"]) {
+  if (values["assert-promise-budget"]) {
+    const readJobs = asyncResources.FSREQCALLBACK ?? 0;
     assert.ok(
-      (asyncResources.FSREQPROMISE ?? 0) + (asyncResources.FSREQCALLBACK ?? 0) > 0,
+      readJobs > 0,
       "No filesystem polling observed; increase --seconds to capture a sample",
     );
-    assert.equal(
-      (asyncResources.FILEHANDLE ?? 0) + (asyncResources.FILEHANDLECLOSEREQ ?? 0),
-      0,
-      "Child-memory polling must not create per-read FileHandle lifecycle resources",
+    assert.ok(
+      (asyncResources.PROMISE ?? 0) <= 4 * readJobs,
+      "Child-memory polling exceeded four promises per native read job",
     );
   }
 } finally {
