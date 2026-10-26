@@ -19,9 +19,11 @@ local message attachments, and generation tools reading local references, wait f
 initial diff baseline. Tools that do not use the workspace can run immediately,
 including generation with inline or remote references. Completion also waits
 for preparation, and a preparation failure ends the turn with a retryable error.
+Accelerated clones can start prompt preparation once their files are complete,
+while Git index preparation finishes behind the same workspace-tool gate.
 
 Repositories with setup scripts, included files, unsupported checkout transforms,
-or project configuration that needs additional files finish preparation before
+or project configuration whose required files are not yet available finish preparation before
 the first turn starts. Active bootstrap hooks, including `bootstrap-extra-files`,
 also retain complete preparation so configured instructions remain available.
 Sandboxed projections require a fully published worktree before startup, as do

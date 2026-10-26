@@ -5,7 +5,8 @@
 // Uses canonical Team-shaped fixtures (10,800 sessions), 40 bundled plugins, 65 clients,
 // eight exact subscribers, sidebar/list/search churn, four simultaneous turns, an origin README change before each fresh burst, and a
 // 200 ms mock first-token delay. --unchanged-origin keeps the remote fixed; --cpu-profile
-// records a separate diagnostic CPU/Git-trace pass. --state-dir reuses an existing
+// records a separate diagnostic CPU/Git-trace pass; --git-trace records Git Trace2 alone.
+// --state-dir reuses an existing
 // synthetic fixture after a setup failure; --output must always be new. Phase timings exclude
 // provider delay. Fresh bursts are separated by 31s to expire the base-refresh TTL. p95 at 40 samples is descriptive, not a regression gate. All state is synthetic.
 import { spawnSync } from "node:child_process";
@@ -24,6 +25,7 @@ const { values } = parseArgs({
     port: { type: "string", default: "41920" },
     entry: { type: "string", default: "dist/entry.js" },
     "cpu-profile": { type: "boolean", default: false },
+    "git-trace": { type: "boolean", default: false },
     "unchanged-origin": { type: "boolean", default: false },
     "cold-rounds": { type: "string", default: "10" },
     "warm-rounds": { type: "string", default: "10" },
@@ -65,7 +67,8 @@ const identity = {
     fileBytes: 256,
     providerDelayMs: 200,
     advanceOrigin: !values["unchanged-origin"],
-    cpuAndGitTrace: values["cpu-profile"],
+    cpuProfile: values["cpu-profile"],
+    gitTrace: values["git-trace"] || values["cpu-profile"],
   },
   stateDir,
   entry,
@@ -81,6 +84,16 @@ const identity = {
           .update(readFileSync(path.join(path.dirname(entry), name)))
           .digest("hex"),
       ]),
+  ),
+  checkoutRuntime: Object.fromEntries(
+    readdirSync(path.dirname(entry))
+      .filter((name) => /^(?:service|checkout-apfs)-.*\.mjs$/.test(name))
+      .flatMap((name) => {
+        const contents = readFileSync(path.join(path.dirname(entry), name));
+        return contents.includes("copyApfsCloneIndex")
+          ? [[name, createHash("sha256").update(contents).digest("hex")]]
+          : [];
+      }),
   ),
   revision: spawnSync("git", ["rev-parse", "HEAD"], {
     encoding: "utf8",
@@ -114,7 +127,8 @@ const result = spawnSync(
     String(port),
     "--mock-port",
     String(port + 2),
-    ...(values["cpu-profile"] ? ["--cpu-profile", "--git-trace"] : []),
+    ...(values["cpu-profile"] ? ["--cpu-profile"] : []),
+    ...(values["git-trace"] || values["cpu-profile"] ? ["--git-trace"] : []),
     ...(values["start-file"] ? ["--start-file", path.resolve(values["start-file"])] : []),
     ...(values["unchanged-origin"] ? [] : ["--turn-start-advance-origin"]),
     "--scenario",
@@ -175,6 +189,8 @@ const captured = JSON.parse(readFileSync(phaseFile, "utf8")) as {
     round: number;
     name: string;
     durationMs: number;
+    startedAt: number;
+    endedAt: number;
     details?: Record<string, unknown> & { stage?: string };
   }>;
 };
@@ -219,3 +235,89 @@ writeFileSync(
   ),
 );
 console.table(summary.slice(0, 50));
+
+if (values["git-trace"] || values["cpu-profile"]) {
+  type GitTraceEvent = {
+    event: string;
+    sid: string;
+    time: string;
+    argv?: string[];
+    t_abs?: number;
+    code?: number;
+  };
+  const traceDir = path.join(stateDir, probeDir, "git-trace");
+  const commands = readdirSync(traceDir).flatMap((filename) => {
+    const events = readFileSync(path.join(traceDir, filename), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as GitTraceEvent);
+    const start = events.find((event) => event.event === "start");
+    const exit = events.find((event) => event.event === "exit");
+    if (!start?.argv || typeof exit?.t_abs !== "number") {
+      return [];
+    }
+    const args = start.argv.slice(1);
+    let commandIndex = 0;
+    while (commandIndex < args.length) {
+      const arg = args[commandIndex]!;
+      if (["-C", "-c", "--git-dir", "--work-tree", "--config-env"].includes(arg)) {
+        commandIndex += 2;
+      } else if (arg.startsWith("--")) {
+        commandIndex++;
+      } else {
+        break;
+      }
+    }
+    const executable = path.basename(start.argv[0] ?? "git");
+    const command = executable === "git" ? (args[commandIndex] ?? "unknown") : executable;
+    const commandArgs = executable === "git" ? args.slice(commandIndex + 1) : args;
+    const argvClass = [
+      command,
+      ...(["worktree", "remote", "sparse-checkout"].includes(command)
+        ? commandArgs.slice(0, 1)
+        : []),
+      ...commandArgs.filter((arg) => arg.startsWith("-")).map((arg) => arg.split("=")[0]),
+    ].join(" ");
+    const startedAt = Date.parse(start.time);
+    const containing = captured.phases.find(
+      (phase) => phase.startedAt <= startedAt && phase.endedAt >= startedAt,
+    );
+    return [
+      {
+        argvClass,
+        argv: start.argv,
+        sid: start.sid,
+        nested: start.sid.includes("/"),
+        startedAt,
+        durationMs: exit.t_abs * 1000,
+        code: exit.code,
+        round: containing?.round,
+        cohort: containing ? (containing.round < coldRounds ? "fresh" : "warm") : "setup-or-gap",
+      },
+    ];
+  });
+  writeFileSync(path.join(output, "git-commands.json"), JSON.stringify(commands, null, 2));
+  const classes = new Map<string, number[]>();
+  for (const command of commands) {
+    const key = `${command.cohort}/${command.nested ? "nested" : "direct"}/${command.argvClass}`;
+    const samples = classes.get(key) ?? [];
+    samples.push(command.durationMs);
+    classes.set(key, samples);
+  }
+  const gitSummary = [...classes]
+    .map(([argvClass, samples]) => {
+      samples.sort((a, b) => a - b);
+      return {
+        argvClass,
+        count: samples.length,
+        totalMs: samples.reduce((sum, value) => sum + value, 0),
+        p50: samples[Math.ceil(samples.length * 0.5) - 1],
+        p95: samples[Math.ceil(samples.length * 0.95) - 1],
+        max: samples.at(-1),
+      };
+    })
+    .toSorted((a, b) => b.totalMs - a.totalMs);
+  writeFileSync(path.join(output, "git-summary.json"), JSON.stringify(gitSummary, null, 2));
+  console.table(gitSummary.slice(0, 40));
+}
