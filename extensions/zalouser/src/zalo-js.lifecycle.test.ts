@@ -66,7 +66,9 @@ function register(version: string) {
     setupEntry.registerSetupRuntime?.(api);
   });
   const close = () => disposePluginRegistryInstances(builder.registry);
-  onTestFinished(close);
+  onTestFinished(async () => {
+    await close();
+  });
   return {
     run,
     self: () =>

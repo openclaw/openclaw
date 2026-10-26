@@ -313,11 +313,9 @@ describe("runBrowserProxyCommand", () => {
 
   it("serializes plural action downloads without reading nested page paths", async () => {
     await withTempDir("openclaw-browser-proxy-action-", async (tempDir) => {
-      const [firstPath, secondPath, nestedPagePath] = [
-        " first.txt ",
-        "second.txt",
-        "page-controlled.txt",
-      ].map((name) => nodePath.join(tempDir, name));
+      const firstPath = nodePath.join(tempDir, " first.txt ");
+      const secondPath = nodePath.join(tempDir, "second.txt");
+      const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
       const result = {
         ok: true,
         downloads: [
@@ -330,25 +328,27 @@ describe("runBrowserProxyCommand", () => {
         result: { path: nestedPagePath, downloads: [{ path: nestedPagePath }] },
       };
 
-      const contents = [
-        "first browser download",
-        "second browser download",
-        "must stay on the node",
-      ];
-      await Promise.all(
-        [firstPath, secondPath, nestedPagePath].map((path, i) =>
-          fs.writeFile(path, contents[i], "utf8"),
-        ),
-      );
+      await Promise.all([
+        fs.writeFile(firstPath, "first browser download", "utf8"),
+        fs.writeFile(secondPath, "second browser download", "utf8"),
+        fs.writeFile(nestedPagePath, "must stay on the node", "utf8"),
+      ]);
       dispatchResult(result);
 
       expect(JSON.parse(await invoke("/act"))).toEqual({
         result,
-        files: [firstPath, secondPath].map((path, i) => ({
-          path,
-          base64: Buffer.from(contents[i]).toString("base64"),
-          mimeType: "image/png",
-        })),
+        files: [
+          {
+            path: firstPath,
+            base64: Buffer.from("first browser download").toString("base64"),
+            mimeType: "image/png",
+          },
+          {
+            path: secondPath,
+            base64: Buffer.from("second browser download").toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
       });
     });
   });

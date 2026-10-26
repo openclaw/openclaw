@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,6 +55,7 @@ it.skipIf(process.platform === "win32").concurrent.for([
       env: { ...process.env, VITEST: undefined },
       stdio: ["pipe", "pipe", "inherit", "ipc"],
     });
+    assert(child.stdin && child.stdout, "Mantis child must expose its configured pipes");
     const grace = Promise.withResolvers<unknown>();
     child.once("message", grace.resolve);
     const ready = Promise.withResolvers<void>();
