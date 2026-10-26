@@ -19,6 +19,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -74,6 +75,10 @@ const rewritten = { changed: true, bytesFreed: 77, rewrittenEntries: 1 };
 const keepProcessAlive = () => {};
 type Maintain = NonNullable<ContextEngine["maintain"]>;
 type MaintenanceParams = Parameters<typeof runContextEngineMaintenance>[0];
+
+function ownedEngine(id: string, maintain: Maintain, dispose = async () => {}) {
+  return { ...createBackgroundMaintenanceEngine(maintain, id), dispose: vi.fn(dispose) };
+}
 
 function backgroundSession(sessionId: string) {
   const params = sessionParams(sessionId);
@@ -216,16 +221,14 @@ describe("runContextEngineMaintenance", () => {
           published(event);
         }
       });
-      const dispose = vi.fn(async () => {});
       let rewrite: ContextEngineRuntimeContext["rewriteTranscriptEntries"];
       let activeRewriteResult: unknown;
       const request = rewriteRequest();
-      const engine = createBackgroundMaintenanceEngine(async ({ runtimeContext }) => {
+      const engine = ownedEngine("retained", async ({ runtimeContext }) => {
         rewrite = runtimeContext?.rewriteTranscriptEntries;
         activeRewriteResult = await rewrite?.(request);
         return rewritten;
-      }, "retained");
-      engine.dispose = dispose;
+      });
       try {
         await f.run(engine, {
           sessionFile: sessionKey,
@@ -235,7 +238,7 @@ describe("runContextEngineMaintenance", () => {
         await waitForSessionMaintenance(sessionKey);
 
         expect(activeRewriteResult).toEqual(rewritten);
-        expectCalls(1, dispose, rewriteMock, published);
+        expectCalls(1, engine.dispose, rewriteMock, published);
         rewriteMock.mockClear();
         resolveTargetMock.mockClear();
         openMock.mockClear();
@@ -284,14 +287,9 @@ describe("runContextEngineMaintenance", () => {
           return unchanged;
         });
         const secondMaintain = vi.fn(async () => unchanged);
-        const createOwnedEngine = (id: string, maintain: Maintain) => ({
-          ...createBackgroundMaintenanceEngine(maintain, id),
-          dispose: vi.fn(async () => {}),
-        });
-        const firstEngine = createOwnedEngine("first", firstMaintain);
-        const secondEngine = createOwnedEngine("second", secondMaintain);
+        const firstEngine = ownedEngine("first", firstMaintain);
         const secondDisposed = createDeferred();
-        secondEngine.dispose.mockImplementation(async () => {
+        const secondEngine = ownedEngine("second", secondMaintain, async () => {
           secondDisposed.resolve();
         });
         await registerLegacyContextEngine();
@@ -368,10 +366,7 @@ describe("runContextEngineMaintenance", () => {
         await releaseLane.promise;
       });
       const maintain = vi.fn(async () => unchanged);
-      const engine = {
-        ...createBackgroundMaintenanceEngine(maintain, "queued"),
-        dispose: vi.fn(async () => {}),
-      };
+      const engine = ownedEngine("queued", maintain);
 
       try {
         await laneStarted.promise;
@@ -411,21 +406,16 @@ describe("runContextEngineMaintenance", () => {
       });
       const firstEngine = createBackgroundEngine("first");
       const secondEngine = createBackgroundEngine("second");
-      let secondDeferredSettled = false;
-
       try {
         await f.run(firstEngine, { disposeDeferredContextEngineAfterMaintenance: true });
         await Promise.race([firstEngine.started, ...f.pending]);
         await f.run(secondEngine, { disposeDeferredContextEngineAfterMaintenance: true });
-        const secondDeferred = expectDefined(f.pending[1], "second maintenance completion").then(
-          () => {
-            secondDeferredSettled = true;
-          },
-        );
+        const secondDeferred = expectDefined(f.pending[1], "second maintenance completion");
+        const secondDeferredSettled = observeSettlement(secondDeferred);
         releaseFirstMaintenance.resolve();
         await Promise.race([secondEngine.started, ...f.pending]);
         expect(secondEngine["dispose"]).not.toHaveBeenCalled();
-        expect(secondDeferredSettled).toBe(false);
+        expect(secondDeferredSettled()).toBe(false);
 
         releaseSecondMaintenance.resolve();
         await secondDeferred;

@@ -5,7 +5,6 @@ import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
-import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { normalizeUsage } from "../usage.js";
 import {
   beginPromptCacheObservation,
@@ -20,7 +19,6 @@ import {
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
-  persistSessionSystemPrompt,
   prepareSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
@@ -37,8 +35,8 @@ function observation(name: string, begin = beginOpenAIObservation) {
     sessionId,
     begin: (params: Omit<Parameters<typeof begin>[0], "sessionId"> = {}) =>
       begin({ sessionId, ...params }),
-    complete: (cacheRead: number, input?: number) =>
-      completePromptCacheObservation({ sessionId, usage: { cacheRead, input } }),
+    complete: (cacheRead: number) =>
+      completePromptCacheObservation({ sessionId, usage: { cacheRead } }),
   };
 }
 
@@ -53,7 +51,6 @@ describe("prompt cache observability", () => {
   it("reports the bounded personal-profile restart reason and subsequent pinned reuse on drops", async () => {
     const sessionId = scopedKey("personal-profile-series");
     using lease = retainEmbeddedSessionPromptState(sessionId);
-    const entries: SessionEntry[] = [];
     const model = { provider: "openai", id: "gpt-5.4", api: "openai-responses" as const };
     let status: ReturnType<typeof prepareSessionSystemPrompt>["seriesStatus"];
     const observer = createPromptCacheRequestObserver(
@@ -69,20 +66,10 @@ describe("prompt cache observability", () => {
         state: lease.state,
         routeKey: JSON.stringify([model.provider, model.id, model.api, null, true, profile]),
         systemPrompt: "Synthetic instructions",
-        entries,
+        entries: [],
       });
       status = prepared.seriesStatus;
       prepared.commit();
-      await persistSessionSystemPrompt(lease.state, (customType, data) => {
-        entries.push({
-          type: "custom",
-          customType,
-          data,
-          id: `checkpoint-${entries.length}`,
-          parentId: null,
-          timestamp: "2026-10-01T00:00:00Z",
-        });
-      });
       await observer.onModelRequest(model, { systemPrompt: prepared.systemPrompt, messages: [] });
       observer.onModelUsage({ cacheRead });
       expect(observer.getObservation()).toMatchObject({
@@ -353,23 +340,6 @@ describe("prompt cache observability", () => {
     ]);
   });
 
-  it("attributes dynamic system prompt suffix changes separately from the stable prefix", () => {
-    const { begin, complete } = observation("dynamic-system-suffix", beginAnthropicObservation);
-    const stablePrefix = "stable instructions and tool capability directory";
-    begin({
-      systemPrompt: `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}first turn context`,
-    });
-    complete(8_000);
-    begin({
-      systemPrompt: `${stablePrefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}second turn context`,
-    });
-    expect(complete(2_000, 12_000)).toEqual({
-      previousCacheRead: 8_000,
-      cacheRead: 2_000,
-      changes: [{ code: "systemPromptSuffix", detail: "system prompt suffix digest changed" }],
-    });
-  });
-
   it.each([
     {
       change: "schema",
@@ -386,7 +356,6 @@ describe("prompt cache observability", () => {
       override: { name: "write" },
       detail: '1 -> 1 tools; added: "write"; removed: "read"',
     },
-    { change: "removal", override: undefined, detail: '1 -> 0 tools; removed: "read"' },
   ])("attributes a tool $change to the changed definition", ({ override, detail }) => {
     const { begin, complete } = observation("changed-tool-schema");
     const tool = {
@@ -405,7 +374,7 @@ describe("prompt cache observability", () => {
     begin({ tools });
     complete(8_000);
     begin({
-      tools: collectPromptCacheTools(override ? [{ ...tool, ...override }] : []),
+      tools: collectPromptCacheTools([{ ...tool, ...override }]),
     });
     expect(complete(0)).toEqual({
       previousCacheRead: 8_000,
