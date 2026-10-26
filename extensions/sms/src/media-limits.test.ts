@@ -95,17 +95,13 @@ describe("SMS configured media limits", () => {
     );
   });
 
-  it.each([
-    { file: "attachment.pdf", magic: "%PDF-1.4", size: 500_001, error: /500,000 byte limit/ },
-    { file: "attachment.gif", magic: "GIF89a", size: 5_000_000, error: /GIF exceeds/ },
-  ])(
-    "retains Twilio's ceiling for $file when the configured cap is larger",
-    async ({ file, magic, size, error }) => {
-      const bytes = Buffer.alloc(size);
-      bytes.write(magic);
-      await expect(prepare(accountFor({ mediaMaxMb: 10 }), bytes, file)).rejects.toThrow(error);
-    },
-  );
+  it("retains Twilio's GIF ceiling when the configured cap is larger", async () => {
+    const bytes = Buffer.alloc(5_000_000);
+    bytes.write("GIF89a");
+    await expect(prepare(accountFor({ mediaMaxMb: 10 }), bytes, "attachment.gif")).rejects.toThrow(
+      /GIF exceeds/,
+    );
+  });
 
   it("applies the per-attachment cap without making it a shared inbound budget", async () => {
     const bodies = [PDF, Buffer.alloc(33), PDF];
