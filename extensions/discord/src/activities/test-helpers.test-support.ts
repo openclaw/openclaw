@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { DiscordActivitiesRuntime, getDiscordActivitiesRuntime } from "./runtime.js";
 import { DiscordActivityStore, openDiscordActivityStores } from "./store.js";
@@ -92,12 +93,14 @@ export function createActivityTestRuntime(
 export function createRegisteredActivityFixture(
   cfg = createActivityTestConfig(),
   vendorAssetPath = "/synthetic-missing-discord-activity-sdk.mjs",
+  runtimeConfig = cfg,
 ) {
   const unsupported = () => {
     throw new Error("unused Activity fixture store operation");
   };
   const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
   const presenters: Array<Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0]> = [];
+  const resolvePath = vi.fn(() => vendorAssetPath);
   registerDiscordActivities(
     createTestPluginApi({
       config: cfg,
@@ -112,9 +115,9 @@ export function createRegisteredActivityFixture(
             count: unsupported,
           }),
         },
-        config: { current: () => cfg },
+        config: { current: () => runtimeConfig },
       }),
-      resolvePath: () => vendorAssetPath,
+      resolvePath,
       registerHttpRoute: (route) => {
         routes.push(route);
       },
@@ -129,5 +132,5 @@ export function createRegisteredActivityFixture(
   if (!runtime || !route || !presenter || routes.length !== 1 || presenters.length !== 1) {
     throw new Error("expected one registered Discord Activity route, presenter and runtime");
   }
-  return { runtime, route, presenter };
+  return { runtime, route, presenter, resolvePath };
 }

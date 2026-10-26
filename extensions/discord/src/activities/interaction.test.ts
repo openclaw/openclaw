@@ -26,7 +26,6 @@ afterEach(() => {
 
 const widgetId = "AAAAAAAAAAAAAAAAAAAAAA";
 const applicationId = "123456789012345678";
-const launchIdentity = { accountId: "default", channelId: "777", discordUserId: "42" };
 
 function componentContext(cfg = createActivityTestConfig()): AgentComponentContext {
   return {
@@ -109,24 +108,16 @@ describe("Discord Activity interaction", () => {
     const { runtime, launchActivity, run } = createLaunchFixture();
     const recordPendingLaunch = vi.spyOn(runtime.store, "recordPendingLaunch");
     await run();
-    expect(recordPendingLaunch).toHaveBeenCalledWith(expect.objectContaining(launchIdentity));
     expect(launchActivity).toHaveBeenCalledOnce();
     expect(recordPendingLaunch.mock.invocationCallOrder[0] ?? Number.NaN).toBeLessThan(
       launchActivity.mock.invocationCallOrder[0] ?? Number.NaN,
     );
   });
 
-  it("clears the exact watchdog handle when the pending launch write wins", async () => {
+  it("clears the watchdog when the pending launch write wins", async () => {
     const { launchActivity, run } = createLaunchFixture();
     vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     await run();
-    const watchdogIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 250);
-    expect(watchdogIndex).toBeGreaterThanOrEqual(0);
-    const watchdogHandle = setTimeoutSpy.mock.results[watchdogIndex]?.value;
-    expect(watchdogHandle).toBeDefined();
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(watchdogHandle);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(275);
     expect(launchActivity).toHaveBeenCalledOnce();

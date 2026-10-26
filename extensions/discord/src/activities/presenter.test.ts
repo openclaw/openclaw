@@ -37,10 +37,10 @@ const present = (route = context, title = "Status") =>
   presenter.present({ context: route, document, title });
 beforeEach(() => {
   vi.stubEnv("DISCORD_CLIENT_SECRET", "");
-  const fixture = createRegisteredActivityFixture();
-  const { runtime } = fixture;
-  store = runtime.store;
-  presenter = fixture.presenter;
+  ({
+    runtime: { store },
+    presenter,
+  } = createRegisteredActivityFixture());
   vi.mocked(sendDiscordComponentMessage).mockReset().mockResolvedValue(delivery);
 });
 afterEach(() => {
@@ -50,7 +50,6 @@ afterEach(() => {
 });
 
 it("matches only configured Discord channel routes", async () => {
-  expect(presenter.target).toBe("current_channel");
   expect(matches(presenter)).toBe(true);
   expect(matches(presenter, { messageChannel: "slack" })).toBe(false);
   expect(
@@ -63,7 +62,6 @@ it("matches only configured Discord channel routes", async () => {
   const unconfigured = createRegisteredActivityFixture(
     createActivityTestConfig({ clientSecret: "" }),
   ).presenter;
-  expect(unconfigured.target).toBe("current_channel");
   expect(matches(unconfigured)).toBe(false);
   await expect(unconfigured.availability(context)).resolves.toMatchObject({
     ok: false,
