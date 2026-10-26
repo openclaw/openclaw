@@ -10,7 +10,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/apply-patch.ts": Symbol.for("openclaw.applyPatchTestApi"),
   "src/agents/auth-profiles/external-auth.ts": Symbol.for("openclaw.externalAuthTestApi"),
-  "src/agents/auth-profiles/oauth.ts": Symbol.for("openclaw.oauthTestApi"),
   "src/agents/auth-profiles/runtime-snapshots.ts": Symbol.for(
     "openclaw.runtimeAuthSnapshotsTestApi",
   ),
