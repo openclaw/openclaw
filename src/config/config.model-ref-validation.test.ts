@@ -12,28 +12,8 @@ function createModelRegistry(
   };
 }
 
-function createModelSuppressionRegistry() {
-  return createModelRegistry({
-    id: "openai",
-    origin: "bundled",
-    providers: ["openai", "openai"],
-    contracts: {},
-    rootDir: "/tmp/plugins/openai",
-    modelCatalog: {
-      suppressions: [
-        {
-          provider: "openai",
-          model: "gpt-5.3-codex-spark",
-          reason:
-            "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-        },
-      ],
-    },
-  });
-}
-
-function createModelNormalizationRegistry() {
-  return createModelRegistry({
+const createModelNormalizationRegistry = () =>
+  createModelRegistry({
     id: "custom-provider-plugin",
     providers: ["myproxy"],
     origin: "config",
@@ -44,10 +24,26 @@ function createModelNormalizationRegistry() {
       },
     },
   });
-}
+const metadata = () => ({ manifestRegistry: createModelNormalizationRegistry() });
+const provider = (
+  models: Array<{ id: string; name: string }>,
+  baseUrl = "https://proxy.example/v1",
+) => ({
+  baseUrl,
+  api: "openai-completions",
+  models,
+});
 
 it("rejects statically suppressed provider/model pairs during config validation", () => {
-  const manifestRegistry = createModelSuppressionRegistry();
+  const reason = "This model is no longer exposed. Use openai/gpt-5.5.";
+  const manifestRegistry = createModelRegistry({
+    id: "openai",
+    origin: "bundled",
+    providers: ["openai", "openai"],
+    contracts: {},
+    rootDir: "/tmp/plugins/openai",
+    modelCatalog: { suppressions: [{ provider: "openai", model: "gpt-5.3-codex-spark", reason }] },
+  });
   const res = validateConfigObjectWithPlugins(
     { agents: { defaults: { model: { primary: "openai/gpt-5.3-codex-spark" } } } },
     { pluginMetadataSnapshot: { manifestRegistry } },
@@ -56,26 +52,23 @@ it("rejects statically suppressed provider/model pairs during config validation"
   expect(res.ok ? undefined : res.issues).toEqual([
     {
       path: "agents.defaults.model.primary",
-      message:
-        "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      message: `Unknown model: openai/gpt-5.3-codex-spark. ${reason}`,
     },
   ]);
 });
 
 it("loads model normalization policies when plugin validation is skipped", () => {
-  const myproxy = {
-    baseUrl: "https://proxy.example/v1",
-    apiKey: "sk-test",
-    api: "openai-completions",
-    models: [{ id: "latest", name: "Custom latest" }],
-  };
   const res = validateConfigObjectWithPlugins(
-    { models: { providers: { myproxy } } },
+    {
+      models: {
+        providers: {
+          myproxy: { ...provider([{ id: "latest", name: "Custom latest" }]), apiKey: "sk-test" },
+        },
+      },
+    },
     {
       pluginValidation: "skip",
-      loadPluginMetadataSnapshot: () => ({
-        manifestRegistry: createModelNormalizationRegistry(),
-      }),
+      loadPluginMetadataSnapshot: metadata,
     },
   );
 
@@ -85,19 +78,12 @@ it("loads model normalization policies when plugin validation is skipped", () =>
 });
 
 it("keeps core-only validation independent from plugin metadata", () => {
-  const loadPluginMetadataSnapshot = vi.fn(() => ({
-    manifestRegistry: createModelNormalizationRegistry(),
-  }));
+  const loadPluginMetadataSnapshot = vi.fn(metadata);
   const options = { pluginValidation: "core-only" as const, loadPluginMetadataSnapshot };
-  const provider = {
-    baseUrl: "http://127.0.0.1:19432/v1",
-    api: "openai-completions",
-    models: [],
-  };
   const valid = validateConfigObjectWithPlugins(
     {
       gateway: { mode: "local" },
-      models: { providers: { "fixture-external": provider } },
+      models: { providers: { "fixture-external": provider([], "http://127.0.0.1:19432/v1") } },
     },
     options,
   );

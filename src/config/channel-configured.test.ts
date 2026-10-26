@@ -29,6 +29,15 @@ function configuredStatePlugin(
 function configured(channel: string, config: OpenClawConfig["channels"], env = {}) {
   return isChannelConfigured({ channels: config }, channel, env);
 }
+function setupPlugins(
+  id: string,
+  hasConfiguredState: NonNullable<ChannelPlugin["config"]["hasConfiguredState"]>,
+) {
+  bundledPlugins.getBundledChannelPlugin.mockReturnValue(configuredStatePlugin(id, () => false));
+  bundledPlugins.getBundledChannelSetupPlugin.mockReturnValue(
+    configuredStatePlugin(id, hasConfiguredState),
+  );
+}
 
 describe("isChannelConfigured", () => {
   beforeEach(() => {
@@ -60,12 +69,8 @@ describe("isChannelConfigured", () => {
     ).toBe(true);
   });
 
-  it("treats explicit enabled channel config as configured state", () => {
-    expect(configured("openclaw-weixin", { "openclaw-weixin": { enabled: true } })).toBe(true);
-  });
-
-  it("does not treat disabled channel config as configured state", () => {
-    expect(configured("openclaw-weixin", { "openclaw-weixin": { enabled: false } })).toBe(false);
+  it.each([true, false])("honors explicit channel enabled=%s", (enabled) => {
+    expect(configured("openclaw-weixin", { "openclaw-weixin": { enabled } })).toBe(enabled);
   });
 
   it("honors Matrix bootstrap metadata without consulting operational credential hooks", () => {
@@ -73,12 +78,7 @@ describe("isChannelConfigured", () => {
     const hasConfiguredState = vi.fn(() => {
       throw new Error("operational credential storage must not be read during bootstrap");
     });
-    bundledPlugins.getBundledChannelPlugin.mockReturnValue(
-      configuredStatePlugin("matrix", () => false),
-    );
-    bundledPlugins.getBundledChannelSetupPlugin.mockReturnValue(
-      configuredStatePlugin("matrix", hasConfiguredState),
-    );
+    setupPlugins("matrix", hasConfiguredState);
 
     expect(
       isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
@@ -94,12 +94,7 @@ describe("isChannelConfigured", () => {
     const hasConfiguredState = vi.fn(
       ({ env }: { env?: NodeJS.ProcessEnv }) => env?.FIXTURE_TOKEN === "configured",
     );
-    bundledPlugins.getBundledChannelPlugin.mockReturnValue(
-      configuredStatePlugin("fixture", () => false),
-    );
-    bundledPlugins.getBundledChannelSetupPlugin.mockReturnValue(
-      configuredStatePlugin("fixture", hasConfiguredState),
-    );
+    setupPlugins("fixture", hasConfiguredState);
     const env = { FIXTURE_TOKEN: "configured" };
 
     expect(isChannelConfigured({}, "fixture", env)).toBe(true);
