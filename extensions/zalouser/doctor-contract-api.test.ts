@@ -105,6 +105,7 @@ describe("zalouser doctor state migration", () => {
   it("retains malformed UTF-8 credentials while importing a healthy profile", async () => {
     const filePath = await writeLegacyCredentials("broken");
     const healthyPath = await writeLegacyCredentials("healthy");
+    const createdAt = (await fs.stat(healthyPath)).mtime.toISOString();
     const bytes = Buffer.from(JSON.stringify({ ...legacyCredentials, userAgent: "utf8-marker" }));
     bytes[bytes.indexOf("utf8-marker")] = 0xff;
     await fs.writeFile(filePath, bytes);
@@ -112,53 +113,34 @@ describe("zalouser doctor state migration", () => {
     const result = await credentialsMigration.migrateLegacyState(params);
     expect(result.warningDisposition).toBe("recoverable");
     expect(result.warnings).toHaveLength(1);
+    expect(result.changes).toEqual([
+      "Migrated Zalo Personal credentials for profile healthy",
+      expect.stringContaining("Archived Zalo Personal credentials legacy source"),
+    ]);
     expect(await fs.readFile(filePath)).toEqual(bytes);
     await expect(fs.access(healthyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.access(`${healthyPath}.migrated`);
     const store = params.context.openPluginStateKeyedStore<StoredZaloCredentials>({
       namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
       maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     });
     expect(await store.lookup(zalouserCredentialStoreKey("broken"))).toBeUndefined();
-    expect(await store.lookup(zalouserCredentialStoreKey("healthy"))).toMatchObject(
-      legacyCredentials,
-    );
+    expect(await store.lookup(zalouserCredentialStoreKey("healthy"))).toEqual({
+      profile: "healthy",
+      ...legacyCredentials,
+      createdAt,
+    });
   });
 
-  it("imports a profile credential blob into SQLite before archiving it", async () => {
-    const profile = "work";
-    const filePath = await writeLegacyCredentials(profile);
-    const createdAt = (await fs.stat(filePath)).mtime.toISOString();
+  it("archives legacy credentials without restoring an explicitly cleared profile", async () => {
+    const filePath = await writeLegacyCredentials("work");
     const params = doctorParams();
-
     await expect(credentialsMigration.detectLegacyState(params)).resolves.toEqual({
       preview: [
         `- Zalo Personal credentials: 1 file -> plugin state (${ZALOUSER_CREDENTIALS_NAMESPACE})`,
       ],
     });
-    await expect(credentialsMigration.migrateLegacyState(params)).resolves.toMatchObject({
-      warnings: [],
-      changes: [
-        "Migrated Zalo Personal credentials for profile work",
-        expect.stringContaining("Archived Zalo Personal credentials legacy source"),
-      ],
-    });
-    const store = params.context.openPluginStateKeyedStore<StoredZaloCredentials>({
-      namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
-      maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-    await expect(store.lookup(zalouserCredentialStoreKey(profile))).resolves.toEqual({
-      profile,
-      ...legacyCredentials,
-      createdAt,
-    });
-    await fs.access(`${filePath}.migrated`);
-  });
-
-  it("archives legacy credentials without restoring an explicitly cleared profile", async () => {
-    const profile = "work";
-    const filePath = await writeLegacyCredentials(profile);
     const runtime = createPluginRuntimeMock();
     runtime.state.openKeyedStoreV2 = (options, authority) =>
       createPluginStateKeyedStoreV2ForTests(
@@ -167,8 +149,8 @@ describe("zalouser doctor state migration", () => {
         authority ?? { assertCurrent() {} },
       );
     setZalouserRuntime(runtime);
-    await clearStoredZaloCredentials(profile, env);
-    await expect(credentialsMigration.migrateLegacyState(doctorParams())).resolves.toMatchObject({
+    await clearStoredZaloCredentials("work", env);
+    await expect(credentialsMigration.migrateLegacyState(params)).resolves.toMatchObject({
       warnings: [],
       changes: [
         "Archived revoked Zalo Personal credential legacy source for profile work",
@@ -200,7 +182,7 @@ describe("zalouser doctor state migration", () => {
     const params = doctorParams({
       agents,
       channels: { zalouser: {} },
-      session: { dmScope: "per-channel-peer" as const },
+      session: { dmScope: "per-channel-peer" },
     });
     const retained = { sessionId: "session-1", chatType: "direct" as const, skillsSnapshot };
     await store.put(legacyKey, { ...retained, updatedAt: 1, delivery });
@@ -214,8 +196,7 @@ describe("zalouser doctor state migration", () => {
     });
 
     const entries = store.entries();
-    expect(entries.has(legacyKey)).toBe(false);
-    expect(entries.has(groupKey)).toBe(true);
+    expect([...entries.keys()].toSorted()).toEqual([canonicalKey, groupKey]);
     expect(entries.get(canonicalKey)).toMatchObject(retained);
   });
 
@@ -228,7 +209,7 @@ describe("zalouser doctor state migration", () => {
       channels: { zalouser: {} },
       session: {
         store: storePath,
-        dmScope: "per-channel-peer" as const,
+        dmScope: "per-channel-peer",
         identityLinks: { alice: ["zalouser:user-1", "zalouser:user-2"] },
       },
     });
@@ -245,8 +226,7 @@ describe("zalouser doctor state migration", () => {
     });
 
     const entries = store.entries();
-    expect(entries.has(firstLegacyKey)).toBe(false);
-    expect(entries.has(secondLegacyKey)).toBe(false);
+    expect([...entries.keys()]).toEqual([canonicalKey]);
     expect(entries.get(canonicalKey)).toMatchObject({ sessionId: "freshest", updatedAt: 5 });
   });
 });
