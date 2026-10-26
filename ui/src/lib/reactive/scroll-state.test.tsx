@@ -3,6 +3,7 @@ import { createRoot, createSignal, flush, For } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useScrollState } from "../../components/solid/scroll-state.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { scheduleLayout } from "../layout-frame.ts";
 import { createScrollPosition, createScrollStateRef } from "./scroll-state.ts";
 
 const observers: TestResizeObserver[] = [];
@@ -36,7 +37,12 @@ function geometry(element: HTMLElement, horizontal = false) {
   Object.defineProperties(element, {
     [horizontal ? "scrollWidth" : "scrollHeight"]: { get: () => values.extent },
     [horizontal ? "clientWidth" : "clientHeight"]: { get: () => values.viewport },
-    [horizontal ? "scrollLeft" : "scrollTop"]: { get: () => values.offset },
+    [horizontal ? "scrollLeft" : "scrollTop"]: {
+      get: () => values.offset,
+      set: (offset: number) => {
+        values.offset = Math.max(0, Math.min(offset, values.extent - values.viewport));
+      },
+    },
   });
   return values;
 }
@@ -330,4 +336,83 @@ it("restores a destination after readiness without overwriting subsequent reader
   flush();
   expect(element.scrollTop).toBe(12);
   expect(outer.scrollTop).toBe(400);
+});
+
+function retainedScroll() {
+  const element = document.body.appendChild(document.createElement("div"));
+  cleanup.push(() => element.remove());
+  const values = geometry(element);
+  const [state, setState] = createSignal({ key: "first", presented: true, ready: true });
+  const dispose = createRoot((stop) => {
+    createScrollPosition(() => ({
+      retain: {
+        identity: [state().key],
+        target: element,
+        presented: state().presented,
+        ready: state().ready,
+      },
+    }));
+    return stop;
+  });
+  cleanup.push(dispose);
+  const frame = (patch: Partial<ReturnType<typeof state>> = {}) => {
+    setState((current) => ({ ...current, ...patch }));
+    flush();
+    vi.advanceTimersToNextFrame();
+  };
+  frame();
+  return { element, values, frame, setState, dispose };
+}
+
+it("restores retained scroll after accepted content and finishes when it is genuinely shorter", () => {
+  const { element, values, frame } = retainedScroll();
+  values.offset = 160;
+  element.dispatchEvent(new Event("scroll"));
+  frame({ presented: false });
+  values.extent = 100;
+  values.offset = 0;
+  element.dispatchEvent(new Event("scroll"));
+  frame({ presented: true, ready: false });
+  expect(element.scrollTop).toBe(0);
+  values.extent = 400;
+  frame({ ready: true });
+  expect(element.scrollTop).toBe(160);
+
+  frame({ presented: false });
+  values.extent = 150;
+  values.offset = 0;
+  frame({ presented: true, ready: false });
+  frame({ ready: true });
+  expect(element.scrollTop).toBe(50);
+  values.extent = 500;
+  frame();
+  expect(element.scrollTop).toBe(50);
+});
+
+it("lets user scrolling, a replacement scope and disposal cancel retained restoration", () => {
+  const { element, values, frame, setState, dispose } = retainedScroll();
+  values.offset = 160;
+  element.dispatchEvent(new Event("scroll"));
+  frame({ presented: false });
+  values.offset = 0;
+  frame({ presented: true, ready: false });
+  element.dispatchEvent(new WheelEvent("wheel"));
+  values.offset = 20;
+  element.dispatchEvent(new Event("scroll"));
+  frame({ ready: true });
+  expect(element.scrollTop).toBe(20);
+
+  frame({ key: "second" });
+  expect(element.scrollTop).toBe(0);
+  values.offset = 90;
+  element.dispatchEvent(new Event("scroll"));
+  frame({ presented: false });
+  values.offset = 0;
+  setState((current) => ({ ...current, presented: true }));
+  flush();
+  scheduleLayout({}, () => {
+    dispose();
+  });
+  vi.advanceTimersToNextFrame();
+  expect(element.scrollTop).toBe(0);
 });

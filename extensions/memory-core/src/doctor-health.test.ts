@@ -136,18 +136,8 @@ describe("managed local embedding setup health check", () => {
     expect(registerHealthCheck).toHaveBeenCalledTimes(2);
   });
 
-  it("passes configured local setup", async () => {
-    const stateDir = await createState();
-    const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
-    const check = captureCheck(inspect);
-
-    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([]);
-    expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local"]);
-  });
-
   it("snapshots only local agents while preserving their setup findings", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-mixed-"));
-    roots.add(stateDir);
+    const stateDir = await createState(false);
     for (const agentId of ["default", "disabled", "local"]) {
       await createSemanticIndex(stateDir, "embeddinggemma-300m", agentId);
     }

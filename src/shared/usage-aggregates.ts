@@ -248,8 +248,9 @@ export function createUsageAggregateAccumulator() {
     addModelDays(usage);
   }
 
+  /* oxlint-disable unicorn/no-array-sort -- Every sorted array is freshly materialized here and exclusively owned until return. */
   function finish(): SessionsUsageAggregates {
-    const toolEntries = Array.from(tools, ([name, count]) => ({ name, count })).toSorted(
+    const toolEntries = Array.from(tools, ([name, count]) => ({ name, count })).sort(
       (a, b) => b.count - a.count,
     );
     return {
@@ -261,25 +262,25 @@ export function createUsageAggregateAccumulator() {
         uniqueTools: tools.size,
         tools: toolEntries,
       },
-      byModel: Array.from(models.values()).toSorted(compareModelUsage),
-      byProvider: Array.from(providers.values()).toSorted(compareModelUsage),
+      byModel: Array.from(models.values()).sort(compareModelUsage),
+      byProvider: Array.from(providers.values()).sort(compareModelUsage),
       byAgent: Array.from(agents, ([agentId, groupTotals]) => ({
         agentId,
         totals: groupTotals,
-      })).toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      })).sort((a, b) => b.totals.totalCost - a.totals.totalCost),
       byChannel: Array.from(channels, ([channel, groupTotals]) => ({
         channel,
         totals: groupTotals,
-      })).toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      })).sort((a, b) => b.totals.totalCost - a.totals.totalCost),
       byCreator: Array.from(creators.values(), ({ daily, sessionActivity, ...creator }) => ({
         ...creator,
-        daily: Array.from(daily, ([date, dayTotals]) => ({ date, ...dayTotals })).toSorted((a, b) =>
+        daily: Array.from(daily, ([date, dayTotals]) => ({ date, ...dayTotals })).sort((a, b) =>
           a.date.localeCompare(b.date),
         ),
-        sessionActivity: Array.from(sessionActivity.values()).toSorted((a, b) =>
+        sessionActivity: Array.from(sessionActivity.values()).sort((a, b) =>
           a.dates.join(",").localeCompare(b.dates.join(",")),
         ),
-      })).toSorted(
+      })).sort(
         (a, b) =>
           b.totals.totalCost - a.totals.totalCost ||
           b.totals.totalTokens - a.totals.totalTokens ||
@@ -288,18 +289,19 @@ export function createUsageAggregateAccumulator() {
       costDaily: Array.from(costDays, ([date, groupTotals]) => ({
         date,
         ...groupTotals,
-      })).toSorted((a, b) => a.date.localeCompare(b.date)),
+      })).sort((a, b) => a.date.localeCompare(b.date)),
       latency: latency.count > 0 ? summarizeLatency(latency) : undefined,
       dailyLatency: Array.from(dailyLatency, ([date, value]) => ({
         date,
         ...summarizeLatency(value),
-      })).toSorted((a, b) => a.date.localeCompare(b.date)),
-      modelDaily: Array.from(dailyModels.values()).toSorted(
+      })).sort((a, b) => a.date.localeCompare(b.date)),
+      modelDaily: Array.from(dailyModels.values()).sort(
         (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
       ),
-      daily: Array.from(days.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+      daily: Array.from(days.values()).sort((a, b) => a.date.localeCompare(b.date)),
     };
   }
+  /* oxlint-enable unicorn/no-array-sort */
 
   return { totals, totalsForDays, add, addCalendar, finish };
 }

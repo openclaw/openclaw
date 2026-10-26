@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
@@ -15,14 +16,6 @@ type CapturedRequest = {
   url?: string;
 };
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function withXaiVideoServer(
   run: (server: { baseUrl: string; requests: CapturedRequest[] }) => Promise<void>,
 ) {
@@ -35,7 +28,7 @@ async function withXaiVideoServer(
           method: request.method,
           url: request.url,
           headers: request.headers,
-          body: await readRequestBody(request),
+          body: (await consumeBuffer(request)).toString("utf8"),
         });
         const routes: Record<string, string | Buffer> = {
           "POST /v1/videos/generations": JSON.stringify({ request_id: "local_request" }),

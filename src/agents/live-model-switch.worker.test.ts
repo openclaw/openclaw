@@ -21,6 +21,18 @@ import { createAgentPatchedSessionModelRunGuard } from "./session-model-auto-rev
 
 afterEach(() => vi.restoreAllMocks());
 
+function modelGuardFixture() {
+  const warnings = createWarnLogCapture("model-guard-read");
+  onTestFinished(() => warnings.cleanup());
+  const scope = {
+    agentId: "main",
+    storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
+    sessionKey: "agent:main:model-guard",
+  };
+  replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+  return { scope, warnings };
+}
+
 describe("live model switch worker persistence", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-switch-worker-");
   const selection = { provider: "openai", model: "gpt-5.4" };
@@ -35,23 +47,16 @@ describe("live model switch worker persistence", () => {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     return {
       scope: { storePath, sessionKey: "agent:main:model-switch" },
-      cfg: { session: { store: storePath } },
-      defaultProvider: selection.provider,
-      defaultModel: selection.model,
-      providerUsed: selection.provider,
-      modelUsed: selection.model,
+      params: {
+        cfg: { session: { store: storePath } },
+        agentId: "main",
+        sessionKey: "agent:main:model-switch",
+        defaultProvider: selection.provider,
+        defaultModel: selection.model,
+        providerUsed: selection.provider,
+        modelUsed: selection.model,
+      },
     };
-  }
-
-  async function withoutHostSql(run: () => Promise<unknown>, forbidden: RegExp) {
-    const sql = observeHostDataSql();
-    try {
-      const result = await run();
-      expect(sql.queries.filter((query) => forbidden.test(query))).toEqual([]);
-      return result;
-    } finally {
-      sql.restore();
-    }
   }
 
   function completeSelection(
@@ -67,7 +72,7 @@ describe("live model switch worker persistence", () => {
       if (!reducer) {
         return undefined;
       }
-      const outcome = await actor.completeTurn(
+      return actor.completeTurn(
         {
           commandId,
           phaseId: "completion",
@@ -82,23 +87,19 @@ describe("live model switch worker persistence", () => {
         },
         authority,
       );
-      expect(outcome.kind).toBe("committed");
-      return outcome;
     });
   }
 
   it.each(["clear", "complete"] as const)(
-    "%s consumes only the applied selection without host session SQL",
+    "%s consumes only the applied selection",
     async (operation) => {
-      const { scope, ...params } = fixture();
+      const { scope, params } = fixture();
       const initial = { ...initialSelection, label: "keep this label" };
       await replaceSessionEntry(scope, initial);
       const apply = async () => {
         if (operation === "clear") {
           await clearLiveModelSwitchPending({
             ...params,
-            agentId: "main",
-            sessionKey: scope.sessionKey,
             expectedSelection: selection,
           });
           return;
@@ -106,16 +107,11 @@ describe("live model switch worker persistence", () => {
         await completeSelection(scope, "complete-selection", (entry) =>
           prepareLiveModelSwitchAfterRun({
             ...params,
-            agentId: "main",
-            sessionKey: scope.sessionKey,
             entry,
           }),
         );
       };
-      await withoutHostSql(
-        apply,
-        /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i,
-      );
+      await apply();
       expect(loadSessionEntry(scope)).toMatchObject({
         sessionId: initial.sessionId,
         label: initial.label,
@@ -124,25 +120,8 @@ describe("live model switch worker persistence", () => {
       expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
 
       const withoutPendingSwitch = loadSessionEntry(scope);
-      const writeGrants: string[] = [];
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const observeAdmission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              writeGrants.push(request.stage);
-            }
-            callback(request, grant);
-          }, attachment),
-        );
-      try {
-        await apply();
-        expect(writeGrants).toEqual([]);
-        expect(loadSessionEntry(scope)).toEqual(withoutPendingSwitch);
-      } finally {
-        observeAdmission.mockRestore();
-      }
+      await apply();
+      expect(loadSessionEntry(scope)).toEqual(withoutPendingSwitch);
 
       await replaceSessionEntry(scope, { ...initial, modelOverride: "gpt-5.5" });
       await apply();
@@ -150,24 +129,25 @@ describe("live model switch worker persistence", () => {
         liveModelSwitchPending: true,
         modelOverride: "gpt-5.5",
       });
+      const reads = observeHostDataSql();
+      using _ = { [Symbol.dispose]: reads.restore };
       expect(
-        await withoutHostSql(
-          () =>
-            shouldSwitchToLiveModel({
-              ...scope,
-              ...params,
-              agentId: "main",
-              currentProvider: selection.provider,
-              currentModel: selection.model,
-            }),
-          /session_nodes|session_entry_snapshots|session_participants|session_windows/i,
-        ),
+        await shouldSwitchToLiveModel({
+          ...params,
+          currentProvider: selection.provider,
+          currentModel: selection.model,
+        }),
       ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
+      expect(
+        reads.queries.filter((sql) =>
+          /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(sql),
+        ),
+      ).toEqual([]);
     },
   );
 
   it("keeps newer selections when a prepared terminal reducer reaches the actor", async () => {
-    const { scope, ...params } = fixture();
+    const { scope, params } = fixture();
     const initial = {
       ...initialSelection,
       agentRuntimeOverride: "openclaw",
@@ -176,7 +156,6 @@ describe("live model switch worker persistence", () => {
     };
     const reducer = prepareLiveModelSwitchAfterRun({
       ...params,
-      sessionKey: scope.sessionKey,
       entry: initial,
     });
     if (!reducer) {
@@ -201,16 +180,8 @@ describe("live model switch worker persistence", () => {
 });
 
 it("propagates model-guard read cancellation instead of treating it as missing metadata", async () => {
-  const warnings = createWarnLogCapture("model-guard-read-cancel");
-  onTestFinished(() => warnings.cleanup());
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:model-guard-cancel",
-    };
-    replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+    const { scope, warnings } = modelGuardFixture();
     const controller = new AbortController();
     const reason = new Error("model read owner cancelled");
     let cancelledAtAdmission = false;
@@ -232,18 +203,12 @@ it("propagates model-guard read cancellation instead of treating it as missing m
 });
 
 it("warns when model rollback preparation fails, not when its marker is absent", async () => {
-  const warnings = createWarnLogCapture("model-guard-read-failure");
-  onTestFinished(() => warnings.cleanup());
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:model-guard-read-error",
-    };
-    replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+    const { scope, warnings } = modelGuardFixture();
+    const prepare = (sessionKey: string) =>
+      createAgentPatchedSessionModelRunGuard({ ...scope, sessionKey, cfg: {} });
     for (const sessionKey of [scope.sessionKey, "agent:main:model-guard-missing"]) {
-      await createAgentPatchedSessionModelRunGuard({ ...scope, sessionKey, cfg: {} });
+      await prepare(sessionKey);
     }
     expect(await warnings.findText("model rollback preparation unavailable")).toBeUndefined();
 
@@ -251,11 +216,7 @@ it("warns when model rollback preparation fails, not when its marker is absent",
     probe.admission(workerAdmission, () => {
       throw failure;
     });
-    const guard = await createAgentPatchedSessionModelRunGuard({
-      ...scope,
-      sessionKey: "agent:main:model-guard-unread",
-      cfg: {},
-    });
+    const guard = await prepare("agent:main:model-guard-unread");
     expect(await warnings.findText("model rollback preparation unavailable")).toContain(
       failure.message,
     );

@@ -24,7 +24,9 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
@@ -100,6 +102,7 @@ import {
   mockPendingNativeCompaction,
 } from "./compact.hooks.pending.test-support.js";
 import { registerCompactionSafeguardTests } from "./compact.hooks.safeguard.test-support.js";
+import { createModelAliasMetadata } from "./model-alias-metadata.test-support.js";
 import { abortEmbeddedAgentRun, isEmbeddedAgentRunHandleActive } from "./runs.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -207,12 +210,6 @@ async function nativeCompactionArgs(
 
 function expectCall(mock: Mock, fields: Record<string, unknown>, ...rest: unknown[]) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields), ...rest);
-}
-
-function expectNoCalls(...mocks: Mock[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 const abortedCompaction = { ok: false, compacted: false, reason: "compaction aborted" };
@@ -962,16 +959,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("preserves configured fallback identity through credential refresh", async () => {
     const provider = "compaction-fallback-fixture";
-    const metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: provider,
-          providers: [provider],
-          modelIdNormalization: {
-            providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
-          },
-        },
-      ],
+    const metadataSnapshot = createModelAliasMetadata(provider, {
+      entry: "middle",
+      middle: "final",
     });
     const { normalizeStaticProviderModelId } =
       await vi.importActual<typeof import("../model-ref-shared.js")>("../model-ref-shared.js");
@@ -1673,30 +1663,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       const parent = new AsyncWorkScope();
       const controller = new AbortController();
       const releaseLease = vi.fn(async () => {});
-      const resolutionStarted = createDeferred();
-      const releaseResolution = createDeferred();
+      const resolutionGate = createEnteredGate();
       let hostActive = true;
-      const waitForResolution = async () => {
-        resolutionStarted.resolve(undefined);
-        await releaseResolution.promise;
-      };
       if (stage === "admission") {
         const acquire = expectDefined(
           acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
           "prepared runtime acquisition",
         );
         acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(async (input) => {
-          await waitForResolution();
+          await resolutionGate.wait();
           return { ...(await acquire(input)), [Symbol.asyncDispose]: releaseLease };
         });
       } else if (stage === "model") {
         resolveModelAsyncMock.mockImplementationOnce(async (provider, modelId) => {
-          await waitForResolution();
+          await resolutionGate.wait();
           return subscriptionModel(provider, modelId);
         });
       } else {
         resolveContextEngineMock.mockImplementationOnce(async () => {
-          await waitForResolution();
+          await resolutionGate.wait();
           return { info: { ownsCompaction: true }, compact: contextEngineCompactMock };
         });
       }
@@ -1720,13 +1705,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           { assertActive: assertActiveWhile(() => hostActive) },
         ),
       );
-      await resolutionStarted.promise;
+      await resolutionGate.entered;
       if (cancel) {
         controller.abort(new Error("request timed out"));
       } else {
         hostActive = false;
       }
-      releaseResolution.resolve(undefined);
+      resolutionGate.release();
       try {
         if (cancel) {
           await expect(pending).resolves.toEqual(abortedCompaction);

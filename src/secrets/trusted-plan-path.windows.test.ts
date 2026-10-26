@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OwnerAndDaclResult, WindowsAccessControlEntry } from "@openclaw/fs-safe/permissions";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWindowsAllowEntry } from "../test-utils/windows-acl.test-support.js";
 
 const inspections = vi.hoisted(() => ({
   batch: vi.fn<typeof import("@openclaw/fs-safe/permissions").readOwnerAndDaclBatch>(),
@@ -28,21 +29,7 @@ const facts = new Map<string, Partial<WindowsSecurity>>();
 let root: string, directory: string, executable: string;
 
 function allow(mask: number, sid = EVERYONE, inheritOnly = false): WindowsAccessControlEntry {
-  return {
-    sid,
-    mask,
-    aceType: "allow",
-    flags: {
-      raw: inheritOnly ? 11 : 0,
-      objectInherit: inheritOnly,
-      containerInherit: inheritOnly,
-      noPropagateInherit: false,
-      inheritOnly,
-      inherited: false,
-      successfulAccess: false,
-      failedAccess: false,
-    },
-  };
+  return createWindowsAllowEntry(sid, mask, inheritOnly, inheritOnly);
 }
 
 const securityFor = (file: string): WindowsSecurity => ({

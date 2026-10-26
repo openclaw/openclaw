@@ -25,7 +25,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await pauseVirtualClock(page);
         await gateway.setMethodResponse("chat.send", {
           __mockError: {
@@ -103,7 +103,7 @@ suite.define(() => {
       const prompt = "Please also review the installation notes.";
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(suite.server.baseUrl + "chat");
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.setOnline(false);
       await page.locator(".agent-chat__input--offline").waitFor();
       await waitForControlUiGatewayReconnecting(page);
@@ -408,7 +408,7 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await page.reload();
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await expectRemoved();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });

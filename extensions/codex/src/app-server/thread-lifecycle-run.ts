@@ -2,8 +2,13 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
-import { isCodexAppServerLiveThreadBackgroundOnly } from "./client-runtime.js";
+import {
+  isCodexAppServerLiveThreadBackgroundOnly,
+  isCodexAppServerLiveThreadClaimed,
+  isCodexAppServerLiveThreadProtected,
+} from "./client-runtime.js";
 import { injectCodexHistoryDelta } from "./context-engine-history.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -53,6 +58,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { splitCodexExtraSystemPrompt } from "./thread-prompt.js";
 import { isTransientCodexRestrictedTurn } from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
@@ -126,6 +132,7 @@ export async function startOrResumeThread(
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
+    const initialBoundRestrictedThread = Boolean(binding?.restrictedThreadConfigFingerprint);
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
     // Rotation changes the physical binding, not this attempt's admitted tier.
     let serviceTierAdmission: CodexThreadRequestContext["serviceTierAdmission"] | undefined;
@@ -147,6 +154,14 @@ export async function startOrResumeThread(
       params.refreshableInstructions = params.inferenceRoute
         ? undefined
         : input.refreshableInstructions;
+      // Only an actual relay can preserve current context through native compaction.
+      params.developerInstructions =
+        params.inferenceRoute || input.developerInstructions === undefined
+          ? input.developerInstructions
+          : joinPresentSections(
+              input.developerInstructions,
+              splitCodexExtraSystemPrompt(params.params).turn,
+            );
       return context;
     };
     const releaseRetainedThread = (
@@ -678,7 +693,22 @@ export async function startOrResumeThread(
         isCodexAppServerLiveThreadBackgroundOnly(params.client, initialBoundThreadId)
       )
     ) {
-      await releaseRetainedThread(initialBoundThreadId);
+      // Preliminary app/MCP discovery can leave a restricted thread protected
+      // while the same message starts its first reply. The discovery lease owns
+      // cleanup, so rotating the restricted binding must not masquerade as a
+      // claimed turn or strand the reply behind its own preparation borrow.
+      const protectedRestrictedPredecessor =
+        initialBoundRestrictedThread &&
+        params.nativeCodeModeEnabled !== false &&
+        isCodexAppServerLiveThreadProtected(params.client, initialBoundThreadId) &&
+        !isCodexAppServerLiveThreadClaimed(params.client, initialBoundThreadId);
+      if (protectedRestrictedPredecessor) {
+        embeddedAgentLog.debug("codex app-server retaining a protected restricted predecessor", {
+          threadId: initialBoundThreadId,
+        });
+      } else {
+        await releaseRetainedThread(initialBoundThreadId);
+      }
     }
     const started = await startFreshCodexThread(params, {
       ...requestContext,

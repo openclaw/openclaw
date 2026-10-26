@@ -390,16 +390,17 @@ async function updateFinalizeCommandInternal(
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
       await lifecycle.run(
         "doctor",
-        () =>
+        (phase) =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
+            serviceInspectionDeadlineAtMs: phase.deadlineAtMs,
           }),
         undefined,
         {
-          enter: async () => {
+          enter: async (serviceInspectionDeadlineAtMs) => {
             if (!ownsMaintenance) {
               return;
             }
@@ -409,6 +410,7 @@ async function updateFinalizeCommandInternal(
               runId: invokingRunId,
               options: { repair: true, nonInteractive: true, json: opts.json },
               runtime: { ...defaultRuntime, log: defaultRuntime.error },
+              serviceInspectionDeadlineAtMs,
             });
             lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
             // Fresh Doctor owns database fences; the parent retains service custody.

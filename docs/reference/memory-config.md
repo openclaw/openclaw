@@ -266,6 +266,38 @@ authentication.
 
 ---
 
+## Query instructions
+
+Set `memory.search.queryInstruction` when your embedding model requires a text
+prefix for retrieval queries, especially when a local server exposes the model
+under an alias that OpenClaw cannot recognize:
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "my-nomic-alias",
+      remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+      queryInstruction: "search_query: ",
+    },
+  },
+}
+```
+
+The instruction is prepended literally to query text. Include any required
+spaces or newlines; OpenClaw does not trim it, add a separator, or expand
+placeholders. This changes query embeddings only. Document text, stored
+embeddings, and index identity stay unchanged, so changing the instruction does
+not require reindexing. The `queryInputType` setting is separate: it sends an
+API `input_type` label rather than changing text.
+
+A non-empty instruction replaces automatic query formatting, including native
+Ollama's model-family templates, so the prefix is applied once. When unset or
+empty, existing provider behavior is preserved. Per-agent overrides use
+`agents.entries.<id>.memory.search.queryInstruction`; an empty string suppresses
+an inherited instruction and restores the provider's automatic behavior.
+
 ## Provider-specific config
 
 <AccordionGroup>
@@ -619,8 +651,11 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 For ordinary embedding requests, a recognized error with one explicit item cap
-sizes the retry batches directly. Unusable or conflicting caps fall back to
-halving the rejected batch. Successful slices retain their input order and cache entries.
+sizes the retry batches directly. Unusable or conflicting caps, and aggregate
+limits reported without a count (Mistral's "Too many tokens overall, split into
+more batches."), fall back to halving the rejected batch. Successful slices
+retain their input order and cache entries. A single input that still exceeds a
+per-input limit fails the pass and is reported.
 
 ---
 

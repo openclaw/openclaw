@@ -16,6 +16,13 @@ hint without changing the package or stopping the Gateway; background checks
 skip package-registry updates. Missing or invalid markers retain normal install
 behavior, with a warning for an invalid marker.
 
+After a Mac app update, recovery checks the service selected by the connection
+mode: the local Gateway or, with a remote primary, the Mac node service. If a
+custom node launcher cannot be inspected, check its node LaunchAgent before
+retrying. This node inspection failure does not invalidate an already verified
+local Gateway. Recovery keeps the update receipt for retry, verifies the node
+after its launcher is repaired, and leaves the custom launcher unchanged.
+
 For [standalone builds](/install/standalone#update-the-complete-artifact), update
 the owning desktop app or replace the complete executable and runtime directory.
 The standalone CLI refuses package-manager and git updates with a visible next
@@ -32,6 +39,13 @@ Automatic config copies and migration recovery originals are not a full-state
 backup.
 
 ## Update implementation contract
+
+Candidate Doctor preserves same-conversation automation continuations when adopting
+a stored inference account. It carries forward the original authenticated source
+only when its old executable revision still matches, then binds that source and
+existing standing-grant references to the restricted definition. Stale captures
+stay stale; runtime authorization, conversation identity and revocation checks
+remain required. The candidate must contain this repair.
 
 Background discovery failures are logged and retried at the next scheduled check.
 Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
@@ -126,6 +140,10 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+This retention covers Node and Bun late imports, including CommonJS dependencies
+and JSON. Module state already loaded by the updater stays shared through cleanup;
+imports outside that retained generation continue using the active installation.
+
 Source updates qualify the installed pnpm launcher outside the checkout so even
 its version probe cannot rewrite the checkout's lockfile. If another version is
 needed, the updater uses a temporary Corepack shim or npm-installed pnpm matching
@@ -215,7 +233,9 @@ the update result. This does not change Gateway authentication or pairing.
 The retained verifier runs the previous package, so an update that changes the
 Gateway protocol version, in either direction, gets the same HTTP identity check
 with an RPC protocol warning instead of waiting for an RPC handshake that cannot
-succeed.
+succeed. When readiness never settles, the recorded timeout names both the read
+the budget interrupted and the last health probe error, such as an RPC
+rejection.
 
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`
@@ -1358,9 +1378,18 @@ progress report remains available through that Gateway's restart.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's
-`update.run` action. The minimal, coding, and messaging profiles expose that update
-action without granting configuration reads or other Gateway controls. Explicit tool
-restrictions still apply.
+`update.run` action. The same tool exposes `restart` for a runtime-coordinated safe
+restart and `update.cleanup` for explicit recovery cleanup without stopping the
+Gateway. The minimal, coding, and messaging profiles expose these maintenance
+actions without granting configuration reads. Explicit tool restrictions still apply.
+
+On an explicit owner request, the agent performs the supported action itself; it
+does not send the owner to a slash command or terminal. Restart requests can be
+deferred until active work settles; an accepted schedule is not a completed restart.
+Cleanup uses the serving Gateway's owner-bound worker and the existing manual
+verification, eligibility, and dependency checks. It permanently removes eligible
+rollback copies, so it requires a cleanup request. Set `dryRun: true` to preview.
+It does not select unmanifested paths or stop/restart the Gateway.
 
 Operator-created scheduled automations can also call `gateway` → `update.run`
 without a chat owner identity. The Gateway uses the active scheduled run's
@@ -1450,9 +1479,11 @@ External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
 configured update channel and install method.
-Agents must never run `npm install -g openclaw` or stop the Gateway service
-from a chat shell; use `/update` or the update action so restart and notification
-stay coordinated.
+Agents use runtime-supervised maintenance rather than an unsupervised shell
+stop/update/start sequence or package swap. The runtime retains restart ownership
+before stopping the Gateway. Non-owner requests remain refused, and chat restarts
+honor `commands.restart` just like chat updates. Cleanup does not depend on that
+flag because it does not restart the Gateway.
 
 ## Inspect FreeBSD service discovery
 
@@ -1546,8 +1577,12 @@ is not required for this ledger defect. See [Update run history](/cli/update#run
 
 ## Retire update recovery data
 
-Once you have verified the update and your conversations, preview retained
-migration originals:
+Once you have verified the update and your conversations, ask the agent to clean
+up update recovery copies. The `gateway` tool's `update.cleanup` action runs under
+the serving Gateway's ownership; no stop is needed. It also accepts `dryRun: true`
+for a preview. The standalone CLI keeps its offline apply requirement below.
+
+To preview retained migration originals from a terminal:
 
 ```bash
 openclaw update cleanup --dry-run
@@ -1590,9 +1625,9 @@ Migrates config, audits DM policies, and checks gateway health. Doctor also comp
 Standalone repair cancels its pre-repair original-state capture after ten minutes.
 If that capture times out, Doctor waits for its workers to settle and reports a
 warning with backup and retry instructions; repair-specific migration backups still apply.
-Doctor restores a managed Gateway it stopped, including after interruption. If
-restoration fails, it prints the failure and the command to start the Gateway
-after resolving it.
+Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
+or SIGHUP interrupts repair. If restoration fails, it prints the failure and the
+command to start the Gateway after resolving it.
 
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and

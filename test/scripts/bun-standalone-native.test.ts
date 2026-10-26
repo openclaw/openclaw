@@ -5,15 +5,18 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
-import { parse } from "acorn";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStandaloneNativeAdapter } from "../../scripts/lib/bun-standalone-native.mjs";
 import { createStandaloneRequireAdapter } from "../../scripts/lib/bun-standalone-require.mjs";
 import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
 } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
+import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
+import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
 
+const parse = createStandaloneSourceParser();
 const temporary: string[] = [];
 afterEach(() =>
   temporary
@@ -108,6 +111,168 @@ function hoistedCopies() {
 }
 
 describe("standalone native sidecar", () => {
+  it("keeps native routing bytes stable across graph discovery order", () => {
+    const { root, pkg } = fixture();
+    const entries = ["@fixture/alpha", "@fixture/bravo"].map((name) =>
+      path.join(
+        pkg(
+          name,
+          { type: "module", main: "index.js" },
+          { "index.js": "export const value = 1;", "runtime.wasm": "synthetic resource" },
+        ),
+        "index.js",
+      ),
+    );
+    const capture = (filenames: string[]) =>
+      createStandaloneNativeAdapter({ runtimeRoot: root, parse }).finalize({
+        metafile: { inputs: Object.fromEntries(filenames.map((filename) => [filename, {}])) },
+      });
+    const first = capture(entries);
+    const reversed = capture(entries.toReversed());
+    expect(first.files.filter((file) => file.source.endsWith("runtime.wasm"))).toHaveLength(2);
+    expect(
+      reversed.files.map((file) => file.source).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(first.files.map((file) => file.source).toSorted((a, b) => a.localeCompare(b)));
+    expect(reversed.bootstrapReplacement.replacement).toBe(first.bootstrapReplacement.replacement);
+  });
+
+  it("loads admitted addons through the native boundary and preserves the module cache", () => {
+    const { root, write, pkg } = fixture();
+    const addon = pkg("addon", { main: "binding.node" }, { "binding.node": "native fixture" });
+    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { addon: "1" } }));
+    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    adapter.transform({ filename: path.join(addon, "binding.node"), contents: "" });
+    const relocated = path.join(root, "relocated");
+    const { context } = evaluate(adapter, {}, relocated);
+    const binding = { value: 42 };
+    const failure = new Error("native initialization failed");
+    const dlopen = vi
+      .fn((module: { exports: unknown }) => {
+        module.exports = binding;
+      })
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+    Object.assign(context, {
+      commonJsEntries: new Set(),
+      embedded: () => undefined,
+      process: { dlopen },
+    });
+    const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} });
+    vm.runInContext(requireAdapter.bootstrap, context);
+    const load = context["__openclawStandaloneCreateRequire"](
+      createRequire,
+      path.join(relocated, "entry.mjs"),
+    );
+    const filename = load.resolve("addon");
+    try {
+      expect(() => load("addon")).toThrow(failure);
+      expect(load.cache[filename]).toBeUndefined();
+      expect(load("addon")).toBe(binding);
+      expect(load(filename)).toBe(binding);
+      expect(dlopen).toHaveBeenCalledTimes(2);
+      expect(load.cache[filename]).toMatchObject({ filename, loaded: true, exports: binding });
+      delete load.cache[filename];
+      expect(load("addon")).toBe(binding);
+      expect(dlopen).toHaveBeenCalledTimes(3);
+      const outside = path.join(root, "outside.node");
+      write(outside, "not an admitted addon");
+      expect(() => load(outside)).toThrow();
+      expect(dlopen).toHaveBeenCalledTimes(3);
+    } finally {
+      delete load.cache[filename];
+    }
+  });
+
+  it("skips file probes for discarded text while retaining resource payloads", () => {
+    const { root, write, pkg } = fixture();
+    const discarded = [
+      "index.js",
+      "types.d.ts",
+      "index.js.map",
+      "data.json",
+      "README.md",
+      "run.sh",
+    ];
+    const owner = pkg(
+      "resource-fixture",
+      {},
+      {
+        ...Object.fromEntries(discarded.map((name) => [name, "discarded"])),
+        "archive.wasm": "wasm payload",
+        "bin/helper": "executable payload",
+        "unused.dat": "unused payload",
+      },
+    );
+    fs.chmodSync(path.join(owner, "bin/helper"), 0o755);
+    fs.chmodSync(path.join(owner, "run.sh"), 0o755);
+    const playwright = pkg(
+      "playwright-core",
+      {},
+      { "browsers.json": "{}", "lib/vite/app.js": "browser payload" },
+    );
+    write(
+      path.join(root, "package.json"),
+      JSON.stringify({ dependencies: { "resource-fixture": "1", "playwright-core": "1" } }),
+    );
+    const discardedPaths = new Set(discarded.map((name) => path.join(owner, name)));
+    const realpath = vi.spyOn(fs, "realpathSync");
+    const stat = vi.spyOn(fs, "statSync");
+    let adapter: ReturnType<typeof createStandaloneNativeAdapter>;
+    try {
+      adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+      expect(
+        realpath.mock.calls.filter(([filename]) => discardedPaths.has(String(filename))),
+      ).toHaveLength(0);
+      expect(
+        stat.mock.calls.filter(([filename]) => discardedPaths.has(String(filename))),
+      ).toHaveLength(0);
+      expect(stat).toHaveBeenCalledWith(path.join(owner, "bin/helper"));
+      expect(stat).toHaveBeenCalledWith(path.join(owner, "unused.dat"));
+    } finally {
+      realpath.mockRestore();
+      stat.mockRestore();
+    }
+    for (const directory of [owner, playwright]) {
+      adapter.transform({ filename: path.join(directory, "index.js"), contents: "export {};" });
+    }
+    const resources = adapter
+      .finalize()
+      .files.filter((file) => file.category !== "dependencyMetadata");
+    expect(
+      resources.map((file) => file.source).toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(
+      [
+        path.join(owner, "archive.wasm"),
+        path.join(owner, "bin/helper"),
+        path.join(playwright, "browsers.json"),
+        path.join(playwright, "lib/vite/app.js"),
+      ]
+        .map((filename) => path.relative(root, filename))
+        .toSorted(),
+    );
+    expect(
+      resources.map((file) => fs.readFileSync(path.join(root, file.source), "utf8")).toSorted(),
+    ).toEqual(["wasm payload", "executable payload", "{}", "browser payload"].toSorted());
+  });
+
+  it.each(["entry.js", "binding.node"])("rejects an escaping file symlink named %s", (name) => {
+    const { root, write, pkg } = fixture();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-native-outside-"));
+    temporary.push(outside);
+    write(path.join(outside, name), "outside payload");
+    const owner = pkg("escaping-resource", {}, {});
+    const link = path.join(owner, name);
+    fs.symlinkSync(path.join(outside, name), link);
+    write(
+      path.join(root, "package.json"),
+      JSON.stringify({ dependencies: { "escaping-resource": "1" } }),
+    );
+    expect(() => createStandaloneNativeAdapter({ runtimeRoot: root, parse })).toThrow(
+      `Dependency resource escapes runtime: ${link}`,
+    );
+  });
+
   it("collapses identical hoisted metadata and licenses while retaining every resolution path", () => {
     const { root, parents, helpers, adapter } = hoistedCopies();
     const { finalized, context } = evaluate(adapter, {}, root);
@@ -140,6 +305,74 @@ describe("standalone native sidecar", () => {
       expect(fs.readFileSync(expected, "utf8")).toContain(
         name === "LICENSE" ? "Same license" : '"name":"helper"',
       );
+    }
+    expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
+  });
+
+  it("preserves named package scopes and their resources under the installed package", () => {
+    const { root, write, pkg } = fixture();
+    const name = "@fixture/scoped";
+    const scopes = [
+      { directory: "dist/esm", type: "module" },
+      { directory: "dist/commonjs", type: "commonjs" },
+    ];
+    const owner = pkg(
+      name,
+      { exports: { "./package.json": "./package.json" } },
+      { "shared.wasm": "shared resource", LICENSE: "scope fixture license" },
+    );
+    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { [name]: "1.0.0" } }));
+    for (const scope of scopes) {
+      write(
+        path.join(owner, scope.directory, "package.json"),
+        JSON.stringify({
+          name,
+          version: "1.0.0",
+          type: scope.type,
+          exports: { "./package.json": "./package.json" },
+        }),
+      );
+      write(path.join(owner, scope.directory, "index.js"), "export {};");
+      write(path.join(owner, scope.directory, "scope.wasm"), scope.type);
+    }
+    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const finalized = adapter.finalize({
+      metafile: {
+        inputs: Object.fromEntries(
+          scopes.map((scope) => [path.join(owner, scope.directory, "index.js"), {}]),
+        ),
+      },
+    });
+    const context = vm.createContext({ root, path, fileURLToPath });
+    vm.runInContext(
+      adapter.bootstrap
+        .replace(/^import[^\n]+\n/, "")
+        .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
+      context,
+    );
+    pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
+    const destination = path.join(root, "native/@fixture+scoped@1.0.0/@fixture/scoped");
+    expect(JSON.parse(fs.readFileSync(path.join(destination, "package.json"), "utf8"))).toEqual({
+      name,
+      version: "1.0.0",
+      exports: { "./package.json": "./package.json" },
+    });
+    expect(fs.readFileSync(path.join(destination, "shared.wasm"), "utf8")).toBe("shared resource");
+    expect(fs.readFileSync(path.join(destination, "LICENSE"), "utf8")).toBe(
+      "scope fixture license",
+    );
+    for (const scope of scopes) {
+      const originalEntry = path.join(owner, scope.directory, "index.js");
+      const relocatedEntry = path.join(destination, scope.directory, "index.js");
+      const manifest = path.join(destination, scope.directory, "package.json");
+      expect(JSON.parse(fs.readFileSync(manifest, "utf8")).type).toBe(scope.type);
+      expect(context["__openclawStandaloneNativeResolve"](originalEntry, "./package.json")).toBe(
+        manifest,
+      );
+      expect(context["__openclawStandaloneOriginalPath"](relocatedEntry)).toBe(originalEntry);
+      const resource = context["__openclawStandaloneNativeResolve"](relocatedEntry, "./scope.wasm");
+      expect(resource).toBe(path.join(destination, scope.directory, "scope.wasm"));
+      expect(fs.readFileSync(resource, "utf8")).toBe(scope.type);
     }
     expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
   });
@@ -184,13 +417,13 @@ describe("standalone native sidecar", () => {
       String.raw`
 import fs from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { createStandaloneNativeAdapter } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/bun-standalone-native.mjs")).href)};
 import { createStandaloneRequireAdapter } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/bun-standalone-require.mjs")).href)};
 import { rewriteStandaloneImports } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/bun-standalone-imports.mjs")).href)};
 import { planStandaloneRuntime, pruneStandaloneRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/bun-standalone-sidecar.mjs")).href)};
-const { parse } = createRequire(${JSON.stringify(path.resolve("package.json"))})("acorn");
+import { createStandaloneSourceParser } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/bun-standalone-source-parser.mjs")).href)};
+const parse = createStandaloneSourceParser();
 const root = ${JSON.stringify(root)};
 const image = ${JSON.stringify(image)};
 const dependency = ${JSON.stringify(dependency)};
@@ -238,6 +471,124 @@ console.log("full-ws loaded without node_modules");
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("full-ws loaded without node_modules");
+  });
+
+  it("keeps canonical native and CommonJS owners across typed dependency contexts", () => {
+    const runtime = fixture();
+    const source = fixture();
+    for (const tree of [runtime, source]) {
+      tree.pkg(
+        "@fixture/fs-safe-native",
+        { main: "binding.node" },
+        { "binding.node": "native marker" },
+      );
+      tree.pkg(
+        "@fixture/fs-safe",
+        { optionalDependencies: { "@fixture/fs-safe-native": "1.0.0" } },
+        { "dist/native.js": "export const url = import.meta.url;" },
+      );
+      tree.pkg(
+        "ws",
+        { main: "index.js", exports: { ".": "./index.js", "./package.json": "./package.json" } },
+        {
+          "index.js": "module.exports = require('./lib/websocket.js');",
+          "lib/websocket.js": "module.exports = { marker: 'full-ws' };",
+        },
+      );
+      tree.write(
+        path.join(tree.root, "package.json"),
+        JSON.stringify({ dependencies: { "@fixture/fs-safe": "1.0.0", ws: "1.0.0" } }),
+      );
+    }
+    source.write(path.join(source.root, "src/entry.ts"), "export const value: number = 1;");
+    const configs: Parameters<typeof createStandaloneSourceEntries>[0]["configs"] = [
+      { entry: { first: "src/entry.ts" } },
+      { entry: { second: "src/entry.ts" } },
+    ];
+    const embeddedPaths: Record<string, string> = {};
+    const graph = createStandaloneSourceGraph({
+      sourceRoot: source.root,
+      runtimeRoot: runtime.root,
+      outputRoot: path.dirname(runtime.root),
+      sourceEntries: createStandaloneSourceEntries({ sourceRoot: source.root, configs }),
+      embeddedPaths,
+    });
+    const parents = configs.map((config) =>
+      graph.addSource(path.join(source.root, "src/entry.ts"), config),
+    );
+    const sourceWrapper = path.join(source.root, "node_modules/@fixture/fs-safe/dist/native.js");
+    const sourceWs = path.join(source.root, "node_modules/ws/lib/websocket.js");
+    const staged = configs.flatMap((config) =>
+      [sourceWrapper, sourceWs].map((filename) => graph.materialize(filename, config)),
+    );
+    const nativeFilename = (filename: string) => {
+      const file = graph.files.get(filename);
+      return file?.relative.startsWith("node_modules/")
+        ? path.join(runtime.root, file.relative)
+        : filename;
+    };
+    const adapter = createStandaloneNativeAdapter({ runtimeRoot: runtime.root, parse });
+    for (const filename of staged) {
+      adapter.transform({
+        filename: nativeFilename(filename),
+        contents: fs.readFileSync(filename, "utf8"),
+      });
+    }
+    const image = fixture();
+    const imageEntry = path.join(image.root, "websocket.cjs");
+    image.write(imageEntry, "module.exports = { marker: 'full-ws' };");
+    const canonicalWs = fs.realpathSync(
+      path.join(runtime.root, "node_modules/ws/lib/websocket.js"),
+    );
+    embeddedPaths[path.relative(runtime.root, canonicalWs)] = imageEntry;
+    const finalized = adapter.finalize({
+      metafile: { inputs: Object.fromEntries(staged.map((filename) => [filename, {}])) },
+      embeddedPaths,
+      resolveFilename: nativeFilename,
+    });
+    const context = vm.createContext({
+      root: runtime.root,
+      path,
+      fileURLToPath,
+      createRequire,
+      commonJsEntries: new Set(),
+      embedded: (filename: string) => {
+        const original = context["__openclawStandaloneOriginalPath"](filename);
+        return original === imageEntry
+          ? imageEntry
+          : embeddedPaths[path.relative(runtime.root, original)];
+      },
+    });
+    vm.runInContext(
+      adapter.bootstrap
+        .replace(/^import[^\n]+\n/, "")
+        .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
+      context,
+    );
+    vm.runInContext(
+      createStandaloneRequireAdapter({ runtimeRoot: runtime.root, embeddedPaths }).bootstrap,
+      context,
+    );
+    pruneStandaloneRuntime(planStandaloneRuntime(runtime.root, finalized.files));
+    const nativeParent = path.join(
+      runtime.root,
+      "native/@fixture+fs-safe@1.0.0/@fixture/fs-safe/dist/native.js",
+    );
+    const expectedNative = path.join(
+      runtime.root,
+      "native/@fixture+fs-safe-native@1.0.0/@fixture/fs-safe-native/binding.node",
+    );
+    expect(
+      context["__openclawStandaloneNativeResolve"](nativeParent, "@fixture/fs-safe-native"),
+    ).toBe(expectedNative);
+    expect(fs.readFileSync(expectedNative, "utf8")).toBe("native marker");
+    for (const parent of parents) {
+      const load = context["__openclawStandaloneCreateRequire"](createRequire, parent);
+      expect(load("ws/lib/websocket.js").marker).toBe("full-ws");
+    }
+    expect(fs.existsSync(path.join(runtime.root, "node_modules"))).toBe(false);
+    expect(staged.every((filename) => !fs.existsSync(filename))).toBe(true);
+    expect(graph.contexts.size).toBe(2);
   });
 
   it("resolves graph-retained root and peer packages without retaining unused development packages", () => {
@@ -576,6 +927,59 @@ console.log("full-ws loaded without node_modules");
     const load = vm.runInContext(transformed.contents, context);
     expect(load()).toBe("/relocated/runtime/native/native-helper@1.0.0/native-helper/binding.node");
     expect(adapter.transform({ filename, contents: source }).contents).toBe(source);
+  });
+
+  it("loads JavaScript behind a native-looking request and preserves native resource resolution", () => {
+    const { root, write, pkg } = fixture();
+    const owner = pkg(
+      "native-looking-name",
+      { main: "index.js" },
+      {
+        "index.js": "module.exports = require('./platform.node');",
+        "platform.node.js": "module.exports = 'JavaScript platform';",
+        "binding.node": "native fixture",
+        "module.wasm": "wasm fixture",
+      },
+    );
+    write(
+      path.join(root, "package.json"),
+      JSON.stringify({ dependencies: { "native-looking-name": "1.0.0" } }),
+    );
+    const filename = path.join(owner, "index.js");
+    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const transformed = adapter.transform({
+      filename,
+      contents: "() => require('./platform.node')",
+    });
+    const { context, root: destination } = evaluate(adapter);
+    Object.assign(context, {
+      require: createRequire(filename),
+      __standaloneNativeCreateRequire: createRequire,
+      commonJsEntries: new Set(),
+      embedded: () => undefined,
+      __openclawStandaloneRootUrl: pathToFileURL(destination + "/").href,
+    });
+    vm.runInContext(
+      createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} }).bootstrap,
+      context,
+    );
+    const load = vm.runInContext(transformed.contents, context);
+    expect(load()).toBe("JavaScript platform");
+    for (const resource of ["binding.node", "module.wasm"]) {
+      const resolve = vm.runInContext(
+        adapter.transform({ filename, contents: `() => require.resolve('./${resource}')` })
+          .contents,
+        context,
+      );
+      expect(resolve()).toBe(
+        `${destination}/native/native-looking-name@1.0.0/native-looking-name/${resource}`,
+      );
+    }
+    const resolveMissing = vm.runInContext(
+      adapter.transform({ filename, contents: "() => require.resolve('./missing.node')" }).contents,
+      context,
+    );
+    expect(() => resolveMissing()).toThrow("Cannot find module './missing.node'");
   });
 
   it("preserves library aliases while copying their bytes as regular files", () => {

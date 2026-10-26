@@ -513,66 +513,51 @@ export function stripPlainTextToolCallBlocks(
   return projectPlainTextToolCallBlocks(text, options).text;
 }
 
-const MAX_PLAIN_TEXT_TOOL_CALL_PROBE_HEADER_CHARS = "tool:".length + 120 + 2;
-
-/**
- * Detects a line-start bracket call with a JSON payload without rescanning the
- * complete streamed reply on every delta. Other activation tokens stay with the
- * caller; this probe only replaces the bare `{` token, which otherwise enters
- * whole-reply checkpoint mode for ordinary JSON-like prose.
- */
+/** Admit bracket JSON candidates without activating on ordinary brace prose. */
 export function createPlainTextToolCallBraceProbe(): (delta: string) => boolean {
   let lineStart = true;
   let header = "";
-  let awaitingPayload = false;
-
+  let awaitingPayload = "";
   return (delta) => {
-    for (let index = 0; index < delta.length; index += 1) {
-      const char = delta.charAt(index);
+    for (const char of delta) {
       if (char === "\r" || char === "\n") {
-        header = "";
         lineStart = true;
+        header = "";
+        if (awaitingPayload && !awaitingPayload.endsWith("\n")) {
+          awaitingPayload += "\n";
+        }
         continue;
       }
-
       if (awaitingPayload) {
         if (/\s/u.test(char)) {
           continue;
         }
-        if (char === "{") {
+        // The canonical header parser owns names, limits, and required line breaks.
+        const opening = char === "{" ? scanBracketOpening(awaitingPayload + char, 0) : undefined;
+        awaitingPayload = "";
+        if (opening?.kind === "complete") {
           return true;
         }
-        awaitingPayload = false;
-        if (!lineStart) {
-          continue;
-        }
       }
-
-      if (lineStart) {
-        if (/[^\S\r\n]/u.test(char)) {
-          continue;
-        }
-        lineStart = false;
-      }
-
       if (header) {
+        header += char;
         if (char === "]") {
-          const name = header.slice(1);
-          awaitingPayload = /^(?:tool:)?[A-Za-z0-9_-]{1,120}$/u.test(name);
+          awaitingPayload = header;
           header = "";
         } else if (
-          /[A-Za-z0-9_:-]/u.test(char) &&
-          header.length < MAX_PLAIN_TEXT_TOOL_CALL_PROBE_HEADER_CHARS
+          /\s/u.test(char) ||
+          header.length > MAX_PLAIN_TEXT_TOOL_NAME_CHARS + "[tool:]".length
         ) {
-          header += char;
-        } else {
           header = "";
         }
         continue;
       }
-
+      if (!lineStart || /[^\S\r\n]/u.test(char)) {
+        continue;
+      }
+      lineStart = false;
       if (char === "[") {
-        header = "[";
+        header = char;
       }
     }
     return false;

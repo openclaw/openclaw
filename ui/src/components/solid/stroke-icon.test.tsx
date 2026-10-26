@@ -1,7 +1,7 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it } from "vitest";
-import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
+import { renderSolidSnapshot } from "../../lib/reactive/detached-root.ts";
 import { StrokeIcon } from "./stroke-icon.tsx";
 
 afterEach(cleanup);

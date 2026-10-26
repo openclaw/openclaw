@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -19,15 +20,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "main", name: "Main agent" },
-                { id: "writer", name: "Writer" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
+            "agents.list": agentRoster({ main: "Main agent", writer: "Writer" }, "main", "agent"),
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/agents`);
@@ -83,6 +76,7 @@ suite.define(() => {
         await openPicker();
         await expect.poll(() => writer.getAttribute("aria-checked")).toBe("true");
         expect(await selected.locator(".agent-select__option-check").count()).toBe(0);
+        await writer.locator(".agent-select__option-check svg").waitFor({ state: "visible" });
         const writerCheck = await writer.locator(".agent-select__option-check svg").boundingBox();
         expect(writerCheck?.width).toBe(check!.width);
         expect(writerCheck?.height).toBe(check!.height);

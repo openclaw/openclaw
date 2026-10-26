@@ -422,7 +422,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       throw err;
     } finally {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
-      // Full rebuild failures (including forced preflight) leave the primary alone.
+      // Full rebuilds finalize their cache with the shadow; preflight failures have no shadow work.
       if (!needsFullReindex) {
         await this.pruneEmbeddingCacheIfNeeded();
       }

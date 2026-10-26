@@ -31,15 +31,7 @@ const text = (selector: string) => query(selector)?.textContent;
 const click = (selector: string) => container.querySelector<HTMLButtonElement>(selector)?.click();
 
 function paint(props: Partial<ChatPullRequestsProps>) {
-  paintChatPullRequests(
-    {
-      pullRequests: [],
-      status: "ready",
-      onDismiss: () => {},
-      ...props,
-    },
-    container,
-  );
+  paintChatPullRequests(props, container);
 }
 
 function published(requestId: string, url = pullRequest().url) {

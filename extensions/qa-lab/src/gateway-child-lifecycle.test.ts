@@ -162,14 +162,6 @@ function own(params: Parameters<ReturnType<typeof createQaGatewayChild>["start"]
   return { start: () => owner.start(params), stop: owner.stop };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", () => {
   it.each(["stdout", "stderr"] as const)(
     "fails and releases a child when its %s log sink stops draining",
@@ -621,8 +613,8 @@ http.createServer((request, response) => {`,
     const owner = own(params);
     const gateway = await owner.start();
     pids();
-    const entered = deferred();
-    const release = deferred();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     const restarting = gateway.restartAfterStateMutation(async () => {
       entered.resolve();
       await release.promise;

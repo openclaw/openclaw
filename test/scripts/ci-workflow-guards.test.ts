@@ -4300,6 +4300,45 @@ ${buildScript}`,
     }
   });
 
+  it("transfers the exact public browser runtime with hidden stamps and executable modes", async () => {
+    const { packBrowserRuntime, restoreBrowserRuntime } =
+      await import("../../scripts/ui-browser-runtime-artifact.mjs");
+    const root = tempDirs.make("browser-runtime-artifact-");
+    const source = path.join(root, "source");
+    const target = path.join(root, "target");
+    const archive = path.join(root, "archive");
+    const revision = "b".repeat(40);
+    const files = {
+      "dist/build-info.json": JSON.stringify({ commit: revision }),
+      "dist/.buildstamp": "completed",
+      "dist/extensions/browser/native-host-entry.js": "#!/usr/bin/env node\n",
+      "dist-runtime/extensions/browser/index.js": "export {};\n",
+      "packages/protocol/dist/index.js": "export {};\n",
+    };
+    for (const [file, content] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
+      writeFileSync(path.join(source, file), content);
+    }
+    mkdirSync(target);
+    chmodSync(path.join(source, "dist/extensions/browser/native-host-entry.js"), 0o755);
+    expect(() => packBrowserRuntime(source, archive, "c".repeat(40))).toThrow("selected checkout");
+    const digest = packBrowserRuntime(source, archive, revision);
+    expect(() => restoreBrowserRuntime(target, archive, revision, "0".repeat(64))).toThrow(
+      "changed in transit",
+    );
+    expect(existsSync(path.join(target, "dist"))).toBe(false);
+    restoreBrowserRuntime(target, archive, revision, digest);
+    for (const [file, content] of Object.entries(files)) {
+      expect(readFileSync(path.join(target, file), "utf8")).toBe(content);
+    }
+    expect(
+      statSync(path.join(target, "dist/extensions/browser/native-host-entry.js")).mode & 0o777,
+    ).toBe(0o755);
+    expect(() => restoreBrowserRuntime(target, archive, "c".repeat(40), digest)).toThrow(
+      "selected checkout",
+    );
+  });
+
   it("reuses the exact Linux runtime without installing or building every workspace", async () => {
     const workflow = readCiWorkflow();
     const steps = workflow.jobs["macos-swift"].steps;

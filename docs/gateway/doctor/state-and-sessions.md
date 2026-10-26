@@ -9,6 +9,12 @@ read_when:
 Checks 3-7b cover legacy on-disk state migrations, session integrity, model
 auth health, sandbox images, and plugin installs.
 
+If a shared-state or agent database migration refuses to continue, Doctor reports
+the cause before the database location so path redaction preserves the diagnosis.
+Native SQLite failures include their error codes. Stop the Gateway, preserve the
+database and its SQLite sidecars, resolve the reported cause, then rerun
+`openclaw doctor --fix` against the same state and configuration.
+
 ## Legacy data and PostgreSQL
 
 Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port

@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
@@ -68,6 +68,15 @@ async function createInitializedFixture() {
 }
 
 describe("Copilot attempt transcript journal", () => {
+  it("keeps scheduled assistant prose audit-only for final cron publication", async () => {
+    const { attempt, journal, session, target } = await createInitializedFixture();
+    attempt.inputProvenance = { kind: "internal_system", sourceTool: "cron_execution" };
+    emitAssistant(session, "scheduled-prose", { content: "Still waiting." });
+    await journal.barrier("test");
+    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+    expect(rows.at(-1)?.message).toMatchObject({ role: "assistant", display: false });
+  });
+
   it("prepares standalone media after hooks without claiming user or tool-group media", async () => {
     const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
     const rewrittenText = `${sourceText}\nMEDIA:./hook-only.json`;
@@ -579,7 +588,9 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual(
       rows.map((row) => row.message.role),
     );
-    const files = await fs.readdir(tempDir, { recursive: true });
+    const files = (await listDirectoryTreeStrict(tempDir)).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
     expect(files.some((file) => file.endsWith(".jsonl"))).toBe(false);
   });
 

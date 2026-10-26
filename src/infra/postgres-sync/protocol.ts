@@ -1,10 +1,11 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
-import type { MessagePort, Worker } from "node:worker_threads";
+import type { MessagePort } from "node:worker_threads";
 
 export type PostgresBridge = {
   port: MessagePort;
   control: Int32Array;
-  worker: Worker;
+  service: Int32Array;
+  nextStep?: string;
   requestId: number;
 };
 

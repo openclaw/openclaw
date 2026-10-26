@@ -345,7 +345,7 @@ suite.define(() => {
     await gateway.setSessionsListResponse({ sessions: [completedSession] });
 
     await page.reload();
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
     await replyBody.waitFor();
     await operationLabel.waitFor();
     expect(await operationLabel.textContent()).toBe("Worked for 13 seconds");

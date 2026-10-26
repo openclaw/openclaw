@@ -51,6 +51,11 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
+Automatic goal continuations retain that same authenticated operator source,
+including continuations after subagent announcements or requester-settle yields.
+If interrupted mid-tool, they resume through normal startup recovery under current
+permissions. The saved goal and its transcript do not grant authority on their own.
+
 An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
@@ -543,6 +548,20 @@ cannot resume reconciliation or hold the shutdown guard. Interrupted maintenance
 retains the lease and provisioning identity for a later sweep; it does not request
 worker destruction. Provider mutations already in progress still settle before
 their owners close.
+Reconciliation also passes cancellation into provider teardown, including Crabbox
+image capture and stop commands. Teardown's provider deadline aborts the command;
+shutdown still joins its subprocess settlement and records the interruption. An
+unconfirmed stop retains the lease and cleanup intent so the next startup retries
+the same environment. Pending replies and terminal persistence keep their normal
+drain obligations.
+Rejected background environment reconciliation waits one minute before retrying,
+then doubles the delay up to fifteen minutes. The warning records the attempt
+count and next retry time. This delay applies before placement and workspace
+recovery, independently for each environment; healthy environments continue normally.
+Explicit recovery stays immediate. Successful recovery, changed lease ownership,
+state or destruction intent, and a new Gateway process reset the delay. Suspension
+and shutdown interruptions do not count as failed attempts. Durable cleanup intent
+and the separate session-attachment cleanup retry owner are unchanged.
 Read-only allocation lookups made by reconciliation also release their wait on shutdown, without
 publishing a late lookup result or changing the saved cleanup intent. Reconciliation
 waiting for an environment lock releases its observer on cancellation; any admitted

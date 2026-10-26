@@ -48,6 +48,29 @@ afterEach(async () => {
 const readEntry = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
 const adminClient = { client: { connect: { scopes: ["operator.admin"] } } as never };
+
+test("preserves generated-title provenance at session creation without treating manual names as generated", async () => {
+  const { storePath } = await createSessionStoreDir();
+  for (const generated of [true, false]) {
+    const result = await request<{ key: string }>(
+      "sessions.create",
+      { agentId: "main", displayName: "Release planning", displayNameGenerated: generated },
+      controlUiClient,
+    );
+    const entry = readEntry(storePath, result.key);
+    expect(entry?.displayName).toBe("Release planning");
+    if (generated) {
+      expect(entry?.titleRefinement).toMatchObject({
+        sessionId: entry?.sessionId,
+        generatedName: "Release planning",
+        remainingMessages: 7,
+      });
+    } else {
+      expect(entry?.titleRefinement).toBeUndefined();
+    }
+  }
+});
+
 async function workspaceFixture(prefix: string) {
   const workspace = await initializeRepository(tempDirs.make(prefix), "workspace");
   testState.agentConfig = { workspace };

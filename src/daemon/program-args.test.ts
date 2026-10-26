@@ -14,18 +14,8 @@ const fsMocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      access: fsMocks.access,
-      realpath: fsMocks.realpath,
-      stat: fsMocks.stat,
-    },
-    access: fsMocks.access,
-    realpath: fsMocks.realpath,
-    stat: fsMocks.stat,
-  };
+  const mocked = { ...actual, ...fsMocks };
+  return { ...mocked, default: mocked };
 });
 
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
@@ -82,6 +72,18 @@ function nodeArgs(options: Partial<Parameters<typeof resolveNodeProgramArguments
 const gatewayTail = ["gateway", "--port", "18789"];
 const nodeTail = ["node", "run", "--host", "gateway.example", "--port", "18789"];
 describe("resolveGatewayProgramArguments", () => {
+  it("runs a standalone service directly without a loose entrypoint or runtime flags", async () => {
+    process.argv = [originalExecPath, "/unavailable/source/entry.ts"];
+    const runtimePath = "/opt/immutable-runtime/openclaw";
+    await expect(gatewayArgs({ runtime: "standalone", runtimePath, dev: true })).resolves.toEqual({
+      programArguments: [runtimePath, ...gatewayTail],
+    });
+    await expect(nodeArgs({ runtime: "standalone", runtimePath })).resolves.toEqual({
+      programArguments: [runtimePath, ...nodeTail],
+    });
+    expect(fsMocks.access).not.toHaveBeenCalled();
+  });
+
   it("installs the requested start-mode override once", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/index.js");
     mockEntrypoint(entryPath);

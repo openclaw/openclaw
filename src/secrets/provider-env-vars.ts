@@ -270,16 +270,13 @@ export function resolveProviderAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
 ): ProviderAuthLookupMaps {
   const snapshot = resolveProviderMetadataSnapshot(params);
-  // Frozen captured configs cannot change in place; process env reaches these maps only
-  // through the memoized bundled discovery mode, which keys the entry.
+  // Frozen configs cannot change in place. After snapshot selection, env affects these
+  // secret-free maps only through its profile's bundled discovery mode.
   const config = params?.config;
-  const cacheable =
-    (params?.env === undefined || params.env === process.env) &&
-    (config === undefined || isDeeplyFrozenPlainData(config));
-  if (!cacheable) {
+  if (config !== undefined && !isDeeplyFrozenPlainData(config)) {
     return computeProviderAuthLookupMaps(params, snapshot);
   }
-  const key = `${params?.includeUntrustedWorkspacePlugins}:${readBundledDiscoveryModeMemoized()}`;
+  const key = `${params?.includeUntrustedWorkspacePlugins}:${readBundledDiscoveryModeMemoized(params?.env)}`;
   let byConfig = lookupMapsBySnapshot.get(snapshot);
   if (!byConfig) {
     byConfig = new WeakMap();

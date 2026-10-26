@@ -26,6 +26,7 @@ import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admis
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 // Trajectory runtime tests cover event recording and runtime file handling.
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { createLargeTrajectoryUsage } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
 import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import {
@@ -418,13 +419,7 @@ describe("trajectory runtime", () => {
     const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
-    const usage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
+    const usage = createLargeTrajectoryUsage();
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
     const recorder = await createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -498,6 +493,44 @@ describe("trajectory runtime", () => {
     expect(parsed.data).toEqual(data);
     expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
     expect(parsed.data.truncated).toBeUndefined();
+  });
+
+  it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
+    const writes: string[] = [];
+    const recorder = expectTrajectoryRuntimeRecorder(await createCapturedRuntimeRecorder(writes));
+    const error = new Error("synthetic failure");
+    error.stack = "synthetic stack";
+    recorder.recordEvent("tool.result", {
+      count: 123n,
+      callback: () => {},
+      values: [undefined, Number.NaN, 1n, () => {}],
+      custom: {
+        toJSON: () => ({
+          count: 456n,
+          error,
+          bytes: new Uint8Array([1, 2]),
+          callback: () => {},
+        }),
+      },
+    });
+
+    expect(JSON.parse(expectDefined(writes[0], "captured event")).data).toEqual({
+      count: "123",
+      callback: "[Function]",
+      values: [null, null, "1", "[Function]"],
+      custom: {
+        count: "456",
+        error: { name: "Error", message: "synthetic failure", stack: "synthetic stack" },
+        bytes: { type: "Uint8Array", data: "AQI=" },
+        callback: "[Function]",
+      },
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    recorder.recordEvent("tool.result", { toJSON: () => circular });
+    recorder.recordEvent("session.ended", { status: "success" });
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(expectDefined(writes[1], "terminal event")).seq).toBe(2);
   });
 
   it("keeps structured tool output and usage below the event byte limit", async () => {
@@ -582,13 +615,7 @@ describe("trajectory runtime", () => {
 
   it("preserves usage when truncating oversized runtime events", async () => {
     const writes: string[] = [];
-    const usage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
+    const usage = createLargeTrajectoryUsage();
     const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
     const recorder = await createCapturedRuntimeRecorder(writes);
 
@@ -708,13 +735,7 @@ describe("trajectory runtime", () => {
 
   it("preserves usage on non-final oversized runtime completions", async () => {
     const writes: string[] = [];
-    const firstUsage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
+    const firstUsage = createLargeTrajectoryUsage();
     const secondUsage = { input: 12, output: 3, total: 15 };
     const recorder = await createCapturedRuntimeRecorder(writes);
 

@@ -84,6 +84,21 @@ describe("automation invocation tools", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("accepts no_change without boilerplate and rejects invalid meaningful summaries", async () => {
+    const { invocation, claim, tool } = createInvocation();
+    ownedClaim = claim;
+    for (const summary of [undefined, "   ", "x".repeat(2001)]) {
+      await expect(
+        tool.execute("invalid", { action: "record_result", outcome: "progress", summary }),
+      ).rejects.toThrow();
+      expect(invocation.result).toBeUndefined();
+    }
+    await expect(
+      tool.execute("quiet", { action: "record_result", outcome: "no_change" }),
+    ).resolves.toMatchObject({ details: { ok: true, outcome: "no_change" } });
+    expect(invocation.result).toEqual({ outcome: "no_change" });
+  });
+
   it.each(["closed", "replacement", "released"] as const)(
     "retires retained result and scratch tools when the invocation is %s",
     async (reason) => {

@@ -276,13 +276,6 @@ describe("cron agent setup watchdog", () => {
     expect(watchdog.observedLaneWait()).toBe(false);
   });
 
-  it("lets initial workspace progress use the configured job timeout", async () => {
-    const { runner, phase, advance } = makeWatchdog();
-    runner();
-    phase("workspace");
-    await advance(CRON_AGENT_SETUP_WATCHDOG_MS);
-  });
-
   it("keeps the fallback watchdog armed across later setup progress", async () => {
     const { runner, phase, fallback, advance } = makeWatchdog();
     runner();

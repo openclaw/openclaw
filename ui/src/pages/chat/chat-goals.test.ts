@@ -4,6 +4,7 @@ import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { Value } from "typebox/value";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult, SessionGoal } from "../../api/types.ts";
@@ -27,17 +28,11 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "goal-a",
-  objective: "Review the UI",
+const goal: SessionGoal = createSessionGoalFixture("goal-a", "Review the UI", {
   status: "paused",
-  createdAt: 1,
   updatedAt: 2,
-  tokenStart: 0,
   tokensUsed: 10,
-  continuationTurns: 0,
-};
+});
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {
@@ -330,6 +325,7 @@ describe("Goal control requests", () => {
         "sessions.goal.update": () => pending.promise,
       });
       const submitted = mutateChatGoal(host, { action, goalId: goal.id });
+      await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
       if (replacement === "goal") {
         host.sessions.patchRowLocal(host.sessionKey, { goal: { ...goal, id: "replacement-goal" } });
       } else if (replacement === "session") {
@@ -652,7 +648,7 @@ describe("Goal control requests", () => {
         onTestFinished(() => sessions.dispose());
       }
       const check = chatGoalRecovery(host)?.onCheck();
-      expect(reads).toBe(1);
+      await vi.waitFor(() => expect(reads).toBe(1));
       expect(host.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
         1,
       );
@@ -731,6 +727,7 @@ describe("Goal control requests", () => {
         busy ? pending.promise : { status: "started", goalId: goal.id, runId: "new-run", goal },
     });
     const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
     const captured = chatGoalRecovery(host);
     const original = host.request.mock.calls[0]?.[1];
     pending.reject(
@@ -804,7 +801,7 @@ describe("Goal control requests", () => {
       const expiresAt = original.issuedAtMs + 24 * 60 * 60 * 1000;
       const now = vi.spyOn(Date, "now").mockReturnValue(expiresAt - 1);
       const check = chatGoalRecovery(host)?.onCheck();
-      expect(host.request.mock.calls[1]?.[1]).toEqual(original);
+      await vi.waitFor(() => expect(host.request.mock.calls[1]?.[1]).toEqual(original));
       // The server can cross its receipt boundary in flight or have a clock ahead of the UI.
       if (crossesBoundary) {
         now.mockReturnValue(expiresAt + 1);

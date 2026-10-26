@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   readRunOperatorAuthority,
@@ -28,6 +29,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
+import { companionRuntimeConfig } from "./session-companion-runtime.test-support.js";
 import { createSessionCompanion } from "./session-companion.js";
 
 const runLoop = vi.hoisted(() =>
@@ -53,48 +55,32 @@ describe("Side chat with a published Gateway runtime", () => {
         label: "companion-runtime",
         env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
       });
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: {
-            main: {
-              workspace: state.workspaceDir,
+      const cfg: OpenClawConfig = companionRuntimeConfig(
+        {
+          agents: {
+            entries: {
+              main: {
+                workspace: state.workspaceDir,
+                models: { "test-provider/utility-model": { codeMode: true } },
+                tools: { codeMode: true },
+              },
+            },
+            defaults: {
               models: { "test-provider/utility-model": { codeMode: true } },
-              tools: { codeMode: true },
             },
           },
-          defaults: {
-            workspace: state.workspaceDir,
-            model: "test-provider/test-model",
-            utilityModel: "test-provider/utility-model",
-            models: { "test-provider/utility-model": { codeMode: true } },
+          plugins: { allow: [], slots: { memory: "none" } },
+          tools: {
+            codeMode: true,
+            toolSearch: { enabled: true, mode: "directory" },
+            sessions: { visibility: "all" },
+            fs: { workspaceOnly: false },
           },
         },
-        models: {
-          providers: {
-            "test-provider": {
-              api: "openai-completions",
-              apiKey: "synthetic-test-key",
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: ["test-model", "utility-model"].map((id) => ({
-                id,
-                name: id,
-                reasoning: false,
-                input: ["text" as const],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              })),
-            },
-          },
-        },
-        plugins: { allow: [], slots: { memory: "none" } },
-        tools: {
-          codeMode: true,
-          toolSearch: { enabled: true, mode: "directory" },
-          sessions: { visibility: "all" },
-          fs: { workspaceOnly: false },
-        },
-      };
+        state.workspaceDir,
+        "test-provider",
+        ["test-model", "utility-model"],
+      );
       const companion = createSessionCompanion({
         scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
@@ -240,12 +226,11 @@ describe("Side chat with a published Gateway runtime", () => {
           const controller = new AbortController();
           const pending = invoke("What is it doing?", controller.signal);
           try {
-            const target = await Promise.race([
+            const target = await awaitGateBeforeSettlement(
               received.promise,
-              pending.then(() => {
-                throw new Error("Ask settled before hydration barrier");
-              }),
-            ]);
+              pending,
+              "Ask settled before hydration barrier",
+            );
             expect(
               loadTranscriptEventsSync(target).filter(
                 (entry) => isRecord(entry) && entry.type === "message",
@@ -296,35 +281,30 @@ describe("Side chat with a published Gateway runtime", () => {
         const asyncOpen = SessionManager.openAsync.bind(SessionManager);
         let hydrationCount = 0;
         const hydrationFailures: unknown[] = [];
-        const recordHydration = (sql: ReturnType<typeof observeMainThreadSql>) => {
-          hydrationCount++;
-          try {
-            sql.expectIdle();
-          } catch (error) {
-            hydrationFailures.push(error);
-          }
+        const probeHydration = () => {
+          const sql = observeMainThreadSql();
+          return {
+            [Symbol.dispose]() {
+              hydrationCount++;
+              try {
+                sql.expectIdle();
+              } catch (error) {
+                hydrationFailures.push(error);
+              } finally {
+                sql.restore();
+              }
+            },
+          };
         };
         const syncProbe = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
-          const sql = observeMainThreadSql();
-          try {
-            const result = syncOpen(...args);
-            recordHydration(sql);
-            return result;
-          } finally {
-            sql.restore();
-          }
+          using _ = probeHydration();
+          return syncOpen(...args);
         });
         const asyncProbe = vi
           .spyOn(SessionManager, "openAsync")
           .mockImplementation(async (...args) => {
-            const sql = observeMainThreadSql();
-            try {
-              const result = await asyncOpen(...args);
-              recordHydration(sql);
-              return result;
-            } finally {
-              sql.restore();
-            }
+            using _ = probeHydration();
+            return await asyncOpen(...args);
           });
         try {
           for (const question of ["What is it doing?", "What did I ask before?"]) {

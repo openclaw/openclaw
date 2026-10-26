@@ -325,6 +325,10 @@ it("reuses palette reads through session publications while retaining retries an
       "--shell-viewport-height",
       "--shell-safe-area-bottom",
       "--control-ui-system-chrome-background",
+      ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+        `--oc-${owner}-reserve-bottom`,
+        `--oc-${owner}-reserve-right`,
+      ]),
     ]) {
       root.style.setProperty(property, "123px");
     }

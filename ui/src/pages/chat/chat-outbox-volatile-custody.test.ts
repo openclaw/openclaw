@@ -72,7 +72,7 @@ it.each([
   { subscribed: false, replacement: false },
   { subscribed: true, replacement: true },
 ])(
-  "retains a genuinely volatile send across account return ($subscribed/$replacement)",
+  "replays a bound volatile send only after its account returns ($subscribed/$replacement)",
   async ({ subscribed, replacement }) => {
     failStorageWrites(new DOMException("quota exceeded", "QuotaExceededError"));
     let attempts = 0;
@@ -118,12 +118,10 @@ it.each([
         id: original.id,
         text: original.text,
         sendRunId: original.sendRunId,
-        sendState: "held",
+        sendState: "waiting-reconnect",
       },
     ]);
     await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-    await retryQueuedChatMessage(host, original.id);
     expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
     expect(requestCalls(host.request, "chat.send")[1]?.[1]).toMatchObject({
       idempotencyKey: original.sendRunId,
@@ -315,7 +313,11 @@ it("moves peer panes together while retaining each volatile input under its orig
   const { host: left, select } = custodyHost({
     chatMessage: "Left private input",
   });
-  const right = makeChatHost({ client: left.client, chatMessage: "Right private input" });
+  const right = makeChatHost({
+    client: left.client,
+    sessionKey: "agent:main:right",
+    chatMessage: "Right private input",
+  });
   onTestFinished(chatOutboxOwner(right).subscribe(right));
   await handleSendChat(left);
   await handleSendChat(right);

@@ -15,32 +15,17 @@ import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { startRuntimePty, type PtyRun } from "../../tui/tui-pty-test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import {
+  cliSqliteFiles,
+  dropCliSchemas,
+  inspectPostgresCliStore,
+} from "./cli-storage.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const nodeExecutable = resolveTestNodeExecPath();
 const commandTimeoutMs = 60_000;
-const localStores = new Map([
-  [
-    path.join("state", "openclaw-quarantine.sqlite"),
-    ["agent_integrity_verifications", "quarantined_databases"],
-  ],
-  [
-    path.join("control", "services.sqlite"),
-    ["daemon_runtime_pin_migration", "daemon_runtime_pins"],
-  ],
-  [
-    path.join("client", "credentials.sqlite"),
-    [
-      "client_credential_migration",
-      "device_auth_tokens",
-      "device_identities",
-      "gateway_origin_device_tokens",
-      "native_exec_socket_credentials",
-    ],
-  ],
-]);
 
 async function answer(run: PtyRun, prompt: string, input = "\r") {
   await run.waitForOutput(prompt);
@@ -143,11 +128,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect(await fs.readFile(configPath, "utf8")).toBe(
               `synthetic warning\n${initialConfig}`,
             );
-            expect(
-              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                file.endsWith(".sqlite"),
-              ),
-            ).toEqual([]);
+            expect(await cliSqliteFiles(stateDir)).toEqual([]);
           };
           try {
             const args: string[] = entry === "bare-root" ? [] : [entry];
@@ -200,33 +181,21 @@ for (const engine of ["sqlite", "postgres"] as const) {
               expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).not.toBe("");
             }
 
-            const databases = (await fs.readdir(stateDir, { recursive: true }))
-              .filter((file) => file.endsWith(".sqlite"))
-              .map((file) => path.join(stateDir, file));
+            const databases = (await cliSqliteFiles(stateDir)).map((file) =>
+              path.join(stateDir, file),
+            );
             expect(databases.length).toBeGreaterThan(0);
             let onboardingState: unknown;
             let stateSchema: string | undefined;
             for (const database of databases) {
               const relative = path.relative(stateDir, database);
-              using local = openNodeSqliteDatabase(database, { readOnly: true });
               if (engine === "postgres") {
-                const localStore = localStores.get(relative);
-                expect(
-                  local
-                    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-                    .all(),
-                  `${entry} left application state in ${relative}`,
-                ).toEqual((localStore ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
-                if (!localStore) {
-                  const anchor = local
-                    .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
-                    .get();
-                  expect(anchor?.engine).toBe(engine);
-                  if (relative === path.join("state", "openclaw.sqlite")) {
-                    stateSchema = String(anchor?.schema);
-                  }
+                const schema = inspectPostgresCliStore(database, stateDir, entry);
+                if (relative === path.join("state", "openclaw.sqlite")) {
+                  stateSchema = schema;
                 }
               } else if (relative === path.join("state", "openclaw.sqlite")) {
+                using local = openNodeSqliteDatabase(database, { readOnly: true });
                 onboardingState = local
                   .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
                   .get(localOnboardingStateKey(configPath))?.value_json;
@@ -288,13 +257,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
             }
             if (client) {
               try {
-                const schemas = await client.query<{ schema_name: string }>(
-                  "SELECT schema_name FROM information_schema.schemata WHERE starts_with(schema_name, $1)",
-                  [`${prefix}_`],
-                );
-                for (const { schema_name: schema } of schemas.rows) {
-                  await client.query(`DROP SCHEMA "${schema}" CASCADE`);
-                }
+                await dropCliSchemas(client, prefix);
               } finally {
                 await client.end();
               }

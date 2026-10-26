@@ -283,8 +283,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     session.expiresTimer = setTimeout(
       () => closeSession(session, "session expired"),
       SESSION_IDLE_MS,
-    );
-    session.expiresTimer.unref?.();
+    ).unref();
   };
 
   const sendQueuedEvent = (res: ServerResponse, queued: QueuedNodeEvent): boolean => {
@@ -977,8 +976,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         if (!res.writableEnded) {
           sendJson(res, 200, { ok: true, event: null });
         }
-      }, POLL_TIMEOUT_MS);
-      timer.unref?.();
+      }, POLL_TIMEOUT_MS).unref();
       session.waiter = { res, timer };
       res.once("close", () => {
         if (!res.writableEnded && session.waiter?.res === res) {

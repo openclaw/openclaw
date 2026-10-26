@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createPlainTextToolCallBraceProbe,
   projectPlainTextToolCallBlocks,
   scanPlainTextToolCall,
   stripPlainTextToolCallBlocks,
@@ -80,34 +79,6 @@ describe("scanPlainTextToolCall JSON branch", () => {
       }
     },
   );
-});
-
-describe("createPlainTextToolCallBraceProbe", () => {
-  it.each([
-    ["bracket payload", ["Before\n[tool:write] {", '{"path":"a.ts"}', "}\nAfter"]],
-    ["split tool prefix", ["Before\n[too", "l:write] {", "}\nAfter"]],
-    ["payload after blank whitespace", ["[read]", "\r\n  \t", "{}", "\nAfter"]],
-    ["tool bracket on its own line", ["[tool:write]\n", "{}"]],
-    ["call after an abandoned opening", ["[read]\n", "ordinary\n", "[tool:write] {"]],
-    ["deeply indented call", [`${" ".repeat(5_000)}[tool:read] {`, "}"]],
-  ])("activates for a split %s", (_name, chunks) => {
-    const probe = createPlainTextToolCallBraceProbe();
-    expect(chunks.map((chunk) => probe(chunk))).toContain(true);
-  });
-
-  it.each([
-    ['Configure the value as {"mode":"fast"} before starting.'],
-    ['{\n  "items": [\n    {"id":0}\n  ]\n}'],
-    ["[1] A cited claim.\n[2] Another cited claim.\n"],
-    ["[1]\n\nordinary prose without a payload.\n"],
-    ["[not a tool]\n{}"],
-    [`[${"x".repeat(121)}]\n{}`],
-  ])("does not activate for ordinary brace or citation text: %s", (text) => {
-    const probe = createPlainTextToolCallBraceProbe();
-    for (let offset = 0; offset < text.length; offset += 4) {
-      expect(probe(text.slice(offset, offset + 4))).toBe(false);
-    }
-  });
 });
 
 describe("stripPlainTextToolCallBlocks", () => {

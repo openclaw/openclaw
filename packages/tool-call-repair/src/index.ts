@@ -1,7 +1,6 @@
 export { detectToolCallShapedText, isPlainTextToolCallAttempt } from "./attempt.js";
 /** Public repair utilities for model-emitted plain-text tool calls. */
 export {
-  createPlainTextToolCallBraceProbe,
   parseStandalonePlainTextToolCallBlocks,
   projectPlainTextToolCallBlocks,
   stripPlainTextToolCallBlocks,

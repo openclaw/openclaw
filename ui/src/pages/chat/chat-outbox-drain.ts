@@ -3,20 +3,13 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
-  readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-  resolveUiConversationIdentity,
-} from "../../lib/sessions/session-key.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
+import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   captureChatCommandTarget,
   confirmConversationResetForCurrentSession,
@@ -31,6 +24,7 @@ import {
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
+import { collectChatOutboxes, readChatOutboxLane } from "./chat-outbox-scopes.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
@@ -90,12 +84,6 @@ const storedChatOutboxLanes = new WeakMap<
   GatewayBrowserClient,
   Map<string, StoredChatOutboxDrainLane>
 >();
-
-function readChatOutboxLane(host: ChatHost, scope: StoredChatOutboxScope): StoredChatOutbox | null {
-  const stored = readStoredChatOutbox(host, scope);
-  const queue = chatOutboxOwner(host).snapshot(host, scope, stored?.queue ?? []);
-  return queue.length ? { ...scope, queue } : null;
-}
 
 export function scheduleStoredChatOutboxRetry(
   host: ChatHost,
@@ -539,37 +527,7 @@ export async function resumeStoredChatOutboxes(
   if (!host.connected || !client) {
     return;
   }
-  // Refresh credential ownership; callers own frame-coalesced rendering.
-  chatOutboxOwner(host).syncHost(host, { notify: false });
-  const eventScope = event ? readSessionChangedEvent(event.payload) : undefined;
-  if (event && !eventScope) {
-    return;
-  }
-  const scopes = new Map(
-    listStoredChatOutboxes(host).map((outbox) => [storedChatOutboxScopeKey(outbox), outbox]),
-  );
-  for (const item of chatOutboxOwner(host).allItems(host)) {
-    const scope = resolveUiConversationIdentity(
-      host,
-      item.sessionKey ?? host.sessionKey,
-      item.agentId,
-    );
-    const key = storedChatOutboxScopeKey(scope);
-    if (!scopes.has(key)) {
-      const outbox = readChatOutboxLane(host, scope);
-      if (outbox) {
-        scopes.set(key, outbox);
-      }
-    }
-  }
-  const outboxes = [...scopes.values()].filter(
-    (outbox) =>
-      !eventScope ||
-      (areUiSessionKeysEquivalent(outbox.sessionKey, eventScope.key) &&
-        (!isUiGlobalSessionKey(outbox.sessionKey) ||
-          (eventScope.agentId !== null &&
-            outbox.agentId === normalizeAgentId(eventScope.agentId)))),
-  );
+  const outboxes = collectChatOutboxes(host, event);
   const observed = observedOutboxEvents.get(client) ?? new WeakSet<GatewayEventFrame>();
   observedOutboxEvents.set(client, observed);
   const changed = event ? !observed.has(event) : undefined;

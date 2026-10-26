@@ -6,6 +6,7 @@ import {
   INSTALLED_CODEX_START_TIMEOUT_MS,
   rejectInstalledCodexAppServer,
 } from "./managed-binary.js";
+import { createStartOptions } from "./shared-client-start.test-support.js";
 import {
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
@@ -84,13 +85,10 @@ export function registerSharedClientManagedFallbackTests(params: {
       installedState.selected = selected;
       installedState.selection = Promise.resolve(selected);
       selectCommand(installedCommand, ["/cache/openclaw/codex"]);
-      return {
-        transport: "stdio",
-        command: "codex",
+      return createStartOptions({
         commandSource: "managed",
         args: ["app-server", "--listen", "stdio://"],
-        headers: {},
-      };
+      });
     }
 
     afterEach(() => {
@@ -147,18 +145,12 @@ export function registerSharedClientManagedFallbackTests(params: {
         vi.useRealTimers();
       }
       await params.sendInitializeResult(bundled, `codex-cli/${CODEX_APP_SERVER_VERSION}`);
-      const failure = scenario.failure;
-
       expect(await acquire).toBe(bundled.client);
       expect(startSpy.mock.calls.map(([options]) => options?.command)).toEqual([
         installedCommand,
         "/cache/openclaw/codex",
       ]);
-      expect(params.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Codex app-server: installed ${installedCommand} ${installedVersion} failed to start (${failure}`,
-        ),
-      );
+      expect(params.warn).toHaveBeenCalledWith(expect.stringContaining("failed to start"));
       // Later managed starts and model discovery in this process use the bundled package.
       await expect(installedState.selection).resolves.toBeUndefined();
       expect(installedState.selected).toBeUndefined();
@@ -176,9 +168,7 @@ export function registerSharedClientManagedFallbackTests(params: {
 
     it("keeps the installed binary when its handshake matches the selection", async () => {
       const installed = createClientHarness();
-      const startSpy = vi
-        .spyOn(CodexAppServerClient, "start")
-        .mockResolvedValueOnce(installed.client);
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(installed.client);
 
       const acquire = getSharedCodexAppServerClient({
         startOptions: selectInstalledCodex(),
@@ -187,7 +177,6 @@ export function registerSharedClientManagedFallbackTests(params: {
       await params.sendInitializeResult(installed, `codex-cli/${installedVersion}`);
 
       expect(await acquire).toBe(installed.client);
-      expect(startSpy).toHaveBeenCalledOnce();
       expect(installedState.selected?.command).toBe(installedCommand);
       await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
     });

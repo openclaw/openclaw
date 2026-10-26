@@ -105,6 +105,7 @@ describe("Gateway dispatch run ownership", () => {
         release: vi.fn(),
       },
     });
+    onTestFinished(() => owner.close());
     const dispatch = (
       runId = f.runId,
       entry = f.entry,
@@ -514,8 +515,6 @@ describe("Gateway dispatch run ownership", () => {
     const { f, owner, dispatch } = createFollowupDispatch();
     const settlement = createGate();
     const finishExecution = vi.spyOn(owner, "finishExecution");
-    let predecessor: ReturnType<typeof dispatch> | undefined;
-    let successorDispatch: ReturnType<typeof dispatch> | undefined;
     const entries: SubagentRunRecord[] = [
       {
         runId: "descendant",
@@ -535,55 +534,51 @@ describe("Gateway dispatch run ownership", () => {
       },
     ];
     owner.promoteYield(f.runId, entries, 1);
-    try {
-      mocks.agentCommand.mockResolvedValueOnce({
-        payloads: [],
-        meta: { yielded: true, terminalReply: { disposition: "empty" } },
-      });
-      predecessor = dispatch(f.runId, f.entry, undefined, async () => {
-        await settlement.wait();
-        return true;
-      });
-      await Promise.race([settlement.entered, predecessor]);
-      expect(finishExecution).not.toHaveBeenCalled();
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [],
+      meta: { yielded: true, terminalReply: { disposition: "empty" } },
+    });
+    const predecessor = dispatch(f.runId, f.entry, undefined, async () => {
+      await settlement.wait();
+      return true;
+    });
+    onTestFinished(async () => {
       settlement.resolve();
       await predecessor;
-      expect(finishExecution).toHaveBeenCalledWith(f.runId);
-      const successor = owner.successor(entries, "exact-successor", vi.fn());
-      await owner.prepareSuccessor(successor);
-      owner.adopt(successor);
-      const successorEntry = createTestRpcSource(
-        {
-          ...f.entry.adapter,
-          ...getRpcSourceIdentity(f.entry),
-          operationalRunInstance: { runId: successor.runId, instanceId: "successor-instance" },
+    });
+    await Promise.race([settlement.entered, predecessor]);
+    expect(finishExecution).not.toHaveBeenCalled();
+    settlement.resolve();
+    await predecessor;
+    expect(finishExecution).toHaveBeenCalledWith(f.runId);
+    const successor = owner.successor(entries, "exact-successor", vi.fn());
+    await owner.prepareSuccessor(successor);
+    owner.adopt(successor);
+    const successorEntry = createTestRpcSource(
+      {
+        ...f.entry.adapter,
+        ...getRpcSourceIdentity(f.entry),
+        operationalRunInstance: { runId: successor.runId, instanceId: "successor-instance" },
+      },
+      successor.runId,
+    );
+    rpcSourceTesting.set(successor.runId, successorEntry);
+    mocks.agentCommand.mockImplementationOnce(async (opts) => {
+      await opts.onExecutionStarted?.();
+      return {
+        payloads: [{ text: "not canonical", mediaUrl: null }],
+        meta: {
+          terminalReply,
+          finalAssistantVisibleText: fullReply,
         },
-        successor.runId,
-      );
-      rpcSourceTesting.set(successor.runId, successorEntry);
-      mocks.agentCommand.mockImplementationOnce(async (opts) => {
-        await opts.onExecutionStarted?.();
-        return {
-          payloads: [{ text: "not canonical", mediaUrl: null }],
-          meta: {
-            terminalReply,
-            finalAssistantVisibleText: fullReply,
-          },
-        };
-      });
-      successorDispatch = dispatch(successor.runId, successorEntry);
-      await successorDispatch;
-      await expect(owner.take()).resolves.toMatchObject({
-        status: "ok",
-        replyText: fullReply,
-        terminalReply,
-      });
-      expect(mocks.agentCommand).toHaveBeenCalledTimes(2);
-    } finally {
-      settlement.resolve();
-      await Promise.allSettled([predecessor, successorDispatch]);
-      owner.close();
-    }
+      };
+    });
+    await dispatch(successor.runId, successorEntry);
+    await expect(owner.take()).resolves.toMatchObject({
+      status: "ok",
+      replyText: fullReply,
+      terminalReply,
+    });
   });
 
   it.each<[string, Partial<AgentCommandDeliveryResult["meta"]>, string, string | undefined]>([
@@ -605,16 +600,12 @@ describe("Gateway dispatch run ownership", () => {
         payloads: [{ text: "payload is not canonical", mediaUrl: null }],
         meta,
       });
-      try {
-        await dispatch();
-        const result = await owner.take();
-        expect(result).toMatchObject({ status, ...(stopReason ? { stopReason } : {}) });
-        if (meta.terminalReply) {
-          expect(result?.terminalReply).toEqual(meta.terminalReply);
-          expect(result?.replyText).toBeUndefined();
-        }
-      } finally {
-        owner.close();
+      await dispatch();
+      const result = await owner.take();
+      expect(result).toMatchObject({ status, ...(stopReason ? { stopReason } : {}) });
+      if (meta.terminalReply) {
+        expect(result?.terminalReply).toEqual(meta.terminalReply);
+        expect(result?.replyText).toBeUndefined();
       }
     },
   );
@@ -623,26 +614,22 @@ describe("Gateway dispatch run ownership", () => {
     "settles an admitted followup without invoking it when activation is %s",
     async (outcome) => {
       const { f, owner, dispatch } = createFollowupDispatch();
-      try {
-        if (outcome === "replaced") {
-          const successor = createSuccessor(f.entry, f.runId, {}, true);
-          rpcSourceTesting.set(f.runId, successor);
-          await expect(dispatch()).rejects.toThrow("lost its Gateway registration");
-          expect(rpcSourceTesting.get(f.runId)).toBe(successor);
-          await expect(owner.take()).rejects.toThrow("lost its Gateway registration");
-        } else {
-          await dispatch(f.runId, f.entry, () => {
-            throw new Error("activation denied");
-          });
-          await expect(owner.take()).resolves.toMatchObject({
-            status: "error",
-            error: "activation denied",
-          });
-        }
-        expect(mocks.agentCommand).not.toHaveBeenCalled();
-      } finally {
-        owner.close();
+      if (outcome === "replaced") {
+        const successor = createSuccessor(f.entry, f.runId, {}, true);
+        rpcSourceTesting.set(f.runId, successor);
+        await expect(dispatch()).rejects.toThrow("lost its Gateway registration");
+        expect(rpcSourceTesting.get(f.runId)).toBe(successor);
+        await expect(owner.take()).rejects.toThrow("lost its Gateway registration");
+      } else {
+        await dispatch(f.runId, f.entry, () => {
+          throw new Error("activation denied");
+        });
+        await expect(owner.take()).resolves.toMatchObject({
+          status: "error",
+          error: "activation denied",
+        });
       }
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
     },
   );
 });

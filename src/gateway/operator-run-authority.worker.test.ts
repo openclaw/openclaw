@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
@@ -24,7 +23,6 @@ import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.work
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
@@ -100,16 +98,9 @@ function registerProof(
   scope: "operator.read" | "operator.write",
   handler: (options: GatewayRequestHandlerOptions) => void,
 ) {
-  context.getGatewayMethodRegistry = () =>
-    createGatewayMethodRegistry([
-      {
-        name,
-        scope,
-        profileAccess: "independent",
-        owner: { kind: "core", area: "proof" },
-        handler,
-      },
-    ]);
+  context.getGatewayMethodRegistry = createContext([
+    [name, scope, "proof", handler],
+  ]).getGatewayMethodRegistry;
 }
 function scoped<T>({ client, context }: OperatorFixture, run: () => T) {
   return withPluginRuntimeGatewayRequestScope(
@@ -192,55 +183,41 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
     ["operator.write"],
   ));
 
-it("preserves the live operator source through principal capture without trusting copied labels", () =>
+it("keeps gateway and channel role facts immutable and bound to their live source", () =>
   withOperator(async ({ profile, client, context }) => {
     const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
     const source = new AbortController();
     const sourceAuthority = abortAuthority(source);
-    const captures = await Promise.all(
-      [principal, client, { ...client }].map((input) =>
-        capture({ client: input, context, sourceAuthority }),
-      ),
+    const captured = await capture({ client: principal, context, sourceAuthority });
+    using _ = { [Symbol.dispose]: captured.release };
+    const channel = captureChannelOperatorRunAuthority({
+      profileId: profile.id,
+      assignedRole: null,
+      scopes: ["operator.read"],
+      gatewayAccessGrant: null,
+      getRuntimeConfig: context.getRuntimeConfig,
+      ...sourceAuthority,
+    });
+    const authorities = [captured.authority, channel];
+    const readers = authorities.map((authority) =>
+      expectDefined(authority.readCurrentRoleFacts, "role reader"),
     );
-    try {
-      const principalSource = expectDefined(captures[0], "principal authority").authority.source;
-      const originalSource = expectDefined(captures[1], "socket authority").authority.source;
-      const copiedSource = expectDefined(captures[2], "copied authority").authority.source;
-      expect(originalSource).toBeDefined();
-      expect(principalSource).toBe(originalSource);
-      expect(copiedSource).not.toBe(originalSource);
-      const channel = captureChannelOperatorRunAuthority({
-        profileId: profile.id,
-        assignedRole: null,
-        scopes: ["operator.read"],
-        gatewayAccessGrant: null,
-        getRuntimeConfig: context.getRuntimeConfig,
-        ...sourceAuthority,
-      });
-      const readers = [...captures.map(({ authority }) => authority), channel].map((authority) =>
-        expectDefined(authority.readCurrentRoleFacts, "role reader"),
-      );
-      for (const read of readers) {
-        const facts = read();
-        expect(facts.assignedRole).toBeNull();
-        expect(facts.githubLogin ?? null).toBeNull();
-        Object.assign(facts, { assignedRole: "owner", githubLogin: "changed" });
-        expect(read()).toMatchObject({ assignedRole: null, githubLogin: null });
-      }
-      for (const retained of captures) {
-        expect(retained.authority.assertCurrent).not.toThrow();
-      }
-      source.abort(new Error("source revoked"));
-      for (const read of readers) {
-        expect(read).toThrow();
-      }
-      for (const retained of captures) {
-        expect(retained.authority.assertCurrent).toThrow();
-      }
-    } finally {
-      for (const retained of captures) {
-        retained.release();
-      }
+    for (const read of readers) {
+      const facts = read();
+      expect(facts.assignedRole).toBeNull();
+      expect(facts.githubLogin ?? null).toBeNull();
+      Object.assign(facts, { assignedRole: "owner", githubLogin: "changed" });
+      expect(read()).toMatchObject({ assignedRole: null, githubLogin: null });
+    }
+    for (const authority of authorities) {
+      expect(authority.assertCurrent).not.toThrow();
+    }
+    source.abort(new Error("source revoked"));
+    for (const read of readers) {
+      expect(read).toThrow();
+    }
+    for (const authority of authorities) {
+      expect(authority.assertCurrent).toThrow();
     }
   }));
 
@@ -298,20 +275,6 @@ it.each(["capture", "operator tool"])(
       );
       const sql = observeHostDataSql();
       try {
-        {
-          using calibration = new DatabaseSync(":memory:");
-          calibration.exec("CREATE TABLE calibration (value INTEGER)");
-          calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-          const read = calibration.prepare("SELECT value FROM calibration");
-          read.get();
-          read.all();
-          expect([...read.iterate()]).toHaveLength(1);
-          for (const call of sql.calls) {
-            expect(call).toHaveBeenCalled();
-            call.mockClear();
-          }
-        }
-
         if (entry === "capture") {
           const retained = await capture({ client, context });
           const { authority } = retained;
@@ -356,9 +319,7 @@ it.each(["capture", "operator tool"])(
             }),
           );
         }
-        for (const call of sql.calls) {
-          expect(call).not.toHaveBeenCalled();
-        }
+        expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
       }

@@ -59,11 +59,17 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
     if (!state) {
       return;
     }
-    await state.shadow.closeShadow();
-    this.reindexState = undefined;
-    if (!state.shadow.postgresStageId) {
-      state.shadow.assertShadowPath();
-      await removeMemoryDatabaseFiles(state.tempDbPath);
+    try {
+      if (state.progress.cachePrunePending) {
+        await this.withPublishedDatabase(() => this.pruneEmbeddingCacheIfNeeded(true));
+      }
+    } finally {
+      await state.shadow.closeShadow();
+      this.reindexState = undefined;
+      if (!state.shadow.postgresStageId) {
+        state.shadow.assertShadowPath();
+        await removeMemoryDatabaseFiles(state.tempDbPath);
+      }
     }
   }
 
@@ -134,6 +140,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
         publishedIdentity: originalDatabase.facts.serialized,
         progress: {
           memoryComplete: false,
+          cachePrunePending: false,
           completedSessionFiles: new Set(),
           changedSessionFiles: new Set(),
           changedSessionTargets: new Map(),
@@ -269,9 +276,10 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
-      // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
-      // cache only after successful publication so failed rebuilds retain their work.
-      await this.pruneEmbeddingCacheIfNeeded();
+      // Rebuild writes must not evict unread hits. After publication the ordinary
+      // policy can prefer vectors no longer referenced by the replacement index.
+      await this.pruneEmbeddingCacheIfNeeded(true);
+      state.progress.cachePrunePending = false;
       this.clearFullReindexRetryBackoff();
     } catch (err) {
       this.adoptReindexRetryState(originalRetryState);

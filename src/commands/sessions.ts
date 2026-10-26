@@ -71,19 +71,6 @@ function toSessionCatalogEntry(
   };
 }
 
-/** True ACP sessions use the child runtime's model, not the configured fallback. */
-function applyAcpModelOverlayIfNeeded(
-  modelRef: { provider: string; model: string },
-  sessionKey: string,
-  acpRuntime: boolean,
-): { provider: string; model: string } {
-  if (!acpRuntime || !isAcpSessionKey(sessionKey)) {
-    return modelRef;
-  }
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
-  return { provider: "acpx", model: `${agentId}-acp` };
-}
-
 function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
   if (value === undefined) {
     return DEFAULT_SESSIONS_LIMIT;
@@ -270,11 +257,12 @@ export async function sessionsCommand(
       const acpRuntime = acpMeta != null;
       // ACP rows need stored-key metadata before model/runtime resolution so
       // bridge sessions and true ACP runtime sessions display differently.
-      const modelRef = applyAcpModelOverlayIfNeeded(
-        resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
-        acpSessionKey,
-        acpRuntime,
-      );
+      let modelRef = resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId);
+      /** True ACP sessions use the child runtime's model, not the configured fallback. */
+      if (acpRuntime && isAcpSessionKey(acpSessionKey)) {
+        const acpAgentId = parseAgentSessionKey(acpSessionKey)?.agentId ?? "acp";
+        modelRef = { provider: "acpx", model: `${acpAgentId}-acp` };
+      }
       const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
         cfg,
         agentId,

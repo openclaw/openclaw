@@ -256,7 +256,12 @@ it.each(["prompt", "discovery"])(
       filePath,
       "---\ndescription: Transfer\n---\n# Resources\nRead data.bin and run scripts/check.sh.\n",
     );
-    snapshot.resolvedSkills![0]!.readContent = "Stale host cache must not be read";
+    const stale = Object.freeze({
+      ...snapshot.resolvedSkills![0]!,
+      readContent: "Stale host cache must not be read",
+    });
+    snapshot.resolvedSkills = [stale];
+    snapshot.discoverySkills = [stale];
     if (mode === "discovery") {
       snapshot.prompt = "";
       snapshot.resolvedSkills = [];
@@ -275,6 +280,8 @@ it.each(["prompt", "discovery"])(
       tunnel: carrier,
     });
     expect(resources).toBeDefined();
+    expect(stale.filePath).toBe(filePath);
+    expect(stale.readContent).toBe("Stale host cache must not be read");
     await fs.writeFile(filePath, "Changed host instructions after transfer");
     try {
       await withSessionSkillResources(resources!, async () => {

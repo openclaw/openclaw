@@ -277,14 +277,19 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           promptTokens,
           totalTokens: promptTokens + output.usage.output,
         };
-        const cacheWrite1h = event.usage.cacheDetails?.reduce(
-          (total, detail) =>
-            detail.ttl === CacheTTL.ONE_HOUR ? total + (detail.inputTokens ?? 0) : total,
-          0,
-        );
-        if (cacheWrite1h) {
-          output.usage.cacheWrite1h = cacheWrite1h;
+        const cacheWrites: Partial<Record<"cacheWrite1h" | "cacheWrite5m", number>> = {};
+        for (const detail of event.usage.cacheDetails ?? []) {
+          const key =
+            detail.ttl === CacheTTL.ONE_HOUR
+              ? "cacheWrite1h"
+              : detail.ttl === CacheTTL.FIVE_MINUTES
+                ? "cacheWrite5m"
+                : undefined;
+          if (key && detail.inputTokens !== undefined) {
+            cacheWrites[key] = (cacheWrites[key] ?? 0) + detail.inputTokens;
+          }
         }
+        Object.assign(output.usage, cacheWrites);
         calculateCost(model, output.usage);
       }
     }

@@ -25,15 +25,23 @@ export function ChatContextBreakdown(
             <Show
               when={result().report}
               fallback={
-                <p class="chat-context__note" role="status">
-                  {t(
-                    result().offline
-                      ? "chat.sessionDetails.contextOffline"
-                      : result().failed
-                        ? "chat.sessionDetails.contextError"
-                        : "chat.sessionDetails.contextUnavailable",
-                  )}
-                </p>
+                <div
+                  class="chat-context__bar"
+                  role="meter"
+                  aria-label={t("chat.sessionDetails.context")}
+                  aria-valuemin="0"
+                  aria-valuemax={props.limit}
+                  aria-valuenow={Math.min(props.used, props.limit)}
+                  aria-valuetext={t("chat.sessionDetails.contextExactCount", {
+                    used: (props.approximate ? "~" : "") + formatCompactTokenCount(props.used),
+                    limit: formatCompactTokenCount(props.limit),
+                  })}
+                >
+                  <span
+                    class="chat-context__segment chat-context__total"
+                    style={{ width: Math.min(100, (props.used / props.limit) * 100) + "%" }}
+                  />
+                </div>
               }
             >
               {(report) => {

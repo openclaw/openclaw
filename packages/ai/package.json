@@ -76,6 +76,11 @@
       "import": "./dist/internal/anthropic.mjs",
       "default": "./dist/internal/anthropic.mjs"
     },
+    "./internal/google": {
+      "types": "./dist/internal/google.d.mts",
+      "import": "./dist/internal/google.mjs",
+      "default": "./dist/internal/google.mjs"
+    },
     "./internal/google-model-family": {
       "types": "./dist/internal/google-model-family.d.mts",
       "import": "./dist/internal/google-model-family.mjs",
@@ -128,6 +133,7 @@
     "@opentelemetry/semantic-conventions": "1.43.0",
     "openai": "7.35.0",
     "partial-json": "0.1.7",
+    "proxy-from-env": "2.1.0",
     "typebox": "1.4.1",
     "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"

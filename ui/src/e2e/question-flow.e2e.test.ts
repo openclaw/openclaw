@@ -150,8 +150,8 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     sessionKey: mainSessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
-  const startup = await gateway.waitForRequest("chat.startup");
-  expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
+  const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
+  expect(subscription.params).toEqual(expect.objectContaining({ key: questionSessionKey }));
   const compactMobileViewport =
     viewport.width <= 768 ||
     (viewport.width <= 932 && viewport.height <= 500 && viewport.width > viewport.height);

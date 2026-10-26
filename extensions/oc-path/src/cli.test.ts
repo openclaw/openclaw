@@ -56,6 +56,11 @@ const isPathMachineOutput = (() => {
 describe("openclaw path CLI", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  function fileFixture(filename: string) {
+    const workspaceDir = tempDirs.make("oc-path-cli-");
+    return { workspaceDir, filePath: join(workspaceDir, filename) };
+  }
+
   it("reports its TTY-aware machine-output mode to the CLI", () => {
     const argv = ["node", "openclaw", "path", "validate", "oc://AGENTS.md"];
     expect(isPathMachineOutput({ argv, stdoutIsTTY: false })).toBe(true);
@@ -187,8 +192,7 @@ describe("openclaw path CLI", () => {
 
   describe("resolve", () => {
     it("CLI-R04 finds a leaf in yaml and prints it", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "workflow.yaml");
+      const { workspaceDir, filePath } = fileFixture("workflow.yaml");
       writeFileSync(filePath, "name: inbox-triage\nsteps:\n  - id: fetch\n", "utf-8");
       const rt = createTestRuntime();
       await pathResolveCommand(
@@ -204,8 +208,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-R02 returns 1 for not-found path", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
       await pathResolveCommand("oc://gateway.jsonc/missing", { cwd: workspaceDir, json: true }, rt);
@@ -217,8 +220,7 @@ describe("openclaw path CLI", () => {
     it("CLI-R05 keeps reading a file whose undecodable byte is outside the resolved leaf", async () => {
       // Strict admission is limited to the editing verb, so read-only inspection
       // keeps its existing contract for files that are not valid UTF-8.
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       const before = Buffer.concat([
         Buffer.from('{ "version": "1.0", "note": "a'),
         Buffer.from([0xff]),
@@ -234,8 +236,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("bounds every file-loading verb before parsing oversized input", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "oversized.json");
+      const { filePath } = fileFixture("oversized.json");
       const content = `"${"界".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
       writeFileSync(filePath, content, "utf-8");
       const unboundedRead = vi
@@ -347,8 +348,7 @@ describe("openclaw path CLI", () => {
 
   describe("set", () => {
     it("preserves an existing quoted frontmatter value when editing another field", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "AGENTS.md");
+      const { workspaceDir, filePath } = fileFixture("AGENTS.md");
       const value = String.raw`C:\Tools\bin`;
       writeFileSync(filePath, `---\nname: old\nnote: ${JSON.stringify(value)}\n---\n`);
       const rt = createTestRuntime();
@@ -367,8 +367,7 @@ describe("openclaw path CLI", () => {
       { label: "quote delimiters", value: '"hello"' },
       { label: "surrounding whitespace", value: "  hello\t" },
     ])("preserves a frontmatter $label across separate CLI reads and edits", async ({ value }) => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "AGENTS.md");
+      const { workspaceDir, filePath } = fileFixture("AGENTS.md");
       writeFileSync(
         filePath,
         "---\nnote: old\nother: original\n---\n\n## Tasks\n- Keep this item\n",
@@ -399,8 +398,7 @@ describe("openclaw path CLI", () => {
       ["2.5E+3", "2500"],
       ["1e21", "1e+21"],
     ])("writes YAML numeric value %s without changing its type", async (value, expected) => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "workflow.yaml");
+      const { filePath } = fileFixture("workflow.yaml");
       const before = "# settings\nrate: 1e-7\nlabel: keep\n";
       writeFileSync(filePath, before);
       const options = { file: filePath, json: true };
@@ -428,8 +426,7 @@ describe("openclaw path CLI", () => {
     it.each(["1e", "1e999", "0x10", "1,5"])(
       "refuses invalid YAML numeric value %s without writing",
       async (value) => {
-        const workspaceDir = tempDirs.make("oc-path-cli-");
-        const filePath = join(workspaceDir, "workflow.yaml");
+        const { filePath } = fileFixture("workflow.yaml");
         const before = "rate: 1e-7\n";
         writeFileSync(filePath, before);
         const runtime = createTestRuntime();
@@ -456,8 +453,7 @@ describe("openclaw path CLI", () => {
     ])(
       "reads and edits wrapped Markdown item values: $value with $eol",
       async ({ eol, value, text, prefix }) => {
-        const workspaceDir = tempDirs.make("oc-path-cli-");
-        const filePath = join(workspaceDir, "notes.md");
+        const { workspaceDir, filePath } = fileFixture("notes.md");
         const before = [
           "## Notes",
           `- description:${value}`,
@@ -650,8 +646,7 @@ describe("openclaw path CLI", () => {
       ])(
         "preserves unrelated Markdown bytes during %s",
         async (_label, target, value, expected) => {
-          const workspaceDir = tempDirs.make("oc-path-cli-");
-          const filePath = join(workspaceDir, "SKILL.md");
+          const { workspaceDir, filePath } = fileFixture("SKILL.md");
           const finalNewline = ending === "\n" ? ending : "";
           writeFileSync(filePath, before.replace(/\n/g, ending) + finalNewline);
           const rt = createTestRuntime();
@@ -682,8 +677,7 @@ describe("openclaw path CLI", () => {
     it.each(["\n", "\r\n", "mixed"])(
       "preserves JSONL bytes outside a leaf and across append with %j separators",
       async (ending) => {
-        const workspaceDir = tempDirs.make("oc-path-cli-");
-        const filePath = join(workspaceDir, "events.jsonl");
+        const { filePath } = fileFixture("events.jsonl");
         const firstEnding = ending === "mixed" ? "\r\n" : ending;
         const lastEnding = ending === "mixed" ? "\n" : ending;
         const before =
@@ -728,8 +722,7 @@ describe("openclaw path CLI", () => {
     );
 
     it("CLI-S09 refuses an undecodable file instead of rewriting untouchable bytes", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       // The invalid byte sits in a leaf the edit never touches.
       const before = Buffer.concat([
         Buffer.from('{ "version": "1.0", "note": "a'),
@@ -752,8 +745,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S10 still writes valid non-ASCII values including a literal replacement character", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0", "note": "合法 😀 �" }', "utf8");
       const rt = createTestRuntime();
       await pathSetCommand(
@@ -770,8 +762,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       const before = '{ "version": "1.0" }';
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
@@ -800,8 +791,7 @@ describe("openclaw path CLI", () => {
         json: true,
       },
     ])("emits an applicable $label dry-run patch", async ({ before, json }) => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       const patchPath = join(workspaceDir, "preview.patch");
       const after = before.replace('"1.0"', '"2.0"');
       writeFileSync(filePath, before, "utf-8");
@@ -836,8 +826,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S05c --dry-run --diff preserves CRLF during a Markdown value change", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "AGENTS.md");
+      const { workspaceDir, filePath } = fileFixture("AGENTS.md");
       const before = "---\r\nname: x\r\n---\r\n";
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
@@ -856,8 +845,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S07 rejects --diff without --dry-run", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       const before = '{ "version": "1.0" }';
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
@@ -876,8 +864,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S08 sets slash-deep JSONC paths and parsed JSON values", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "openclaw.json");
+      const { workspaceDir, filePath } = fileFixture("openclaw.json");
       writeFileSync(
         filePath,
         '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
@@ -914,8 +901,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("writes literal dollar replacement text through the registered Markdown command", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "AGENTS.md");
+      const { workspaceDir, filePath } = fileFixture("AGENTS.md");
       writeFileSync(filePath, "## Tools\n\n- command: old\n- keep: stable\n", "utf-8");
       const value = "literal $$ $& $1 $` $' $HOME";
       const rt = createTestRuntime();
@@ -936,8 +922,7 @@ describe("openclaw path CLI", () => {
     it.each([true])(
       "refuses sentinel-bearing Markdown insertion in the CLI (dry-run=%s)",
       async (dryRun) => {
-        const workspaceDir = tempDirs.make("oc-path-cli-");
-        const filePath = join(workspaceDir, "AGENTS.md");
+        const { workspaceDir, filePath } = fileFixture("AGENTS.md");
         const before = "---\nname: x\n---\n";
         writeFileSync(filePath, before, "utf-8");
         const rt = createTestRuntime();
@@ -957,8 +942,7 @@ describe("openclaw path CLI", () => {
     );
 
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");
       const rt = createTestRuntime();
       // Sentinel values can enter the AST, but emit must reject them through
@@ -976,8 +960,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "workflow.yaml");
+      const { workspaceDir, filePath } = fileFixture("workflow.yaml");
       const before = "key: value\n  bad indent: oops\n";
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
@@ -1023,8 +1006,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-F02 returns 1 when zero matches", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { workspaceDir, filePath } = fileFixture("gateway.jsonc");
       writeFileSync(filePath, "{}", "utf-8");
       const rt = createTestRuntime();
       await pathFindCommand("oc://gateway.jsonc/nope/*", { cwd: workspaceDir, json: true }, rt);
@@ -1047,8 +1029,7 @@ describe("openclaw path CLI", () => {
       ["comments", '// keep this comment\n{\n  "v": 1\n}\n'],
       ["empty file", ""],
     ])("CLI-E01 round-trips jsonc bytes verbatim: %s", async (_label, before) => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
+      const { filePath } = fileFixture("gateway.jsonc");
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);
@@ -1061,8 +1042,7 @@ describe("openclaw path CLI", () => {
     it.each([["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"]])(
       "CLI-E02 round-trips md verbatim: %s",
       async (_label, before) => {
-        const workspaceDir = tempDirs.make("oc-path-cli-");
-        const filePath = join(workspaceDir, "AGENTS.md");
+        const { filePath } = fileFixture("AGENTS.md");
         writeFileSync(filePath, before, "utf-8");
         const rt = createTestRuntime();
         await pathEmitCommand(filePath, { json: true }, rt);

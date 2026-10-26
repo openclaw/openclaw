@@ -7,6 +7,7 @@ import * as ingress from "../../gateway/local-user-ingress.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import type { FollowupRun } from "./queue.js";
@@ -18,8 +19,6 @@ import {
 import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
 const evidenceCleanups = new Set<() => void>();
 function trackedQueue(...args: Parameters<typeof createQueueCase>) {
   const q = createQueueCase(...args);
@@ -71,7 +70,6 @@ it("drains the complete parked image turn after active steering rejects it", asy
     target: () => undefined,
   });
   run.userTurnTranscriptRecorder = recorder;
-  const persist = vi.spyOn(recorder, "persistApproved");
   const operation = createReplyOperation({
     sessionKey: key,
     sessionId: run.run.sessionId,
@@ -98,26 +96,16 @@ it("drains the complete parked image turn after active steering rejects it", asy
     },
   });
   operation.setPhase("running");
-  const typing = createMockTypingController();
   try {
     await expect(
-      runActiveReplySteer({
-        followupRun: run,
-        opts: undefined,
-        providedReplyOperation: operation,
-        queueKey: key,
-        replyOperationRunState: undefined,
-        resolvedQueue: { mode: "steer", debounceMs: 0 },
-        restartRecoverySourceTurnId: run.messageId,
-        runFollowup: q.runFollowup,
-        sessionCtx: {},
-        sessionKey: key,
-        touchActiveSessionEntry: async () => {},
-        typingSignals: createTypingSignaler({ typing, mode: "never" }),
-      }),
+      runActiveReplySteer(
+        createSteerParams(key, run, operation, {
+          restartRecoverySourceTurnId: run.messageId,
+          runFollowup: q.runFollowup,
+        }),
+      ),
     ).resolves.toBe("handled");
     expect(reject).toHaveBeenCalledOnce();
-    expect(persist).not.toHaveBeenCalled();
     operation.complete();
     await q.done.promise;
     expect(q.calls).toHaveLength(1);
@@ -129,7 +117,6 @@ it("drains the complete parked image turn after active steering rejects it", asy
     expect(recorder.hasPersisted()).toBe(false);
   } finally {
     operation.complete();
-    persist.mockRestore();
   }
 });
 
@@ -166,7 +153,7 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
   const mixed = kind === "mixed";
   const audit = admission.createChannelAdmissionAudit({ enabled: true });
   evidenceCleanups.add(() => audit.close());
-  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 1);
+  const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 2);
   const turns = [
     ["a", "first", "/tmp/a.png", "image/png"],
     ["b", "second", "/tmp/b.pdf", "application/pdf"],

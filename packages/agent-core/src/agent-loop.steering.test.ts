@@ -90,6 +90,20 @@ function trackBatch(agent: Agent) {
   return { commitReadyCalls, releaseSkippedCalls };
 }
 
+async function steerDuring(
+  agent: Agent,
+  checkpoint: ReturnType<typeof gate>,
+  ...messages: AgentMessage[]
+) {
+  const run = agent.prompt("start");
+  await checkpoint.started;
+  for (const message of messages) {
+    agent.steer(message);
+  }
+  checkpoint.release();
+  await run;
+}
+
 function preparedTool(name: string, prepare: (args: unknown) => unknown = (args) => args) {
   const execute = vi.fn(async () => emptyResult());
   const dispose = vi.fn();
@@ -117,10 +131,7 @@ describe("agentLoop steering", () => {
       const agent = new Agent({
         initialState: { model },
         streamFn: createTurnSequenceStream(
-          [
-            ...(mode === "steered" ? [[{ type: "text" as const, text: "Input A response" }]] : []),
-            [{ type: "text", text: "Input B response" }],
-          ],
+          [...(mode === "steered" ? [text("Input A response")] : []), text("Input B response")],
           requestMessages,
         ),
       });
@@ -195,12 +206,7 @@ describe("agentLoop steering", () => {
     const firstSteer = user("first steer", 2);
     const secondSteer = user("second steer", 3);
 
-    const run = agent.prompt("start");
-    await first.started;
-    agent.steer(firstSteer);
-    agent.steer(secondSteer);
-    first.release();
-    await run;
+    await steerDuring(agent, first, firstSteer, secondSteer);
 
     expect(secondExecute).not.toHaveBeenCalled();
     expect(agent.state.messages).not.toContain(firstSteer);
@@ -299,11 +305,7 @@ describe("agentLoop steering", () => {
     const { commitReadyCalls, releaseSkippedCalls } = trackBatch(agent);
     const steer = user("redirect", 2);
 
-    const run = agent.prompt("start");
-    await preflight.started;
-    agent.steer(steer);
-    preflight.release();
-    await run;
+    await steerDuring(agent, preflight, steer);
 
     expect(execute).not.toHaveBeenCalled();
     expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([{ toolCallId: "first", args: {} }]);
@@ -436,11 +438,9 @@ describe("agentLoop steering", () => {
     expect(execute).toHaveBeenCalledOnce();
     expect(result.at(-1)).toBe(steer);
     expect(result).toContainEqual(
-      expect.objectContaining({
-        role: "toolResult",
-        toolCallId: "reload-once",
-        content: [{ type: "text", text: "reload committed" }],
-      }),
+      expect.objectContaining(
+        expectedToolResult("reload-once", false, { content: text("reload committed") }),
+      ),
     );
     expect(run.events.at(-1)).toMatchObject({ type: "agent_end", messages: result });
     expectInjectedOnce(run.events, steer);
@@ -514,11 +514,7 @@ describe("agentLoop steering", () => {
       });
       const steer = user("before launch", 2);
 
-      const run = agent.prompt("start");
-      await preparation.started;
-      agent.steer(steer);
-      preparation.release();
-      await run;
+      await steerDuring(agent, preparation, steer);
 
       expect(execute).toHaveBeenCalledTimes(toolExecution === "parallel" ? 2 : 1);
       expect(commitReadyCalls.mock.calls.flatMap(([calls]) => calls)).toEqual([
@@ -538,7 +534,7 @@ describe("agentLoop steering", () => {
         toolExecution === "parallel"
           ? expectedToolResult("tail", false)
           : expectedToolResult("tail", true, {
-              content: [{ type: "text", text: "Skipped to process an incoming message." }],
+              content: text("Skipped to process an incoming message."),
               details: { status: "skipped", deniedReason: "steering" },
             }),
         steer,
@@ -686,9 +682,7 @@ async function activeResponse(
       started.resolve();
       return firstResponse;
     }
-    const response = createAssistantMessageEventStream();
-    finishMessageStream(response, streamAssistant("updated answer"));
-    return response;
+    return reply(streamAssistant("updated answer"));
   };
   const { agent, requests } = makeAgent(options.tools ?? [], {
     initialState: { model: activeModel },
@@ -697,26 +691,24 @@ async function activeResponse(
   });
   const run = agent.prompt("original question");
   await started.promise;
+  const finish = (message = streamAssistant("original answer")) => {
+    disconnect?.();
+    finishMessageStream(firstResponse, message);
+    return run;
+  };
   return {
     steer,
     submitted: submitted.promise,
     agent,
     requests,
     firstResponse,
-    finish: (message = streamAssistant("original answer")) => {
-      disconnect?.();
-      finishMessageStream(firstResponse, message, "stop");
-      return run;
-    },
-    fail: () => {
-      disconnect?.();
-      finishMessageStream(firstResponse, {
+    finish,
+    fail: () =>
+      finish({
         ...streamAssistant(""),
         stopReason: "error",
         errorMessage: "provider failed",
-      });
-      return run;
-    },
+      }),
   };
 }
 
@@ -804,7 +796,7 @@ it("continues after an automatic response when transport still owns deferred too
   expect(requests[1]?.at(-1)).toMatchObject({ role: "assistant" });
   expect(needsContinuation).toHaveBeenCalledOnce();
   expect(agent.state.messages.at(-1)).toMatchObject({
-    content: [{ type: "text", text: "updated answer" }],
+    content: text("updated answer"),
   });
 });
 it.each(["one-at-a-time", "all"] as const)(
@@ -812,7 +804,7 @@ it.each(["one-at-a-time", "all"] as const)(
   async (steeringMode) => {
     const settled = createDeferred();
 
-    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const execute = vi.fn(async () => emptyResult());
     const { agent, submitted, firstResponse, steer, finish, requests } = await activeResponse({
       steeringMode,
       tools: [{ ...makeTool("lookup"), parameters: Type.Object({}), execute }],
@@ -837,7 +829,7 @@ it.each(["one-at-a-time", "all"] as const)(
     expect(execute).toHaveBeenCalledOnce();
     await finish({
       ...streamAssistant("original answer"),
-      content: [toolCall, { type: "text", text: "original answer" }],
+      content: [toolCall, ...text("original answer")],
     });
     expect(requests[1]?.at(-1)).toBe(first);
     expect(requests[2]?.at(-1)).toBe(second);

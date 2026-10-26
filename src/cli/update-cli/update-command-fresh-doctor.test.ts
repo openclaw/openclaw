@@ -273,6 +273,40 @@ describe("post-plugin update readiness", () => {
     },
   );
 
+  it.each([false, true])(
+    "spends preparation time from the inherited Doctor deadline (expired=%s)",
+    async (expired) => {
+      let elapsedMs = 0;
+      let wallNow = 1_000;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const wall = vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+      mocks.resolveEntrypoint.mockImplementationOnce(async () => {
+        elapsedMs = expired ? 501 : 200;
+        wallNow -= 90_000;
+        return "/opt/openclaw/dist/index.js";
+      });
+      try {
+        const run = runUpdateFinalizationDoctorInFreshProcess({
+          ...updateOptions,
+          phase: "pre-plugin",
+          opts: { timeout: "5" },
+          serviceInspectionDeadlineAtMs: 1_500,
+        });
+        if (expired) {
+          await expect(run).rejects.toThrow("Doctor service-inspection deadline has expired.");
+          expect(mocks.command).not.toHaveBeenCalled();
+        } else {
+          await run;
+          expect(mocks.command).toHaveBeenCalledOnce();
+          expect(mocks.command.mock.calls[0]?.[2].timeoutMs).toBe(300);
+        }
+      } finally {
+        wall.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
   it.each([
     { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: 5_000 },
     { phase: "post-plugin", operatorPolicy: "external", timeout: "3", expected: 3_000 },
@@ -309,8 +343,10 @@ describe("post-plugin update readiness", () => {
       expect(mocks.command).toHaveBeenCalledExactlyOnceWith(
         "/usr/bin/node",
         expect.arrayContaining(["doctor", "--repair"]),
-        expect.objectContaining({ timeoutMs: expected }),
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
       );
+      expect(commandTimeouts()[0]).toBeGreaterThan(0);
+      expect(commandTimeouts()[0]).toBeLessThanOrEqual(expected);
     },
   );
 
@@ -434,7 +470,14 @@ describe("post-plugin update readiness", () => {
           env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
         }),
       );
-      expect(commandTimeouts()).toEqual([timeoutMs, timeoutMs ?? 300_000]);
+      const [doctorTimeout, validationTimeout] = commandTimeouts();
+      expect(validationTimeout).toBe(timeoutMs ?? 300_000);
+      if (timeoutMs === undefined) {
+        expect(doctorTimeout).toBeUndefined();
+      } else {
+        expect(doctorTimeout).toBeGreaterThan(0);
+        expect(doctorTimeout).toBeLessThanOrEqual(timeoutMs);
+      }
     },
   );
 

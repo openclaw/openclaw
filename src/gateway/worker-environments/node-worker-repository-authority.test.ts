@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import {
   nodeWorkspaceTransferManifestPath,
   nodeWorkspaceTransferReconcilePath,
@@ -192,9 +193,9 @@ it.each(["before upload", "after upload"])(
         return;
       }
       expect(h.observed().downloadStatus).toBe(200);
-      const staged = (await fs.readdir(h.temporaryRoot, { recursive: true })).filter((entry) =>
-        path.basename(entry).startsWith("upload-"),
-      );
+      const staged = (await listDirectoryTreeStrict(h.temporaryRoot))
+        .map((walkEntry) => walkEntry.relativePath)
+        .filter((entry) => path.basename(entry).startsWith("upload-"));
       expect(staged).toHaveLength(1);
       h.closeInvocation();
       expect(() => h.transfer.takeUpload("environment-1", baseManifestRef)).toThrow();

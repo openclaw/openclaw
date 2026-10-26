@@ -66,7 +66,7 @@ it("subtracts embedded prompt sections once, and leaves unmeasured and inconsist
   expectTokens(native, [null, null, 3000, 2000, null]);
 });
 
-it("retires a pending report on session replacement and rejects a report from another incarnation", async () => {
+it("keeps total usage when session replacement rejects a report from another incarnation", async () => {
   const first = createDeferredCore<ReturnType<typeof usage>>();
   let signal: AbortSignal | undefined;
   let requestIndex = 0;
@@ -92,8 +92,10 @@ it("retires a pending report on session replacement and rejects a report from an
     <ChatContextBreakdown
       gateway={gateway}
       session={session()}
-      used={session().totalTokens ?? 50000}
-      limit={100000}
+      used={session().totalTokens ?? 72400}
+      limit={1000000}
+      approximate={session().totalTokensFresh === false}
+      popover
     />
   ));
   await expect.poll(() => request.mock.calls.length).toBe(1);
@@ -103,13 +105,20 @@ it("retires a pending report on session replacement and rejects a report from an
   expect(signal?.aborted).toBe(false);
   setSession({ key: "agent:main:second", kind: "direct", sessionId: "current" });
   flush();
-  await expect.poll(() => view.container.textContent).toContain("No matching context report");
+  await expect.poll(() => view.container.querySelector('[role="meter"]')).not.toBeNull();
   expect(signal?.aborted).toBe(true);
   first.resolve(usage("first"));
   await first.promise;
   flush();
   expect(view.container.textContent).not.toContain("AGENTS.md");
-  expect(view.container.querySelector(".chat-context__bar")).toBeNull();
+  const total = view.getByRole("meter", { name: "Context" });
+  expect(total.getAttribute("aria-valuenow")).toBe("72400");
+  expect(total.getAttribute("aria-valuemax")).toBe("1000000");
+  expect(total.getAttribute("aria-valuetext")).toBe("72.4k of 1M tokens");
+  expect(view.container.querySelectorAll("[data-context-category]")).toHaveLength(0);
+  setSession((current) => ({ ...current, totalTokens: 80000, totalTokensFresh: false }));
+  flush();
+  expect(total.getAttribute("aria-valuetext")).toBe("~80k of 1M tokens");
   view.unmount();
 });
 

@@ -23,6 +23,7 @@ import { createSessionsTool } from "./sessions-tool.js";
 import {
   adversarialResolved,
   expectExactResolvedAcknowledgement,
+  makeAgentPatchFallback,
 } from "./sessions-tool.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tool-");
@@ -635,12 +636,7 @@ describe("sessions tool", () => {
       {
         sessionId: "session-main",
         updatedAt: 1,
-        modelFallback: {
-          prevModel: "good",
-          prevProvider: "openai",
-          ts: 1,
-          source: "agent-patch",
-        },
+        modelFallback: makeAgentPatchFallback("good", 1),
       },
     );
 
@@ -690,12 +686,7 @@ describe("sessions tool", () => {
         modelProvider: "broken",
         modelOverride: "bad",
         providerOverride: "broken",
-        modelFallback: {
-          prevModel: "good",
-          prevProvider: "openai",
-          ts: 1,
-          source: "agent-patch",
-        },
+        modelFallback: makeAgentPatchFallback("good", 1),
       },
     );
     const runGuard = await createAgentPatchedSessionModelRunGuard({
@@ -730,6 +721,7 @@ describe("sessions tool", () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/a" } } },
     };
+    const guardOptions = () => ({ cfg, agentId: "main", sessionKey, storePath });
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
@@ -739,52 +731,22 @@ describe("sessions tool", () => {
         modelProvider: "openai",
         modelOverride: "b",
         providerOverride: "openai",
-        modelFallback: {
-          prevModel: "a",
-          prevProvider: "openai",
-          ts: 10,
-          source: "agent-patch",
-        },
+        modelFallback: makeAgentPatchFallback("a", 10),
       },
     );
-    const runB = await createAgentPatchedSessionModelRunGuard({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const runB = await createAgentPatchedSessionModelRunGuard(guardOptions());
     await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
       model: "c",
       modelOverride: "c",
-      modelFallback: {
-        prevModel: "a",
-        prevProvider: "openai",
-        ts: 20,
-        source: "agent-patch",
-      },
+      modelFallback: makeAgentPatchFallback("a", 20),
     }));
-    const runC = await createAgentPatchedSessionModelRunGuard({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const runC = await createAgentPatchedSessionModelRunGuard(guardOptions());
     await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
       model: "d",
       modelOverride: "d",
-      modelFallback: {
-        prevModel: "a",
-        prevProvider: "openai",
-        ts: 30,
-        source: "agent-patch",
-      },
+      modelFallback: makeAgentPatchFallback("a", 30),
     }));
-    const runD = await createAgentPatchedSessionModelRunGuard({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      storePath,
-    });
+    const runD = await createAgentPatchedSessionModelRunGuard(guardOptions());
 
     await runC.finish(true);
     await runB.finish(true);

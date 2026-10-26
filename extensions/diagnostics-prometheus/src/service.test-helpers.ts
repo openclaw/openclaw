@@ -72,10 +72,19 @@ export function createMetricsHarness(
         privateData: DiagnosticEventPrivateData,
       ) => void)
     | undefined;
+  let workerListener:
+    | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onWorkerRequestMetrics"]>>[0]
+    | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
     ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
     ...(onGatewayWorkMetrics ? { onGatewayWorkMetrics } : {}),
     emit() {},
+    onWorkerRequestMetrics(nextListener) {
+      workerListener = nextListener;
+      return () => {
+        workerListener = undefined;
+      };
+    },
     onEvent(nextListener) {
       listener = nextListener;
       return () => {
@@ -102,6 +111,18 @@ export function createMetricsHarness(
     handler: exporter.handler,
     logger: context.logger,
     record(event: EventInput, metadata: DiagnosticEventMetadata = trusted) {
+      if (event.type === "worker.request" && metadata.trusted) {
+        expectDefined(workerListener, "Worker metrics listener")(
+          event.kind,
+          event.requestClass,
+          event.phase,
+          event.queueDepth,
+          event.queueWaitMs,
+          event.durationMs,
+          event.timing,
+        );
+        return;
+      }
       expectDefined(listener, "Prometheus diagnostics listener")(
         { ...baseEvent(), ...event },
         metadata,
