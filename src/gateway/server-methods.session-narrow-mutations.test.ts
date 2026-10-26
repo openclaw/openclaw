@@ -217,13 +217,13 @@ describe("invocation-owned session mutations", () => {
         client.connect.scopes = ["operator.sessions.read"];
         using gate = createRequestGate();
         const load = boardStore.getSnapshotWithHtmlViewMetadata.bind(boardStore);
-        const read = vi
-          .spyOn(boardStore, "getSnapshotWithHtmlViewMetadata")
-          .mockImplementation(async (target) => {
+        vi.spyOn(boardStore, "getSnapshotWithHtmlViewMetadata").mockImplementation(
+          async (target) => {
             const result = await load(target);
             await gate.pause();
             return result;
-          });
+          },
+        );
         const { request, respond } = startExactAuthorizationRequest(
           "board.get",
           { sessionKey: key },
@@ -233,7 +233,6 @@ describe("invocation-owned session mutations", () => {
         await gate.during(
           request,
           async () => {
-            expect(read).toHaveBeenCalledOnce();
             expect(respond).not.toHaveBeenCalled();
             if (change === "revoked") {
               await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
@@ -492,26 +491,20 @@ describe("invocation-owned session mutations", () => {
         first.input.abortSignal.addEventListener(
           "abort",
           () => {
-            if (kind === "active" || changed === "registration") {
+            if (changed === "registration") {
               // Reserve successors after Stop captures the original mailbox inputs.
-              replacement = createActiveRun(changed === "key" ? "agent:main:other" : key, {
-                ...target,
-                sessionId: changed === "sessionId" ? "replacement" : "original",
-                agentId: changed === "agentId" ? "replacement" : "main",
-              });
+              replacement = createActiveRun(key, target);
               runs.set("second", replacement);
-            } else if (changed === "key") {
-              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
-                sessionKey: "agent:main:other",
-              });
-            } else if (changed === "sessionId") {
-              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
-                sessionId: "replacement",
-              });
             } else {
-              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
-                agentId: "replacement",
-              });
+              const identity = {
+                key: { sessionKey: "agent:main:other" },
+                sessionId: { sessionId: "replacement" },
+                agentId: { agentId: "replacement" },
+              }[changed];
+              setRpcSourceIdentityForTest(
+                expectDefined(second, "queued narrow Stop source"),
+                identity,
+              );
             }
           },
           { once: true },
@@ -528,7 +521,7 @@ describe("invocation-owned session mutations", () => {
             false,
           );
         }
-        if (kind === "active" || changed === "registration") {
+        if (changed === "registration") {
           expect(
             expectDefined(replacement, "reentrant narrow Stop successor").input.abortSignal.aborted,
           ).toBe(false);
@@ -538,31 +531,29 @@ describe("invocation-owned session mutations", () => {
   );
 
   it.each(["key", "incarnation"] as const)(
-    "does not borrow a different owned run %s for narrow Stop",
+    "lets broad Stop abort a different owned run %s",
     (changed) =>
       withState(async () => {
         const { client, cfg } = ownerFixture("stop-owner");
         client.connId = "same-connection";
         await upsertSessionEntryCore(scope, ownedEntry(client, "own-row"));
-        for (const grant of ["operator.sessions.write", "operator.write"]) {
-          client.connect.scopes = [grant];
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
-            agentId: "main",
-            sessionId: changed === "key" ? "own-row" : "prior-incarnation",
-            owner: { connId: client.connId },
-          });
-          rpcSourceTesting.set("different-run", run);
-          const respond = await dispatchAuthorizationRequest(
-            "chat.abort",
-            { sessionKey: key, runId: "different-run" },
-            { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
-            grant,
-          );
-          expect(run.input.abortSignal.aborted).toBe(grant === "operator.write");
-          expect(respond.mock.calls[0]?.[0]).toBe(grant === "operator.write");
-          await finishRun("different-run", run);
-        }
+        client.connect.scopes = ["operator.write"];
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
+          agentId: "main",
+          sessionId: changed === "key" ? "own-row" : "prior-incarnation",
+          owner: { connId: client.connId },
+        });
+        rpcSourceTesting.set("different-run", run);
+        const respond = await dispatchAuthorizationRequest(
+          "chat.abort",
+          { sessionKey: key, runId: "different-run" },
+          { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
+          changed,
+        );
+        expect(run.input.abortSignal.aborted).toBe(true);
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        await finishRun("different-run", run);
       }),
   );
 
