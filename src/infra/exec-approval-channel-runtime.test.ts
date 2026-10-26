@@ -4,7 +4,10 @@ import type { GatewayClient } from "../gateway/client.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 // Covers gateway-backed approval channel runtime behavior.
-import { createSystemAgentChangeRequest } from "./approval-handler.test-helpers.js";
+import {
+  createExecRequest,
+  createSystemAgentChangeRequest,
+} from "./approval-handler.test-helpers.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
 import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
@@ -70,14 +73,7 @@ function emitPluginApprovalRequested(clientParams = lastGatewayEventClientParams
 }
 
 function createExecReplayRequest(id = "abc"): ExecApprovalRequest {
-  return {
-    id,
-    request: {
-      command: "echo abc",
-    },
-    createdAtMs: 1000,
-    expiresAtMs: 2000,
-  };
+  return createExecRequest(id, "echo abc", 1000, 2000);
 }
 
 function createPluginReplayRequest(id = "plugin:abc"): PluginApprovalRequest {
@@ -260,22 +256,8 @@ describe("createExecApprovalChannelRuntime", () => {
       finalizeExpired: finalizedExpired,
     });
 
-    await runtime.handleRequested({
-      id: "abc",
-      request: {
-        command: "echo abc",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
-    await runtime.handleRequested({
-      id: "xyz",
-      request: {
-        command: "echo xyz",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
+    await runtime.handleRequested(createExecRequest("abc", "echo abc", 1000, 2000));
+    await runtime.handleRequested(createExecRequest("xyz", "echo xyz", 1000, 2000));
 
     await runtime.handleExpired("abc");
 

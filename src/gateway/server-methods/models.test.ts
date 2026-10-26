@@ -30,6 +30,7 @@ import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   EXPECTED_IMPLICIT_CODEX_RUNTIME,
   EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
@@ -97,17 +98,7 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
 }));
 
 const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
-  await withEnvAsync(
-    {
-      CODEX_API_KEY: undefined,
-      CODEX_HOME: "/__openclaw_models_list_test__/codex",
-      OPENAI_API_KEY: undefined,
-      OPENAI_BASE_URL: undefined,
-      OPENAI_OAUTH_TOKEN: undefined,
-      CHATGPT_OAUTH_TOKEN: undefined,
-    },
-    run,
-  );
+  await withEnvAsync({ ...WITHOUT_OPENAI_ENV_AUTH }, run);
 
 const withoutAnthropicEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
   await withEnvAsync(
