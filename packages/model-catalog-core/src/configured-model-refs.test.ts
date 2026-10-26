@@ -11,7 +11,9 @@ function ref(path: string, value: string, kind: ConfiguredModelRef["kind"] = "se
 }
 
 function nested(path: string, value: unknown) {
-  return path.split(".").reduceRight<unknown>((child, key) => ({ [key]: child }), value);
+  return path
+    .split(".")
+    .reduceRight<unknown>((child, key) => (key === "0" ? [child] : { [key]: child }), value);
 }
 
 it("collects string Decision roles without changing profile suffixes", () => {
@@ -50,33 +52,6 @@ it("lists raw refs from one model selector without normalizing them", () => {
   expect(listRefs({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
 });
 
-it("collects agent, hook, message, and channel model refs with config paths", () => {
-  expect(
-    collectConfiguredModelRefs({
-      agents: {
-        defaults: {
-          utilityModel: "p/utility",
-          mediaModels: { image: "p/image" },
-          compaction: { model: "p/compaction" },
-        },
-        entries: { custom: { model: "p/custom", utilityModel: "p/custom-utility" } },
-      },
-      hooks: { mappings: [{ model: "p/hook" }] },
-      tts: { summaryModel: "p/summary" },
-      channels: { modelByChannel: { discord: { guild: "p/channel" } } },
-    }),
-  ).toEqual([
-    ref("agents.defaults.utilityModel", "p/utility"),
-    ref("agents.defaults.mediaModels.image", "p/image", "literal"),
-    ref("agents.defaults.compaction.model", "p/compaction"),
-    ref("agents.entries.custom.model", "p/custom"),
-    ref("agents.entries.custom.utilityModel", "p/custom-utility"),
-    ref("channels.modelByChannel.discord.guild", "p/channel"),
-    ref("hooks.mappings.0.model", "p/hook"),
-    ref("tts.summaryModel", "p/summary"),
-  ]);
-});
-
 it("can exclude channel model overrides from configured refs", () => {
   expect(
     collectConfiguredModelRefValues(
@@ -103,16 +78,18 @@ it("collects media refs in capability order", () => {
   );
 });
 
-it("collects reviewer refs from legacy agent lists", () => {
-  const config = nested("agents.list", [{ tools: { exec: { reviewer: { model: "p/review" } } } }]);
-  expect(collectConfiguredModelRefs(config)).toEqual([
-    ref("agents.list.0.tools.exec.reviewer.model", "p/review"),
-  ]);
-});
-
-it.each([
-  "agents.entries.worker.tts.summaryModel",
-  "channels.discord.accounts.work.voice.tts.summaryModel",
-])("collects %s", (path) => {
-  expect(collectConfiguredModelRefs(nested(path, "p/tts"))).toEqual([ref(path, "p/tts")]);
+it.each<[string, ConfiguredModelRef["kind"]?]>([
+  ["agents.defaults.utilityModel"],
+  ["agents.defaults.mediaModels.image", "literal"],
+  ["agents.defaults.compaction.model"],
+  ["agents.entries.custom.model"],
+  ["agents.entries.custom.utilityModel"],
+  ["channels.modelByChannel.discord.guild"],
+  ["hooks.mappings.0.model"],
+  ["tts.summaryModel"],
+  ["agents.list.0.tools.exec.reviewer.model"],
+  ["agents.entries.worker.tts.summaryModel"],
+  ["channels.discord.accounts.work.voice.tts.summaryModel"],
+])("collects %s with its field-owned syntax", (path, kind = "selector") => {
+  expect(collectConfiguredModelRefs(nested(path, "p/model"))).toEqual([ref(path, "p/model", kind)]);
 });
