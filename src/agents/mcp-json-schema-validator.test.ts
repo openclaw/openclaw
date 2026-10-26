@@ -2,6 +2,7 @@ import type { JsonSchemaType, JsonSchemaValidator } from "@modelcontextprotocol/
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 
+type Schema = JsonSchemaType & { nullable?: boolean; enumIncludesNull?: boolean };
 const profile = vi.hoisted(() => ({ value: "dynamic-execution" }));
 vi.mock("../../standalone-runtime-profile.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../standalone-runtime-profile.mjs")>()),
@@ -23,20 +24,6 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     profile.value = runtimeProfile;
     provider = createMcpJsonSchemaValidator();
   });
-  it("resolves dependency refs even when the dependency key is a schema keyword", () => {
-    const validate = provider.getValidator({
-      $id: "https://example.test/config",
-      type: "object",
-      definitions: { text: { type: "string" } },
-      properties: { type: { type: "string" }, value: {} },
-      dependencies: {
-        type: { properties: { value: { $ref: "#/definitions/text" } }, required: ["value"] },
-      },
-    });
-    expectValidation(validate, { type: "trigger", value: "valid" }, { type: "trigger", value: 42 });
-    expect(validate({ type: "trigger" }).valid).toBe(false);
-  });
-
   it("retains registered root and nested resource identities across schema acquisition", () => {
     const root = {
       $id: "https://example.test/schemas/",
@@ -163,39 +150,46 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     expectValidation(number, 1, "value");
   });
 
-  it("preserves legacy reference rebasing through a sibling ID", () => {
-    const validate = provider.getValidator({
-      $id: "https://example.test/sibling/base/",
-      definitions: {
-        sibling: { $id: "https://example.test/sibling/value.json", type: "string" },
-        enclosing: { $id: "value.json", type: "number" },
+  const contains = { type: "array", contains: { type: "number" }, minContains: 2 };
+  const literal = { dependentRequired: { trigger: ["value"] }, format: "literal" };
+  it.each<[Schema, unknown[], boolean[]]>([
+    [
+      {
+        $id: "https://example.test/config",
+        type: "object",
+        definitions: { text: { type: "string" } },
+        properties: { type: { type: "string" }, value: {} },
+        dependencies: {
+          type: { properties: { value: { $ref: "#/definitions/text" } }, required: ["value"] },
+        },
       },
-      allOf: [{ $id: "https://example.test/sibling/", $ref: "value.json" }],
-    });
-    expectValidation(validate, "legacy sibling", 1);
-  });
-
-  it("keeps draft-07 ignored keywords separate from draft-2020-12 assertions", () => {
-    const schema = { type: "array", contains: { type: "number" }, minContains: 2 };
-    expect(provider.getValidator(schema)([1]).valid).toBe(true);
-    expect(
-      provider.getValidator({ $schema: "https://json-schema.org/draft/2020-12/schema", ...schema })(
-        [1],
-      ).valid,
-    ).toBe(false);
-    const literal = { dependentRequired: { trigger: ["value"] }, format: "literal" };
-    expect(provider.getValidator({ const: literal })(literal).valid).toBe(true);
-  });
-
-  it.each<[JsonSchemaType & { nullable?: boolean; enumIncludesNull?: boolean }, unknown, boolean]>([
-    [{ type: "string", format: "email" }, "not an email", false],
-    [{ type: "integer", format: "int32" }, 2 ** 32, false],
-    [{ type: "number", format: "int32" }, 1, true],
-    [{ type: "string", format: "custom-format" }, "value", true],
-    [{ type: "string", nullable: true }, null, true],
-    [{ type: "string", enum: ["value"], nullable: true, enumIncludesNull: true }, null, false],
-  ])("validates format and nullability policy %j", (schema, input, valid) => {
-    expect(provider.getValidator(schema)(input).valid).toBe(valid);
+      [{ type: "trigger", value: "valid" }, { type: "trigger", value: 42 }, { type: "trigger" }],
+      [true, false, false],
+    ],
+    [
+      {
+        $id: "https://example.test/sibling/base/",
+        definitions: {
+          sibling: { $id: "https://example.test/sibling/value.json", type: "string" },
+          enclosing: { $id: "value.json", type: "number" },
+        },
+        allOf: [{ $id: "https://example.test/sibling/", $ref: "value.json" }],
+      },
+      ["legacy sibling", 1],
+      [true, false],
+    ],
+    [contains, [[1]], [true]],
+    [{ $schema: "https://json-schema.org/draft/2020-12/schema", ...contains }, [[1]], [false]],
+    [{ const: literal }, [literal], [true]],
+    [{ type: "string", format: "email" }, ["not an email"], [false]],
+    [{ type: "integer", format: "int32" }, [2 ** 32], [false]],
+    [{ type: "number", format: "int32" }, [1], [true]],
+    [{ type: "string", format: "custom-format" }, ["value"], [true]],
+    [{ type: "string", nullable: true }, [null], [true]],
+    [{ type: "string", enum: ["value"], nullable: true, enumIncludesNull: true }, [null], [false]],
+  ])("validates schema policy %j", (schema, inputs, expected) => {
+    const validate = provider.getValidator(schema);
+    expect(inputs.map((input) => validate(input).valid)).toEqual(expected);
   });
 });
 

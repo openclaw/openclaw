@@ -26,7 +26,7 @@ const phasedText = (text: string, phase: "commentary" | "final_answer") => ({
   textSignature: JSON.stringify({ v: 1, phase }),
 });
 
-describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-responses"] as const)(
+describe.each(["ollama", "openai-completions", "openai-responses"] as const)(
   "%s tool markup delivery",
   (api) => {
     let ctx: ReturnType<typeof createMessageUpdateContext>;

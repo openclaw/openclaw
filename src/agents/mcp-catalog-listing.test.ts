@@ -85,41 +85,36 @@ it("enforces page, item, and aggregate byte bounds through the SDK", async () =>
   expect(promptPages).toBe(2);
 });
 
-it("uses one absolute deadline across SDK requests", async () => {
-  await using catalog = await fixture();
-  vi.useFakeTimers();
-  let pages = 0;
-  catalog.server.setRequestHandler("tools/list", async () => {
-    pages++;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 30);
-    });
-    return { tools: [], nextCursor: String(pages) };
-  });
-  const rejected = expect(catalog.list("tools", 50)).rejects.toThrow(
-    "MCP tool listing timed out after 50ms",
-  );
-  await vi.advanceTimersByTimeAsync(50);
-  await rejected;
-  expect(pages).toBe(2);
-  await vi.advanceTimersByTimeAsync(10);
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it("keeps the canonical deadline ahead of the nested SDK timeout", async () => {
+it.each(["tools", "resources"] as const)("owns the absolute deadline for %s", async (kind) => {
   await using catalog = await fixture();
   const release = createDeferred();
-  catalog.server.setRequestHandler("resources/list", async () => {
-    await release.promise;
-    return { resources: [] };
-  });
+  let pages = 0;
+  if (kind === "tools") {
+    catalog.server.setRequestHandler("tools/list", async () => {
+      pages++;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
+      return { tools: [], nextCursor: String(pages) };
+    });
+  } else {
+    catalog.server.setRequestHandler("resources/list", async () => {
+      await release.promise;
+      return { resources: [] };
+    });
+  }
   vi.useFakeTimers();
   try {
-    const rejected = expect(catalog.list("resources", 50)).rejects.toThrow(
-      "MCP resource listing timed out after 50ms",
+    const rejected = expect(catalog.list(kind, 50)).rejects.toThrow(
+      `MCP ${kind === "tools" ? "tool" : "resource"} listing timed out after 50ms`,
     );
     await vi.advanceTimersByTimeAsync(50);
     await rejected;
+    if (kind === "tools") {
+      expect(pages).toBe(2);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(vi.getTimerCount()).toBe(0);
+    }
   } finally {
     release.resolve();
   }
