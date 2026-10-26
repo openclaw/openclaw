@@ -75,7 +75,15 @@ describe("minimax web search provider", () => {
         throw new Error("MiniMax request lost caller cancellation");
       }
       return new Promise<Response>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = signal.reason;
+            assert(reason instanceof Error);
+            reject(reason);
+          },
+          { once: true },
+        );
       });
     });
     const controller = new AbortController();
