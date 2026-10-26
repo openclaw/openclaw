@@ -5,17 +5,13 @@ import { createCronJob } from "../../test-helpers/cron.ts";
 import { createStateWithRequest } from "./cron.test-support.ts";
 import * as cron from "./index.ts";
 
-function job(id: string) {
-  return createCronJob(id, id, { displayName: `${id} display name` });
-}
-
 it.each([
   { action: "run", selection: "same" },
   { action: "toggle", selection: "other" },
   { action: "remove", selection: "overview" },
 ])("attributes a failed $action after selecting $selection", async ({ action, selection }) => {
-  const alpha = job("alpha");
-  const beta = job("beta");
+  const alpha = createCronJob("alpha", "alpha", { displayName: "alpha display name" });
+  const beta = createCronJob("beta", "beta");
   const response = createDeferred<unknown>();
   const state = createStateWithRequest(
     vi.fn(() => response.promise),
