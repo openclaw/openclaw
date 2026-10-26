@@ -42,13 +42,14 @@ beforeEach(async () => {
   server = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
-      createServer(async (request, response) => {
+      createServer((request, response) => {
         requests.push(request.headers.authorization === `Bearer ${credential}`);
         request.resume();
         if (request.url === "/v1/models") {
-          await release.promise;
-          response.setHeader("content-type", "application/json");
-          response.end('{"data":[{"id":"discovered-model","name":"Discovered model"}]}');
+          void release.promise.then(() => {
+            response.setHeader("content-type", "application/json");
+            response.end('{"data":[{"id":"discovered-model","name":"Discovered model"}]}');
+          });
         } else if (request.url === "/v1/chat/completions") {
           response.writeHead(200, { "content-type": "text/event-stream" });
           response.end(

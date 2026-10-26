@@ -27,7 +27,7 @@ function mountWidthMeasurement(
   const reads: number[] = [];
   const measure = vi.fn((snapshot: { width: number } | undefined) => {
     if (!snapshot) {
-      return;
+      return undefined;
     }
     const measuredWidth = sample === "live" ? width() : snapshot.width;
     reads.push(measuredWidth);

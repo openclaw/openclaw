@@ -49,7 +49,7 @@ it("keeps each selected owner's metadata and rejects a replaced lifecycle", () =
     const readSessions = async () => {
       const { runtime, logs } = createCapturingTestRuntime();
       runtime.error = runtime.exit = (value: unknown) => {
-        throw new Error(`Unexpected runtime failure: ${value}`);
+        throw new Error(`Unexpected runtime failure: ${String(value)}`);
       };
       await sessionsCommand({ json: true, allAgents: true }, runtime);
       return (JSON.parse(logs.join("\n")) as { sessions: SessionRow[] }).sessions;
