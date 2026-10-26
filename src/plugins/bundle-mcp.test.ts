@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, describe, expect, it as baseIt } from "vitest";
+import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport, loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
@@ -45,7 +45,10 @@ function expectedRemote(
 
 const tempHarness = createBundleMcpTempHarness();
 
-afterEach(() => tempHarness.cleanup());
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await tempHarness.cleanup();
+});
 
 function createEnabledBundleConfig(pluginIds: string[]): OpenClawConfig {
   return { plugins: { entries: createEnabledPluginEntries(pluginIds) } };
@@ -137,6 +140,92 @@ describe("loadEnabledBundleMcpConfig", () => {
       remote: { transport: "streamable-http", url: "https://example.test/mcp" },
       events: { transport: "sse", url: "https://example.test/sse" },
     });
+  });
+
+  it("resolves native HTTP headers once without changing manifest or other fields", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MCP_TOKEN", "synthetic-${NOT_REEXPANDED}");
+    vi.stubEnv("OPENCLAW_TEST_MCP_EMPTY", "");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const headers = {
+      Authorization: "Bearer ${OPENCLAW_TEST_MCP_TOKEN}",
+      "X-Escaped": "$${OPENCLAW_TEST_MCP_TOKEN}",
+      "X-Fallback": "${OPENCLAW_TEST_MCP_EMPTY:-fallback}",
+      "X-Unsupported": "${lowercase}",
+    };
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "native-mcp",
+            origin: "global",
+            format: "openclaw",
+            rootDir: workspaceDir,
+            mcpServers: {
+              remote: {
+                transport: "streamable-http",
+                url: "https://example.test/${OPENCLAW_TEST_MCP_TOKEN}",
+                headers,
+              },
+            },
+          }),
+        ],
+      },
+    });
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.remote).toEqual({
+      transport: "streamable-http",
+      url: "https://example.test/${OPENCLAW_TEST_MCP_TOKEN}",
+      headers: {
+        Authorization: "Bearer synthetic-${NOT_REEXPANDED}",
+        "X-Escaped": "${OPENCLAW_TEST_MCP_TOKEN}",
+        "X-Fallback": "fallback",
+        "X-Unsupported": "${lowercase}",
+      },
+    });
+    expect(headers.Authorization).toBe("Bearer ${OPENCLAW_TEST_MCP_TOKEN}");
+  });
+
+  it("omits missing native header credentials without exposing secrets or dropping siblings", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MCP_MISSING", undefined);
+    vi.stubEnv("OPENCLAW_TEST_MCP_EMPTY", "");
+    vi.stubEnv("OPENCLAW_TEST_MCP_PRESENT", "synthetic-private-value");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "native-mcp",
+            origin: "global",
+            format: "openclaw",
+            rootDir: workspaceDir,
+            mcpServers: {
+              missing: remote("streamable-http", "private", {
+                headers: {
+                  Authorization: "${OPENCLAW_TEST_MCP_PRESENT}:${OPENCLAW_TEST_MCP_MISSING}",
+                },
+              }),
+              empty: remote("sse", "private", {
+                headers: { Authorization: "${OPENCLAW_TEST_MCP_EMPTY}" },
+              }),
+              sibling: remote("sse", "public"),
+            },
+          }),
+        ],
+      },
+    });
+    expect(Object.keys(loaded.config.mcpServers)).toEqual(["sibling"]);
+    expect(loaded.pluginIdsByServer).toEqual({ sibling: "native-mcp" });
+    expect(loaded.diagnostics).toEqual([
+      {
+        pluginId: "native-mcp",
+        message:
+          "one or more native MCP servers were skipped because a required header environment variable is unavailable",
+      },
+    ]);
   });
 
   it("normalizes Claude transports and paths while skipping disabled bundles", async ({

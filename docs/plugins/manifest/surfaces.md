@@ -424,6 +424,8 @@ plugin can recreate.
 
 OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
 
+Native MCP `headers` string values resolve `${VAR}` and `${VAR:-fallback}` from the Gateway environment when the enabled plugin configuration is loaded. `$${VAR}` preserves a literal reference; substituted values are not expanded again. Missing or empty required variables skip that server with a generic diagnostic, without exposing credentials or variable names. Other servers remain available. This does not expand URLs or arbitrary manifest fields, and does not change third-party bundle formats. Enable only plugins whose declared endpoints you trust: resolved headers are sent to those endpoints.
+
 ## UI capabilities
 
 Declare `uiCapabilities` in `openclaw.plugin.json` to describe what the plugin adds
