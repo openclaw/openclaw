@@ -217,6 +217,47 @@ describe("subagent registry scoped reads", () => {
     }
   });
 
+  it("checks requester liveness without visiting unrelated retained runs", () => {
+    const childSessionKey = "agent:main:subagent:requester";
+    const older = createRun("requester-older", { childSessionKey, generation: 1 });
+    const latest = createRun("requester-latest", {
+      childSessionKey,
+      generation: 2,
+      execution: { status: "terminal", endedAt: 10 },
+    });
+    let unrelatedReads = 0;
+    for (let index = 0; index < 32; index += 1) {
+      const unrelated = createRun(`retained-${index}`, {
+        execution: { status: "terminal", endedAt: 10 },
+      });
+      Object.defineProperty(unrelated, "childSessionKey", {
+        get() {
+          unrelatedReads += 1;
+          return `agent:main:subagent:retained-${index}`;
+        },
+      });
+      publishLive(unrelated);
+    }
+    publishLive(older, latest);
+    mocks.getSubagentRunsForChildSession.mockReturnValue([older, latest]);
+    const claim = claimAgentRunContext(
+      older.runId,
+      { sessionKey: childSessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+      mocks.liveRuns.delete(latest.runId);
+      mocks.getSubagentRunsForChildSession.mockReturnValue([older]);
+      expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(true);
+      releaseAgentRunContext(older.runId, claim);
+      expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+      expect(unrelatedReads).toBe(0);
+    } finally {
+      releaseAgentRunContext(older.runId, claim);
+    }
+  });
+
   it("selects live controller roots while retaining legacy requester-owned runs", () => {
     const controllerSessionKey = "agent:main:controller";
     const explicit = createRun("explicit", {

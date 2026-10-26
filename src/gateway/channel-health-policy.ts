@@ -61,23 +61,6 @@ export function resolveChannelHealthMonitorEnabled(
   return accountOverride ?? (typeof channelOverride === "boolean" ? channelOverride : true);
 }
 
-export type ChannelHealthEvaluation = {
-  healthy: boolean;
-  reason:
-    | "healthy"
-    | "unmanaged"
-    | "not-running"
-    | "terminal-disconnect"
-    | "blocked"
-    | "busy"
-    | "stuck"
-    | "startup-connect-grace"
-    | "reconnect-grace"
-    | "disconnected"
-    | "stale-socket"
-    | "ingress-unavailable";
-};
-
 export type ChannelHealthPolicy = {
   channelId: ChannelId;
   now: number;
@@ -106,15 +89,15 @@ export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
-): ChannelHealthEvaluation {
+) {
   if (snapshot.enabled === false || snapshot.configured === false) {
-    return { healthy: true, reason: "unmanaged" };
+    return { healthy: true, reason: "unmanaged" as const };
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
-    return { healthy: false, reason: "terminal-disconnect" };
+    return { healthy: false, reason: "terminal-disconnect" as const };
   }
   if (snapshot.lifecycle === "blocked") {
-    return { healthy: false, reason: "blocked" };
+    return { healthy: false, reason: "blocked" as const };
   }
   // Transport liveness and inbound admission are independent failure domains: a
   // channel can hold a healthy socket and still admit nothing. This outranks the
@@ -123,12 +106,12 @@ export function evaluateChannelHealth(
   // into a generic crash. Absence is "unknown", never "fine"; readiness owns its
   // own restart-backoff tolerance in server/readiness.ts.
   if (snapshot.ingressUnavailable === true) {
-    return { healthy: false, reason: "ingress-unavailable" };
+    return { healthy: false, reason: "ingress-unavailable" as const };
   }
   // Ordinary unlinked accounts need no recovery, but losing linkage cannot hide
   // an already recorded failure (for example, a terminal session logout).
   if (snapshot.linked === false) {
-    return { healthy: true, reason: "unmanaged" };
+    return { healthy: true, reason: "unmanaged" as const };
   }
   const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
   // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
@@ -138,10 +121,10 @@ export function evaluateChannelHealth(
     lastStartAt !== null &&
     policy.now - lastStartAt < policy.channelConnectGraceMs
   ) {
-    return { healthy: true, reason: "startup-connect-grace" };
+    return { healthy: true, reason: "startup-connect-grace" as const };
   }
   if (snapshot.lifecycle === "stopped" || !snapshot.running) {
-    return { healthy: false, reason: "not-running" };
+    return { healthy: false, reason: "not-running" as const };
   }
   const activeRuns = resolveNonNegativeIntegerOption(snapshot.activeRuns, 0);
   const isBusy = snapshot.busy === true || activeRuns > 0;
@@ -165,14 +148,14 @@ export function evaluateChannelHealth(
         : 0;
     const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
     if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
-      return { healthy: true, reason: "busy" };
+      return { healthy: true, reason: "busy" as const };
     }
-    return { healthy: false, reason: "stuck" };
+    return { healthy: false, reason: "stuck" as const };
   }
   if (snapshot.lifecycle === undefined && lastStartAt !== null) {
     const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
-      return { healthy: true, reason: "startup-connect-grace" };
+      return { healthy: true, reason: "startup-connect-grace" as const };
     }
   }
   if (snapshot.connected === false) {
@@ -188,9 +171,9 @@ export function evaluateChannelHealth(
       disconnectBelongsToLifecycle &&
       Math.max(0, policy.now - lastDisconnectAt) < CHANNEL_RECONNECT_GRACE_MS
     ) {
-      return { healthy: true, reason: "reconnect-grace" };
+      return { healthy: true, reason: "reconnect-grace" as const };
     }
-    return { healthy: false, reason: "disconnected" };
+    return { healthy: false, reason: "disconnected" as const };
   }
   // App-level events are not socket liveness: quiet Slack/Discord workspaces can
   // go idle while their upstream clients maintain heartbeats internally.
@@ -198,21 +181,21 @@ export function evaluateChannelHealth(
   if (shouldCheckStaleSocket) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
       if (policy.now - lastStartAt <= policy.staleEventThresholdMs) {
-        return { healthy: true, reason: "healthy" };
+        return { healthy: true, reason: "healthy" as const };
       }
-      return { healthy: false, reason: "stale-socket" };
+      return { healthy: false, reason: "stale-socket" as const };
     }
     const eventAge = policy.now - lastTransportActivityAt;
     if (eventAge > policy.staleEventThresholdMs) {
-      return { healthy: false, reason: "stale-socket" };
+      return { healthy: false, reason: "stale-socket" as const };
     }
   }
-  return { healthy: true, reason: "healthy" };
+  return { healthy: true, reason: "healthy" as const };
 }
 
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
-  evaluation: ChannelHealthEvaluation,
+  evaluation: ReturnType<typeof evaluateChannelHealth>,
 ): "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected" | "ingress-unavailable" {
   // Restart reasons are intentionally coarse: downstream logs/UI need stable
   // categories, while detailed channel state stays in the health snapshot.

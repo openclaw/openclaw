@@ -427,12 +427,11 @@ export function createForcedScrubSnapshot(options: {
 }) {
   // Reuse completed removal ranges while appended text preserves grammar and code ownership.
   // Ambiguous Markdown and unfinished removal boundaries keep the canonical full scrub.
-  type ScrubReuse = {
+  const scrubReuses: {
     parts: StandalonePlainTextToolCallCandidate["parts"];
     ranges: ScannedCallSequence[];
     text: string;
-  };
-  const scrubReuses: ScrubReuse[] = [];
+  }[] = [];
 
   // Check the same line, content-block, and post-call boundaries as the canonical scan.
   const scrubScanIsSettled = (
@@ -509,58 +508,6 @@ export function createForcedScrubSnapshot(options: {
     });
   };
 
-  const reuseScrub = (
-    candidate: StandalonePlainTextToolCallCandidate,
-    record: Record<string, unknown>,
-    preserveEmptyTextBlocks: boolean,
-  ): ScrubProjection | undefined => {
-    for (const [index, reuse] of scrubReuses.entries()) {
-      const text = candidate.text;
-      if (text.length <= reuse.text.length || !text.startsWith(reuse.text)) {
-        continue;
-      }
-      const suffix = text.slice(reuse.text.length);
-      if (
-        SCRUB_REUSE_SUFFIX_RE.test(suffix) ||
-        findPotentialCallStart(suffix, nextAtLineStart(true, reuse.text), options.matcher) !== null
-      ) {
-        continue;
-      }
-      if (!partsContinueCandidate(candidate.parts, reuse.parts, suffix.length)) {
-        continue;
-      }
-      const ranges = reuse.ranges;
-      scrubReuses.splice(index, 1);
-      scrubReuses.unshift({ ...reuse, parts: candidate.parts, ranges, text });
-      return {
-        ...projectRangesOntoMessage(record, candidate, ranges, preserveEmptyTextBlocks),
-        ranges,
-      };
-    }
-    return undefined;
-  };
-
-  const rememberScrubReuse = (
-    candidate: StandalonePlainTextToolCallCandidate,
-    projection: ScrubProjection,
-  ): void => {
-    if (!scrubScanIsSettled(candidate, projection.ranges)) {
-      return;
-    }
-    const existing = scrubReuses.findIndex((reuse) => reuse.text === candidate.text);
-    if (existing !== -1) {
-      scrubReuses.splice(existing, 1);
-    }
-    scrubReuses.unshift({
-      parts: candidate.parts,
-      ranges: projection.ranges,
-      text: candidate.text,
-    });
-    if (scrubReuses.length > MAX_SCRUB_REUSES) {
-      scrubReuses.length = MAX_SCRUB_REUSES;
-    }
-  };
-
   const forcedScrubSnapshot = (
     value: unknown,
     preserveEmptyTextBlocks: boolean,
@@ -568,9 +515,29 @@ export function createForcedScrubSnapshot(options: {
     const candidate = extractStandaloneCandidate(value);
     const record = asOptionalObjectRecord(value);
     if (candidate && record) {
-      const reused = reuseScrub(candidate, record, preserveEmptyTextBlocks);
-      if (reused) {
-        return reused;
+      for (const [index, reuse] of scrubReuses.entries()) {
+        const text = candidate.text;
+        if (text.length <= reuse.text.length || !text.startsWith(reuse.text)) {
+          continue;
+        }
+        const suffix = text.slice(reuse.text.length);
+        if (
+          SCRUB_REUSE_SUFFIX_RE.test(suffix) ||
+          findPotentialCallStart(suffix, nextAtLineStart(true, reuse.text), options.matcher) !==
+            null
+        ) {
+          continue;
+        }
+        if (!partsContinueCandidate(candidate.parts, reuse.parts, suffix.length)) {
+          continue;
+        }
+        const ranges = reuse.ranges;
+        scrubReuses.splice(index, 1);
+        scrubReuses.unshift({ ...reuse, parts: candidate.parts, ranges, text });
+        return {
+          ...projectRangesOntoMessage(record, candidate, ranges, preserveEmptyTextBlocks),
+          ranges,
+        };
       }
     }
     const projection = projectScrubbedPlainTextToolCallMessage({
@@ -580,8 +547,19 @@ export function createForcedScrubSnapshot(options: {
       preserveEmptyTextBlocks,
       resolveProtectedRanges: options.resolveProtectedRanges,
     });
-    if (projection && candidate) {
-      rememberScrubReuse(candidate, projection);
+    if (projection && candidate && scrubScanIsSettled(candidate, projection.ranges)) {
+      const existing = scrubReuses.findIndex((reuse) => reuse.text === candidate.text);
+      if (existing !== -1) {
+        scrubReuses.splice(existing, 1);
+      }
+      scrubReuses.unshift({
+        parts: candidate.parts,
+        ranges: projection.ranges,
+        text: candidate.text,
+      });
+      if (scrubReuses.length > MAX_SCRUB_REUSES) {
+        scrubReuses.length = MAX_SCRUB_REUSES;
+      }
     }
     return projection;
   };

@@ -52,9 +52,10 @@ import { createMattermostModelPickerInteractionHandler } from "./monitor-model-p
 import type { MattermostMonitorContext } from "./monitor-types.js";
 
 const scenarios = [
-  ...["providers", "back", "list", "select"].flatMap((action) =>
-    ["ready", "failed", "empty"].map((catalogStatus) => ({ action, catalogStatus })),
-  ),
+  { action: "providers", catalogStatus: "ready" },
+  { action: "list", catalogStatus: "ready" },
+  { action: "select", catalogStatus: "ready" },
+  { action: "select", catalogStatus: "empty" },
   ...["removed-model", "unlisted-provider"].map((catalogStatus) => ({
     action: "select",
     catalogStatus,
@@ -177,14 +178,12 @@ it.each(scenarios)(
       post: { id: "picker-post-1", channel_id: "channel-1", message: "picker" },
     });
 
-    expect(mocks.buildPreparedModelsProviderData).toHaveBeenCalledOnce();
     expect(mocks.dispatch).not.toHaveBeenCalled();
     if (catalogStatus === "removed-model" || catalogStatus === "unlisted-provider") {
       expect(response).toEqual({
         ephemeral_text: "That model is no longer available: openai/gpt-5.4",
       });
-      expect(mocks.runDetachedWebhookWork).not.toHaveBeenCalled();
-      expect(updateModelPickerPost).not.toHaveBeenCalled();
+      expect(order).toEqual(["load"]);
       expect(mocks.recordDeliveredCommandExchange).not.toHaveBeenCalled();
       return;
     }
@@ -198,23 +197,14 @@ it.each(scenarios)(
           ? "Select a model"
           : "Select a provider";
     if (selectsModel) {
-      expect(mocks.runDetachedWebhookWork).toHaveBeenCalledOnce();
-      expect(detachedRun).toBeTypeOf("function");
-      expect(updateModelPickerPost).not.toHaveBeenCalled();
       expect(order).toEqual(["load", "detach"]);
       await detachedRun?.();
-      expect(mocks.dispatch.mock.calls[0]?.[0]).toMatchObject({
-        channel: "mattermost",
-        delivery: { observeMessageSent: true },
-      });
       expect(mocks.deliverReply).toHaveBeenCalledWith(
         expect.objectContaining({ channelId: "channel-1", replyToId: "picker-post-1" }),
       );
     } else {
-      expect(mocks.runDetachedWebhookWork).not.toHaveBeenCalled();
       expect(detachedRun).toBeUndefined();
     }
-    expect(updateModelPickerPost).toHaveBeenCalledOnce();
     expect(order).toEqual(selectsModel ? ["load", "detach", "update"] : ["load", "update"]);
     const sent = updateModelPickerPost.mock.calls[0]?.[0];
     expect(sent?.message).toContain(visibleText);

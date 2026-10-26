@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, lazy } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -19,7 +19,7 @@ import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
-import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type {
@@ -27,7 +27,8 @@ import type {
   ChatDetailsOutputs,
   ChatDetailsProps,
 } from "./chat-details-types.ts";
-import { ChatOutputsDesktop, getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.ts";
 import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
@@ -38,6 +39,13 @@ registerEnglishCatalog(registerSessionProgressEnglish);
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
+const ChatDetailsPeople = lazy(() => import("./chat-details-people-list.tsx"), {
+  export: "ChatDetailsPeople",
+});
+const ChatOutputsDesktop = lazy(() => import("./chat-outputs.tsx"), {
+  export: "ChatOutputsDesktop",
+});
+
 type Props = {
   props?: ChatDetailsProps;
   presented: boolean;
@@ -47,6 +55,54 @@ type Props = {
   desktop?: boolean;
 };
 export type ChatDetailsSession = SolidBridgeElement<Props>;
+
+function DetailsAutomations(props: Props) {
+  const identity = createMemo(
+    () =>
+      [
+        props.props?.sessionKey,
+        props.props?.currentAgentId,
+        props.props?.selectedSession?.sessionId,
+      ] as const,
+    { equals: (before, after) => before.every((value, index) => value === after[index]) },
+  );
+  // Reset disclosure state with the incarnation; the inventory owns its logical scope.
+  const [expanded, setExpanded] = createSignal<boolean>(() => {
+    identity();
+    return true;
+  });
+  const desktop = createMemo(
+    () =>
+      props.desktop
+        ? {
+            expanded: props.props?.desktopDisclosures?.expanded.automations ?? expanded(),
+            onExpandedChange: (next: boolean) => {
+              if (props.presented) {
+                setExpanded(next);
+                props.props?.desktopDisclosures?.onExpandedChange("automations", next);
+              }
+            },
+          }
+        : undefined,
+    { equals: (before, after) => before?.expanded === after?.expanded },
+  );
+  return (
+    <ChatSummaryAutomations
+      presentationIdentity={identity()}
+      desktop={desktop()}
+      gateway={props.props?.pullRequestsGateway}
+      sessionKey={
+        props.props
+          ? scopedSessionArtifactKey(
+              props.props.sessionKey,
+              props.props.currentAgentId ?? undefined,
+            )
+          : ""
+      }
+      presented={props.presented}
+    />
+  );
+}
 
 export const ChatDetailsSession = defineSolidBridge<Props>(
   "openclaw-chat-details-session",
@@ -131,18 +187,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 before?.expanded === after?.expanded &&
                 before?.workingLabel === after?.workingLabel,
             },
-          );
-          const changeAutomationsExpanded = (expanded: boolean) =>
-            changeSection("automations", expanded);
-          const desktopAutomations = createMemo(
-            () =>
-              props.desktop
-                ? {
-                    expanded: sectionExpanded("automations"),
-                    onExpandedChange: changeAutomationsExpanded,
-                  }
-                : undefined,
-            { equals: (before, after) => before?.expanded === after?.expanded },
           );
           const requestsExpanded = () =>
             (props.desktop
@@ -367,11 +411,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             </Show>
                           }
                         >
-                          <ChatDetailsPeople
-                            people={desktopPeople()}
-                            ownerIdentity={owner()?.identity}
-                            personActivity={props.props?.personActivity}
-                          />
+                          <ChatLazyBoundary>
+                            <ChatDetailsPeople
+                              people={desktopPeople()}
+                              ownerIdentity={owner()?.identity}
+                              personActivity={props.props?.personActivity}
+                            />
+                          </ChatLazyBoundary>
                           <Show when={count() > people().length}>
                             <div class="chat-details__muted">
                               {t("chat.sessionDetails.moreParticipants", {
@@ -421,7 +467,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           fallback={
                             <ChatDetailsDesktopSection
                               section="pull-requests"
-                              title={t("sessionHovercard.pullRequests")}
+                              title={t("chat.sessionDetails.pullRequests")}
                               expanded={requestsExpanded()}
                               presented={active()}
                               onExpandedChange={(expanded) => {
@@ -446,7 +492,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             }}
                           >
                             <summary class="chat-details__caption">
-                              {t("sessionHovercard.pullRequests")}
+                              {t("chat.sessionDetails.pullRequests")}
                               <span>{props.props?.pullRequests?.length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>
@@ -457,19 +503,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </Show>
                   )}
                 </Show>
-                <ChatSummaryAutomations
-                  desktop={desktopAutomations()}
-                  gateway={props.props?.pullRequestsGateway}
-                  sessionKey={
-                    props.props
-                      ? scopedSessionArtifactKey(
-                          props.props.sessionKey,
-                          props.props.currentAgentId ?? undefined,
-                        )
-                      : ""
-                  }
-                  presented={active()}
-                />
+                <Show when={!props.desktop}>
+                  <DetailsAutomations props={props.props} presented={active()} />
+                </Show>
                 <Show when={props.desktop}>
                   <Background
                     details={props.props!}
@@ -508,7 +544,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           </Show>
                         }
                       >
-                        <ChatOutputsDesktop {...data()} />
+                        <ChatLazyBoundary>
+                          <ChatOutputsDesktop {...data()} />
+                        </ChatLazyBoundary>
                       </ChatDetailsDesktopSection>
                     </Show>
                   )}
@@ -574,6 +612,9 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           {t("sessionProgressCard.widgetAccessDenied")}
         </div>
       </Show>
+      {/* Its separate inventory can arrive after the session. Append it so
+          loading automation rows never displaces the existing sections. */}
+      <DetailsAutomations props={props.props} presented={props.presented} desktop />
     </ChatDetailsDesktopBody>
   );
 }

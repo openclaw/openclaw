@@ -291,6 +291,7 @@ export function writePluginFixtures(
   root: string,
   options: {
     activationOnStartup?: boolean | undefined;
+    nodePolicy?: boolean | undefined;
     count: number;
     providerCatalogStallMs?: number | undefined;
     providerStaticCatalogModelCount?: number | undefined;
@@ -334,7 +335,9 @@ export function writePluginFixtures(
       ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Catalog Stall", auth: [], catalog: { order: "simple", run: async () => { const stopAt = Date.now() + ${options.providerCatalogStallMs}; while (Date.now() < stopAt) {} return { provider }; } }, staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
       : stallsProviderStaticCatalog
         ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Static Catalog Stall", auth: [], staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
-        : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
+        : options.nodePolicy
+          ? `module.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerNodeInvokePolicy({ commands: [${JSON.stringify(`${id}.echo`)}], defaultPlatforms: ["linux"], handle: (ctx) => ctx.invokeNode() }); } };\n`
+          : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
     writeFileSync(path.join(pluginDir, "index.cjs"), entrySource);
     if (stallsProviderStaticCatalog) {
       writeFileSync(
@@ -596,6 +599,16 @@ if (isMainThread) {
         const caller = key + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
         this.callers[caller] = (this.callers[caller] ?? 0) + 1;
       }
+      if (${captureCallers} && (key === "session-source-authority.assertSources" ||
+          key === "operator-run-recovery.assertRecoveryCurrent" ||
+          key === "cron-delivery-attempt-fence.assertCurrent" ||
+          key === "server-cron.isAgentAvailable")) {
+        const limit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 64;
+        const caller = key + " <- " + new Error().stack.split("\n").slice(2).join(" <- ").trim();
+        Error.stackTraceLimit = limit;
+        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
+      }
       if (${captureCallers} && key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
         this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
     } };
@@ -607,11 +620,14 @@ if (isMainThread) {
     "session-source-authority", "admitted-run-context", "operator-run-authority",
     "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
     "session-tool-overrides", "auth-policy", "sqlite-worker-identity",
-    "user-profile-events", "user-profile-authority", "operator-run-recovery", "user-profiles-internal"
+    "user-profile-events", "user-profile-authority", "operator-run-recovery", "user-profiles-internal",
+    "server-cron", "cron-operator-source", "cron-delivery-attempt-fence"
   ]);
   registerHooks({ load(url, context, nextLoad) {
     const loaded = nextLoad(url, context);
-    const owner = url.match(/\/([^/]+)\.ts$/)?.[1];
+    const owner = url.endsWith("/cron/service/delivery-attempt-fence.ts")
+      ? "cron-delivery-attempt-fence"
+      : url.match(/\/([^/]+)\.ts$/)?.[1];
     if (!owners.has(owner)) return loaded;
     // A matched baseline/candidate source overlay runs before this observer.
     const raw = loaded.format === "module-typescript" ? loaded.source : fs.readFileSync(new URL(url));
@@ -623,6 +639,10 @@ if (isMainThread) {
       installed[key] = (installed[key] ?? 0) + 1;
       return "__authorityCounts.count(" + JSON.stringify(key) + ");";
     };
+    if (owner === "server-cron") {
+      source = source.replace(/isAgentAvailable: \(agentId, facts\) =>([\s\S]*?),\n    resolveSessionStorePath,/,
+        (_match, expression) => "isAgentAvailable: (agentId, facts) => {" + count("isAgentAvailable") + "return " + expression + "; },\n    resolveSessionStorePath,");
+    }
     source = source.replace(/const (assert\w*) = \((?:[^()]|\([^()]*\))*\) => \{/g,
       (match, name) => match + count(name));
     source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,

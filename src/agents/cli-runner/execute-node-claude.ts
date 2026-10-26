@@ -69,12 +69,7 @@ function parseNodeClaudePayload(result: {
   return asNullableRecord(result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload);
 }
 
-function parseNodeClaudeResultPayload(record: Record<string, unknown> | null): {
-  exitCode: number;
-  stderrTail: string;
-  truncated: boolean;
-  timeoutKind?: "hard" | "idle";
-} {
+function parseNodeClaudeResultPayload(record: Record<string, unknown> | null) {
   if (!record) {
     throw new Error("paired node returned an invalid Claude CLI result");
   }

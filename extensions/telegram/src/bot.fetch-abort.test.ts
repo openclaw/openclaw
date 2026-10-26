@@ -1,8 +1,8 @@
 import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { Agent, fetch as undiciFetch } from "undici/index.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { TelegramRequestNotStartedError } from "./network-errors.js";
 import {
@@ -67,10 +67,7 @@ const server = createServer((request, response) => {
 });
 let apiRoot: string;
 beforeAll(async () => {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}/bot123:fixture`;
+  apiRoot = `http://127.0.0.1:${await listenOnLoopback(server)}/bot123:fixture`;
 });
 beforeEach(() => {
   requests.length = 0;
@@ -85,9 +82,7 @@ afterEach(() => {
 afterAll(async () => {
   await dispatcher.destroy();
   server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await server[Symbol.asyncDispose]();
 });
 
 it.each(["active", "refused", "revoked"] as const)(

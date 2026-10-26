@@ -10,6 +10,7 @@ import { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js"
 import type { DiffReadTiming } from "../infra/diff-read-timing.js";
 import * as execRunner from "../process/exec-runner.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   loadSessionDiffBranchMetadata,
   resolveSessionDiffBase,
@@ -74,15 +75,7 @@ async function withCheckout(
 }
 
 function gitResult(stdout: string, code = 0): GitResult {
-  return {
-    stdout,
-    code,
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    timeoutMs: 120_000,
-  };
+  return { ...createCommandResult({ stdout, code }), timeoutMs: 120_000 };
 }
 
 describe("empty-tree preparation", () => {

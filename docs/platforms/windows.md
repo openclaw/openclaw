@@ -269,6 +269,9 @@ running policy when ownership can still be verified. During an update, the
 updater retains recovery ownership. If recovery cannot be confirmed, inspect the
 reported Task Scheduler state before retrying.
 
+Scheduler takeover evidence and Startup login-item reprobes use elapsed-time budgets,
+so wall-clock corrections do not extend or prematurely expire those waits.
+
 Publication accepts filesystem timestamp changes when the launcher's identity,
 permissions, and contents still match. Reinstallation reports the retained
 `.task.xml.bak` and launcher `.bak` recovery files beside the task script.

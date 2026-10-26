@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { runtimeProcessScriptEntrypoints } from "../src/infra/runtime-process-manifest.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
   loadRatchetReference,
@@ -16,9 +17,18 @@ const BUDGET_PATH = "config/env-var-count-budget.txt";
 const SOURCE_ROOTS = ["src", "packages", "extensions"];
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 const ENV_VAR_PATTERN = /OPENCLAW_[A-Z0-9_]+/gu;
+// Compiled copies carry their source owner's names; only authored inputs define configuration.
+const generatedScriptArtifacts = new Set<string>(
+  Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "buildSource" in entry ? [entry.sourceModule] : [],
+  ),
+);
 
 export function isCountedSourcePath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
+  if (generatedScriptArtifacts.has(normalized)) {
+    return false;
+  }
   if (!SOURCE_ROOTS.some((root) => normalized.startsWith(root + "/"))) {
     return false;
   }

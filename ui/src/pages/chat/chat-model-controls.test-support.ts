@@ -1,14 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  ModelAuthStatusResult,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../../api/types.ts";
-import type { UiSettings } from "../../app/settings.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
@@ -19,47 +12,25 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { makeUiSettings } from "../../test-helpers/settings-node.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { renderChatModelControls } from "./chat-view.test-helpers.ts";
 import type { ChatModelControls } from "./components/chat-model-controls.tsx";
 
 type ChatHeaderTestState = {
-  basePath?: string;
   chatLoading: boolean;
-  chatMessage: string;
   chatMessages: unknown[];
   chatModelCatalog: ModelCatalogEntry[];
-  chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
   chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatVerboseLevel: string | null;
-  chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
   connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
-  modelAuthStatusResult?: ModelAuthStatusResult | null;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   agentsList: null;
-  agentsPanel: string;
-  agentsSelectedId: string | null;
-  settings: UiSettings;
   sessions: SessionCapability;
-  setRoute: ReturnType<typeof vi.fn>;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveLoadingKey: string | null;
-  toolsEffectiveError: string | null;
-  toolsEffectiveResultKey: string | null;
-  toolsEffectiveResult: unknown;
-  applySettings(patch: Partial<UiSettings>): void;
-  loadAssistantIdentity(): void;
-  resetChatInputHistoryNavigation(): void;
-  resetChatScroll(): void;
-  resetToolStream(): void;
 };
 
 export function createChatHeaderState(
@@ -78,6 +49,16 @@ export function createChatHeaderState(
   let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
+  const listSessions = () =>
+    createSessionsListResult({
+      model: currentModel,
+      modelProvider: currentModelProvider,
+      modelOverrideSource: overrides.modelOverrideSource,
+      defaultsThinkingDefault: overrides.defaultsThinkingDefault,
+      thinkingDefault: overrides.thinkingDefault,
+      thinkingLevels: overrides.thinkingLevels,
+      omitSessionFromList,
+    });
   const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
     if (method === "sessions.patch") {
       if (Object.hasOwn(params, "model")) {
@@ -117,15 +98,7 @@ export function createChatHeaderState(
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      return createSessionsListResult({
-        model: currentModel,
-        modelProvider: currentModelProvider,
-        modelOverrideSource: overrides.modelOverrideSource,
-        defaultsThinkingDefault: overrides.defaultsThinkingDefault,
-        thinkingDefault: overrides.thinkingDefault,
-        thinkingLevels: overrides.thinkingLevels,
-        omitSessionFromList,
-      });
+      return listSessions();
     }
     if (method === "models.list") {
       return { models: catalog };
@@ -145,57 +118,22 @@ export function createChatHeaderState(
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
-  const initialSessionsResult = createSessionsListResult({
-    model: currentModel,
-    modelProvider: currentModelProvider,
-    modelOverrideSource: overrides.modelOverrideSource,
-    defaultsThinkingDefault: overrides.defaultsThinkingDefault,
-    thinkingDefault: overrides.thinkingDefault,
-    thinkingLevels: overrides.thinkingLevels,
-    omitSessionFromList,
-  });
+  const initialSessionsResult = listSessions();
   const state: ChatHeaderTestState = {
     sessionKey: "main",
     connected: true,
     sessionsResult: initialSessionsResult,
     chatModelCatalog: catalog,
     client,
-    settings: makeUiSettings("", {
-      locale: "en",
-      themeMode: "dark",
-      navWidth: 280,
-      chatShowThinking: false,
-    }),
-    chatMessage: "",
     chatStream: null,
-    chatStreamStartedAt: null,
     chatRunId: null,
-    chatQueue: [],
     chatMessages: [],
     chatLoading: false,
     chatSending: false,
-    chatVerboseLevel: null,
     lastError: null,
-    chatAvatarUrl: null,
-    basePath: "",
     hello: sessionMutationGatewayHello(),
     agentsList: null,
-    agentsPanel: "overview",
-    agentsSelectedId: null,
     sessions,
-    toolsEffectiveLoading: false,
-    toolsEffectiveLoadingKey: null,
-    toolsEffectiveResultKey: null,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
-    applySettings(patch: Partial<UiSettings>) {
-      state.settings = { ...state.settings, ...patch };
-    },
-    setRoute: vi.fn(),
-    loadAssistantIdentity: vi.fn(),
-    resetChatInputHistoryNavigation: vi.fn(),
-    resetToolStream: vi.fn(),
-    resetChatScroll: vi.fn(),
   };
   sessions.subscribe((next) => {
     state.sessionsResult = next.result;
@@ -226,24 +164,11 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
     onFastModeSelect: (value, targetSessionKey) =>
-      switchChatSetting(
-        state as unknown as Parameters<typeof switchChatSetting>[0],
-        { kind: "fastMode", value },
-        targetSessionKey,
-      ),
+      switchChatSetting(state, { kind: "fastMode", value }, targetSessionKey),
     onModelSelect: (value, targetSessionKey, agentRuntime) =>
-      switchChatModel(
-        state as unknown as Parameters<typeof switchChatModel>[0],
-        value,
-        targetSessionKey,
-        agentRuntime,
-      ),
+      switchChatModel(state, value, targetSessionKey, agentRuntime),
     onThinkingSelect: (value, targetSessionKey) =>
-      switchChatSetting(
-        state as unknown as Parameters<typeof switchChatSetting>[0],
-        { kind: "thinkingLevel", value },
-        targetSessionKey,
-      ),
+      switchChatSetting(state, { kind: "thinkingLevel", value }, targetSessionKey),
   };
 }
 

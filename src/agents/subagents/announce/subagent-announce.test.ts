@@ -216,25 +216,22 @@ describe("subagent announce seam flow", () => {
     });
     const entries = new Map(["main", "research"].map((agentId) => [agentId, identity(agentId)]));
     const load = announceDelivery.loadSessionEntryByKey;
-    const read = vi
+    using _ = vi
       .spyOn(announceDelivery, "loadSessionEntryByKey")
       .mockImplementation(async (key, agentId) =>
         key === "global" ? entries.get(agentId ?? "main") : load(key, agentId),
       );
-    try {
-      expect(
-        await runAnnounceFlow({
-          childSessionKey: "global",
-          childAgentId: "research",
-          childSessionIdentity: identity("research"),
-          cleanup: "delete",
-          ...terminalResult("Research result"),
-        }),
-      ).toBe("delivered");
-      expectChildDeleted(false, "global", "research", identity("research"));
-    } finally {
-      read.mockRestore();
-    }
+
+    expect(
+      await runAnnounceFlow({
+        childSessionKey: "global",
+        childAgentId: "research",
+        childSessionIdentity: identity("research"),
+        cleanup: "delete",
+        ...terminalResult("Research result"),
+      }),
+    ).toBe("delivered");
+    expectChildDeleted(false, "global", "research", identity("research"));
   });
 
   it.each(["explicit", "host", "currency"] as const)(

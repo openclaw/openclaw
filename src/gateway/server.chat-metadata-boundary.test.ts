@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -9,6 +7,7 @@ import {
   getRuntimeConfig,
 } from "../config/config.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { writeGatewayConfig as writeConfig } from "./test-helpers.config-runtime.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -88,12 +87,7 @@ async function expectModels(
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>, resetRuntime = false) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
-  }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  await writeConfig(config);
   clearConfigCache();
   if (resetRuntime) {
     clearRuntimeConfigSnapshot();

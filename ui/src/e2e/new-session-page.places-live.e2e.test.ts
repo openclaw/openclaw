@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { createStandardCloudProfile } from "../test-helpers/session-placement.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
@@ -17,16 +18,10 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const openPage = createPageOpener(suite);
-const cloudProfile = {
-  id: "aws",
-  providerId: "crabbox",
+const cloudProfile = createStandardCloudProfile({
   executionMode: "worker-turn",
   executionModes: ["worker-turn"],
-  machines: [
-    { id: "standard", label: "Standard", default: true },
-    { id: "fast", label: "Fast" },
-  ],
-};
+});
 const runtimeModel = (
   id: string,
   name: string,

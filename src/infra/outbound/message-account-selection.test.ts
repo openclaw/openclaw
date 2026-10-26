@@ -113,18 +113,14 @@ describe("resolveMessageBroadcastAccountPlan (registry-scoped channel plugins)",
     },
   } as unknown as OpenClawConfig;
 
-  it("plans candidates from a channel plugin that is only registry-scoped", async () => {
+  it("limits broadcast candidates and secret access to the registry scope", async () => {
     const plan = await withPluginRuntimeRegistryScope(
       { channels: [{ plugin: scopedPlugin }, { plugin: unavailablePlugin }] } as never,
       () => resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" }),
     );
-    expect(plan?.candidateChannels).toEqual(["scopex"]);
-    expect(plan?.secretChannels).toEqual(["scopex"]);
-  });
-
-  it("does not see the scoped channel outside the scope", async () => {
-    const plan = await resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
-    expect(plan?.candidateChannels).not.toContain("scopex");
-    expect(plan?.secretChannels).toEqual([]);
+    expect(plan).toMatchObject({ candidateChannels: ["scopex"], secretChannels: ["scopex"] });
+    const outside = await resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
+    expect(outside?.candidateChannels).not.toContain("scopex");
+    expect(outside?.secretChannels).toEqual([]);
   });
 });

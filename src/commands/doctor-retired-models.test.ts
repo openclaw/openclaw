@@ -19,6 +19,7 @@ import { createRetiredModelFixture } from "./doctor-retired-models.test-support.
 import { repairCronCodexModelRefsAfterConfigWrite } from "./doctor/cron/legacy-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.codex.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 async function fixture(...args: Parameters<typeof createRetiredModelFixture>) {
   const { cfg, state } = await createRetiredModelFixture(...args);
@@ -231,15 +232,7 @@ it.each([
     main.models = { [currentModel]: { agentRuntime: { id: "codex" } } };
     const legacyRef = `openai-codex/${retiredId}`;
     if (blocked) {
-      const model = {
-        id: retiredId,
-        name: "Synthetic",
-        reasoning: false,
-        input: ["text"] as const,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-      };
+      const model = createTestModelDefinition(retiredId, { name: "Synthetic", maxTokens: 1024 });
       cfg.models!.providers!.openai = {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-responses",

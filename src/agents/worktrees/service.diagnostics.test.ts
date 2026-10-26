@@ -331,10 +331,6 @@ describe("ManagedWorktreeService diagnostics", () => {
 
     it("attributes admission, body and finalization without completing early", async () => {
       const worktree = await materialize("private-removal");
-      const admissionEntered = createDeferredCore();
-      const releaseAdmission = createDeferredCore();
-      const bodyEntered = createDeferredCore();
-      const releaseBody = createDeferredCore();
       const finalizeEntered = createDeferredCore();
       const releaseFinalize = createDeferredCore();
       let callbackResult: unknown;
@@ -344,8 +340,7 @@ describe("ManagedWorktreeService diagnostics", () => {
         if (args[0].scope !== WORKTREE_MUTATION_LEASE_SCOPE) {
           return await acquire(...args);
         }
-        admissionEntered.resolve();
-        await releaseAdmission.promise;
+        clock += 1_100;
         const result = await acquire(...args);
         callbackResult = result;
         finalizeEntered.resolve();
@@ -363,8 +358,7 @@ describe("ManagedWorktreeService diagnostics", () => {
           return await realRunCommand(...args);
         })
         .mockImplementationOnce(async (...args) => {
-          bodyEntered.resolve();
-          await releaseBody.promise;
+          clock += 200;
           return await realRunCommand(...args);
         });
       vi.spyOn(gitWorker, "runGitWorkerOperation").mockImplementation(async (...args) => {
@@ -381,12 +375,6 @@ describe("ManagedWorktreeService diagnostics", () => {
         return result;
       });
       try {
-        await Promise.race([admissionEntered.promise, pending]);
-        clock += 1_100;
-        releaseAdmission.resolve();
-        await Promise.race([bodyEntered.promise, pending]);
-        clock += 200;
-        releaseBody.resolve();
         await Promise.race([finalizeEntered.promise, pending]);
         await waitForDiagnosticEventsDrained();
         expect(completed).toBe(false);
@@ -412,8 +400,6 @@ describe("ManagedWorktreeService diagnostics", () => {
         expect(records()[0]?.trace).toEqual(trace);
         expect({ subsystem: "agents/worktrees", ...fields }).toEqual(records()[0]!.attributes);
       } finally {
-        releaseAdmission.resolve();
-        releaseBody.resolve();
         releaseFinalize.resolve();
         await Promise.allSettled([pending]);
       }

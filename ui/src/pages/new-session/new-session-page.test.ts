@@ -3,13 +3,14 @@ import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { NewSessionModelControl } from "./model-control.ts";
 import "./new-session-page-entry.ts";
+import { NewSessionModelControl } from "./model-control.ts";
 import { NewSessionPageOwner } from "./new-session-page-owner.ts";
 
 type NewSessionElement = HTMLElement & {
@@ -107,16 +108,9 @@ describe("new session draft route ownership", () => {
   it.each([false, true])(
     "retires composer frames through detach and reattach (reduced motion: %s)",
     async (reducedMotion) => {
-      vi.stubGlobal("matchMedia", (media: string) => ({
-        media,
-        matches: reducedMotion && media === "(prefers-reduced-motion: reduce)",
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent: () => true,
-      }));
+      vi.stubGlobal("matchMedia", (media: string) =>
+        createMediaQueryList(media, reducedMotion && media === "(prefers-reduced-motion: reduce)"),
+      );
 
       const framesClock = createFrameClock();
       const frames = framesClock.frames;

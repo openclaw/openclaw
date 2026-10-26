@@ -56,6 +56,19 @@ function multiplexedClientFactory(
   });
 }
 
+async function allowNativeToolPreflight(
+  harness: ReturnType<typeof createInferenceReadyClientHarness>,
+  since = 0,
+) {
+  // Hook admission and native tool policy each read managed requirements.
+  let nextRequest = since;
+  for (let read = 0; read < 2; read += 1) {
+    const request = await waitForHarnessRequest(harness, "configRequirements/read", nextRequest);
+    nextRequest = harness.writes.length;
+    harness.send({ id: request.id, result: { requirements: null } });
+  }
+}
+
 setupRunAttemptTestHooks();
 
 describe("Codex app-server main thread cleanup", () => {
@@ -106,12 +119,7 @@ describe("Codex app-server main thread cleanup", () => {
           result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
         });
       }
-      const requirements = await waitForHarnessRequest(
-        harness,
-        "configRequirements/read",
-        requestStart,
-      );
-      harness.send({ id: requirements.id, result: { requirements: null } });
+      await allowNativeToolPreflight(harness, requestStart);
       const threadId = `thread-${label}`;
       if (index < 2) {
         const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
@@ -141,20 +149,24 @@ describe("Codex app-server main thread cleanup", () => {
         .map((write) => (JSON.parse(write) as { method: string }).method)
         .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
     expect(userRequestMethods()).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -191,12 +203,7 @@ describe("Codex app-server main thread cleanup", () => {
     const siblingRun = runCodexAppServerAttempt(siblingParams, {
       bindingStore: testCodexAppServerBindingStore,
     });
-    const siblingRequirements = await waitForHarnessRequest(
-      harness,
-      "configRequirements/read",
-      siblingRequestStart,
-    );
-    harness.send({ id: siblingRequirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(harness, siblingRequestStart);
     const siblingTurn = await waitForHarnessRequest(harness, "turn/start", siblingRequestStart);
     harness.send({ id: siblingTurn.id, result: turnStartResult("turn-5") });
     harness.send({
@@ -208,8 +215,9 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-5)).toEqual([
+    expect(userRequestMethods().slice(-6)).toEqual([
       "thread/unsubscribe",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -375,8 +383,7 @@ describe("Codex app-server main thread cleanup", () => {
         id: initialize.id,
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
-      const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
-      physical.send({ id: requirements.id, result: { requirements: null } });
+      await allowNativeToolPreflight(physical);
       const thread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: thread.id, result: threadStartResult() });
       const turn = await waitForHarnessRequest(physical, "turn/start");
@@ -458,8 +465,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
     const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
     harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-    const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
-    harness.send({ id: requirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(harness);
     const start = await waitForHarnessRequest(harness, "thread/start");
     expect(start.params).toEqual(expect.objectContaining({ ephemeral: true }));
     harness.send({ id: start.id, result: threadStartResult() });
@@ -556,6 +562,7 @@ describe("Codex app-server main thread cleanup", () => {
       ).rejects.toThrow(error.message);
       expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
         "modelProvider/capabilities/read",
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/start",
@@ -731,8 +738,7 @@ describe("Codex app-server main thread cleanup", () => {
       });
       const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
       harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-      const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
-      harness.send({ id: requirements.id, result: { requirements: null } });
+      await allowNativeToolPreflight(harness);
       const threadStart = await waitForHarnessRequest(harness, "thread/start");
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
@@ -886,8 +892,7 @@ describe("Codex app-server main thread cleanup", () => {
       "modelProvider/capabilities/read",
     );
     contaminated.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-    const requirements = await waitForHarnessRequest(contaminated, "configRequirements/read");
-    contaminated.send({ id: requirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(contaminated);
     const threadStart = await waitForHarnessRequest(contaminated, "thread/start");
     contaminated.send({ id: threadStart.id, result: threadStartResult() });
 
@@ -930,11 +935,7 @@ describe("Codex app-server main thread cleanup", () => {
       id: replacementCapabilities.id,
       result: { imageGeneration: false, webSearch: true },
     });
-    const replacementRequirements = await waitForHarnessRequest(
-      replacement,
-      "configRequirements/read",
-    );
-    replacement.send({ id: replacementRequirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(replacement);
     const replacementThread = await waitForHarnessRequest(replacement, "thread/start");
     replacement.send({ id: replacementThread.id, result: threadStartResult("thread-2") });
     const replacementTurn = await waitForHarnessRequest(replacement, "turn/start");

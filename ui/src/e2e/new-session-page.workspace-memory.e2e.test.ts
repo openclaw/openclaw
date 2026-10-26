@@ -586,7 +586,7 @@ suite.define(() => {
     await button(page, "Browse folders").click();
     await button(page, "Use this folder").click();
     await navigateInApp(page, "chat");
-    await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+    await waitForCommittedChatRoute(page);
     await gateway.setMethodResponse("agents.list", mainAgentList(MOVED_WORKSPACE));
     await page.reload();
     await navigateInApp(page, "new-session");

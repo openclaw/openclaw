@@ -5,6 +5,7 @@ import {
   createSignal,
   createRoot,
   getOwner,
+  latest,
   runWithOwner,
   Show,
   useContext,
@@ -14,6 +15,7 @@ import {
   type MarkdownContentValue,
 } from "../../../components/markdown-dom-ref.ts";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -77,6 +79,13 @@ export type MessageMarkdownProps = {
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
+  const streaming = createMemo(
+    () =>
+      props.options.isStreaming
+        ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
+        : loadStreamingMarkdown.peek(),
+    { loadingValue: undefined },
+  );
   const presentation = createMemo(() =>
     prepareMessageMarkdown(
       props.markdown,
@@ -84,6 +93,8 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.options,
       props.markdownOptions,
       props.duplicateSuffix,
+      latest(streaming)?.toStreamingMarkdownDomParts,
+      props.options.isStreaming && !latest(streaming),
     ),
   );
   return (
@@ -92,7 +103,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
         source={props.markdown}
         messageKey={props.messageKey}
         options={props.options}
-        parts={presentation().parts}
+        parts={presentation().parts()}
       >
         {(elementRef) => (
           <MarkdownText

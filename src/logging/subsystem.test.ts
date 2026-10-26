@@ -8,6 +8,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
@@ -44,14 +45,6 @@ function consoleLogging(
 }
 
 const consoleLine = (spy: ReturnType<typeof installConsoleMethodSpy>) => String(mockCall(spy)[0]);
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
-}
 
 function installConsoleMethodSpy(method: "log" | "warn" | "error") {
   const spy = vi.fn();

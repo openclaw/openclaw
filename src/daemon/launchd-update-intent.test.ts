@@ -60,6 +60,25 @@ const run = (sql: string, ...params: SQLInputValue[]) =>
     .prepare(sql)
     .run(...params);
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+async function startChild(source: string) {
+  child = spawn(process.execPath, ["-e", source], {
+    env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  closed = once(child, "close");
+  const [ready] = await once(child.stdout!, "data");
+  pid = child.pid!;
+  return String(ready).trim();
+}
+async function closeChild() {
+  await stopChildProcess(child, 5000);
+  await closed;
+}
+const replaceServing = (ownerPid: number) =>
+  run(
+    "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
+    JSON.stringify(servingPayload(ownerPid)),
+  );
 function servingPayload(ownerPid = pid) {
   return {
     owner: {
@@ -143,7 +162,6 @@ async function transferred() {
 }
 
 beforeEach(async () => {
-  // Keep the real plist/environment reader; only native plutil transport is host-specific.
   vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
     if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
       throw new Error(`Unexpected fixture subprocess: ${command}`);
@@ -173,17 +191,7 @@ beforeEach(async () => {
   };
   fs.writeFileSync(effectiveEnv.OPENCLAW_CONFIG_PATH!, "{}");
   // This fixture child never imports OpenClaw or opens a handoff store; only the test parent does.
-  child = spawn(
-    process.execPath,
-    ["-e", "process.stdout.write('ready\\n'); setInterval(()=>{}, 60000)"],
-    {
-      env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  closed = once(child, "close");
-  await once(child.stdout!, "data");
-  pid = child.pid!;
+  await startChild("process.stdout.write('ready\\n'); setInterval(()=>{}, 60000)");
   // The synthetic LaunchAgent has a live PID but no native job separate from this runner.
   vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation((target) =>
     target === pid ? "outside" : "unknown",
@@ -234,8 +242,7 @@ beforeEach(async () => {
         if (bootoutFailure) {
           return nativeResult(5, "", "fixture bootout failure");
         }
-        await stopChildProcess(child, 5000);
-        await closed;
+        await closeChild();
       }
       return nativeResult(0);
     }
@@ -244,8 +251,7 @@ beforeEach(async () => {
 });
 
 it("joins the serving child's database cleanup after its launchd wrapper exits", async () => {
-  await stopChildProcess(child, 5000);
-  await closed;
+  await closeChild();
   const releasePath = path.join(root, "release-serving-child");
   const retiredPath = path.join(root, "serving-child-retired");
   const databasePath = path.join(root, "held-agent.sqlite");
@@ -261,11 +267,8 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
     });
     process.send('ready'); process.disconnect();
   `;
-  child = spawn(
-    process.execPath,
-    [
-      "-e",
-      `
+  const servingPid = Number(
+    await startChild(`
     const { spawn } = require('node:child_process');
     const serving = spawn(process.execPath, ['-e', ${JSON.stringify(servingSource)}], {
       env: process.env, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
@@ -273,21 +276,9 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
     serving.once('message', () => process.stdout.write(String(serving.pid) + '\\n'));
     serving.once('exit', () => process.exit(1));
     setInterval(() => {}, 60000);
-  `,
-    ],
-    {
-      env: { HOME: root, OPENCLAW_STATE_DIR: effectiveEnv.OPENCLAW_STATE_DIR },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+  `),
   );
-  closed = once(child, "close");
-  const [ready] = await once(child.stdout!, "data");
-  const servingPid = Number(String(ready).trim());
-  pid = child.pid!;
-  run(
-    "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
-    JSON.stringify(servingPayload(servingPid)),
-  );
+  replaceServing(servingPid);
   const waiting = createDeferredCore();
   const output = new Writable({
     write(chunk, _encoding, done) {
@@ -322,8 +313,7 @@ it("joins the serving child's database cleanup after its launchd wrapper exits",
 });
 
 afterEach(async () => {
-  await stopChildProcess(child, 5000);
-  await closed;
+  await closeChild();
   stateDb.closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
@@ -335,8 +325,7 @@ it.each(["direct-original", "transferred", "already-stopped", "explicit-stop"])(
     if (mode === "transferred") {
       await transferred();
     } else if (mode === "already-stopped") {
-      await stopChildProcess(child, 5000);
-      await closed;
+      await closeChild();
       run("DELETE FROM state_leases WHERE scope='gateway-owner'");
     } else if (mode === "explicit-stop") {
       env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
@@ -430,10 +419,7 @@ it.each([
   ["storage-failure", "Cannot record restart intent"],
 ])("preserves runtime and intent when preparation fails: %s", async (fault, error) => {
   if (fault === "foreign-pid") {
-    run(
-      "UPDATE state_leases SET payload_json=? WHERE scope='gateway-owner'",
-      JSON.stringify(servingPayload(process.pid)),
-    );
+    replaceServing(process.pid);
   } else if (fault === "missing-command") {
     fs.rmSync(resolveLaunchAgentPlistPath(env));
   } else if (fault === "replaced-during-probe" || fault === "revoked") {

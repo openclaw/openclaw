@@ -8,6 +8,7 @@ import {
   isCodexAppServerLiveThreadProtected,
 } from "./client-runtime.js";
 import { injectCodexHistoryDelta } from "./context-engine-history.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -47,7 +48,7 @@ import {
   resolveCodexThreadAgentDir,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
-import { canRetainCodexProjectionBackgroundWork } from "./thread-lifecycle-projection.js";
+import { qualifyCodexProjectionBackgroundWork } from "./thread-lifecycle-projection.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -57,6 +58,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { splitCodexExtraSystemPrompt } from "./thread-prompt.js";
 import { isTransientCodexRestrictedTurn } from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
@@ -152,6 +154,14 @@ export async function startOrResumeThread(
       params.refreshableInstructions = params.inferenceRoute
         ? undefined
         : input.refreshableInstructions;
+      // Only an actual relay can preserve current context through native compaction.
+      params.developerInstructions =
+        params.inferenceRoute || input.developerInstructions === undefined
+          ? input.developerInstructions
+          : joinPresentSections(
+              input.developerInstructions,
+              splitCodexExtraSystemPrompt(params.params).turn,
+            );
       return context;
     };
     const releaseRetainedThread = (
@@ -542,36 +552,16 @@ export async function startOrResumeThread(
       ) {
         // Only a projection refresh can hand the conversation forward while native
         // background work retains its original subscription and cleanup authority.
-        retainBackgroundPredecessor =
-          initialBoundClientId === clientId &&
-          binding.contextEngine?.engineId === contextEngineBinding?.engineId &&
-          binding.contextEngine?.policyFingerprint === contextEngineBinding?.policyFingerprint &&
-          Boolean(contextEngineBinding) &&
-          (!binding.dynamicToolsFingerprint ||
-            areCodexDynamicToolFingerprintsCompatible({
-              previous: binding.dynamicToolsFingerprint,
-              next: dynamicToolsFingerprint,
-              nextLegacy: legacyDynamicToolsFingerprint,
-            })) &&
-          isCodexAppServerLiveThreadBackgroundOnly(params.client, binding.threadId);
-        if (retainBackgroundPredecessor) {
-          const currentPluginConfig = await buildLoadedPluginThreadConfig(binding);
-          if (
-            currentPluginConfig &&
-            currentPluginConfig.fingerprint !== binding.pluginAppsFingerprint
-          ) {
-            retainBackgroundPredecessor = false;
-          }
-        }
-        if (retainBackgroundPredecessor) {
-          retainBackgroundPredecessor = await canRetainCodexProjectionBackgroundWork(
-            params,
-            binding,
-            await prepareRequestContext(),
-            prebuiltPluginThreadConfig,
-          );
-        }
+        const backgroundRetentionReason = await qualifyCodexProjectionBackgroundWork(
+          params,
+          binding,
+          preflight,
+          prepareRequestContext,
+          buildLoadedPluginThreadConfig,
+        );
+        retainBackgroundPredecessor = backgroundRetentionReason === "retained";
         rotateStaleBinding(binding, "context-engine binding", {
+          backgroundRetentionReason,
           engineId: contextEngineBinding?.engineId,
           previousEngineId: binding.contextEngine?.engineId,
           epoch: contextEngineBinding?.projection?.epoch,

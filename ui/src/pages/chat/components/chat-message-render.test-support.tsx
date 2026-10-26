@@ -1,13 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show } from "solid-js";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
+import * as markdownLive from "../../../components/markdown-live.ts";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import * as chatAvatar from "../chat-avatar-view.tsx";
 import { buildCachedChatItems } from "../chat-thread.ts";
-import { ChatNotice } from "./chat-divider.tsx";
 import {
   ActivityGroup,
   MessageGroup as MessageGroupView,
@@ -16,6 +17,7 @@ import {
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
+import { ChatNotice } from "./chat-notice-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import "./chat-detail-panel.tsx";
 
@@ -33,11 +35,11 @@ export function createChatMessageHarness() {
 
   const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 
-  const renderStreamingMarkdown = markdown.toStreamingMarkdownDomParts;
+  const renderStreamingMarkdown = markdownLive.toStreamingMarkdownDomParts;
 
   const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownHtml>((value) => value);
 
-  const streamingMarkdownRenderMock = vi.fn<typeof markdown.toStreamingMarkdownDomParts>(
+  const streamingMarkdownRenderMock = vi.fn<typeof markdownLive.toStreamingMarkdownDomParts>(
     (value) => ["", `<div class="streaming-markdown">${value}</div>`],
   );
 
@@ -46,10 +48,11 @@ export function createChatMessageHarness() {
     ReturnType<typeof mountSolid<{ values: MessageFixture[] }>>
   >();
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadStreamingMarkdown();
     view = document.createElement("div");
     vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
-    vi.spyOn(markdown, "toStreamingMarkdownDomParts").mockImplementation(
+    vi.spyOn(markdownLive, "toStreamingMarkdownDomParts").mockImplementation(
       streamingMarkdownRenderMock,
     );
     vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation(TestAvatar);

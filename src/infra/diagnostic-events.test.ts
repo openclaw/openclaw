@@ -276,26 +276,37 @@ describe("diagnostic-events", () => {
     expect(propagatedTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
-  it("captures one snapshot for trace preparation, queue inspection and all listeners", async () => {
+  it("shares one frozen event and metadata across trace preparation, queue inspection and listeners", async () => {
     const clone = vi.spyOn(globalThis, "structuredClone");
+    const freeze = vi.spyOn(Object, "freeze");
     const trace = { ...diagnosticTraceInput };
     const prepared: Event[] = [];
+    const preparedMetadata: Metadata[] = [];
     registerBridge({
-      prepareEvent: (event: Event) => prepared.push(event),
+      prepareEvent: (event: Event, metadata: Metadata) => {
+        prepared.push(event);
+        preparedMetadata.push(metadata);
+      },
       resolveTraceContext: () => undefined,
     });
-    const received = collectEvents(onInternal);
-    const trusted = collectEvents(onTrusted);
+    const received = captureEvents(onInternal);
+    const trusted = captureEvents(onTrusted);
 
     emitTrusted({ ...modelStartedEvent(), trace });
     trace.spanId = "changed-after-emit";
-    expect(hasPending((event) => event === prepared[0])).toBe(true);
+    expect(
+      hasPending((event, metadata) => event === prepared[0] && metadata === preparedMetadata[0]),
+    ).toBe(true);
     await drain();
 
-    expect(received[0]).toBe(prepared[0]);
-    expect(trusted[0]).toBe(prepared[0]);
-    expect(received[0]?.trace?.spanId).toBe(diagnosticTraceInput.spanId);
+    expect(received.mock.calls[0]?.[0]).toBe(prepared[0]);
+    expect(trusted.mock.calls[0]?.[0]).toBe(prepared[0]);
+    expect(received.mock.calls[0]?.[1]).toBe(preparedMetadata[0]);
+    expect(trusted.mock.calls[0]?.[1]).toBe(preparedMetadata[0]);
+    expect(Object.isFrozen(preparedMetadata[0])).toBe(true);
+    expect(prepared[0]?.trace?.spanId).toBe(diagnosticTraceInput.spanId);
     expect(clone).toHaveBeenCalledTimes(1);
+    expect(freeze.mock.calls.filter(([value]) => value === prepared[0])).toHaveLength(1);
   });
 
   it("shares owned events with immutable plain leaves without cloning", async () => {
@@ -458,6 +469,7 @@ describe("diagnostic-events", () => {
         expect.objectContaining({ trusted: true }),
         {},
       );
+      expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[1])).toBe(true);
       expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[2])).toBe(true);
     },
   );
@@ -818,6 +830,9 @@ describe("queued runtime diagnostic phases", () => {
   it("uses the bounded diagnostic queue without displacing required lifecycle terminals", async () => {
     const publicEvents = collectEvents(onPublic);
     const events = collectEvents(onTrusted);
+    const dropped = captureEvents((listener) =>
+      onInternal(listener, { include: ["diagnostic.async_queue.dropped"] }),
+    );
     const emitPhase = phaseEmitter()!;
     for (let index = 0; index < 9_999; index++) {
       emitPhase(phase);
@@ -846,6 +861,7 @@ describe("queued runtime diagnostic phases", () => {
       "model.call.started",
       "diagnostic.async_queue.dropped",
     ]);
+    expect(Object.isFrozen(dropped.mock.calls[0]?.[1])).toBe(true);
   });
 });
 

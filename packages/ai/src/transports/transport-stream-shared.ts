@@ -254,20 +254,16 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
-async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> {
+function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
   throwIfModelStreamAborted(signal);
   // All streams share the main loop. Recheck after waking so a swarm cannot
   // spend a fresh per-stream budget in the same microtask burst.
-  for (;;) {
-    if (
-      !nextStreamTurn ||
-      (streamWorkThisTurn + work <= MODEL_STREAM_COOPERATIVE_YIELD_BUDGET &&
-        Date.now() - streamTurnStartedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
-    ) {
-      break;
-    }
-    await nextStreamTurn;
-    throwIfModelStreamAborted(signal);
+  if (
+    nextStreamTurn &&
+    (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
+      Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+  ) {
+    return nextStreamTurn.then(() => waitForModelStreamTurn(signal, work));
   }
   if (!nextStreamTurn) {
     streamTurnStartedAt = Date.now();
@@ -280,6 +276,7 @@ async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<v
     });
   }
   streamWorkThisTurn += work;
+  return undefined;
 }
 
 /** Keep ready provider events from monopolizing the main loop, including ignored events. */
@@ -288,7 +285,10 @@ export async function* iterateModelStream<T>(
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
   for await (const event of events) {
-    await waitForModelStreamTurn(signal);
+    const wait = waitForModelStreamTurn(signal);
+    if (wait) {
+      await wait;
+    }
     yield event;
     throwIfModelStreamAborted(signal);
   }
@@ -491,7 +491,10 @@ export function withProviderResponseHook<T = never>(params: {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
         // Hooks may finish together after waiting through earlier work budgets.
-        await waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
+        const wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
+        if (wait) {
+          await wait;
+        }
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;

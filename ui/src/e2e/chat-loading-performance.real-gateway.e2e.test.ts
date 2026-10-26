@@ -16,6 +16,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -147,18 +148,6 @@ suite.define(() => {
       }
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
-    const call = (method: string, params: Record<string, unknown> = {}) =>
-      cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
-    const syntheticViewer = await call("users.list");
-    expect(
-      Array.isArray(syntheticViewer.profiles) &&
-        syntheticViewer.profiles.some(
-          (profile) =>
-            isRecord(profile) &&
-            profile.id === "gateway-owner" &&
-            profile.displayName === "Synthetic Viewer",
-        ),
-    ).toBe(true);
     const sessions = [
       { key: selectedKey, label: "Synthetic loading proof", count: transcriptLength },
       { key: homeKey, label: "Synthetic Home", count: transcriptLength },
@@ -198,6 +187,16 @@ suite.define(() => {
           },
         );
         setupClient = client;
+        const syntheticViewer = await client.request("users.list", {}, { signal });
+        expect(
+          Array.isArray(syntheticViewer.profiles) &&
+            syntheticViewer.profiles.some(
+              (profile) =>
+                isRecord(profile) &&
+                profile.id === "gateway-owner" &&
+                profile.displayName === "Synthetic Viewer",
+            ),
+        ).toBe(true);
         for (const session of sessions) {
           signal.throwIfAborted();
           const created = await client.request(
@@ -221,16 +220,11 @@ suite.define(() => {
             {
               config,
               messages: Array.from({ length: session.count }, (_, index) => ({
-                message: {
-                  role: index % 2 === 0 ? "user" : "assistant",
-                  content: [
-                    {
-                      type: "text",
-                      text: `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
-                    },
-                  ],
-                  timestamp: 1_780_000_000_000 + index * 1000,
-                },
+                message: chatMessage(
+                  index % 2 === 0 ? "user" : "assistant",
+                  `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
+                  { timestamp: 1_780_000_000_000 + index * 1000 },
+                ),
               })),
             },
           );

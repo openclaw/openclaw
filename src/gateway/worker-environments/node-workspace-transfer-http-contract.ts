@@ -15,14 +15,12 @@ export type NodeWorkspaceTransferHttpRoute =
       baseManifestRef: string;
     };
 
-type NodeWorkspaceTransferHttpCallbackResult =
-  | { kind: "unauthorized" }
-  | { kind: "authorized"; handle: () => Promise<void> | void };
-
 /** Authenticates a parsed transfer route before its body or response stream is consumed. */
 export type NodeWorkspaceTransferHttpCallback = (params: {
   req: IncomingMessage;
   res: ServerResponse;
   route: NodeWorkspaceTransferHttpRoute;
   bearer: string;
-}) => Promise<NodeWorkspaceTransferHttpCallbackResult>;
+}) => Promise<
+  { kind: "unauthorized" } | { kind: "authorized"; handle: () => Promise<void> | void }
+>;

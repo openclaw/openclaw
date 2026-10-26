@@ -60,6 +60,10 @@ function createIngress(options: Partial<Parameters<typeof createIMessageDurableI
   return ingress;
 }
 
+async function expectDeadLetter(id: string) {
+  expect((await queue.enqueue(id, {} as IMessageIngressPayload)).kind).toBe("failed");
+}
+
 afterEach(async () => {
   for (const ingress of ingresses.toReversed()) {
     await ingress.stop();
@@ -137,108 +141,78 @@ describe("iMessage durable ingress", () => {
     }
   });
 
-  it("lets an approval poll vote overtake the conversation turn awaiting it", async () => {
-    const firstStarted = deferred<void>();
-    const releaseFirst = deferred<void>();
-    const voteStarted = deferred<void>();
-    const dispatch = vi.fn(async (message: { id?: number | null }) => {
-      if (message.id === 101) {
-        firstStarted.resolve();
-        await releaseFirst.promise;
-      } else if (message.id === 102) {
-        voteStarted.resolve();
-      }
-      return { kind: "completed" } as const;
-    });
-    const ingress = createIngress({
-      dispatch,
-      dispatchPriority: async (message) => {
-        if (message.id !== 102) {
-          return undefined;
+  it.each([true, false])(
+    "only lets owned approval votes overtake a turn: owned=%s",
+    async (owned) => {
+      const firstStarted = deferred<void>();
+      const releaseFirst = deferred<void>();
+      const voteChecked = deferred<void>();
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
+        if (message.id === 101) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
         }
-        voteStarted.resolve();
         return { kind: "completed" } as const;
-      },
-    });
-    ingress.start();
-    try {
-      await ingress.receive(rawRow());
-      await firstStarted.promise;
-      await ingress.receive(
-        rawRow({
-          id: 102,
-          guid: "GUID-102",
-          poll: { kind: "vote", original_guid: "POLL-1", vote: { option_id: "deny" } },
-        }),
-      );
-      await expect(
-        Promise.race([
-          voteStarted.promise.then(() => true),
-          new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), 1_000);
+      });
+      const ingress = createIngress({
+        dispatch,
+        dispatchPriority: async (message) => {
+          if (message.id !== 102) {
+            return undefined;
+          }
+          voteChecked.resolve();
+          return owned ? ({ kind: "completed" } as const) : undefined;
+        },
+      });
+      ingress.start();
+      try {
+        await ingress.receive(rawRow());
+        await firstStarted.promise;
+        await ingress.receive(
+          rawRow({
+            id: 102,
+            guid: "GUID-102",
+            poll: {
+              kind: "vote",
+              original_guid: owned ? "POLL-1" : "OTHER-POLL",
+              vote: { option_id: owned ? "deny" : "alpha" },
+            },
           }),
-        ]),
-      ).resolves.toBe(true);
-    } finally {
-      releaseFirst.resolve();
-      await ingress.stop();
-    }
-  });
-
-  it("keeps an unowned poll vote behind the earlier conversation turn", async () => {
-    const firstStarted = deferred<void>();
-    const releaseFirst = deferred<void>();
-    const unrelatedChecked = deferred<void>();
-    const dispatch = vi.fn(async (message: { id?: number | null }) => {
-      if (message.id === 101) {
-        firstStarted.resolve();
-        await releaseFirst.promise;
+        );
+        await expect(
+          Promise.race([
+            voteChecked.promise.then(() => true),
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1_000);
+            }),
+          ]),
+        ).resolves.toBe(true);
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(false);
+        releaseFirst.resolve();
+        await ingress.waitForIdle();
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(!owned);
+      } finally {
+        releaseFirst.resolve();
+        await ingress.stop();
       }
-      return { kind: "completed" } as const;
-    });
-    const ingress = createIngress({
-      dispatch,
-      dispatchPriority: async (message) => {
-        if (message.id === 102) {
-          unrelatedChecked.resolve();
-        }
-        return undefined;
-      },
-    });
-    ingress.start();
-    try {
-      await ingress.receive(rawRow());
-      await firstStarted.promise;
-      await ingress.receive(
-        rawRow({
-          id: 102,
-          guid: "GUID-102",
-          poll: { kind: "vote", original_guid: "OTHER-POLL", vote: { option_id: "alpha" } },
-        }),
-      );
-      await unrelatedChecked.promise;
-      expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(false);
+    },
+  );
 
-      releaseFirst.resolve();
-      await ingress.waitForIdle();
-      expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(true);
-    } finally {
-      releaseFirst.resolve();
-      await ingress.stop();
-    }
-  });
-
-  it("recovers a durable row with a fresh drain and dispatches exactly once", async () => {
+  it("recovers provenance and dedupes durable GUIDs across ROWID churn", async () => {
     const event = rawRow();
     const interrupted = createIngress();
-    await interrupted.receive(event);
+    await interrupted.receive(event, { catchup: true });
     await interrupted.stop();
 
     closeOpenClawStateDatabaseForTest();
-    const recoveredDispatch = vi.fn(async (_message, claimLifecycle) => {
-      await claimLifecycle.onAdopted();
-      return { kind: "deferred" } as const;
-    });
+    const provenances: Array<{ catchup?: boolean } | undefined> = [];
+    const recoveredDispatch = vi.fn<Parameters<typeof createIMessageDurableIngress>[0]["dispatch"]>(
+      async (_message, claimLifecycle, _receivedAt, provenance) => {
+        provenances.push(provenance);
+        await claimLifecycle.onAdopted();
+        return { kind: "deferred" } as const;
+      },
+    );
     const recovered = createIngress({
       queue: createQueue(stateDir),
       dispatch: recoveredDispatch,
@@ -251,71 +225,39 @@ describe("iMessage durable ingress", () => {
       guid: "GUID-101",
       chat_id: 42,
     });
-  });
-
-  it("preserves the retired guard's GUID parity across ROWID churn", async () => {
-    const dispatch = vi.fn(async (_message, claimLifecycle) => {
-      await claimLifecycle.onAdopted();
-      return { kind: "deferred" } as const;
-    });
-    const ingress = createIngress({ dispatch });
-    ingress.start();
-    await ingress.receive(rawRow());
-    await ingress.waitForIdle();
-    await ingress.receive(rawRow({ id: 999 }));
-    await ingress.waitForIdle();
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("carries catchup provenance through the journal to dispatch", async () => {
-    const provenances: Array<{ catchup?: boolean } | undefined> = [];
-    const ingress = createIngress({
-      dispatch: vi.fn(async (_message, claimLifecycle, _receivedAt, provenance) => {
-        provenances.push(provenance);
-        await claimLifecycle.onAdopted();
-      }),
-    });
-    ingress.start();
-    // Catchup bypasses the live Push age fence so old history is not tombstoned.
-    await ingress.receive(rawRow({ guid: "GUID-CATCHUP", id: 900 }), { catchup: true });
-    await ingress.receive(rawRow({ guid: "GUID-LIVE", id: 901 }));
-    await vi.waitFor(() => expect(provenances).toHaveLength(2));
+    await recovered.receive(rawRow({ id: 999 }));
+    await recovered.waitForIdle();
+    expect(recoveredDispatch).toHaveBeenCalledTimes(1);
+    await recovered.receive(rawRow({ guid: "GUID-LIVE", id: 901 }));
+    await recovered.waitForIdle();
     expect(provenances).toEqual([{ catchup: true }, {}]);
   });
 
   it.each([
-    ["GUID-bad", { guid: "GUID-bad", text: 123 }],
-    ["GUID-missing", { guid: undefined }],
-  ] as const)(
-    "dead-letters malformed persisted payload %s without retry",
-    async (id, overrides) => {
+    ["GUID-bad", { guid: "GUID-bad", text: 123 }, false],
+    ["GUID-missing", { guid: undefined }, false],
+    ["GUID-101", {}, true],
+  ] as const)("dead-letters permanent failure %s", async (id, overrides, denied) => {
+    const dispatch = vi.fn(async () => {
+      if (denied) {
+        throw new Error("Full Disk Access denied for Messages chat.db");
+      }
+    });
+    const ingress = createIngress({ dispatch });
+    if (denied) {
+      await ingress.receive(rawRow());
+    } else {
       await queue.enqueue(
         id,
-        {
-          version: 1,
-          receivedAt: Date.now(),
-          raw: rawRow(overrides),
-        },
+        { version: 1, receivedAt: Date.now(), raw: rawRow(overrides) },
         { laneKey: "chat:42" },
       );
-      const dispatch = vi.fn();
-      const ingress = createIngress({ dispatch });
-      ingress.start();
-      await ingress.waitForIdle();
-      expect((await queue.enqueue(id, {} as IMessageIngressPayload)).kind).toBe("failed");
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
-
-  it("dead-letters permanent Full Disk Access failures", async () => {
-    const ingress = createIngress({
-      dispatch: vi.fn(async () => {
-        throw new Error("Full Disk Access denied for Messages chat.db");
-      }),
-    });
+    }
     ingress.start();
-    await ingress.receive(rawRow());
     await ingress.waitForIdle();
-    expect((await queue.enqueue("GUID-101", {} as IMessageIngressPayload)).kind).toBe("failed");
+    await expectDeadLetter(id);
+    if (!denied) {
+      expect(dispatch).not.toHaveBeenCalled();
+    }
   });
 });

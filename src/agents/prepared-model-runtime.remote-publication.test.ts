@@ -30,6 +30,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import * as runtimePluginLoadPlan from "./harness/runtime-plugin-load-plan.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -371,17 +372,10 @@ it("keeps discovered rows published until the adopted catalog's discovery comple
   signal,
 }) => {
   const native = vi.fn(async () => []);
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "native-test",
-    source: "fixture",
-    harness: {
-      id: "native-test",
-      label: "Native test",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      loadModelCatalog: native,
-    },
+  const registry = harnessRegistry("native-test", {
+    label: "Native test",
+    runAttempt: vi.fn(),
+    loadModelCatalog: native,
   });
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
   await setup();

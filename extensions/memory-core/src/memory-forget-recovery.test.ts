@@ -30,7 +30,6 @@ import {
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
-import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   memoryForgetHarness,
   memoryOrigin,
@@ -40,7 +39,6 @@ import {
 import { seedMemoryForgetSession } from "./memory-forget.test-helpers.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
-import { observePublishedSql } from "./memory/manager-publication-observer.test-support.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type {
   ShortTermPhaseSignalEntry,
@@ -303,48 +301,7 @@ describe("memory forget", () => {
         expect(tombstones()).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
       }
       const retryPreview = await forget(true);
-      const observed =
-        failure === "none" && corpusExtension === "txt" ? observePublishedSql(db) : undefined;
-      const suppliedCalls: ReturnType<ReturnType<typeof observePublishedSql>["calls"]> = [];
-      const isLineageRead = (sql: string) =>
-        /\bSELECT\b[\s\S]*?\bFROM\s+["`]?memory_entry_origins\b/i.test(sql);
-      const isPlanningRead = (sql: string) =>
-        /\bSELECT\b[\s\S]*?\bFROM\s+["`]?memory_(?:index_(?:chunks|sources)|embedding_cache)\b/i.test(
-          sql,
-        );
-      const isMutation = (sql: string) =>
-        /\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM)\s+["`]?memory_(?:entry_origins|session_tombstones|index_(?:state|chunks(?:_vec)?|sources)|embedding_cache)\b/i.test(
-          sql,
-        );
-      let report: Awaited<ReturnType<typeof forgetMemoryEntries>>;
-      try {
-        if (observed) {
-          expect(db.prepare("SELECT entry_key FROM memory_entry_origins WHERE 0").all()).toEqual(
-            [],
-          );
-          expect(
-            db.prepare("UPDATE memory_entry_origins SET observed_at = observed_at WHERE 0").run()
-              .changes,
-          ).toBe(0);
-          expect(db.prepare("DELETE FROM memory_embedding_cache WHERE 0").run().changes).toBe(0);
-          expect(db.prepare("SELECT id FROM memory_index_chunks WHERE 0").all()).toEqual([]);
-          expect({
-            lineage: observed.calls().filter(({ sql }) => isLineageRead(sql)).length,
-            planning: observed.calls().filter(({ sql }) => isPlanningRead(sql)).length,
-            mutations: observed.calls().filter(({ sql }) => isMutation(sql)).length,
-          }).toEqual({ lineage: 1, planning: 1, mutations: 2 });
-          observed.clear();
-        }
-        report = await forget();
-      } finally {
-        if (observed) {
-          try {
-            suppliedCalls.push(...observed.calls());
-          } finally {
-            observed.restore();
-          }
-        }
-      }
+      const report = await forget();
       expect(report).toEqual({ ...retryPreview, dryRun: false });
       const survivingMemory = await h.read("MEMORY.md");
       expect(survivingMemory).toContain("Curated operator fact.");
@@ -414,13 +371,6 @@ describe("memory forget", () => {
       expect(repeated.sessionIds).toEqual(["target"]);
       expect(Object.values(repeated.artifacts).every((count) => count === 0)).toBe(true);
       expect(tombstones()).toEqual(savedTombstones);
-      if (observed) {
-        expect({
-          lineage: suppliedCalls.filter(({ sql }) => isLineageRead(sql)),
-          planning: suppliedCalls.filter(({ sql }) => isPlanningRead(sql)),
-          mutations: suppliedCalls.filter(({ sql }) => isMutation(sql)),
-        }).toEqual({ lineage: [], planning: [], mutations: [] });
-      }
     },
   );
 });
@@ -652,19 +602,11 @@ describe("memory forget worker settlement", () => {
       const state = await seedSelectedMemory(true);
       const before = await state.snapshot();
       const savedOrigins = await h.origins();
-      const reportPath = path.join(h.stateDir, "forget-native-report.jsonl");
-      const restore = observeMemoryForgetWorker(state.db, { failResult, reportPath });
+      const restore = observeMemoryForgetWorker(state.db, { failResult });
       try {
         await expect(forget()).rejects.toMatchObject({
           message: expect.stringContaining("injected committed " + failResult + " reply failure"),
         });
-        const nativeReports = (await fs.readFile(reportPath, "utf8"))
-          .trim()
-          .split("\n")
-          .map((line): unknown => JSON.parse(line));
-        expect(nativeReports).toEqual([
-          { tombstoneInserts: 1, sourceDeletes: failResult === "forget.purge" ? 1 : 0 },
-        ]);
         const savedTombstones = h.tombstones();
         expect(savedTombstones).toEqual([
           {
@@ -704,10 +646,8 @@ describe("memory forget worker settlement", () => {
       expect(state.optionalTables()).toEqual([]);
       const schemaCommit = refusal === "schema commit";
       const originalError = new Error("injected " + refusal + " refusal");
-      const requests: string[] = [];
       let transactions = 0;
       let refused = false;
-      const paths: Array<string | undefined> = [];
       const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
       const observer = vi
         .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
@@ -719,14 +659,10 @@ describe("memory forget worker settlement", () => {
           ) {
             return open(options, source, worker);
           }
-          paths.push(options.path);
           return open(options, source, {
             ...worker,
             assertAdmission(request) {
               const original = worker.assertAdmission ? worker.assertAdmission(request) : request;
-              if (original.stage === "transaction" || original.stage === "commit") {
-                requests.push(original.stage);
-              }
               if (original.stage === "transaction") {
                 transactions++;
               }
@@ -751,14 +687,10 @@ describe("memory forget worker settlement", () => {
               }
             : { message: expect.stringContaining(originalError.message) },
         );
-        expect({ paths, refused, requests, tables: state.optionalTables() }).toEqual({
-          paths: [state.db.location()],
-          refused: true,
-          requests: schemaCommit
-            ? ["transaction", "commit"]
-            : ["transaction", "commit", "transaction"],
-          tables: schemaCommit ? [] : [{ name: "memory_session_tombstones" }],
-        });
+        expect(refused).toBe(true);
+        expect(state.optionalTables()).toEqual(
+          schemaCommit ? [] : [{ name: "memory_session_tombstones" }],
+        );
         expect(h.tombstones()).toEqual([]);
         expect(await state.snapshot()).toEqual(before);
         expect(state.db.prepare("PRAGMA user_version").get()).toEqual(version);

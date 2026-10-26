@@ -20,6 +20,28 @@ import {
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
+function nativeTool(id: string, name: string, args: string) {
+  return { tool_calls: [{ index: 0, id, function: { name, arguments: args } }] };
+}
+
+function localModel(baseUrl: string, overrides: Parameters<typeof makeCompletionsModel>[0] = {}) {
+  return makeCompletionsModel({
+    id: "qwen3.6-27b",
+    provider: "vllm",
+    reasoning: false,
+    baseUrl,
+    ...overrides,
+  });
+}
+
+function collectLocal(baseUrl: string) {
+  return captureStream(
+    createOpenAICompletionsTransportStreamFn()(localModel(baseUrl), replyContext("Run a command"), {
+      apiKey: "test-key",
+    }),
+  );
+}
+
 describe("openai completions stream", () => {
   afterAll(() => {
     resetDiagnosticRunActivityForTest();
@@ -126,12 +148,10 @@ describe("openai completions stream", () => {
         );
       },
       async (baseUrl) => {
-        const model = makeCompletionsModel({
+        const model = localModel(baseUrl, {
           id: "qwen3.5-32b",
-
           provider: "qwen",
-          baseUrl,
-
+          reasoning: true,
           compat: { thinkingFormat: "qwen", supportsReasoningEffort: false },
         });
         const stream = createOpenAICompletionsTransportStreamFn()(
@@ -164,10 +184,8 @@ describe("openai completions stream", () => {
             ? {
                 tool_calls: [
                   {
-                    index: 0,
-                    id: "call_lookup",
+                    ...nativeTool("call_lookup", "lookup", '{"query":"local"}').tool_calls[0],
                     type: "function",
-                    function: { name: "lookup", arguments: '{"query":"local"}' },
                   },
                 ],
               }
@@ -181,12 +199,7 @@ describe("openai completions stream", () => {
           res.end("data: [DONE]\n\n");
         },
         async (baseUrl) => {
-          const model = makeCompletionsModel({
-            id: "minimax-m2.5-8bit",
-            provider: "mlx-lm",
-            baseUrl,
-            reasoning: false,
-          });
+          const model = localModel(baseUrl, { id: "minimax-m2.5-8bit", provider: "mlx-lm" });
           const runtime = createLlmRuntime();
           registerBuiltInApiProviders(runtime.registry);
           const stream = runtime.streamSimple(
@@ -219,11 +232,7 @@ describe("openai completions stream", () => {
   it.concurrent.each(["reasoning_content", "reasoning"] as const)(
     "keeps hidden local %s streams alive beyond the model idle timeout",
     async (reasoningField) => {
-      // The regression under guard is "hidden reasoning stops resetting the idle
-      // watchdog", so the hidden phase has to outlast idleTimeoutMs or a broken
-      // build would pass. Pace chunks far below that budget instead of near it:
-      // a loaded runner stretches every inter-chunk gap, and one gap wider than
-      // the timeout inverts the ratio into a false idle timeout.
+      // Outlast the watchdog while pacing chunks well below its timeout on loaded runners.
       const idleTimeoutMs = 1_000;
       const sessionProgressStaleMs = 750;
       const reasoningChunkDelayMs = 5;
@@ -250,19 +259,14 @@ describe("openai completions stream", () => {
               sessionProgressThresholdReached.resolve();
             }
             if (hiddenReasoningElapsedMs < hiddenReasoningDurationMs) {
-              const reasoningChunk = {
-                id: "chatcmpl-local-reasoning",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "nemotron-local",
-                choices: [
-                  {
-                    index: 0,
-                    delta: { [reasoningField]: "private reasoning" },
-                    finish_reason: null,
-                  },
-                ],
-              };
+              const reasoningChunk = makeCompletionsChunk(
+                { [reasoningField]: "private reasoning" },
+                null,
+                {
+                  id: "chatcmpl-local-reasoning",
+                  model: "nemotron-local",
+                },
+              );
               writeSse(res, reasoningChunk);
               setTimeout(writeNextChunk, reasoningChunkDelayMs);
               return;
@@ -277,13 +281,7 @@ describe("openai completions stream", () => {
           writeNextChunk();
         },
         async (baseUrl) => {
-          const model = makeCompletionsModel({
-            id: "nemotron-local",
-
-            provider: "inference",
-            baseUrl,
-            reasoning: false,
-          });
+          const model = localModel(baseUrl, { id: "nemotron-local", provider: "inference" });
           const onIdleTimeout = vi.fn();
           markDiagnosticRunProgress({ runId, sessionId: runId, reason: "model_call:started" });
           const streamFn = streamWithIdleTimeout(
@@ -308,50 +306,99 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
+  it.each([
+    { name: "split CRLF", prefix: "", terminal: ["data: [DO", "NE]\r\n\r\n"], valid: true },
+    { name: "initial BOM", prefix: "\uFEFF", terminal: ["data: [DONE]\n\n"], valid: true },
+    { name: "mixed line endings", prefix: "", terminal: ["data:[DONE]\r\n\n"], valid: true },
+    { name: "padded marker", prefix: "", terminal: ["data:\t[DONE]\t\n\n"], valid: false },
+    {
+      name: "oversized marker line",
+      prefix: "",
+      terminal: [`data:${" ".repeat(1_014)}[DONE]\n\n`],
+      valid: false,
+    },
+    { name: "comment marker", prefix: "", terminal: [":data: [DONE]\n\n"], valid: false },
+    {
+      name: "embedded marker",
+      prefix: "",
+      terminal: [`data: ${JSON.stringify(makeCompletionsChunk({ content: "[DONE]" }))}\n\n`],
+      valid: false,
+    },
+  ])(
+    "preserves native tool terminal proof over HTTP: $name",
+    async ({ prefix, terminal, valid }) => {
+      await withServer(
+        (_req, res) => {
+          startSse(res, true);
+          res.write(prefix);
+          writeSse(
+            res,
+            makeCompletionsChunk(
+              nativeTool("call_loopback_done", "bash", '{"cmd":"echo loopback"}'),
+            ),
+          );
+          for (const part of terminal) {
+            res.write(part);
+          }
+          res.end();
+        },
+        async (baseUrl) => {
+          const { terminal: event, events, result } = await collectLocal(baseUrl);
+          expect(events.some((entry) => entry.type === "toolcall_start")).toBe(true);
+          if (valid) {
+            expect(event).toMatchObject({ type: "done", reason: "toolUse" });
+            expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(1);
+          } else {
+            expect(event?.type).toBe("error");
+            expect(events.some((entry) => entry.type === "toolcall_end")).toBe(false);
+            expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+          }
+        },
+      );
+    },
+  );
+
+  it("observes terminal proof without walking every SSE character", async () => {
+    const chunks = Array.from({ length: 200 }, () =>
+      makeCompletionsChunk({ content: "Streaming text 🦞 " }),
+    );
+    chunks.push(makeCompletionsChunk({}, "stop"));
+    const body =
+      chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
     await withServer(
       (_req, res) => {
-        startSse(res, true);
-        // Emit a delta.tool_calls chunk with no finish_reason
-        writeSse(
-          res,
-          makeCompletionsChunk({
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_loopback_done",
-                function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
-              },
-            ],
-          }),
-        );
-        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
-        // framing, so the raw terminal observer must preserve the same contract.
-        res.write("data: [DO");
-        res.write("NE]\r\n\r\n");
-        res.end();
+        startSse(res);
+        res.end(body);
       },
       async (baseUrl) => {
-        const baseModel = makeCompletionsModel({
-          id: "qwen3.6-27b",
-
-          provider: "vllm",
-          baseUrl,
-          reasoning: false,
-        });
-        const stream = createOpenAICompletionsTransportStreamFn()(
-          baseModel,
-          replyContext("Run a command"),
-          { apiKey: "test-key" } as never,
-        );
-        const { terminal, events } = await captureStream(stream);
-        expect(terminal).toMatchObject({ type: "done", reason: "toolUse" });
-        expect(events.some((event) => event.type === "toolcall_start")).toBe(true);
-        expect(
-          terminal?.type === "done"
-            ? terminal.message.content.filter((block) => block.type === "toolCall")
-            : [],
-        ).toHaveLength(1);
+        const iteratedCharacters = [];
+        for (const createStream of [
+          streamOpenAICompletions,
+          createOpenAICompletionsTransportStreamFn(),
+        ]) {
+          const iterate = String.prototype[Symbol.iterator];
+          let characters = 0;
+          const iterator = vi
+            .spyOn(String.prototype, Symbol.iterator)
+            .mockImplementation(function* (this: string) {
+              for (const character of iterate.call(this)) {
+                characters++;
+                yield character;
+              }
+              return undefined;
+            });
+          try {
+            const result = await captureStream(
+              createStream(localModel(baseUrl), replyContext(), { apiKey: "test-key" }),
+            );
+            expect(result.text).toBe("Streaming text 🦞 ".repeat(200));
+            expect(result.result.stopReason).toBe("stop");
+            iteratedCharacters.push(characters);
+          } finally {
+            iterator.mockRestore();
+          }
+        }
+        expect(iteratedCharacters[1]).toBe(iteratedCharacters[0]);
       },
     );
   });
@@ -368,33 +415,15 @@ describe("openai completions stream", () => {
           if (content !== "empty") {
             writeSse(
               res,
-              makeCompletionsChunk({
-                tool_calls: [
-                  {
-                    index: 0,
-                    id: "call_interrupted",
-                    function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
-                  },
-                ],
-              }),
+              makeCompletionsChunk(
+                nativeTool("call_interrupted", "bash", '{"cmd":"echo loopback"}'),
+              ),
             );
           }
           res.end();
         },
         async (baseUrl) => {
-          const baseModel = makeCompletionsModel({
-            id: "qwen3.6-27b",
-
-            provider: "vllm",
-            baseUrl,
-            reasoning: false,
-          });
-          const stream = createOpenAICompletionsTransportStreamFn()(
-            baseModel,
-            replyContext("Run a command"),
-            { apiKey: "test-key" } as never,
-          );
-          const { terminal, result } = await captureStream(stream);
+          const { terminal, result } = await collectLocal(baseUrl);
           expect(terminal?.type).toBe("error");
           expect(result.stopReason).toBe("error");
           expect(result.errorMessage).toContain("Stream ended without finish_reason");
@@ -416,18 +445,7 @@ describe("openai completions stream", () => {
     const chunks = [
       makeCompletionsChunk({ role: "assistant" as const, content: "" }),
       makeCompletionsChunk({ content: "Here is the answer." }),
-      makeCompletionsChunk(
-        {
-          tool_calls: [
-            {
-              index: 0,
-              id: "call_spurious",
-              function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
-            },
-          ],
-        },
-        "stop",
-      ),
+      makeCompletionsChunk(nativeTool("call_spurious", "bash", '{"cmd":"echo hi"}'), "stop"),
     ] as const;
     await run(chunks);
 

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import {
   registerSignalExitBarrier,
@@ -19,7 +19,7 @@ import { readBackupRuns } from "../state/backup-run-records.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
   buildBackupArchivePath,
@@ -45,19 +45,25 @@ const create = (
   runtime = createTestRuntime(),
 ) => backupCreateCommand(runtime, options);
 
-async function withEnv(name: string, value: string, run: () => Promise<void> | void) {
-  const snapshot = captureEnv([name]);
-  setTestEnvValue(name, value);
-  try {
-    await run();
-  } finally {
-    snapshot.restore();
-  }
-}
-
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
   let stateDir: string;
+
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in archive creation output without changing paths",
+    async () => {
+      await mockStateOnlyBackupPlan(stateDir);
+      const output = path.join(tempHome.home, "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz");
+      const runtime = createTestRuntime();
+      const result = await create({ output, includeWorkspace: false }, runtime);
+      const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(report).toContain("café\\nforged\\tend\\rrow.tar.gz");
+      expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(report).not.toContain("\nforged");
+      expect(result.archivePath).toBe(output);
+      expect((await fs.stat(output)).isFile()).toBe(true);
+    },
+  );
 
   async function writeWorkspaceBackupConfig(workspaceDir: string) {
     await fs.writeFile(
@@ -176,12 +182,11 @@ describe("backup commands", () => {
     });
     let signalDrain: Promise<void> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        running.then(() => {
-          throw new Error("Backup completed without entering requested verification");
-        }),
-      ]);
+        running,
+        "Backup completed without entering requested verification",
+      );
       const committed = await fs.stat(archivePath, { bigint: true });
       let drained = false;
       signalDrain = waitForSignalExitBarriers("SIGTERM").then(() => {
@@ -214,7 +219,7 @@ describe("backup commands", () => {
     ["Asia/Shanghai", "2026-03-14T09-02-03.456+08-00-openclaw-backup"],
     ["America/New_York", "2026-03-13T21-02-03.456-04-00-openclaw-backup"],
   ])("formats backup archive timestamps in %s local time", async (timezone, expected) => {
-    await withEnv("TZ", timezone, () => {
+    await withEnvAsync({ TZ: timezone }, async () => {
       expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(expected);
     });
   });
@@ -375,7 +380,7 @@ describe("backup commands", () => {
     const configPath = path.join(tempHome.home, "custom-config.json");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}", "utf8");
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-    await withEnv("OPENCLAW_CONFIG_PATH", configPath, async () => {
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
       const runtime = createTestRuntime();
       await expect(create({ dryRun: true }, runtime)).rejects.toThrow(
         /ownership could not be resolved/i,
@@ -417,7 +422,7 @@ describe("backup commands", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(configPath, originalRaw, "utf8");
     const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-    await withEnv("OPENCLAW_CONFIG_PATH", configPath, async () => {
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
       const plan = await resolveBackupPlanFromDisk({ nowMs: 123 });
 
       expect(plan.included).toContainEqual(

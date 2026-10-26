@@ -226,7 +226,7 @@ function createFixture() {
       admissions,
       commands,
       fault,
-      seedTransferEntry: () => seedSessionActorOutcomeTransferEntry(fixture),
+      seedTransferEntry: (bytes?: number) => seedSessionActorOutcomeTransferEntry(fixture, bytes),
       readEntry: fixture.read,
       retireGeneration(this: void) {
         epoch += 1;

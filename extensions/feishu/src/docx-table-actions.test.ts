@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -355,14 +356,11 @@ describe("registered feishu_doc table patches", () => {
     let reply: PatchResponse = { code: 0, data: { block, client_token: "table-client-token" } };
     const server = createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
+        const bodyBuffer = await consumeBuffer(request);
         requests.push({
           method: request.method,
           url: request.url,
-          body: Buffer.concat(chunks).toString("utf8"),
+          body: bodyBuffer.toString("utf8"),
         });
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(reply));

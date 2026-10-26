@@ -1421,10 +1421,7 @@ it("records the hook-selected file after remote Slack upload preparation", async
 });
 describe("Codex automation tool references", () => {
   function setup(options: { registeredSpecs?: CodexDynamicToolSpec[] } = {}) {
-    const execute = vi.fn(async (_id: string, args: unknown) => ({
-      content: [{ type: "text" as const, text: "observed" }],
-      details: args,
-    }));
+    const execute = vi.fn(async (_id: string, args: unknown) => textToolResult("observed", args));
     const tools = [
       createTool("automations", { execute }),
       createTool("sandbox_exec", { catalogMode: "direct-only" }),

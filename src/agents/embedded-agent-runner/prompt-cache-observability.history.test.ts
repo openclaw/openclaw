@@ -19,6 +19,7 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
+import { fingerprintMessage } from "./prompt-cache-history.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
@@ -367,6 +368,52 @@ describe("prompt cache history fingerprints", () => {
     }
   });
 
+  it.each(["string", "blocks"] as const)(
+    "reuses unchanged mutable envelopes with immutable %s content across readers",
+    (kind) => {
+      const messages = [1, 2].map((timestamp) => {
+        const message = makeAgentAssistantMessage({
+          content: [{ type: "text", text: `fixture-${timestamp}` }],
+          timestamp,
+        });
+        const prepared: Message =
+          kind === "string" ? { role: "user", content: "fixture", timestamp } : message;
+        normalizeTranscriptJsonValue(prepared, "");
+        return prepared;
+      });
+      const fingerprints = messages.map((message) => fingerprintMessage(message));
+      for (let read = 0; read < 3; read++) {
+        for (const [index, message] of messages.entries()) {
+          expect(fingerprintMessage(message)).toBe(fingerprints[index]);
+        }
+      }
+      const message = messages[0]!;
+      message.timestamp++;
+      const changed = fingerprintMessage(message, fingerprints[0]);
+      expect(changed.packed).not.toBe(fingerprints[0]!.packed);
+      expect(fingerprintMessage(message)).toBe(changed);
+      if (message.role === "assistant") {
+        message.usage = structuredClone(message.usage);
+        expect(fingerprintMessage(message)).toBe(changed);
+        message.usage.input++;
+        expect(fingerprintMessage(message, changed).packed).not.toBe(changed.packed);
+      }
+      const content: TextContent[] = [{ type: "text", text: "replacement" }];
+      message.content = content;
+      const replaced = fingerprintMessage(message, changed);
+      expect(replaced.packed).not.toBe(changed.packed);
+      content[0]!.text = "edited in place";
+      expect(fingerprintMessage(message, replaced).packed).not.toBe(replaced.packed);
+      normalizeTranscriptJsonValue(message, "");
+      fingerprintMessage(message);
+      Object.freeze(message);
+      fingerprintMessage(message);
+      const entries = vi.spyOn(Object, "entries");
+      fingerprintMessage(message);
+      expect(entries).not.toHaveBeenCalledWith(message);
+    },
+  );
+
   it.each([false, true])(
     "ignores internal tool-result envelopes but detects content rewrites (sealed=%s)",
     async (sealed) => {
@@ -526,6 +573,31 @@ describe("prompt cache history fingerprints", () => {
     delete block.textSignature;
     tracker.assertRewrite("message 0 (assistant)");
   });
+
+  it.each(["__proto__", "constructor", "toString"])(
+    "tracks primitive revisions for the own field %s",
+    (key) => {
+      const block: TextContent & Record<string, unknown> = { type: "text", text: "stable" };
+      Object.defineProperty(block, key, {
+        value: "original",
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+      const tracker = history(`own-field-${key}`, [
+        makeAgentAssistantMessage({ content: [block] }),
+      ]);
+      expect(tracker.read()).toMatchObject(unchangedPrefix);
+      expect(contentHashes("original")).toHaveLength(1);
+      for (const value of [undefined, null, { nested: "value" }, "changed"]) {
+        block[key] = value;
+        tracker.assertRewrite("changed fields: content[0].other");
+        expect(tracker.read()).toMatchObject(unchangedPrefix);
+      }
+      delete block[key];
+      tracker.assertRewrite("changed fields: content[0].other");
+    },
+  );
 
   it.each(["block", "string"] as const)(
     "hashes unchanged large %s content once across three observations",

@@ -7,8 +7,7 @@ export { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 export * from "../providers/transform-messages.js";
 export * from "../replay-turn-classification.js";
 export {
-  createDiagnosticArray,
-  createDiagnosticRecord,
+  projectPreparedDiagnosticValue,
   isCredentialFieldName,
 } from "../utils/credential-redaction.js";
 export { projectProviderError } from "../utils/provider-error.js";
@@ -16,7 +15,6 @@ export { matchesContextOverflowMessage } from "../utils/overflow.js";
 export * from "../utils/prompt-cache-stability.js";
 export * from "../utils/sanitize-unicode.js";
 export * from "../utils/system-prompt-cache-boundary.js";
-export * from "../utils/tls-certificate-errors.js";
 export { projectCopilotRequestFacts } from "../providers/github-copilot-request-facts.js";
 
 export { preparedRequestSuffix } from "../provider-options.js";

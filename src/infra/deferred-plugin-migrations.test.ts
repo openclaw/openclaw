@@ -424,8 +424,6 @@ describe("deferred configured-plugin migrations", () => {
     if (!(error instanceof DeferredPluginMigrationConflictError)) {
       throw error;
     }
-    expect(error.phase).toBe("migration settlement");
-    expect(error.expected).toEqual(expectedPending);
     expect(error.message).toContain("during migration settlement");
     expect(error.message).toContain("expected=[fixture-plugin]");
     expect(error.message).toContain("current=[fixture-plugin]");

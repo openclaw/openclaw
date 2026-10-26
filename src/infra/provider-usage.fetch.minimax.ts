@@ -187,9 +187,7 @@ function scoreUsageRecord(record: Record<string, unknown>): number {
   return score;
 }
 
-function pickUsageRecord(
-  root: Record<string, unknown>,
-): { record: Record<string, unknown>; usedPercent: number } | undefined {
+function pickUsageRecord(root: Record<string, unknown>) {
   const MAX_SCAN_DEPTH = 4;
   const MAX_SCAN_NODES = 60;
   const queue: Array<{ value: Record<string, unknown> | unknown[]; depth: number }> = [
@@ -302,10 +300,7 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   );
 }
 
-function deriveMinimaxModelWindows(record: Record<string, unknown>): {
-  recognized: boolean;
-  windows: UsageWindow[];
-} {
+function deriveMinimaxModelWindows(record: Record<string, unknown>) {
   const windows: UsageWindow[] = [];
   let recognized = false;
   for (const window of [INTERVAL_WINDOW, WEEKLY_WINDOW]) {

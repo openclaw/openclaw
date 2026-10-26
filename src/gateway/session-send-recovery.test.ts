@@ -22,6 +22,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "../state/agent-database-preparation-context.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import type { SessionSendDelivery } from "./session-send-delivery.js";
@@ -101,11 +102,6 @@ const recover = (signal = controller().signal) =>
   recoverSessionSendDeliveries(context, signal).settled;
 async function recoverWithTimers(signal = controller().signal) {
   await Promise.all([recover(signal), vi.runAllTimersAsync()]);
-}
-function expectNoCalls(...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 function peerInput(
   overrides: Partial<SessionSendDelivery> & { operatorSource?: unknown },

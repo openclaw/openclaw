@@ -8,6 +8,7 @@ import {
   validateChatHistoryParams,
   validateChatStartupParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig, resolveAgentVerboseDefault } from "../../agents/agent-scope.js";
 import { findModelCatalogEntry } from "../../agents/model-catalog.js";
@@ -65,8 +66,9 @@ import { withChatStartupDiagnostics } from "./chat-server-timing.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
+/** Internal callers carry schema-validated fields and their resolved session target. */
 export async function handleChatHistoryRequest({
   params,
   respond,
@@ -79,7 +81,8 @@ export async function handleChatHistoryRequest({
   acceptsSerializedJson,
   acceptsDeflatedSegments,
   req,
-}: GatewayRequestHandlerOptions & {
+}: Omit<GatewayRequestHandlerOptions, "params"> & {
+  params: ChatHistoryParams;
   method: ChatHistoryMethod;
   retainedTranscript?: {
     sessionId: string;
@@ -87,9 +90,6 @@ export async function handleChatHistoryRequest({
     verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
-  if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
-    return;
-  }
   const {
     sessionKey,
     limit,
@@ -645,13 +645,15 @@ export async function handleChatHistoryRequest({
 }
 
 export const chatHistoryHandlers: GatewayRequestHandlers = {
-  "chat.history": (opts) => handleChatHistoryRequest({ ...opts, method: "chat.history" }),
+  "chat.history": defineValidatedGatewayHandler("chat.history", validateChatHistoryParams, (opts) =>
+    handleChatHistoryRequest({ ...opts, method: "chat.history" }),
+  ),
   "chat.startup": withChatStartupDiagnostics(async (opts) => {
     if (!assertValidParams(opts.params, validateChatStartupParams, "chat.startup", opts.respond)) {
       return;
     }
     if ("sessionKey" in opts.params) {
-      await handleChatHistoryRequest({ ...opts, method: "chat.startup" });
+      await handleChatHistoryRequest({ ...opts, params: opts.params, method: "chat.startup" });
       return;
     }
     const connId = opts.client?.connId?.trim();

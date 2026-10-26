@@ -304,9 +304,6 @@ class ProviderAdapterEmbeddings implements Embeddings {
     embedding: EmbeddingConfig,
     timeoutMs?: number,
   ): Promise<number[]> {
-    if (this.closed) {
-      throw new Error("memory-lancedb embeddings are closed");
-    }
     const deadlineAtMs = timeoutMs ? Date.now() + resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
     const fingerprint = embeddingConfigFingerprint(embedding);
     this.invalidate(fingerprint);

@@ -1,9 +1,11 @@
 import { PassThrough } from "node:stream";
 import { select as clackSelect } from "@clack/prompts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runtimeFixture } from "../cli/update-cli/update-command-fixtures.test-support.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
 import { defaultRuntime as runtime } from "../runtime.js";
+import { createRuntimeProbeResult } from "../wizard/setup.finalize.test-support.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
 const progressSetLabel = vi.hoisted(() => vi.fn());
@@ -94,15 +96,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(runtime, "exit").mockImplementation(() => {});
   readPin.mockReturnValue({ revision: "empty", stored: false });
-  runExec.mockReset().mockResolvedValue({
-    stdout: JSON.stringify({
-      nodeVersion: "26.8.1",
-      bunVersion: "1.4.3",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-    }),
-    stderr: "",
-  });
+  runExec.mockReset().mockResolvedValue(createRuntimeProbeResult());
   service.isLoaded.mockResolvedValue(false);
   service.hasInstalledDefinition.mockResolvedValue(false);
   service.readCommand.mockResolvedValue(null);
@@ -162,13 +156,9 @@ it("rejects picked Node on a Bun-only host before replacing the service", async 
   const discoverNode = vi
     .spyOn(runtimePaths, "resolvePreferredNodePath")
     .mockResolvedValue(undefined);
-  const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-    status: "supported",
-    version: "1.4.3",
-    sqliteVersion: "3.53.4",
-    sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-    nodeSharedSqlite: false,
-  });
+  const probeBun = vi
+    .spyOn(runtimePaths, "resolveBunRuntimeInfo")
+    .mockResolvedValue(runtimeFixture("1.4.3", "3.53.4"));
   reinstall();
   select.mockResolvedValueOnce("node");
   buildGatewayInstallPlan.mockImplementationOnce(realPlan);

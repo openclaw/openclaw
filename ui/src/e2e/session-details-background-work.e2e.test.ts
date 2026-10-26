@@ -6,7 +6,10 @@ import type { SessionProcessSummary } from "../../../packages/gateway-protocol/s
 import type { GatewaySessionRow } from "../api/types.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -522,21 +525,16 @@ suite.define(() => {
               await page.mouse.move(0, 0);
             }
             await page.mouse.move(0, 0);
-            const frame = await takeControlUiScreenshotFrame(page, details, [summary], {
-              animations: "disabled",
-              elements: [details, subagents, processGroup],
-            });
-            await writeFile(
-              path.join(suite.artifactDir, `details-background-${colorScheme}-${width}.png`),
-              frame.png,
+            await waitForControlUiProofSurface(details, [summary, subagents, processGroup]);
+            await waitForLayoutSettled(
+              page,
+              ".chat-details-desktop-body, .chat-mobile-details-page__body",
             );
-            await writeFile(
-              path.join(
-                suite.artifactDir,
-                `details-background-${colorScheme}-${width}-details.png`,
-              ),
-              frame.elements[0]!.png,
-            );
+            await capture(`details-background-${colorScheme}-${width}`, details, [
+              summary,
+              subagents,
+              processGroup,
+            ]);
             const target = width === 390 ? processes[0]! : processes[2]!;
             const openRow = processGroup
               .locator(`[data-process-id="${target.processId}"]`)
@@ -665,6 +663,9 @@ suite.define(() => {
                 animation.pause();
                 animation.currentTime = 0;
                 animations.push(animation);
+              } else if (this.matches(".chat-details-desktop-section__body")) {
+                animation.pause();
+                animation.currentTime = 0;
               }
               return animation;
             };

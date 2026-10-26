@@ -13,7 +13,7 @@ import {
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  DeferredPluginMigrationConflictError as ConflictError,
+  DeferredPluginMigrationConflictError,
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
   type DeferredPluginMigration,
@@ -139,7 +139,7 @@ export async function runDoctorSessionSqlite(
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
   const configuredAgentIds = new Set(listAgentIds(cfg));
-  const expected = readDeferredPluginMigrations({ env });
+  const pendingPlugins = readDeferredPluginMigrations({ env });
   const verifyMissingIndex = createMissingSessionIndexVerifier({ cfg, env });
   const {
     targets: candidates,
@@ -211,7 +211,7 @@ export async function runDoctorSessionSqlite(
                 verifyMissingIndex,
                 deferredPluginIds: deferredPluginSessionStoreIds({
                   target,
-                  pending: expected,
+                  pending: pendingPlugins,
                 }),
               });
         settlementIssuesForStore(target.storePath).forEach((issue) => report.issues.push(issue));
@@ -257,7 +257,7 @@ export async function runDoctorSessionSqlite(
         ),
         deferredPluginIds: deferredPluginSessionStoreIds({
           target,
-          pending: expected,
+          pending: pendingPlugins,
         }),
       }),
     );
@@ -347,7 +347,7 @@ export async function runDoctorSessionSqlite(
       >(
         {
           env,
-          expectedPending: expected,
+          expectedPending: pendingPlugins,
           onConflict(pending) {
             retainSource();
             if (pending.length > 0) {
@@ -374,6 +374,10 @@ export async function runDoctorSessionSqlite(
         },
       );
       if (conflict) {
+        const error = new DeferredPluginMigrationConflictError(conflict, {
+          expected: pendingPlugins,
+          phase: "session archive publication",
+        });
         for (const owner of archiveTargets) {
           owner.deferredPluginIds = deferredPluginSessionStoreIds({
             target: owner.target,
@@ -383,12 +387,12 @@ export async function runDoctorSessionSqlite(
             owner.retainedImportVerified ||= owner.verifiedSources !== undefined;
             owner.report.issues.push({
               code: "plugin_migration_source_retained",
-              message: `${new ConflictError(conflict, { expected, phase: "session archive publication" }).message} Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}.`,
+              message: `${error.message} Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}.`,
             });
           }
         }
         retainDeferredSources();
-        throw new ConflictError(conflict, { expected, phase: "session archive publication" });
+        throw error;
       }
     };
     retainDeferredSources();
@@ -497,8 +501,8 @@ export async function settleRetainedDoctorSessionSources(
   assertCurrent();
   retainedArchivePlans.delete(report);
   const completed = new Set(completedPluginIds);
-  const expected = readDeferredPluginMigrations({ env: plan.env });
-  const remainingPending = expected.filter((plugin) => !completed.has(plugin.pluginId));
+  const expectedPending = readDeferredPluginMigrations({ env: plan.env });
+  const remainingPending = expectedPending.filter((plugin) => !completed.has(plugin.pluginId));
   if (remainingPending.length > 0) {
     return;
   }
@@ -508,7 +512,7 @@ export async function settleRetainedDoctorSessionSources(
     >(
       {
         env: plan.env,
-        expectedPending: expected,
+        expectedPending,
         onConflict(pending) {
           authority.assertCurrent();
           retainSource();
@@ -521,7 +525,10 @@ export async function settleRetainedDoctorSessionSources(
       },
     );
     if (conflict) {
-      throw new ConflictError(conflict, { expected, phase: "session source retirement" });
+      throw new DeferredPluginMigrationConflictError(conflict, {
+        expected: expectedPending,
+        phase: "session source retirement",
+      });
     }
   };
   const verifyImports = () => {
@@ -1350,7 +1357,7 @@ async function archiveLegacyArtifacts(
         ).push(move.archivePath);
       }
     } catch (error) {
-      if (error instanceof ConflictError && error.pending.length > 0) {
+      if (error instanceof DeferredPluginMigrationConflictError && error.pending.length > 0) {
         break;
       }
       for (const owner of referencingOwners.keys()) {

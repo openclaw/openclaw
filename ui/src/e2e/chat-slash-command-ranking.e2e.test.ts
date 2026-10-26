@@ -58,7 +58,7 @@ async function installCommands(
 
 async function openChat(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
   await page.goto(`${suite.server.baseUrl}chat`);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible" });
   return composer;

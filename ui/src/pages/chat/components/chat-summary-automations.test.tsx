@@ -867,6 +867,7 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
     ),
   );
   await current.ready("Weekday review");
+  await vi.dynamicImportSettled();
   const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
   const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
   await waitForSolid(() => {

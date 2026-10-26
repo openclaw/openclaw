@@ -61,13 +61,15 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
     connectionEpoch: number;
     requestedKey: string;
     requestedAgentId?: string | null;
+    openingDispatch?: Promise<boolean>;
   },
 ): boolean {
   return (
     chatHistoryRequests(state).subscriptionGeneration === params.generation &&
     state.client === params.client &&
-    state.connectionEpoch === params.connectionEpoch &&
-    state.connected &&
+    (params.openingDispatch === undefined
+      ? state.connectionEpoch === params.connectionEpoch && state.connected
+      : params.client.connectSent === params.openingDispatch) &&
     state.sessionKey.trim() === params.requestedKey &&
     resolveSelectedSessionMessageSubscriptionAgentId(state, params.requestedKey) ===
       (params.requestedAgentId ?? null)
@@ -82,6 +84,7 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   delete requests.subscriptionRetry;
   setChatHistoryRetrying(state, "subscription", false);
   requests.subscriptionReady = Promise.resolve(false);
+  delete requests.openingSubscription;
   delete requests.initialHistory;
   const subscription = state.chatSessionMessageSubscription;
   state.chatSessionMessageSubscriptionRequestedKey = null;
@@ -99,9 +102,13 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
 
 export function syncSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
-  opts?: { force?: boolean; initialHistory?: boolean },
+  opts?: { force?: boolean; initialHistory?: boolean; beforeHello?: boolean },
 ): Promise<boolean> {
   const requests = chatHistoryRequests(state);
+  if (requests.openingSubscription?.isCurrent()) {
+    requests.openingSubscription.admit();
+    return requests.subscriptionReady!;
+  }
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const requestedKey = state.sessionKey.trim();
@@ -109,6 +116,7 @@ export function syncSelectedSessionMessageSubscription(
   requests.subscriptionRetry?.abort();
   const retry = new AbortController();
   requests.subscriptionRetry = retry;
+  const openingDispatch = opts?.beforeHello ? client?.connectSent : undefined;
   const pending = synchronizeSelectedSessionMessageSubscription(state, retry.signal, opts).finally(
     () => {
       if (requests.subscriptionRetry === retry) {
@@ -128,7 +136,9 @@ export function syncSelectedSessionMessageSubscription(
         connectionEpoch,
         requestedKey,
         requestedAgentId,
+        openingDispatch,
       }) &&
+      state.connected &&
       state.chatSessionMessageSubscriptionRequestedKey === requestedKey &&
       state.chatSessionMessageSubscription != null,
   );
@@ -139,15 +149,17 @@ export function syncSelectedSessionMessageSubscription(
 async function synchronizeSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
   signal: AbortSignal,
-  opts?: { force?: boolean; initialHistory?: boolean },
+  opts?: { force?: boolean; initialHistory?: boolean; beforeHello?: boolean },
 ): Promise<boolean> {
-  if (!state.client || !state.connected) {
+  if (!state.client || (!state.connected && !opts?.beforeHello)) {
     return false;
   }
   const client = state.client;
   const sessions = state.sessions;
   const retryDeadline = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
   const connectionEpoch = state.connectionEpoch;
+  // Hello advances the pane epoch; the transport receipt spans that admission only.
+  const openingDispatch = opts?.beforeHello ? client.connectSent : undefined;
   const nextKey = state.sessionKey.trim();
   if (!nextKey) {
     return false;
@@ -182,6 +194,7 @@ async function synchronizeSelectedSessionMessageSubscription(
       connectionEpoch,
       requestedKey: nextKey,
       requestedAgentId: nextSubscriptionAgentId,
+      openingDispatch,
     });
   const clearRecoveredError = () => {
     const message = paneRequests.subscriptionError;
@@ -219,6 +232,23 @@ async function synchronizeSelectedSessionMessageSubscription(
     let attempt = 0;
     while (isCurrent()) {
       try {
+        let run: ReturnType<typeof captureChatHistoryRun>;
+        let observation: InitialChatHistoryReceipt["observation"] | undefined;
+        const admit = () => {
+          if (state.connected && opts?.initialHistory && !observation) {
+            observation = { owner: sessions, reconcile: sessions.captureReconcile() };
+            run = captureChatHistoryRun(state, isCurrent);
+          }
+        };
+        if (opts?.beforeHello) {
+          paneRequests.openingSubscription = { isCurrent, admit };
+          if (!(await openingDispatch) || !isCurrent()) {
+            return null;
+          }
+          paneRequests.initialSnapshotHydration?.adoptReadySnapshot?.();
+        }
+        // Storage can hydrate during connect preparation. Capture its latest cursor
+        // at dispatch, without holding the network behind a slow storage read.
         const cursor = opts?.initialHistory ? readChatHistoryCursor(state) : undefined;
         const requestAgentId = isUiSelectedGlobalSessionKey(state, nextKey)
           ? resolveUiSelectedSessionAgentId(state)
@@ -233,10 +263,7 @@ async function synchronizeSelectedSessionMessageSubscription(
               readChatHistoryState(state, cursor),
             )
           : undefined;
-        const observation = params
-          ? { owner: sessions, reconcile: sessions.captureReconcile() }
-          : undefined;
-        const run = params ? captureChatHistoryRun(state, isCurrent) : undefined;
+        admit();
         // Subscription can start just before the initial history owner claims its version.
         const historyVersion =
           paneRequests.historyVersion +
@@ -246,13 +273,17 @@ async function synchronizeSelectedSessionMessageSubscription(
           agentId: _agentId,
           ...initialHistory
         } = params ?? { sessionKey: nextKey, agentId: requestAgentId };
-        const subscribed = await sessions.subscribeMessages(nextKey, {
-          agentId: nextSubscriptionAgentId ?? undefined,
-          ...(hasOperatorApprovalsAccess(state.hello?.auth ?? null)
-            ? { includeApprovals: true }
-            : {}),
-          ...(params ? { initialHistory } : {}),
-        });
+        const subscribed = await sessions.subscribeMessages(
+          nextKey,
+          {
+            agentId: nextSubscriptionAgentId ?? undefined,
+            ...(state.connected && hasOperatorApprovalsAccess(state.hello?.auth ?? null)
+              ? { includeApprovals: true }
+              : {}),
+            ...(params ? { initialHistory } : {}),
+          },
+          opts?.beforeHello ? { beforeHello: true } : undefined,
+        );
         if (params && observation && subscribed.initialHistory) {
           initialHistoryReceipt = {
             paramsKey: JSON.stringify(params),
@@ -305,6 +336,7 @@ async function synchronizeSelectedSessionMessageSubscription(
   };
   paneRequests.pendingApprovalReplay = approvalReplayOwner;
   state.chatSessionApprovalQueue = [];
+  let upgradingApprovals = false;
   try {
     if (shouldUnsubscribePrevious && previousSubscription) {
       // The capability retains failed releases for cleanup. An old observer
@@ -328,44 +360,81 @@ async function synchronizeSelectedSessionMessageSubscription(
       }
       return false;
     }
-    if (!isCurrent()) {
+    if (!isCurrent() || !state.connected) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
       await sessions.unsubscribeMessages(subscribed).catch((error: unknown) => {
         console.warn("[chat] Failed to release message subscription:", formatUiError(error));
       });
       return false;
     }
-    state.chatSessionMessageSubscriptionRequestedKey = nextKey;
-    state.chatSessionMessageSubscription = subscribed;
+    const adoptSubscription = (subscription: typeof subscribed) => {
+      state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+      state.chatSessionMessageSubscription = subscription;
+      if (subscription.includeApprovals) {
+        const agentId = nextSubscriptionAgentId ?? undefined;
+        recordSessionApprovalReplay(state, subscription.approvalReplay, agentId);
+        let queue = projectSessionApprovalReplay(
+          subscription.approvalReplay,
+          subscription.key,
+          subscription.agentId ?? undefined,
+        );
+        // Events received during acquisition supersede its pending snapshot.
+        for (const event of approvalReplayOwner.events.values()) {
+          queue = reconcileSessionApprovalEvent(queue, event, state.sessionKey, agentId) ?? queue;
+        }
+        state.chatSessionApprovalQueue = queue;
+      } else {
+        state.chatSessionApprovalQueue = [];
+        state.chatSessionApprovalReplay = undefined;
+      }
+    };
+    adoptSubscription(subscribed);
     if (initialHistoryReceipt) {
       paneRequests.initialHistory = initialHistoryReceipt;
     }
-    if (subscribed.includeApprovals) {
-      const agentId = nextSubscriptionAgentId ?? undefined;
-      recordSessionApprovalReplay(state, subscribed.approvalReplay, agentId);
-      let queue = projectSessionApprovalReplay(
-        subscribed.approvalReplay,
-        subscribed.key,
-        subscribed.agentId ?? undefined,
-      );
-      // Ordered live events received during acquisition supersede its pending snapshot.
-      for (const event of approvalReplayOwner.events.values()) {
-        queue = reconcileSessionApprovalEvent(queue, event, state.sessionKey, agentId) ?? queue;
-      }
-      state.chatSessionApprovalQueue = queue;
-    } else {
-      state.chatSessionApprovalQueue = [];
-      state.chatSessionApprovalReplay = undefined;
+    if (
+      opts?.beforeHello &&
+      !subscribed.includeApprovals &&
+      hasOperatorApprovalsAccess(state.hello?.auth ?? null)
+    ) {
+      // Transcript readiness does not wait for the stronger approval capability.
+      upgradingApprovals = true;
+      void sessions
+        .subscribeMessages(nextKey, {
+          agentId: nextSubscriptionAgentId ?? undefined,
+          includeApprovals: true,
+        })
+        .then(async (approvalSubscription) => {
+          if (!isCurrent() || !state.connected) {
+            await sessions.unsubscribeMessages(approvalSubscription);
+            return;
+          }
+          adoptSubscription(approvalSubscription);
+          await sessions.unsubscribeMessages(subscribed);
+        })
+        .catch((error: unknown) => {
+          if (isCurrent()) {
+            publishError(error);
+          }
+        })
+        .finally(() => {
+          if (paneRequests.pendingApprovalReplay === approvalReplayOwner) {
+            paneRequests.pendingApprovalReplay = undefined;
+          }
+        });
     }
     clearRecoveredError();
     return true;
   } catch (err) {
-    if (isCurrent()) {
+    if (isCurrent() && state.connected) {
       publishError(err);
     }
     return false;
   } finally {
-    if (paneRequests.pendingApprovalReplay === approvalReplayOwner) {
+    if (paneRequests.openingSubscription?.isCurrent === isCurrent) {
+      delete paneRequests.openingSubscription;
+    }
+    if (!upgradingApprovals && paneRequests.pendingApprovalReplay === approvalReplayOwner) {
       paneRequests.pendingApprovalReplay = undefined;
     }
   }

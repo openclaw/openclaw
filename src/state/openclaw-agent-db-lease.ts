@@ -132,7 +132,7 @@ export type OpenClawAgentIntegrityVerificationReceiver = (
   canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
   because?: string,
-  liveOwnerAdmitted?: boolean,
+  liveOwnerProvenance?: string,
 ) => void;
 
 export function claimOpenClawAgentDatabaseLease(
@@ -195,7 +195,7 @@ function claimAgentDatabaseLeaseInDatabase(
   assertAgentDeletionPathFence(database, deletionFence);
   let invalidated = false;
   let hasOtherOwner = false;
-  let liveOwnerAdmitted = false;
+  let liveOwnerProvenance: string | undefined;
   let processDeathRefusal: string | undefined;
   const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
   for (const held of readAgentDatabaseLeases(database.db)) {
@@ -229,20 +229,26 @@ function claimAgentDatabaseLeaseInDatabase(
         held.owner_start_time !== owner.ownerStartTime)
     ) {
       hasOtherOwner = true;
-      // A live peer that finished admitting this exact path already verified the file; another
+      // A live peer that finished admitting this same physical file already verified it; another
       // process rescanning it adds no protection and costs a full integrity_check per open.
-      liveOwnerAdmitted ||=
+      // Provenance binds boot, PID namespace, build and file inode, so a replaced path never borrows.
+      if (
         held.path === owner.path &&
+        held.provenance !== null &&
+        held.provenance === owner.provenance &&
         held.opened_at > 0 &&
         held.owner_start_time !== null &&
-        getFileLockProcessStartTime(held.owner_pid) === held.owner_start_time;
+        getFileLockProcessStartTime(held.owner_pid) === held.owner_start_time
+      ) {
+        liveOwnerProvenance = held.provenance;
+      }
     }
   }
   onVerification?.(
     !hasOtherOwner,
     invalidated,
     processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),
-    liveOwnerAdmitted,
+    liveOwnerProvenance,
   );
   executeSqliteQuerySync(
     database.db,
@@ -271,18 +277,25 @@ export function releaseOpenClawAgentDatabaseLease(
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
       database,
-      db
-        .selectFrom("agent_database_leases")
-        .select(["path", "agent_id"])
-        .where("lease_id", "=", leaseId),
+      closeOutcome === undefined
+        ? db
+            .selectFrom("agent_database_leases")
+            .select(["path", "agent_id"])
+            .where("lease_id", "=", leaseId)
+        : db
+            .deleteFrom("agent_database_leases")
+            .where("lease_id", "=", leaseId)
+            .returning(["path", "agent_id"]),
     );
-    if (held && !closeOutcome) {
-      clearAgentDatabaseLeaseVerifications(database, held.path);
+    if (closeOutcome === undefined) {
+      if (held) {
+        clearAgentDatabaseLeaseVerifications(database, held.path);
+      }
+      executeSqliteQuerySync(
+        database,
+        db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
+      );
     }
-    executeSqliteQuerySync(
-      database,
-      db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
-    );
     let receipt: string;
     if (!held) {
       receipt = "lease-not-held";

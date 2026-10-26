@@ -29,46 +29,18 @@ import {
   normalizeDocsRootHref,
   isControlUiRoutePath,
 } from "./markdown-sanitizer.ts";
-import {
-  hasStreamingMarkdownHtml,
-  repairStreamingMarkdownTail,
-  splitStableStreamingMarkdown,
-  streamingMarkdownStableHtml,
-  streamingMarkdownState,
-} from "./markdown-streaming.ts";
+import { streamingMarkdownStableHtml } from "./markdown-streaming-state.ts";
 import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
-import { renderMarkdownTokens } from "./markdown-tokens.ts";
 
-const MARKDOWN_CHAR_LIMIT = 140_000;
+export const MARKDOWN_CHAR_LIMIT = 140_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
 const MARKDOWN_CACHE_LIMIT = 500;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
-const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
+export const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
-function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
-  const source = stripUnsupportedCitationControlMarkers(markdownLocal);
-  const state = streamingMarkdownState(streamKey);
-  const cached = state?.input;
-  let normalized: string;
-  if (cached && source.startsWith(cached.source)) {
-    const appended = source.slice(cached.source.length);
-    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
-    normalized =
-      cached.source.endsWith("\r") && appended.startsWith("\n")
-        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
-        : `${cached.normalized}${normalizedAppend}`;
-  } else {
-    normalized = normalizeMarkdownLineBreaks(source);
-  }
-  if (state) {
-    state.input = source.length <= MARKDOWN_CHAR_LIMIT ? { source, normalized } : undefined;
-  }
-  return normalized;
-}
-
-function appendMarkdownTruncationNotice(truncated: {
+export function appendMarkdownTruncationNotice(truncated: {
   text: string;
   truncated: boolean;
   total: number;
@@ -168,11 +140,12 @@ const markdownParser = createMarkdownParser();
 // Uncached render core shared by the static and streaming paths. The streaming
 // tail changes on every delta, so routing it through here (instead of the cached
 // wrapper) keeps per-message churn out of the LRU cache.
-function renderSanitizedMarkdown(
+// The live entry supplies token rendering so settled history does not load it.
+export function renderSanitizedMarkdown(
   renderInput: string,
   renderOptions: MarkdownRenderEnv,
   blockArt?: boolean,
-  direct = false,
+  renderTokens?: typeof import("./markdown-tokens.ts").renderMarkdownTokens,
 ): MarkdownContent {
   const sanitizer = markdownSanitizer(decorateMarkdownAnchor, renderOptions.progressBars);
   const documentMode = renderOptions.mode === "document";
@@ -195,14 +168,9 @@ function renderSanitizedMarkdown(
   }
   let rendered: string | HTMLDivElement;
   try {
-    if (direct) {
+    if (renderTokens) {
       const tokens = markdownParser.parse(input, renderOptions);
-      const fragment = renderMarkdownTokens(
-        tokens,
-        renderOptions,
-        sanitizer,
-        decorateMarkdownAnchor,
-      );
+      const fragment = renderTokens(tokens, renderOptions, sanitizer, decorateMarkdownAnchor);
       if (fragment) {
         const template = document.createElement("template");
         template.content.append(fragment);
@@ -275,7 +243,7 @@ export function toSanitizedMarkdownHtml(
   return cached.html;
 }
 
-function markdownRenderKey(options: MarkdownRenderEnv): string {
+export function markdownRenderKey(options: MarkdownRenderEnv): string {
   return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
 }
 
@@ -294,96 +262,4 @@ export function partitionMarkdownHtml(html: string, streamKey?: string): [string
   const previous = streamingMarkdownStableHtml(streamKey);
   const stable = html.startsWith(previous) ? previous : "";
   return [stable, html.slice(stable.length)];
-}
-
-export function toStreamingMarkdownDomParts(
-  markdownLocal: string,
-  options: MarkdownRenderOptions = {},
-  streamKey?: string,
-): [MarkdownContent, MarkdownContent] {
-  const renderOptions = normalizeMarkdownRenderOptions(options);
-  // Explicit selections are complete user input, not incremental assistant text.
-  if (renderOptions.humanMentions.length) {
-    return partitionMarkdownHtml(toSanitizedMarkdownHtml(markdownLocal, options), streamKey);
-  }
-  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
-  if (isMarkdownBlockArtText(rawInput)) {
-    return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
-  }
-
-  if (!rawInput.trim()) {
-    return ["", ""];
-  }
-  const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
-  const input = appendMarkdownTruncationNotice(truncated);
-
-  const { boundary: candidateBoundary, tailRepairStart } = splitStableStreamingMarkdown(
-    input,
-    streamKey,
-    truncated.text.length,
-  );
-  let boundary = candidateBoundary;
-  const stableMarkdown = input.slice(0, boundary);
-  let streamingTail = input.slice(boundary);
-  const state = streamingMarkdownState(streamKey);
-  const previous = state?.rendered;
-  const renderKey = markdownRenderKey(renderOptions);
-  const append = previous && stableMarkdown.startsWith(previous.markdown);
-  // Literal code cannot acquire HTML ownership after its block is complete.
-  const hasHtml = append
-    ? previous.hasHtml || hasStreamingMarkdownHtml(stableMarkdown.slice(previous.markdown.length))
-    : hasStreamingMarkdownHtml(stableMarkdown);
-  // Containers and block-art classification can outlive a completed boundary.
-  // The message parse guard also keeps applying to the complete prefix.
-  const incremental =
-    previous?.options === renderKey &&
-    append &&
-    (previous.markdown === stableMarkdown ||
-      (previous.markdown.endsWith("\n") &&
-        !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
-        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
-        !hasHtml &&
-        !isMarkdownBlockArtText(stableMarkdown) &&
-        !previous.html.includes('class="markdown-block-art"') &&
-        (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
-  let stableHtml = incremental ? previous.html : "";
-  const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
-  if (stableAppend) {
-    const appendedHtml = markdownContentHtml(
-      renderSanitizedMarkdown(stableAppend, { ...renderOptions }),
-    );
-    // File-label collisions and standalone block art depend on the whole prefix.
-    stableHtml =
-      (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
-      (renderOptions.fileLinks &&
-        stableHtml.includes('class="markdown-file-link"') &&
-        appendedHtml.includes('class="markdown-file-link"'))
-        ? markdownContentHtml(renderSanitizedMarkdown(stableMarkdown, { ...renderOptions }))
-        : stableHtml + appendedHtml;
-  }
-  if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
-    // Keep provisional code in the mutable tail so highlighting can arrive
-    // before its DOM is promoted to stable content, preserving reader controls.
-    const retained = previous?.options === renderKey && append ? previous : undefined;
-    boundary = retained?.markdown.length ?? 0;
-    stableHtml = retained?.html ?? "";
-    streamingTail = input.slice(boundary);
-  } else if (state) {
-    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
-  }
-  if (!streamingTail.trim()) {
-    return [stableHtml, ""];
-  }
-  // Only the live tail uses direct construction; settled messages and the
-  // completed prefix retain the bulk HTML + DOMPurify path.
-  // The whole input was classified above; an isolated tail is not block art.
-  const tailHtml = renderSanitizedMarkdown(
-    tailRepairStart === null
-      ? streamingTail
-      : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
-    false,
-    true,
-  );
-  return [stableHtml, tailHtml];
 }

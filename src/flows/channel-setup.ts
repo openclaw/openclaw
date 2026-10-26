@@ -34,7 +34,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -220,7 +220,7 @@ export async function setupChannels(
   };
   const setupCache = getPluginCache();
   const enableChannelPluginForSetup = async (channel: ChannelChoice): Promise<boolean> => {
-    const outcome = await withPluginLifecycleLease({}, async () => {
+    const outcome = await withPluginLifecycleLeaseAsync({}, async () => {
       const result = await enablePluginWithCapabilityConsent(next, channel, {
         workspaceDir: resolveWorkspaceDir(),
         onCapabilityConsent: createPluginCapabilityConsentPrompter(
@@ -630,7 +630,7 @@ export async function setupChannels(
     channel: ChannelChoice,
     install: Parameters<typeof runPluginInstallWithNavigation>[0]["install"],
   ) =>
-    await withPluginLifecycleLease({}, async () => {
+    await withPluginLifecycleLeaseAsync({}, async () => {
       const outcome = await runPluginInstallWithNavigation({ install, prompter, options });
       if (outcome.status !== "back" && outcome.value.installed) {
         next = outcome.value.cfg;

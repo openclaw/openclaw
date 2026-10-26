@@ -255,11 +255,13 @@ out of order, so owners requiring serial completion must use a serial class.
 This policy adds no operator configuration or storage migration.
 
 Pools can set `burstIdleTimeoutMs` to retire workers beyond their first usable slot
-sooner than `idleTimeoutMs`. Retiring these surplus workers does not extend the
-first worker's adaptive warm window. Image processing uses at most two workers
+sooner than `idleTimeoutMs`. If demand returns within five minutes of a surplus
+idle retirement, one replacement can remain idle for three times `burstIdleTimeoutMs`.
+It still retires after that idle window, without extending the first worker's
+adaptive warm window. Image processing uses at most two workers
 under shared compute admission and retires surplus capacity after five idle
-seconds. Control UI file reads use their own bounded two-worker pool so shared
-compute contention cannot block asset reads.
+seconds, or fifteen seconds for a recurring burst. Control UI file reads use their
+own bounded two-worker pool so shared compute contention cannot block asset reads.
 
 `prepareWorker()` can return `temporaryDirectory` for disposable scratch files
 and an optional asynchronous `releaseResources()` callback for producer-owned

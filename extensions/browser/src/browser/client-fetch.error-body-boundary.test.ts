@@ -1,25 +1,7 @@
 import http from "node:http";
+import "./client-fetch.auth.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
-
-const authMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
-  resolveBrowserControlAuth: vi.fn(() => ({})),
-  getBridgeAuthForPort: vi.fn(() => undefined),
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return { ...actual, readRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
-});
-vi.mock("./control-auth.js", () => ({
-  resolveBrowserControlAuth: authMocks.resolveBrowserControlAuth,
-}));
-vi.mock("./bridge-auth-registry.js", () => ({
-  getBridgeAuthForPort: authMocks.getBridgeAuthForPort,
-}));
 
 const { fetchBrowserJson } = await import("./client-fetch.js");
 

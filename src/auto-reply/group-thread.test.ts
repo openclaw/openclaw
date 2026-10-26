@@ -27,14 +27,11 @@ vi.mock("./reply/dispatch-from-config.js", () => ({
   },
 }));
 
-const replyHooks = vi.hoisted(() => {
-  const state: {
-    enabled: boolean;
-    events: PluginHookReplyPayloadSendingEvent[];
-    rewriteText?: string;
-  } = { enabled: false, events: [] };
-  return state;
-});
+const replyHooks = vi.hoisted<{
+  enabled: boolean;
+  events: PluginHookReplyPayloadSendingEvent[];
+  rewriteText?: string;
+}>(() => ({ enabled: false, events: [] }));
 afterEach(() => {
   replyHooks.enabled = false;
   replyHooks.rewriteText = undefined;
@@ -66,6 +63,34 @@ function config(entry: NonNullable<Config["broadcast"]>[string] = ["alice", "bob
 }
 
 const continuationConfig = () => config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 });
+const routedSession = "agent:routed:telegram:group:-100123";
+const acpSession = "agent:routed:acp:bound";
+
+function bindAcpConversation() {
+  const binding: bindings.SessionBindingRecord = {
+    bindingId: "group-thread-acp-binding",
+    targetSessionKey: acpSession,
+    targetKind: "session",
+    conversation: { channel: "telegram", accountId: "default", conversationId: "-100123" },
+    status: "active",
+    boundAt: 1,
+  };
+  const adapter: bindings.SessionBindingAdapter = {
+    channel: "telegram",
+    accountId: "default",
+    listBySession: (key) => (key === acpSession ? [binding] : []),
+    resolveByConversation: (ref) => (ref.conversationId === "-100123" ? binding : null),
+  };
+  bindings.registerSessionBindingAdapter(adapter);
+  return {
+    [Symbol.dispose]: () =>
+      bindings.unregisterSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        adapter,
+      }),
+  };
+}
 
 function dispatch(
   params: {
@@ -109,7 +134,7 @@ function dispatch(
       CommandBody: text,
       CommandSource: "text",
       ChatType: "group",
-      SessionKey: "agent:routed:telegram:group:-100123",
+      SessionKey: routedSession,
       AgentId: "routed",
       Provider: "telegram",
       Surface: "telegram",
@@ -248,9 +273,7 @@ describe("agent group thread dispatch", () => {
             : `telegram:${accountId}:direct:${peerId}:thread:${peerId}:7`;
         const run = await completed(
           kind === "group"
-            ? {
-                context: { AccountId: accountId, MessageThreadId: peerId },
-              }
+            ? { context: { AccountId: accountId, MessageThreadId: peerId } }
             : {
                 cfg: { agents: roster, broadcast: { [`telegram:${peerId}`]: ["alice", "bob"] } },
                 context: {
@@ -418,60 +441,24 @@ describe("agent group thread dispatch", () => {
     expect(first.turns).toHaveLength(2);
   });
 
-  it.each(["session", "native command", "conversation binding"])(
-    "keeps an ACP %s exclusive",
-    async (source) => {
-      const targetSessionKey = "agent:routed:acp:bound";
-      const binding: bindings.SessionBindingRecord = {
-        bindingId: "group-thread-acp-binding",
-        targetSessionKey,
-        targetKind: "session",
-        conversation: { channel: "telegram", accountId: "default", conversationId: "-100123" },
-        status: "active",
-        boundAt: 1,
-      };
-      const adapter: bindings.SessionBindingAdapter = {
-        channel: "telegram",
-        accountId: "default",
-        listBySession: (key) => (key === targetSessionKey ? [binding] : []),
-        resolveByConversation: (ref) => (ref.conversationId === "-100123" ? binding : null),
-      };
-      if (source === "conversation binding") {
-        bindings.registerSessionBindingAdapter(adapter);
-      }
-      try {
-        const context: Partial<MsgContext> =
-          source === "session"
-            ? { SessionKey: targetSessionKey }
-            : source === "native command"
-              ? {
-                  CommandSource: "native",
-                  CommandTargetSessionKey: targetSessionKey,
-                  CommandBody: "/status",
-                }
-              : {};
-        const run = await completed({ context });
-        expect(run.turns).toHaveLength(1);
-        const dispatched = expectDefined(run.turns[0], "expected exclusive ACP dispatch");
-        expect(dispatched.ctx.AgentId).toBe("routed");
-        expect(dispatched.ctx.SessionKey).toBe(
-          context.SessionKey ?? "agent:routed:telegram:group:-100123",
-        );
-        if (source === "native command") {
-          expect(dispatched.ctx.CommandTargetSessionKey).toBe(targetSessionKey);
-        }
-        expect(expectDefined(run.delivered[0], "expected ACP reply").participant).toBeUndefined();
-      } finally {
-        if (source === "conversation binding") {
-          bindings.unregisterSessionBindingAdapter({
-            channel: "telegram",
-            accountId: "default",
-            adapter,
-          });
-        }
-      }
-    },
-  );
+  it.each<[string, Partial<MsgContext>]>([
+    ["session", { SessionKey: acpSession }],
+    [
+      "native command",
+      { CommandSource: "native", CommandTargetSessionKey: acpSession, CommandBody: "/status" },
+    ],
+    ["conversation binding", {}],
+  ])("keeps an ACP %s exclusive", async (source, context) => {
+    using _ = source === "conversation binding" ? bindAcpConversation() : undefined;
+    const run = await completed({ context });
+    expect(run.turns).toHaveLength(1);
+    expect(run.turns[0]?.ctx).toMatchObject({
+      AgentId: "routed",
+      SessionKey: context.SessionKey ?? routedSession,
+      ...(source === "native command" ? { CommandTargetSessionKey: acpSession } : {}),
+    });
+    expect(expectDefined(run.delivered[0], "expected ACP reply").participant).toBeUndefined();
+  });
 
   it("attributes parallel reply hooks to each participant's own run and session", async () => {
     replyHooks.enabled = true;

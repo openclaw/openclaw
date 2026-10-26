@@ -512,12 +512,9 @@ describe("managed npm root", () => {
     });
 
     const runCommand = vi.fn(async () => ({
+      ...successfulSpawn,
       code: 1,
-      stdout: "",
       stderr: "npm ERR! network request failed",
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
     }));
 
     await expect(
@@ -552,12 +549,9 @@ describe("managed npm root", () => {
     const runCommand = peerPlan(async (cwd) => {
       if (runCommand.mock.calls.length === 1) {
         return {
+          ...successfulSpawn,
           code: 1,
-          stdout: "",
           stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
         };
       }
       await writeFixtureJson(path.join(cwd, "package-lock.json"), {

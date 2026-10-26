@@ -150,12 +150,7 @@ export const pluginRuntimeOperations = {
       );
     } catch (error) {
       if (error instanceof DeferredPluginMigrationConflictError) {
-        return {
-          kind: "conflict" as const,
-          pending: error.pending,
-          expected: error.expected,
-          phase: error.phase,
-        };
+        return { kind: "conflict" as const, pending: error.pending };
       }
       if (error instanceof ZodError) {
         return { kind: "invalid" as const, issues: error.issues };

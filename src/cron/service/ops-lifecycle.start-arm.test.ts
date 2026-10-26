@@ -5,8 +5,8 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import type { GatewayCronState } from "../../gateway/server-cron-contract.js";
 import { createLazyGatewayCronState } from "../../gateway/server-cron-lazy.js";
-import type { GatewayCronState } from "../../gateway/server-cron.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,

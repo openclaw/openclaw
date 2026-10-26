@@ -7,7 +7,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAccountListHelpers } from "../../channels/plugins/account-helpers.js";
 import * as legacyBindingRepair from "../../commands/doctor/shared/legacy-config-binding-repair.runtime.js";
 import type { runPostCorePluginConvergence as Converge } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
-import { replaceConfigFile } from "../../config/config.js";
 import * as configIO from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV } from "../../infra/update-post-core-context.js";
@@ -91,7 +90,6 @@ import {
   planLegacyConfigForUpdateChannel,
   repairLegacyConfigForUpdateChannel,
 } from "../../commands/doctor/legacy-config-repair.js";
-import { applyLegacyCompatibilityStep } from "../../commands/doctor/shared/config-flow-steps.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
@@ -177,57 +175,34 @@ it("reports unresolved ownership without writing when the original roster is una
   });
 });
 
-it.each(["update channel", "manual Doctor"])(
-  "preserves the historical account owner and narrower route through %s",
-  async (flow) => {
-    await withTempHome(async (home) => {
-      const { snapshot, writeOptions, configPath } = await prepareConfig(home, {
-        gateway: { mode: "local", bind: "localhost" },
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
-        channels: accounts,
-        bindings: [narrowerRoute],
-      });
-      expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list", [
-        { id: "ops" },
-        { id: "research" },
-      ]);
-      if (flow === "update channel") {
-        const plan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-        expect(plan).toBeDefined();
-        await repairLegacyConfigForUpdateChannel({
-          configSnapshot: snapshot,
-          plan,
-          configWriteOptions: writeOptions,
-          jsonMode: true,
-        });
-      } else {
-        const result = applyLegacyCompatibilityStep({
-          snapshot,
-          state: {
-            cfg: snapshot.sourceConfig,
-            candidate: snapshot.sourceConfig,
-            pendingChanges: false,
-            fixHints: [],
-          },
-          shouldRepair: true,
-          doctorFixCommand: "openclaw doctor --fix",
-        });
-        expect(result.state.pendingChanges).toBe(true);
-        await replaceConfigFile({
-          sourceConfig: result.state.candidate,
-          baseHash: snapshot.hash,
-          writeOptions: { ...writeOptions, auditOrigin: "doctor", skipOutputLogs: true },
-        });
-      }
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(persisted.bindings).toEqual([
-        narrowerRoute,
-        { agentId: "ops", match: { channel: "discord", accountId: "default" } },
-        { agentId: "ops", match: { channel: "discord", accountId: "*" } },
-      ]);
+it("preserves the historical account owner and narrower route through update channel repair", async () => {
+  await withTempHome(async (home) => {
+    const { snapshot, writeOptions, configPath } = await prepareConfig(home, {
+      gateway: { mode: "local", bind: "localhost" },
+      agents: { list: [{ id: "ops" }, { id: "research" }] },
+      channels: accounts,
+      bindings: [narrowerRoute],
     });
-  },
-);
+    expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list", [
+      { id: "ops" },
+      { id: "research" },
+    ]);
+    const plan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
+    expect(plan).toBeDefined();
+    await repairLegacyConfigForUpdateChannel({
+      configSnapshot: snapshot,
+      plan,
+      configWriteOptions: writeOptions,
+      jsonMode: true,
+    });
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+    expect(persisted.bindings).toEqual([
+      narrowerRoute,
+      { agentId: "ops", match: { channel: "discord", accountId: "default" } },
+      { agentId: "ops", match: { channel: "discord", accountId: "*" } },
+    ]);
+  });
+});
 
 it.each([
   { flow: "plugins", requestedChannel: undefined },

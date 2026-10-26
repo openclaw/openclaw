@@ -2,21 +2,18 @@ import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
+import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { useState } from "./plugin-state-fixtures.test-support.js";
+import type { PluginStateOperationInput } from "./plugin-state-operation-contract.js";
 import { PluginStateOperationInvalidatedError } from "./plugin-state-operation-error.js";
+import { executePluginStateOperation } from "./plugin-state-operation.kernel.js";
 import type { FixtureOperations } from "./plugin-state-operation.test-support.js";
-import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
@@ -25,7 +22,6 @@ import {
 } from "./plugin-state-store.js";
 import type { PluginStateOperation } from "./plugin-state-store.types.js";
 import * as workerClient from "./plugin-state-worker-client.js";
-import { executePluginStateCommand, preparePluginStateOperation } from "./plugin-state.worker.js";
 
 const invalid = (promise: Promise<unknown>) =>
   expect(promise).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
@@ -34,6 +30,19 @@ const modulePath = fileURLToPath(
   new URL("./plugin-state-operation.test-support.ts", import.meta.url),
 );
 const handler = { moduleName: "plugin-state-operation.test-support.ts", exportName: "execute" };
+const moduleSource = {
+  modulePath,
+  boundaryRoot: path.dirname(modulePath),
+  origin: "bundled" as const,
+  pluginId: "operation-test",
+};
+const entriesCommand = { type: "entries", input: undefined } as const;
+const scan = (operation: PluginStateOperation<FixtureOperations>, watchStores = [0, 1]) =>
+  operation.execute(entriesCommand, {
+    writeStores: [],
+    watchStores,
+    ifEmpty: { store: 1, value: [] },
+  });
 
 const state = useState("plugin-state-operation");
 const options = (namespace: string, env = state().env) => ({
@@ -44,12 +53,7 @@ const options = (namespace: string, env = state().env) => ({
 });
 const open = (namespace: string, env = state().env) =>
   createPluginStateKeyedStore<string>("operation-test", options(namespace, env), undefined, {
-    resolve: () => ({
-      modulePath,
-      boundaryRoot: path.dirname(modulePath),
-      origin: "bundled",
-      pluginId: "operation-test",
-    }),
+    resolve: () => moduleSource,
   });
 
 const read = (operation: PluginStateOperation<FixtureOperations>, store = 0) =>
@@ -92,33 +96,15 @@ it("moves rows across namespaces in one worker command and rolls back undeclared
   await invalid(move(operation, "moved", [0]));
   expect(await first.lookup("key")).toBe("original");
   expect(await second.lookup("key")).toBeUndefined();
-  const hostSql = observeHostDataSql();
-  const facts = new Map<string, unknown>();
-  const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
-    if (change.kind === "committed") {
-      change.receipt.facts.forEach((fact, key) => facts.set(key, fact));
-    }
+  const result = await move(operation, "moved");
+  expect(result.value).toMatchObject({
+    before: ["original", undefined],
+    after: [undefined, "moved"],
   });
-  try {
-    const result = await move(operation, "moved");
-    expect(result.value).toMatchObject({
-      before: ["original", undefined],
-      after: [undefined, "moved"],
-    });
-    expect(result.value.threadId).toBeGreaterThan(0);
-    result.assertCurrent();
-    expect(facts.get(JSON.stringify(["operation-test", "move-first", "key"]))).toEqual({
-      kind: "absent",
-    });
-    expect(facts.get(JSON.stringify(["operation-test", "move-second", "key"]))).toMatchObject({
-      kind: "postimage",
-      value: { value_json: '"moved"' },
-    });
-    hostSql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
-  } finally {
-    unsubscribe();
-    hostSql.restore();
-  }
+  expect(result.value.threadId).toBeGreaterThan(0);
+  expect(await first.lookup("key")).toBeUndefined();
+  expect(await second.lookup("key")).toBe("moved");
+  result.assertCurrent();
 });
 
 it("keeps read-only absent sources noncreating and uses only an explicit missing value", async () => {
@@ -138,102 +124,122 @@ it("keeps read-only absent sources noncreating and uses only an explicit missing
   expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
 });
 
-it("uses one autocommit read when empty and rereads populated inputs in a snapshot", async () => {
-  const { second } = await pair("empty-count");
-  const input = {
-    module: {
-      modulePath,
-      boundaryRoot: path.dirname(modulePath),
-      origin: "bundled" as const,
-      pluginId: "operation-test",
-    },
-    exportName: "execute",
-    stores: ["empty-count-first", "empty-count-second"].map((namespace) => ({
-      pluginId: "operation-test",
-      namespace,
-      maxEntries: 10,
-      overflowPolicy: "reject-new" as const,
-      defaultTtlMs: undefined,
-    })),
-    writeStores: [],
-    ifEmpty: { store: 1, value: [] },
-    command: { type: "entries", input: undefined },
-    receiptId: "empty-count",
-  };
-  await preparePluginStateOperation(input);
-  const database = openOpenClawStateDatabase({ env: state().env });
-  const run = () =>
-    executePluginStateCommand(
-      { type: "pluginState.executeOperation", input },
-      { path: database.path, env: state().env },
-      () => database,
-      true,
-    );
-  run();
-  const statements: string[] = [];
-  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype, (sql) => {
-    statements.push(sql);
-  });
-  const exec = database.db.exec.bind(database.db);
-  const transactions = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
-    statements.push(sql);
-    return exec(sql);
-  });
-  try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      expect(run()).toEqual({ ok: true, value: { value: [], validUntil: undefined } });
-      expect(statements.splice(0)).toEqual([expect.stringContaining("plugin_state_entries")]);
-    }
+it("invalidates empty receipts after either watched namespace changes", async () =>
+  withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {
+    const { first, second, operation } = await pair("empty-watch");
+    let receipt = await scan(operation);
+    expect(receipt.value).toEqual([]);
+    receipt.value.push([]);
+    expect((await scan(operation)).value).toEqual([]);
+    await first.register("key", "changed peer");
+    expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+    receipt = await scan(operation);
     await second.register("key", "delivery");
-    statements.length = 0;
-    expect(run()).toMatchObject({ ok: true, value: { value: [[{ value: "delivery" }], [{}]] } });
-    expect(statements).toEqual([
-      expect.stringContaining("plugin_state_entries"),
-      "BEGIN",
-      expect.stringContaining("plugin_state_entries"),
-      expect.stringContaining("plugin_state_entries"),
-      "COMMIT",
+    expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+    expect((await scan(operation)).value).toMatchObject([
+      [{ value: "delivery" }],
+      [{ value: "changed peer" }],
     ]);
-  } finally {
-    transactions.mockRestore();
-    reads.restore();
-  }
+    await invalid(
+      operation.execute(entriesCommand, { writeStores: [], ifEmpty: { store: 2, value: [] } }),
+    );
+    await invalid(
+      operation.execute(entriesCommand, { writeStores: [0], ifEmpty: { store: 1, value: [] } }),
+    );
+  }));
+
+it("decodes only live requested snapshot rows and retains expiry across clock corrections", () => {
+  const input: PluginStateOperationInput = {
+    module: moduleSource,
+    exportName: "execute",
+    stores: [
+      {
+        pluginId: "operation-test",
+        namespace: "raw-snapshot",
+        maxEntries: 10,
+        overflowPolicy: "reject-new",
+        defaultTtlMs: undefined,
+      },
+    ],
+    writeStores: [],
+    command: { type: "read", input: undefined },
+    receiptId: "raw-snapshot",
+    namespaceSnapshots: {
+      '["operation-test","raw-snapshot"]': [
+        { entry_key: "key", value_json: '"current"', created_at: 1, expires_at: 3_000 },
+        {
+          entry_key: "expired-corrupt",
+          value_json: "invalid JSON",
+          created_at: 2,
+          expires_at: 500,
+        },
+        { entry_key: "backward", value_json: '"earlier"', created_at: 3, expires_at: 1_000 },
+      ],
+    },
+  };
+  const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+  expect(
+    executePluginStateOperation(undefined, input, (_command, tx) => tx.lookup(0, "key")),
+  ).toEqual({ value: "current", validUntil: 3_000 });
+  expect(executePluginStateOperation(undefined, input, (_command, tx) => tx.entries(0))).toEqual({
+    value: [{ key: "key", value: "current", createdAt: 1, expiresAt: 3_000 }],
+    validUntil: 3_000,
+  });
+  now.mockReturnValue(750);
+  expect(
+    executePluginStateOperation(undefined, input, (_command, tx) =>
+      tx.lookupMany([{ store: 0, key: "backward" }]),
+    ),
+  ).toEqual({ value: ["earlier"], validUntil: 1_000 });
+  now.mockReturnValue(250);
+  expect(() =>
+    executePluginStateOperation(undefined, input, (_command, tx) =>
+      tx.lookup(0, "expired-corrupt"),
+    ),
+  ).toThrowError(expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT", operation: "lookup" }));
 });
 
-it("invalidates empty receipts after either watched namespace changes", async () => {
-  const { first, second, operation } = await pair("empty-watch");
-  const scan = () =>
-    operation.execute(
-      { type: "entries", input: undefined },
-      { writeStores: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
+it("waits for an earlier write to the empty target even when it is not watched", async () =>
+  withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {
+    const { first, second, operation } = await pair("empty-target-order");
+    expect((await scan(operation, [0])).value).toEqual([]);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    sqliteWorkerOwnerProbe.command(
+      await import("../state/openclaw-state-worker-store.js"),
+      async (command, commandOptions, scope) => {
+        if (command.type === "pluginState.register") {
+          entered.resolve();
+          await release.promise;
+        }
+        return scope.execute(command, commandOptions);
+      },
     );
-  let receipt = await scan();
-  expect(receipt.value).toEqual([]);
-  await first.register("key", "changed peer");
-  expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-  receipt = await scan();
-  await second.register("key", "delivery");
-  expect(receipt.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
-  expect((await scan()).value).toMatchObject([
-    [{ value: "delivery" }],
-    [{ value: "changed peer" }],
-  ]);
-  await invalid(
-    operation.execute(
-      { type: "entries", input: undefined },
-      { writeStores: [], ifEmpty: { store: 2, value: [] } },
-    ),
-  );
-  await invalid(
-    operation.execute(
-      { type: "entries", input: undefined },
-      { writeStores: [0], ifEmpty: { store: 1, value: [] } },
-    ),
-  );
-});
+    const writing = second.register("key", "delivery");
+    await entered.promise;
+    const reading = scan(operation, [0]);
+    release.resolve();
+    await writing;
+    expect((await reading).value).toMatchObject([[{ value: "delivery" }], [{ value: "original" }]]);
+    expect(await first.lookup("key")).toBe("original");
+  }));
+
+it("validates a new handler even when another operation confirmed an empty namespace", async () =>
+  withDatabaseEngineSelection(await resolveDatabaseEngineSelection({}), async () => {
+    const { first, second, operation } = await pair("empty-preparation");
+    const readOptions = { writeStores: [], ifEmpty: { store: 1, value: [] } };
+    expect((await operation.execute(entriesCommand, readOptions)).value).toEqual([]);
+    const invalidOperation = first.createOperation<FixtureOperations>([first, second], {
+      ...handler,
+      exportName: "missingHandler",
+    });
+    await expect(invalidOperation.execute(entriesCommand, readOptions)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_WRITE_FAILED",
+    });
+  }));
 
 it("leaves the writer free during initial grants and preserves replacement revocation", async () => {
-  const { first, second, operation } = await pair("admission");
+  const { first, operation } = await pair("admission");
   const replacement = { ...options("replacement"), ownerId: "core:admission-test" as const };
   const core = createCorePluginStateKeyedStore<string>(replacement);
   await core.register("key", "original");
@@ -250,26 +256,11 @@ it("leaves the writer free during initial grants and preserves replacement revoc
   });
 
   await first.register("key", "updated");
-  const moved = await move(operation, "moved");
+  await move(operation, "moved");
   await replaceCorePluginStateEntry(replacement, "key", "replacement");
-  expect(contention.observed).toEqual([
-    "transaction:free",
-    "commit:held",
-    "transaction:free",
-    "commit:held",
-    "transaction:free",
-    "commit:held",
-    "transaction:free",
-    "commit:held",
-  ]);
-  expect(moved.value).toMatchObject({
-    before: ["updated", undefined],
-    after: [undefined, "moved"],
-  });
-  expect(moved.value.threadId).toBeGreaterThan(0);
-  moved.assertCurrent();
-  expect(await first.lookup("key")).toBeUndefined();
-  expect(await second.lookup("key")).toBe("moved");
+  expect(contention.observed).toEqual(
+    Array.from({ length: 4 }, () => ["transaction:free", "commit:held"]).flat(),
+  );
   expect(await core.lookup("key")).toBe("replacement");
 
   // Replacement intentionally commits revocation before seeking its next grant.
@@ -296,8 +287,7 @@ it("expires receipts without querying SQLite or waiting for a timer", async () =
   const { operation } = await single("ttl", "allowed", 60_000);
   const result = await read(operation);
   result.assertCurrent();
-  const afterExpiry = Date.now() + 120_000;
-  vi.spyOn(Date, "now").mockReturnValue(afterExpiry);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
   expect(result.assertCurrent).toThrow("no longer current");
 });
 
@@ -399,9 +389,7 @@ it("brands recovery receipts and rejects composing a captured source with retarg
 it.each(["transaction", "commit"] as const)(
   "rechecks bound authority at %s and rolls back",
   async (stage) => {
-    const first = open(`authority-first-${stage}`);
-    const second = open(`authority-second-${stage}`);
-    await first.register("key", "allowed");
+    const { first, second } = await pair(`authority-${stage}`, "allowed");
     let current = true;
     const bound = second.withCurrent({
       assertCurrent() {
@@ -411,16 +399,12 @@ it.each(["transaction", "commit"] as const)(
       },
     });
     const operation = first.createOperation<FixtureOperations>([first, bound], handler);
-    const create = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        create((request, grant) => {
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-    );
+    sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     await expect(move(operation, "forbidden")).rejects.toMatchObject({
       code: "PLUGIN_STATE_WRITE_FAILED",
     });

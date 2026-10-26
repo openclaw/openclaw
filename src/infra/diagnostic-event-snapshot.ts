@@ -23,17 +23,15 @@ export type DiagnosticEventMetadata = Readonly<{
 // Only proven immutable graphs enter this set; their lifetime follows the snapshot.
 const immutableSnapshots = new WeakSet<object>();
 
-export function createDiagnosticMetadataForListener<T extends object>(metadata: T): Readonly<T> {
-  return Object.freeze({ ...metadata });
-}
-
 /** Owned envelopes contain data properties; their nested values still belong to producers. */
 export function cloneDiagnosticValueForListener<T extends object>(value: T, owned = false): T {
+  if (immutableSnapshots.has(value)) {
+    return value;
+  }
   if (
-    immutableSnapshots.has(value) ||
-    (owned &&
-      Object.getOwnPropertySymbols(value).length === 0 &&
-      Object.values(value).every((nested) => isImmutableDiagnosticValue(nested)))
+    owned &&
+    Object.getOwnPropertySymbols(value).length === 0 &&
+    Object.values(value).every((nested) => isImmutableDiagnosticValue(nested))
   ) {
     immutableSnapshots.add(value);
     return Object.freeze(value);
@@ -88,11 +86,6 @@ function isImmutableDiagnosticValue(value: unknown, seen?: WeakSet<object>): boo
       isImmutableDiagnosticValue(descriptor.value, visited)
     );
   });
-}
-
-export function deepFreezeDiagnosticValue<T>(value: T): T {
-  freezeDiagnosticValue(value, new WeakSet());
-  return value;
 }
 
 function freezeDiagnosticValue(value: unknown, seen: WeakSet<object>): boolean {
@@ -195,10 +188,6 @@ export function captureQueuedDiagnosticEvent(
     );
     return false;
   }
-}
-
-export function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMetadata {
-  return { internal: true, trusted };
 }
 
 /** Returns whether listener metadata marks dispatcher-internal provenance. */

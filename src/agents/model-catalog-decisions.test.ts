@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderPluginCatalog } from "../plugins/provider-catalog.types.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -493,13 +494,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: createClaudeCliBackends,
     });
   });

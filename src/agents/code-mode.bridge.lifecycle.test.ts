@@ -645,7 +645,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
             : wait.execute(`code-wait-${close}`, { runId: suspended.runId });
 
         if (close === "expire") {
-          parked.expiresAt = Date.now() - 1;
+          parked.expiresAt = performance.now() - 1;
           testing.removeExpiredRuns();
         } else {
           await disposeAllCodeModeRuns();

@@ -527,6 +527,17 @@ type CliBackendPluginBase = {
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
   /**
+   * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
+   * otherwise expose no native tools. Core applies the same list to ordinary and
+   * verified completion turns, so return only tools that confer no capability
+   * through `projectNativeToolAuthority`; caller caps, restricted senders,
+   * delegated execution, and workspace-only runs still receive none.
+   */
+  resolveManagedNativeTools?: (ctx: {
+    config?: OpenClawConfig;
+    agentId: string;
+  }) => readonly string[];
+  /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *
    * Tool events report execution already performed by the backend. OpenClaw

@@ -1,4 +1,4 @@
-// Browser edits persist through the normal built Gateway and independent CLI readback.
+// Browser edits persist through the normal built Gateway with independent readback.
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
@@ -10,7 +10,10 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import { openPicker, pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -315,60 +318,87 @@ function cronJobId(result: Record<string, unknown>): string {
   return job.id;
 }
 
+let cronPage: CronPageEvidence | undefined;
+
 async function withCronJobPage(
   cliJson: CliJson,
   jobId: string,
   run: (evidence: CronPageEvidence) => Promise<void>,
 ) {
-  const handoff = await cliJson(["dashboard", "--json"]);
-  expect(handoff.ok).toBe(true);
-  if (typeof handoff.browserUrl !== "string") {
-    throw new Error("Dashboard did not return its normal browser handoff");
-  }
-  const issued = new URL(handoff.browserUrl);
-  const url = new URL("cron", issued);
-  url.hash = issued.hash;
-  url.searchParams.set("job", jobId);
-  await suite.withPage(
-    {
-      ...createControlUiE2eContextOptions(),
-    },
-    async ({ page }) => {
-      const requests: Record<string, unknown>[] = [];
-      const replies: Record<string, unknown>[] = [];
-      page.on("websocket", (socket) => {
-        socket.on("framesent", ({ payload }) => {
-          const frame = requireRecord(JSON.parse(payload.toString()));
-          if (
-            frame.type === "req" &&
-            (frame.method === "cron.update" || frame.method === "cron.add")
-          ) {
-            requests.push(frame);
-          }
-        });
-        socket.on("framereceived", ({ payload }) => {
-          const frame = requireRecord(JSON.parse(payload.toString()));
-          if (frame.type === "res" && requests.some(({ id }) => id === frame.id)) {
-            replies.push(frame);
-          }
-        });
+  const firstVisit = !cronPage;
+  if (!cronPage) {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    await installControlUiE2eRendererStallProbe(page);
+    const requests: Record<string, unknown>[] = [];
+    const replies: Record<string, unknown>[] = [];
+    page.on("websocket", (socket) => {
+      socket.on("framesent", ({ payload }) => {
+        const frame = requireRecord(JSON.parse(payload.toString()));
+        if (
+          frame.type === "req" &&
+          (frame.method === "cron.update" || frame.method === "cron.add")
+        ) {
+          requests.push(frame);
+        }
       });
+      socket.on("framereceived", ({ payload }) => {
+        const frame = requireRecord(JSON.parse(payload.toString()));
+        if (frame.type === "res" && requests.some(({ id }) => id === frame.id)) {
+          replies.push(frame);
+        }
+      });
+    });
+    cronPage = { page, requests, replies };
+  }
+  const evidence = cronPage;
+  const { page, requests, replies } = evidence;
+  requests.length = 0;
+  replies.length = 0;
+  try {
+    if (firstVisit) {
+      const handoff = await cliJson(["dashboard", "--json"]);
+      expect(handoff.ok).toBe(true);
+      if (typeof handoff.browserUrl !== "string") {
+        throw new Error("Dashboard did not return its normal browser handoff");
+      }
+      const issued = new URL(handoff.browserUrl);
+      const url = new URL("cron", issued);
+      url.hash = issued.hash;
+      url.searchParams.set("job", jobId);
       const document = await page.goto(url.toString());
       if (!document) {
         throw new Error("Gateway did not return the Control UI document");
       }
       expect(document.status()).toBe(200);
-      await waitForControlUiGatewayReady(page);
-      expect(new URL(page.url()).hash.length).toBe(0);
-      await run({ page, requests, replies });
-    },
-  );
+    } else {
+      // Retire the previous editor and its open disclosures through normal routing.
+      await evaluateControlUiContext(page, (app) => app.navigate("about"));
+      await page.locator("openclaw-about-page").waitFor();
+      await page.locator("openclaw-cron-page").waitFor({ state: "detached" });
+      await evaluateControlUiContext(
+        page,
+        (app, id) => app.navigate("cron", { search: `?job=${encodeURIComponent(id)}`, hash: "" }),
+        jobId,
+      );
+      await page.locator("openclaw-cron-page").waitFor();
+    }
+    await waitForControlUiGatewayReady(page);
+    expect(new URL(page.url()).hash.length).toBe(0);
+    await run(evidence);
+  } catch (error) {
+    await captureControlUiE2eFailureDiagnostics(page, {
+      error: error instanceof Error ? error : new Error(String(error)),
+      label: "Control UI exact stagger with a real Gateway",
+    });
+    throw error;
+  }
 }
 
 async function submitCronForm(
   evidence: CronPageEvidence,
-  cliJson: CliJson,
   method: "cron.add" | "cron.update",
+  readJob = readStoredJob,
 ) {
   const { page, requests, replies } = evidence;
   const previousRequests = requests.length;
@@ -386,12 +416,19 @@ async function submitCronForm(
   } else {
     await expect.poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(false);
   }
-  const stored = await cliJson(["automations", "get", id, "--json"]);
+  const stored = await readJob(id);
   expect(stored).toMatchObject({ id, enabled: false });
   return { request, reply, stored };
 }
 
-async function seedAlertJob(cliJson: CliJson, name: string, failureAlert: CronJob["failureAlert"]) {
+async function readStoredJob(id: string) {
+  if (!seedClient) {
+    throw new Error("Automation seed client was not started");
+  }
+  return requireRecord(await seedClient.request("cron.get", { id }));
+}
+
+async function seedAlertJob(name: string, failureAlert: CronJob["failureAlert"]) {
   const result = await seedPausedAgentJob(
     name,
     {
@@ -401,7 +438,7 @@ async function seedAlertJob(cliJson: CliJson, name: string, failureAlert: CronJo
     { failureAlert },
   );
   const id = cronJobId(result);
-  const stored = await cliJson(["automations", "get", id, "--json"]);
+  const stored = await readStoredJob(id);
   expect(stored).toMatchObject({
     id,
     name,
@@ -483,7 +520,7 @@ suite.define(() => {
         const timeout = page.locator("#cron-timeout-seconds");
         expect(await timeout.inputValue()).toBe("90");
         await timeout.fill("");
-        const cleared = await submitCronForm(evidence, cliJson, "cron.update");
+        const cleared = await submitCronForm(evidence, "cron.update");
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await page.locator("details.cron-advanced > summary").click();
@@ -492,7 +529,7 @@ suite.define(() => {
         expect(await timeout.inputValue()).toBe("");
         for (const value of ["0", "0.25"]) {
           await timeout.fill(value);
-          const saved = await submitCronForm(evidence, cliJson, "cron.update");
+          const saved = await submitCronForm(evidence, "cron.update");
           expect(saved.stored.payload).toMatchObject({ timeoutSeconds: Number(value) });
           expect(await timeout.inputValue()).toBe(value);
         }
@@ -518,7 +555,9 @@ suite.define(() => {
         const loadedStagger = await amount.inputValue();
         await amount.scrollIntoViewIfNeeded();
         await page.locator("#cron-cron-expr").fill("*/5 * * * *");
-        const { request, stored } = await submitCronForm(evidence, cliJson, "cron.update");
+        const { request, stored } = await submitCronForm(evidence, "cron.update", (id) =>
+          cliJson(["automations", "get", id, "--json"]),
+        );
         const reloadedStagger = await amount.inputValue();
         await amount.scrollIntoViewIfNeeded();
         expect({ loadedStagger, submitted: request.params, stored, reloadedStagger }).toMatchObject(
@@ -547,20 +586,20 @@ suite.define(() => {
   it("failure alert round trip: preserves partial policy through metadata save and clone", async () => {
     await withGatewayCommands(async (cliJson) => {
       const policy = { cooldownMs: 1_001, includeSkipped: true };
-      const job = await seedAlertJob(cliJson, "Partial failure policy", policy);
+      const job = await seedAlertJob("Partial failure policy", policy);
       await withCronJobPage(cliJson, job.id, async (evidence) => {
         const { page } = evidence;
         await openAdvanced(page, job.stored.name);
         const loaded = await readAlertFields(page);
         await page.locator("#cron-failure-alert-cooldown-seconds").scrollIntoViewIfNeeded();
         await page.locator("#cron-description").fill("Only metadata changed");
-        const saved = await submitCronForm(evidence, cliJson, "cron.update");
+        const saved = await submitCronForm(evidence, "cron.update");
         const savedFields = await readAlertFields(page);
         const menu = page.locator(".cron-detail-actions .cron-job-menu");
         await menu.locator(".cron-job-menu__trigger").click();
         await menu.locator('[data-value="clone"]').click();
         await page.locator("#cron-name").fill("Cloned partial failure policy");
-        const cloned = await submitCronForm(evidence, cliJson, "cron.add");
+        const cloned = await submitCronForm(evidence, "cron.add");
         const cloneId = cronJobId(cloned.stored);
         await page.locator(`[data-test-id="cron-row-${cloneId}"]`).click();
         await openAdvanced(page, cloned.stored.name);
@@ -588,7 +627,7 @@ suite.define(() => {
 
   it("failure alert round trip: clears field overrides through the real picker", async () => {
     await withGatewayCommands(async (cliJson) => {
-      const job = await seedAlertJob(cliJson, "Clear failure policy", {
+      const job = await seedAlertJob("Clear failure policy", {
         after: 4,
         cooldownMs: 1_001,
         mode: "webhook",
@@ -615,7 +654,7 @@ suite.define(() => {
             deliveryMode.locator(".picker-select__trigger .picker-select__label").textContent(),
           )
           .toBe("Inherit global setting");
-        const cleared = await submitCronForm(evidence, cliJson, "cron.update");
+        const cleared = await submitCronForm(evidence, "cron.update");
         expect(cleared.request.params).toMatchObject({
           patch: { failureAlert: { after: null, cooldownMs: null, mode: null } },
         });
@@ -626,15 +665,15 @@ suite.define(() => {
         });
         const policyMode = page.locator("openclaw-select-picker:has(#cron-failure-alert-mode)");
         await choosePicker(policyMode, "inherit");
-        const inherited = await submitCronForm(evidence, cliJson, "cron.update");
+        const inherited = await submitCronForm(evidence, "cron.update");
         expect(inherited.request.params).toMatchObject({ patch: { failureAlert: null } });
         expect(inherited.stored).not.toHaveProperty("failureAlert");
         await choosePicker(policyMode, "disabled");
-        const disabled = await submitCronForm(evidence, cliJson, "cron.update");
+        const disabled = await submitCronForm(evidence, "cron.update");
         expect(disabled.stored.failureAlert).toBe(false);
         await choosePicker(policyMode, "custom");
         await page.locator("#cron-failure-alert-cooldown-seconds").fill("0");
-        const zero = await submitCronForm(evidence, cliJson, "cron.update");
+        const zero = await submitCronForm(evidence, "cron.update");
         expect(zero.stored.failureAlert).toEqual({ cooldownMs: 0 });
       });
     });
@@ -658,7 +697,7 @@ suite.define(() => {
         };
         const created = await seedPausedAgentJob(sourceName, payload);
         const sourceId = cronJobId(created);
-        const original = await cliJson(["automations", "get", sourceId, "--json"]);
+        const original = await readStoredJob(sourceId);
         expect(original).toMatchObject({ id: sourceId, enabled: false });
         expect(original.payload).toEqual(payload);
 
@@ -676,11 +715,13 @@ suite.define(() => {
             .toBe(`${sourceName} copy`);
           const cloneName = `Synthetic clone ${variant.name} copy`;
           await page.locator("#cron-name").fill(cloneName);
-          const cloned = await submitCronForm(evidence, cliJson, "cron.add");
+          const cloned = await submitCronForm(evidence, "cron.add", (id) =>
+            cliJson(["automations", "get", id, "--json"]),
+          );
           const cloneId = cronJobId(cloned.stored);
           await page.locator(`[data-test-id="cron-row-${cloneId}"]`).click();
           await expect.poll(() => page.locator(".cron-detail-title").textContent()).toBe(cloneName);
-          const originalAfter = await cliJson(["automations", "get", sourceId, "--json"]);
+          const originalAfter = await readStoredJob(sourceId);
 
           expect.soft(originalAfter, `${variant.name}: source unchanged`).toEqual(original);
           expect.soft(cloneId, `${variant.name}: new job identity`).not.toBe(sourceId);

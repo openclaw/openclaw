@@ -26,6 +26,7 @@ import {
   revokeCronStandingGrant,
   resolveOperatorApproval,
 } from "../gateway/operator-approval-store.js";
+import { createExecApprovalPresentation } from "../gateway/operator-approval-store.test-support.js";
 import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
@@ -188,16 +189,7 @@ async function mintStandingGrant(revision: string, expiresAtMs: number | null): 
     approval: {
       id: "cron-approval-1",
       kind: "exec",
-      presentation: {
-        kind: "exec",
-        commandText: grantCommand,
-        commandPreview: grantCommand,
-        warningText: null,
-        host: "gateway",
-        nodeId: null,
-        agentId: "main",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
+      presentation: createExecApprovalPresentation(grantCommand),
       source: {
         agentId: "main",
         sessionKey: "agent:main:cron:job-1",

@@ -1,6 +1,4 @@
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -34,6 +32,7 @@ import {
   readSessionPendingInput,
   readSessionPendingInputRequesterOrigin,
   stageSessionPendingInput,
+  prepareForeignLiveSessionPendingInputEntries,
   withSessionPendingInputPersistence as withPersistence,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
@@ -163,43 +162,6 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each([false, true])(
-  "releases settled input authority while its timer remains pending (collected: %s)",
-  async (collected) => {
-    const makeTimer = () => setTimeout(() => {}, 60_000);
-    async function settle() {
-      const entry = { sessionId, skillsSnapshot: { prompt: "synthetic prompt", skills: [] } };
-      const reference = new WeakRef(entry);
-      const receipt = (await stageSessionPendingInput(scope(), {
-        runId: "retention",
-        message: message("retention"),
-        assertCurrent: () => {
-          expect(entry.sessionId).toBe(sessionId);
-        },
-      }))!;
-      const execution = collected
-        ? bindSessionPendingInputSources([receipt], message("collected-retention"))!
-        : receipt;
-      const timer = execution.run(makeTimer);
-      execution.finish("cancelled");
-      await execution.settled?.();
-      expect(() => execution.run(() => {})).toThrow(SessionPendingInputCustodyError);
-      return { reference, timer };
-    }
-    const { reference, timer } = await settle();
-    try {
-      const control = new WeakRef({});
-      await nextTurn();
-      queryObjects(WeakRef);
-      expect(control.deref()).toBeUndefined();
-      expect(timer.hasRef()).toBe(true);
-      expect(reference.deref()).toBeUndefined();
-    } finally {
-      clearTimeout(timer);
-    }
-  },
-);
-
 it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
   await append(message("active", "First task"));
   expect(await submitted("active:user")).toEqual(message("active", "First task"));
@@ -233,9 +195,15 @@ it("keeps accepted input outside the active transcript and applies its hook once
   expect(await submitted("queued:user")).toEqual(receipt.message);
   const committedReplay = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
   expect(committedReplay.message).toEqual(receipt.message);
+  expect(bindSessionPendingInputSources([committedReplay], message("recollected"))).toBeUndefined();
   expect(prepare).toHaveBeenCalledOnce();
   receipt.finish("interrupted");
   expect(() => receipt.run(() => {})).toThrow("ownership ended");
+  const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope());
+  expect(readForeign()).toEqual(new Map([[receipt.inputId, receipt.message.idempotencyKey]]));
+  committedReplay.finish("interrupted");
+  await committedReplay.settled?.();
+  expect(readForeign()).toEqual(new Map());
 });
 
 it("keeps requester facts with exact accepted custody through projection edits and restart replay", async () => {

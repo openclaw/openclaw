@@ -33,6 +33,8 @@ export function createTestGatewayClient(request: GatewayRequestHandler): Gateway
     get: () => "test-recovery-scope",
   });
   Object.defineProperty(client, "recoveryScopeReady", { configurable: true, get: () => true });
+  const connectSent = Promise.resolve(true);
+  Object.defineProperty(client, "connectSent", { configurable: true, get: () => connectSent });
   client.request = async <T = unknown>(
     ...args: Parameters<GatewayBrowserClient["request"]>
   ): Promise<T> => (await request(...args)) as T;

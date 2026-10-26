@@ -1,4 +1,7 @@
+import type { AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
+
 type DispatchCase = {
+  cyberAccessProgram?: AgentHarnessAttemptParamsV2["cyberAccessProgram"];
   agentId?: string;
   sandboxSessionKey?: string;
   remoteSkills?: boolean;
@@ -20,6 +23,8 @@ type DispatchCase = {
 };
 
 export const dispatchCases: DispatchCase[] = [
+  { agentId: "main", cyberAccessProgram: "standard" },
+  { agentId: "main", cyberAccessProgram: "daybreak_blue" },
   ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
     agentId: "main",
     preparedAuth,

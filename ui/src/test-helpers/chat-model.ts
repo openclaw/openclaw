@@ -22,58 +22,48 @@ export const createModelCatalog = (...entries: ModelCatalogEntry[]) => entries;
 export const createAmbiguousModelCatalog = (id: string, ...providers: string[]) =>
   providers.map((provider) => catalogModel(id, id, provider));
 
-export function createSessionsListResult({
-  model = null,
-  modelProvider = model ? "openai" : null,
-  modelOverrideSource,
-  defaultsModel = "gpt-5",
-  defaultsProvider = defaultsModel ? "openai" : null,
-  defaultsThinkingLevels,
-  defaultsThinkingOptions,
-  defaultsThinkingDefault,
-  thinkingDefault,
-  thinkingLevels,
-  omitSessionFromList = false,
-}: {
-  model?: string | null;
-  modelProvider?: string | null;
-  modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
-  defaultsModel?: string | null;
-  defaultsProvider?: string | null;
-  defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
-  defaultsThinkingOptions?: string[];
-  defaultsThinkingDefault?: string;
-  thinkingDefault?: string;
-  thinkingLevels?: GatewaySessionRow["thinkingLevels"];
-  omitSessionFromList?: boolean;
-} = {}): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: omitSessionFromList ? 0 : 1,
-    defaults: {
-      modelProvider: defaultsProvider,
-      model: defaultsModel,
-      contextTokens: null,
-      ...(defaultsThinkingLevels ? { thinkingLevels: defaultsThinkingLevels } : {}),
-      ...(defaultsThinkingOptions ? { thinkingOptions: defaultsThinkingOptions } : {}),
-      ...(defaultsThinkingDefault ? { thinkingDefault: defaultsThinkingDefault } : {}),
-    },
-    sessions: omitSessionFromList
-      ? []
-      : [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            ...(modelProvider ? { modelProvider } : {}),
-            ...(model ? { model } : {}),
-            ...(modelOverrideSource === undefined ? {} : { modelOverrideSource }),
-            ...(thinkingDefault ? { thinkingDefault } : {}),
-            ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
-          },
-        ],
+export function createSessionsListResult(
+  options: {
+    model?: string | null;
+    modelProvider?: string | null;
+    modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
+    defaultsModel?: string | null;
+    defaultsProvider?: string | null;
+    defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
+    defaultsThinkingOptions?: string[];
+    defaultsThinkingDefault?: string;
+    thinkingDefault?: string;
+    thinkingLevels?: GatewaySessionRow["thinkingLevels"];
+    omitSessionFromList?: boolean;
+  } = {},
+): SessionsListResult {
+  const {
+    model = null,
+    modelProvider = model ? "openai" : null,
+    defaultsModel = "gpt-5",
+    defaultsProvider = defaultsModel ? "openai" : null,
+    ...fields
+  } = options;
+  const session = {
+    key: "main",
+    kind: "direct" as const,
+    updatedAt: null,
+    ...(modelProvider ? { modelProvider } : {}),
+    ...(model ? { model } : {}),
+    ...(fields.modelOverrideSource === undefined
+      ? {}
+      : { modelOverrideSource: fields.modelOverrideSource }),
+    ...(fields.thinkingDefault ? { thinkingDefault: fields.thinkingDefault } : {}),
+    ...(fields.thinkingLevels === undefined ? {} : { thinkingLevels: fields.thinkingLevels }),
   };
+  return sessionListResult(0, fields.omitSessionFromList ? [] : [session], {
+    modelProvider: defaultsProvider,
+    model: defaultsModel,
+    contextTokens: null,
+    ...(fields.defaultsThinkingLevels ? { thinkingLevels: fields.defaultsThinkingLevels } : {}),
+    ...(fields.defaultsThinkingOptions ? { thinkingOptions: fields.defaultsThinkingOptions } : {}),
+    ...(fields.defaultsThinkingDefault ? { thinkingDefault: fields.defaultsThinkingDefault } : {}),
+  });
 }
 
 export function createResolvedModelPatch(
@@ -87,4 +77,16 @@ export function createResolvedModelPatch(
     entry: { sessionId: "main" },
     resolved: { model, modelProvider: modelProvider ?? undefined },
   };
+}
+
+export function sessionListResult(
+  ts: number,
+  sessions: SessionsListResult["sessions"],
+  defaults: SessionsListResult["defaults"] = {
+    modelProvider: null,
+    model: null,
+    contextTokens: null,
+  },
+): SessionsListResult {
+  return { ts, path: "", count: sessions.length, defaults, sessions };
 }

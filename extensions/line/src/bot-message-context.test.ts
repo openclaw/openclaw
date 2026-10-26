@@ -22,16 +22,6 @@ const getUserProfileMock = vi.hoisted(() =>
   vi.fn(async () => null as { displayName: string } | null),
 );
 const getLineGroupNameMock = vi.hoisted(() => vi.fn(async () => undefined as string | undefined));
-const toInboundMediaFactsWithMetadataMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
-  toInboundMediaFactsWithMetadataMock.mockImplementation(actual.toInboundMediaFactsWithMetadata);
-  return {
-    ...actual,
-    toInboundMediaFactsWithMetadata: toInboundMediaFactsWithMetadataMock,
-  };
-});
 
 // Names are LINE API reads; the context under test only cares what it does with
 // the answers, so the two lookups are stubbed and the default answer is "unknown",
@@ -138,7 +128,6 @@ describe("buildLineMessageContext", () => {
     logVerboseMock.mockClear();
     getUserProfileMock.mockClear();
     getLineGroupNameMock.mockClear();
-    toInboundMediaFactsWithMetadataMock.mockClear();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -301,111 +290,60 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: false,
     });
 
-    expect(context?.ctxPayload.RawBody).toBe("");
-    expect(context?.ctxPayload.CommandBody).toBe("");
-    expect(context?.ctxPayload.CommandAuthorized).toBe(false);
-    expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
+    expect(context?.ctxPayload).toMatchObject({
+      RawBody: "",
+      CommandBody: "",
+      CommandAuthorized: false,
+      BodyForAgent: "[line attachment unavailable]",
+    });
     expect(context?.ctxPayload.media?.[0]).toMatchObject({
       path: undefined,
       kind: "image",
     });
   });
 
-  it("tells the agent how much of a multi-image send never arrived", async () => {
-    const event = imageEvent();
-
-    const context = await buildMessageContext(event, {
+  it.each([
+    [1, "[line: 1 more image in this send was not delivered]"],
+    [2, "[line: 2 more images in this send were not delivered]"],
+  ] as const)("reports %i missing image parts to the agent", async (missingParts, expected) => {
+    const context = await buildMessageContext(imageEvent(), {
       allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
-      missingParts: 2,
+      missingParts,
     });
-
-    // Without this the turn reads as the whole send and the agent answers
-    // confidently about images the sender can see are missing.
-    expect(context?.ctxPayload.BodyForAgent).toBe(
-      "[line: 2 more images in this send were not delivered]",
-    );
+    expect(context?.ctxPayload.BodyForAgent).toBe(expected);
   });
 
-  it("counts a single missing image in the singular", async () => {
-    const event = imageEvent();
-
-    const context = await buildMessageContext(event, {
-      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
-      missingParts: 1,
-    });
-
-    // A media-only send has no other text, so this sentence is the whole body the
-    // model reads; it has to be a sentence.
-    expect(context?.ctxPayload.BodyForAgent).toBe(
-      "[line: 1 more image in this send was not delivered]",
-    );
-  });
-
-  it("resolves prefixed-only group config through the inbound message context", async () => {
-    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
-
-    const context = await buildMessageContext(event, {
-      cfg: {
-        ...cfg,
-        agents: { entries: { main: {}, "line-group-agent": {} } },
-        bindings: [
-          {
-            agentId: "line-group-agent",
-            match: { channel: "line", peer: { kind: "group", id: "group-1" } },
-          },
-        ],
-      },
-      account: {
-        ...account,
-        config: {
-          groups: {
-            "group:group-1": {
-              systemPrompt: "Use the prefixed group config",
-              skills: ["triage"],
-            },
-          },
+  it.each([
+    ["group", ["triage"]],
+    ["room", []],
+  ] as const)(
+    "resolves prefixed-only %s config through the inbound context",
+    async (kind, skills) => {
+      const id = `${kind}-1`;
+      const agentId = `line-${kind}-agent`;
+      const systemPrompt = `Use the prefixed ${kind} config`;
+      const source: MessageEvent["source"] =
+        kind === "group"
+          ? { type: kind, groupId: id, userId: "user-1" }
+          : { type: kind, roomId: id, userId: "user-1" };
+      const context = await buildMessageContext(createMessageEvent(source), {
+        cfg: {
+          ...cfg,
+          agents: { entries: { main: {}, [agentId]: {} } },
+          bindings: [{ agentId, match: { channel: "line", peer: { kind: "group", id } } }],
         },
-      },
-    });
-
-    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed group config");
-    expect(context?.skillFilter).toEqual(["triage"]);
-    expect(context?.route.agentId).toBe("line-group-agent");
-    expect(context?.route.matchedBy).toBe("binding.peer");
-  });
-
-  it("resolves prefixed-only room config through the inbound message context", async () => {
-    const event = createMessageEvent({ type: "room", roomId: "room-1", userId: "user-1" });
-
-    const context = await buildMessageContext(event, {
-      cfg: {
-        ...cfg,
-        agents: { entries: { main: {}, "line-room-agent": {} } },
-        bindings: [
-          {
-            agentId: "line-room-agent",
-            match: { channel: "line", peer: { kind: "group", id: "room-1" } },
-          },
-        ],
-      },
-      account: {
-        ...account,
-        config: {
-          groups: {
-            "room:room-1": {
-              systemPrompt: "Use the prefixed room config",
-              skills: [],
-            },
-          },
+        account: {
+          ...account,
+          config: { groups: { [`${kind}:${id}`]: { systemPrompt, skills: [...skills] } } },
         },
-      },
-    });
-
-    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed room config");
-    expect(context?.skillFilter).toEqual([]);
-    expect(context?.route.agentId).toBe("line-room-agent");
-    expect(context?.route.matchedBy).toBe("binding.peer");
-  });
+      });
+      expect(context).toMatchObject({
+        ctxPayload: { GroupSystemPrompt: systemPrompt },
+        skillFilter: skills,
+        route: { agentId, matchedBy: "binding.peer" },
+      });
+    },
+  );
 
   const postbackSelectionCases: {
     name: string;

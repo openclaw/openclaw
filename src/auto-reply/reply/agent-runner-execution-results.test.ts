@@ -11,8 +11,6 @@ import {
   initialFallbackAttemptOptions,
   requireRecord,
   expectRecordFields,
-  requireMockCall,
-  expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
   createNonDirectFailureSessionCtx,
 } from "./agent-runner-execution.test-support.js";
@@ -162,26 +160,29 @@ it.each(["missing-answer", "blocked-tool"])(
   },
 );
 
-it("forwards media-only tool results without typing text", async () => {
-  const onToolResult = vi.fn();
-  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-    await params.onToolResult?.({ mediaUrls: ["/tmp/generated.png"] });
-    return { payloads: [{ text: "final" }], meta: {} };
-  });
+it.each([{ mediaUrls: ["/tmp/generated.png"] }, { text: "NO_REPLYThe user is saying hello" }])(
+  "forwards tool results without losing literal text or media: %j",
+  async (payload) => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onToolResult?.(payload);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
 
-  const { result, typingSignals } = await deliverToolResults(onToolResult);
+    const { result, typingSignals } = await deliverToolResults(onToolResult);
 
-  expect(result.kind).toBe("success");
-  expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
-  expect(onToolResult).toHaveBeenCalledTimes(1);
-  expectMockCallArgFields(onToolResult, 0, "tool result payload", {
-    mediaUrls: ["/tmp/generated.png"],
-  });
-  expect(
-    requireRecord(requireMockCall(onToolResult, 0, "tool result payload")[0], "tool result payload")
-      .text,
-  ).toBeUndefined();
-});
+    expect(result.kind).toBe("success");
+    expect(onToolResult).toHaveBeenCalledOnce();
+    if (payload.text) {
+      expect(typingSignals.signalTextDelta).toHaveBeenCalledWith(payload.text);
+      expect(onToolResult).toHaveBeenCalledWith(payload);
+    } else {
+      expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
+      expect(onToolResult.mock.calls[0]?.[0]).toMatchObject(payload);
+      expect(onToolResult.mock.calls[0]?.[0].text).toBeUndefined();
+    }
+  },
+);
 
 it("surfaces model capacity errors from no-text mid-turn failures in Slack channels", async () => {
   state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -288,20 +289,6 @@ it.each(["sent", "buffered"] as const)(
     expect(result.kind).toBe("success");
   },
 );
-
-it("preserves a glued leading NO_REPLY mention in streamed tool results", async () => {
-  const onToolResult = vi.fn();
-  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-    await params.onToolResult?.({ text: "NO_REPLYThe user is saying hello" });
-    return { payloads: [{ text: "final" }], meta: {} };
-  });
-
-  const { result, typingSignals } = await deliverToolResults(onToolResult);
-
-  expect(result.kind).toBe("success");
-  expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("NO_REPLYThe user is saying hello");
-  expect(onToolResult).toHaveBeenCalledWith({ text: "NO_REPLYThe user is saying hello" });
-});
 
 it("propagates rejected approval notice delivery while preserving later best-effort results", async () => {
   const payload = {

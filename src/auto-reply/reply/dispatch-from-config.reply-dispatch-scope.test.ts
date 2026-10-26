@@ -7,6 +7,7 @@ import {
   createHookCtx,
   emptyConfig,
   hookMocks,
+  mockSessionStorePath,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -527,7 +528,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           runAfterReplyOperationClear(operation, () => {
             void submitSessionControllerTask(operation.key, {
               target: captureSessionTarget({
-                storeScope: "/tmp/mock-sessions.json",
+                storeScope: mockSessionStorePath,
                 sessionKey: operation.key,
               }),
               start: (claim) => {

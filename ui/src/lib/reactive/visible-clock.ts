@@ -40,10 +40,11 @@ function createVisibleClock(intervalMs: number) {
 
 const clocks = {
   1_000: createVisibleClock(1_000),
+  30_000: createVisibleClock(30_000),
   60_000: createVisibleClock(60_000),
 };
 
 /** Tracked readers share cadence and release its timer when the last reader leaves. */
-export function readVisibleTime(intervalMs: 1_000 | 60_000): number {
+export function readVisibleTime(intervalMs: 1_000 | 30_000 | 60_000): number {
   return clocks[intervalMs]();
 }

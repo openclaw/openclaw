@@ -29,6 +29,7 @@ import {
   hookMocks,
   internalHookMocks,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   sessionBindingMocks,
@@ -112,7 +113,7 @@ function acpEntry(sessionKey: string, agent = "codex", entry = {}) {
     sessionKey,
     storeSessionKey: sessionKey,
     cfg: {},
-    storePath: "/tmp/mock-sessions.json",
+    storePath: mockSessionStorePath,
     entry,
     acp: {
       backend: "acpx",
@@ -552,7 +553,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         await predecessor.ownerSettlement;
         expect(settled).not.toHaveBeenCalled();
         const target = captureSessionTarget({
-          storeScope: "/tmp/mock-sessions.json",
+          storeScope: mockSessionStorePath,
           sessionKey: key,
         });
         const mutationEntered = createDeferred();

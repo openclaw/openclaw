@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { fstatSync, renameSync } from "node:fs";
+import fs, { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
@@ -46,7 +46,9 @@ import {
   revokeSqliteDatabaseAdmissionsForPath as revokePath,
   trackSqliteDatabaseAdmissionWorker as trackWorker,
   withSqliteDatabaseAdmissionExchange as withExchange,
+  withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
+import { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications as postCommit,
@@ -260,6 +262,21 @@ it("retires the final closed handle's facts while preserving open siblings and d
   using second = openNodeSqliteDatabase(location);
   admitSqliteSchema(second);
   const original = recordsFor(location)[0]!;
+  {
+    using stat = vi.spyOn(fs, "statSync");
+    using fstat = vi.spyOn(fs, "fstatSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
+    using open = vi.spyOn(fs, "openSync");
+    using read = vi.spyOn(fs, "readFileSync");
+    using lstat = vi.spyOn(fs, "lstatSync");
+    retainLocation(location, original.physicalIdentity);
+    retainLocation(location, original.physicalIdentity);
+    expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
+    expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
+    for (const probe of [stat, fstat, realpath, open, read, lstat]) {
+      expect(probe).not.toHaveBeenCalled();
+    }
+  }
   const stale = structuredClone([original]);
   publishFact(first, key, "connection-scoped");
   first.close();
@@ -326,6 +343,42 @@ it("revokes retained validation when corruption is reported after native close",
   expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
 });
 
+it("prepares the actual autocommit receipt before one scoped statement and publishes it after settlement", () => {
+  using fixture = databaseFixture("sqlite-prepared-receipt-");
+  const { database, location } = fixture;
+  const before = scopedToken(database, "entry");
+  const statement = database.prepare("INSERT INTO proof VALUES (?)");
+  let pending: string | undefined;
+  let pendingDatabase: string | undefined;
+  let installed: { scoped: string | undefined; database: string | undefined } | undefined;
+  postCommit(database, () =>
+    withSqliteDatabaseWriteScope(database, ["entry"], () =>
+      withSqlitePreparedNativeMutation(
+        database,
+        () => {
+          expect(database.isTransaction).toBe(false);
+          pending = pendingScopedToken(database, "entry");
+          pendingDatabase = pendingToken(database);
+          stageSqliteTransactionState(database, {
+            commit: () => {
+              installed = {
+                scoped: scopedToken(database, "entry"),
+                database: pathToken(location),
+              };
+            },
+          });
+        },
+        () => statement.run(43),
+      ),
+    ),
+  );
+  expect(installed).toEqual({ scoped: pending, database: pendingDatabase });
+  expect(pending).not.toBe(before);
+  expect(pendingDatabase).toBeTypeOf("string");
+  expect(pendingToken(database)).toBeUndefined();
+  expect(database.prepare("SELECT value FROM proof").all()).toEqual([{ value: 42 }, { value: 43 }]);
+});
+
 it("keeps committed and pending row-cache tokens distinct across readmission", () => {
   using fixture = databaseFixture("sqlite-admission-tokens-");
   const { location, database } = fixture;
@@ -349,6 +402,32 @@ it("keeps committed and pending row-cache tokens distinct across readmission", (
     previous = committed;
     database.close();
   }
+});
+
+it("keeps the prior prepared receipt when a competing writer refuses the native statement", () => {
+  using fixture = databaseFixture("sqlite-prepared-busy-");
+  const { database, location } = fixture;
+  using peer = openNodeSqliteDatabase(location);
+  database.exec("PRAGMA busy_timeout=0");
+  peer.exec("BEGIN IMMEDIATE");
+  const before = scopedToken(database, "entry");
+  const beforeDatabase = pathToken(location);
+  const statement = database.prepare("INSERT INTO proof VALUES (?)");
+  expect(() =>
+    postCommit(database, () =>
+      withSqliteDatabaseWriteScope(database, ["entry"], () =>
+        withSqlitePreparedNativeMutation(
+          database,
+          () => {},
+          () => statement.run(43),
+        ),
+      ),
+    ),
+  ).toThrow("database is locked");
+  expect(scopedToken(database, "entry")).toBe(before);
+  expect(pathToken(location)).toBe(beforeDatabase);
+  expect(database.prepare("SELECT value FROM proof").all()).toEqual([{ value: 42 }]);
+  peer.exec("ROLLBACK");
 });
 
 it("releases a connection reference when initial admission exchange fails", () => {

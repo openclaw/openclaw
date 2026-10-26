@@ -13,9 +13,9 @@ import {
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import { runWithoutOwnedSessionTranscriptWrites as outsideWriter } from "../../../config/sessions/transcript-write-context-store.js";
 import {
   SessionTranscriptWriterClaimReboundError as WriterReboundError,
-  runWithoutOwnedSessionTranscriptWrites as outsideWriter,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";

@@ -296,17 +296,11 @@ it("fences a dedicated stream writer and requires settlement before retiring its
     { name: entry.containerName, id },
     { name: `openclaw-stream-${attemptId}`, id: childId },
   ]);
-  expect(commands("pause")).toEqual([
-    ["pause", id],
-    ["pause", childId],
-  ]);
+  expect(commands("pause")).toEqual([id, childId].map((runtimeId) => ["pause", runtimeId]));
   await expect(retire()).rejects.toThrow("Settle persistent streams");
   expect(commands("rm")).toEqual([]);
   await resume();
-  expect(commands("unpause")).toEqual([
-    ["unpause", childId],
-    ["unpause", id],
-  ]);
+  expect(commands("unpause")).toEqual([childId, id].map((runtimeId) => ["unpause", runtimeId]));
   expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
   expect(persistCustody).toHaveBeenLastCalledWith([]);
 

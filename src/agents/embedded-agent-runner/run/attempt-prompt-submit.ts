@@ -5,6 +5,7 @@ import {
 } from "../../../config/sessions/session-source-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { isOpenClawSystemUpdateMessage } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
@@ -303,7 +304,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     // Persist after the user (or synthetic runtime prompt), retiring unconsumed
     // context when preflight handles or rejects the prompt before the loop starts.
     const cleanupRuntimeContextMessage =
-      input.appendOnlyRuntimeContext && input.runtimeContextMessage
+      input.runtimeContextMessage &&
+      (input.appendOnlyRuntimeContext || isOpenClawSystemUpdateMessage(input.runtimeContextMessage))
         ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
         : installRuntimeContextMessageForPrompt({
             session: activeSession,

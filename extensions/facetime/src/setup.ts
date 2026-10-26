@@ -62,6 +62,10 @@ function commandAction(label: string, command: string) {
   return { kind: "command" as const, label, command };
 }
 
+function settingsAction(label: string, settingsPath: string) {
+  return { kind: "system-settings" as const, label, settingsPath };
+}
+
 const SETUP_ACTIONS = {
   "install-native-package": commandAction(
     "Install or reinstall the FaceTime native package with Homebrew",
@@ -96,37 +100,33 @@ const SETUP_ACTIONS = {
   },
   "restart-call-apps": {
     kind: "manual-test",
-    label: "Quit and reopen FaceTime and Phone, then let OpenClaw reinject the helper",
+    label: "Quit and reopen FaceTime, then let OpenClaw reinject the helper",
   },
   "install-driver": {
     kind: "gateway",
     label: "Install or update the paired FaceTime audio driver",
     gatewayMethod: "facetime.installDriver",
   },
-  "select-physical-output": {
-    kind: "system-settings",
-    label: "Select MacBook Speakers or another physical output",
-    settingsPath: "System Settings > Sound > Output",
-  },
-  "grant-system-audio": {
-    kind: "system-settings",
-    label: "Allow OpenClaw to capture FaceTime app audio",
-    settingsPath: "System Settings > Privacy & Security > Screen & System Audio Recording",
-  },
+  "select-physical-output": settingsAction(
+    "Select MacBook Speakers or another physical output",
+    "System Settings > Sound > Output",
+  ),
+  "grant-system-audio": settingsAction(
+    "Allow OpenClaw to capture FaceTime app audio",
+    "System Settings > Privacy & Security > Screen & System Audio Recording",
+  ),
   "configure-realtime-provider": commandAction(
     "Configure authentication for a registered realtime voice provider",
     "openclaw configure",
   ),
-  "verify-focus": {
-    kind: "system-settings",
-    label: "Verify Focus is off or allows the expected caller",
-    settingsPath: "Control Center > Focus",
-  },
-  "allow-sharing-notifications": {
-    kind: "system-settings",
-    label: "Allow notifications while mirroring or sharing the display",
-    settingsPath: "System Settings > Notifications",
-  },
+  "verify-focus": settingsAction(
+    "Verify Focus is off or allows the expected caller",
+    "Control Center > Focus",
+  ),
+  "allow-sharing-notifications": settingsAction(
+    "Allow notifications while mirroring or sharing the display",
+    "System Settings > Notifications",
+  ),
   "live-outbound-test": {
     kind: "manual-test",
     label: "Place one outbound FaceTime audio call with facetime.dial",
@@ -136,11 +136,10 @@ const SETUP_ACTIONS = {
     kind: "manual-test",
     label: "Run one inbound and one outbound FaceTime audio call",
   },
-  "review-live-voicemail": {
-    kind: "system-settings",
-    label: "Review Live Voicemail if inbound audio calls are screened",
-    settingsPath: "Phone > Settings > Live Voicemail",
-  },
+  "review-live-voicemail": settingsAction(
+    "Review Live Voicemail if inbound audio calls are screened",
+    "Phone > Settings > Live Voicemail",
+  ),
 } satisfies Record<string, Omit<FaceTimeSetupAction, "id">>;
 
 const PRECHECK_ACTIONS: Record<string, keyof typeof SETUP_ACTIONS> = {
@@ -322,7 +321,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     required: true,
     message: developerSecurityEnabled
       ? developerSecurity.message
-      : "Developer tools access is disabled; helper injection cannot attach to FaceTime or Phone",
+      : "Developer tools access is disabled; helper injection cannot attach to FaceTime",
     ...(!developerSecurityEnabled ? { actionId: "enable-developer-tools" } : {}),
   });
 
@@ -348,7 +347,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     status: debuggingRestrictionsDisabled ? "ready" : "action-required",
     required: true,
     message: debuggingRestrictionsDisabled
-      ? "SIP permits debugger attachment to FaceTime and Phone; a connected helper must still be verified separately"
+      ? "SIP permits debugger attachment to FaceTime; a connected helper must still be verified separately"
       : debuggingRestrictionsEnabled
         ? "SIP debugging restrictions block LLDB helper injection into protected Apple apps"
         : "Could not verify SIP debugging restrictions; run csrutil status before changing protection settings",
@@ -411,7 +410,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
         id: `helper-${target.target.toLowerCase()}`,
         label: `${target.target} helper`,
         status,
-        required: target.target === "FaceTime" || target.target === "Phone",
+        required: true,
         message: target.connected
           ? "Authenticated helper connected"
           : target.stale

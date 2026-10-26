@@ -2,8 +2,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { resolveTheme, type ThemeName } from "../app/theme.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledGatewayUrl,
+  waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
@@ -75,7 +77,17 @@ suite.define(() => {
       const images = new Map<string, string>();
       const decoded = new Set<string>();
       for (const route of ["new", "chat", "settings/appearance"] as const) {
-        await page.goto(`${suite.server.baseUrl}${route}`);
+        if (route === "new") {
+          await page.goto(`${suite.server.baseUrl}${route}`);
+        } else {
+          const routeId = route === "chat" ? "chat" : "appearance";
+          await evaluateControlUiContext(
+            page,
+            (app, target: "chat" | "appearance") => app.navigate(target),
+            routeId,
+          );
+          await waitForControlUiRoute(page, { routeId });
+        }
         await gateway.waitForRequest("config.get");
         if (route === "chat") {
           await page
@@ -117,7 +129,8 @@ suite.define(() => {
               }
             }
             const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
-            const artwork = await readArtwork(shell);
+            const fingerprint = route === "new" && viewport === "desktop";
+            const artwork = await readArtwork(shell, fingerprint ? "fingerprint" : undefined);
             expectAppArtwork(artwork, label);
             expect(artwork.canvasOwner, label).toBe(
               route === "chat" && viewport === "mobile" ? "native-mobile" : "shell-artwork",
@@ -137,7 +150,10 @@ suite.define(() => {
                 `${label}: conversation text on artwork`,
               ).toBeGreaterThanOrEqual(4.5);
             }
-            if (route === "new" && viewport === "desktop") {
+            if (fingerprint) {
+              if (artwork.pixels === null) {
+                throw new Error(`Missing decoded artwork fingerprint for ${label}`);
+              }
               images.set(resolved, artwork.backgroundImage);
               decoded.add(artwork.pixels);
             } else {
@@ -218,7 +234,7 @@ suite.define(() => {
       for (const mode of ["dark", "light"] as const) {
         const resolved = mode === "dark" ? "custom" : "custom-light";
         await changeTheme(page, gateway, { family: "custom", mode }, resolved);
-        const artwork = await readArtwork(page.locator(".shell"));
+        const artwork = await readArtwork(page.locator(".shell"), "color-spread");
         expectAppArtwork(artwork, `custom ${mode}`);
         await expectComposerSurface(composer);
         expect(artwork.maxColorSpread).toBeLessThanOrEqual(32);

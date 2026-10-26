@@ -1,6 +1,3 @@
-import { once } from "node:events";
-import { createServer } from "node:http";
-import { promisify } from "node:util";
 import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -11,6 +8,7 @@ import {
   type ProviderContext,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { wrapMoonshotStream } from "./native-video.js";
@@ -108,77 +106,76 @@ it("measures caller replacements and rejects an oversized non-video body", async
 
 it("sends ordered video_url content through the real Chat Completions transport", async () => {
   let requestBody: unknown;
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      requestBody = JSON.parse(body);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
-      );
-    });
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing loopback address");
-    }
-    const provider = await registerSingleProviderPlugin(plugin);
-    const normalized = provider.normalizeResolvedModel?.({ ...route, model: model() } as never) as
-      | Model
-      | undefined;
-    expect(normalized?.input).toContain("video");
-    const transport = createOpenAICompletionsTransportStreamFn();
-    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-    const streamFn: StreamFn = (runtimeModel, context, options) =>
-      transport(
-        attachModelProviderRequestTransport(
-          { ...runtimeModel, provider: "custom", baseUrl },
-          { allowPrivateNetwork: true },
-        ),
-        context,
-        options,
-      );
-    const wrapped = provider.wrapStreamFn?.({ ...route, thinkingLevel: "off", streamFn } as never);
-    if (!wrapped || !normalized) {
-      throw new Error("Moonshot registered transport unavailable");
-    }
-    const message: ProviderContext["messages"][number] = {
-      role: "user",
-      content: [
-        { type: "text", text: "before" },
-        { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
-        { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
-        { type: "text", text: "after" },
-      ],
-      timestamp: 1,
-    };
-    let callerPayload: unknown;
-    const caller = vi.fn((payload: unknown) => (callerPayload = payload));
-    const stream = await wrapped(normalized, { messages: [message] } as never, {
-      apiKey: "test-key",
-      onPayload: caller,
-    });
-    const streamResult = JSON.stringify(await stream.result());
+  await withServer(
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requestBody = JSON.parse(body);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
+        );
+      });
+    },
+    async (origin) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const normalized = provider.normalizeResolvedModel?.({
+        ...route,
+        model: model(),
+      } as never) as Model | undefined;
+      expect(normalized?.input).toContain("video");
+      const transport = createOpenAICompletionsTransportStreamFn();
+      const baseUrl = `${origin}/v1`;
+      const streamFn: StreamFn = (runtimeModel, context, options) =>
+        transport(
+          attachModelProviderRequestTransport(
+            { ...runtimeModel, provider: "custom", baseUrl },
+            { allowPrivateNetwork: true },
+          ),
+          context,
+          options,
+        );
+      const wrapped = provider.wrapStreamFn?.({
+        ...route,
+        thinkingLevel: "off",
+        streamFn,
+      } as never);
+      if (!wrapped || !normalized) {
+        throw new Error("Moonshot registered transport unavailable");
+      }
+      const message: ProviderContext["messages"][number] = {
+        role: "user",
+        content: [
+          { type: "text", text: "before" },
+          { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+          { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+          { type: "text", text: "after" },
+        ],
+        timestamp: 1,
+      };
+      let callerPayload: unknown;
+      const caller = vi.fn((payload: unknown) => (callerPayload = payload));
+      const stream = await wrapped(normalized, { messages: [message] } as never, {
+        apiKey: "test-key",
+        onPayload: caller,
+      });
+      const streamResult = JSON.stringify(await stream.result());
 
-    expect(caller, streamResult).toHaveBeenCalledOnce();
-    const body = JSON.stringify(callerPayload);
-    expect(body).not.toMatch(/__openclaw|\/private\//u);
-    expect(body).toContain("data:video/mp4;base64,dmlkZW8=");
-    expect(requestBody, streamResult).toBeDefined();
-    expect(requestBody).toHaveProperty("messages.0.content", [
-      { type: "text", text: "before" },
-      { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
-      { type: "video_url", video_url: { url: "data:video/mp4;base64,dmlkZW8=" } },
-      { type: "text", text: "after" },
-    ]);
-  } finally {
-    await promisify(server.close.bind(server))();
-  }
+      expect(caller, streamResult).toHaveBeenCalledOnce();
+      const body = JSON.stringify(callerPayload);
+      expect(body).not.toMatch(/__openclaw|\/private\//u);
+      expect(body).toContain("data:video/mp4;base64,dmlkZW8=");
+      expect(requestBody, streamResult).toBeDefined();
+      expect(requestBody).toHaveProperty("messages.0.content", [
+        { type: "text", text: "before" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+        { type: "video_url", video_url: { url: "data:video/mp4;base64,dmlkZW8=" } },
+        { type: "text", text: "after" },
+      ]);
+    },
+  );
 });

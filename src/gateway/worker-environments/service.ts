@@ -23,7 +23,11 @@ import {
   createWorkerEnvironmentErrorRecorder,
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
-import { createWorkerProviderCaller, createWorkerReconcileTrace } from "./environment-operation.js";
+import {
+  createWorkerEnvironmentReconciler,
+  createWorkerProviderCaller,
+  createWorkerReconcileTrace,
+} from "./environment-operation.js";
 import {
   joinInferenceOperations,
   registerWorkerInferenceSessionControl,
@@ -35,13 +39,11 @@ import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
-import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 import { requireWorkerProfile } from "./service-validation.js";
 import type {
   WorkerEnvironmentCreateRequest,
   WorkerEnvironmentServiceOptions,
-  WorkerEnvironmentReconcileGuard,
 } from "./service.types.js";
 import { createWorkerEnvironmentSessionAttachments } from "./session-attachment-service.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -82,11 +84,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       retainInferenceCancellation(inference.cancelClaim(claim));
     },
   );
-  let reconcileEnvironmentGuard: WorkerEnvironmentReconcileGuard | undefined;
-  let reconcileEnvironmentGuardClosing = false;
-  // Coalesce the whole guarded closure. Serializing only provider work would still let a
-  // losing recovery pass attach or sync after the winner advances the placement.
-  const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
   const isReconciliationPaused = () => stopping || isGatewayWorkAdmissionClosed();
   let maintenanceInFlight: Promise<void> | undefined;
@@ -285,45 +282,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await operation;
   };
 
-  const reconcileEnvironment = async (environmentId: string) => {
-    if (isReconciliationPaused() || reconcileEnvironmentGuardClosing) {
-      return;
-    }
-    const guard = reconcileEnvironmentGuard;
-    const active = guardedReconcileInFlight.get(environmentId);
-    if (active) {
-      return await active;
-    }
-    using cancellation = createWorkerReconcileCancellation(scope.signal);
-    const reconcile = (signal = cancellation.signal, retain?: (settled: Promise<void>) => void) =>
-      reconcileEnvironmentCore(
-        environmentId,
-        AbortSignal.any([cancellation.signal, signal]),
-        retain,
-      );
-    const operation = guard ? guard(environmentId, reconcile, cancellation.signal) : reconcile();
-    guardedReconcileInFlight.set(environmentId, operation);
-    try {
-      await operation;
-    } finally {
-      guardedReconcileInFlight.delete(environmentId);
-    }
-  };
-
-  const closeReconcileEnvironmentGuard = async () => {
-    reconcileEnvironmentGuardClosing = true;
-    await Promise.allSettled(guardedReconcileInFlight.values());
-    reconcileEnvironmentGuard = undefined;
-    reconcileEnvironmentGuardClosing = false;
-  };
-
-  const installReconcileEnvironmentGuard = (guard: WorkerEnvironmentReconcileGuard) => {
-    if (reconcileEnvironmentGuard) {
-      throw new Error("Worker environment reconciliation guard is already installed");
-    }
-    reconcileEnvironmentGuard = guard;
-    return closeReconcileEnvironmentGuard;
-  };
+  const environmentReconciler = createWorkerEnvironmentReconciler({
+    store,
+    ownerSignal: scope.signal,
+    isPaused: isReconciliationPaused,
+    now,
+    warn,
+    reconcileCore: reconcileEnvironmentCore,
+  });
+  const { reconcileEnvironment, installReconcileEnvironmentGuard, closeReconcileEnvironmentGuard } =
+    environmentReconciler;
 
   const reconcileStep = <T>(name: string, run: () => Promise<T>) =>
     measureGatewayRestartTrace(`worker-environments.reconcile.${name}`, run, undefined, true);
@@ -346,16 +314,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentId === undefined
         ? store.listForReconcile().filter((record) => record.preparation?.consumedAtMs !== null)
         : [store.get(environmentId)].filter((candidate) => candidate !== undefined);
-    const tasks = candidates.map(
-      ({ environmentId: id, providerId }) =>
-        () =>
-          measureGatewayRestartTrace(
-            "worker-environments.reconcile.environment",
-            () => reconcileEnvironment(id),
-            () => ({ environment: id, provider: providerId }),
-            true,
-          ).catch(() => warn(`Worker environment reconcile failed (${id}, ${providerId})`)),
-    );
+    const eligible =
+      environmentId === undefined
+        ? environmentReconciler.backgroundCandidates(candidates)
+        : candidates;
+    const tasks = eligible.map((record) => () => environmentReconciler.reconcileCandidate(record));
     await runTasksWithConcurrency({ tasks, limit: 8 });
     if (isReconciliationPaused() || environmentId !== undefined) {
       return;
@@ -509,6 +472,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }
       }
       inferenceCancellations.clear();
+      environmentReconciler.clearFailures();
       credentialBroker.clear();
       clearTurnRpc();
       options.liveEvents?.clear();

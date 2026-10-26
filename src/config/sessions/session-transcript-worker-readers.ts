@@ -14,12 +14,12 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 import type { InternalSessionEntry } from "./types.js";
 
 export type SessionHistoryWorkerRequestRunner = <
-  Kind extends SessionHistoryWorkerPreparedInput["kind"],
+  Request extends SessionHistoryWorkerPreparedInput,
   TResult,
 >(
-  prepare: () => Extract<SessionHistoryWorkerPreparedInput, { kind: Kind }>,
+  prepare: () => Request,
   inputBytes: number,
-  receive: (value: SessionTranscriptWorkerValues[Kind]) => TResult,
+  receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
   timeoutMs?: number,
@@ -85,30 +85,14 @@ export function createSessionHistoryWorkerReaders(
   return Object.assign({ runRequest }, readers);
 }
 
-function reader<K extends SessionHistoryWorkerPreparedInput["kind"], T>(
-  kind: K,
-  project: (value: SessionTranscriptWorkerValues[K]) => T,
-): (
-  input: Omit<Extract<SessionHistoryWorkerPreparedInput, { kind: K }>, "kind">,
-  signal?: AbortSignal,
-) => Promise<T>;
-function reader<K extends SessionHistoryWorkerPreparedInput["kind"], Input extends object, T>(
-  kind: K,
-  project: (value: SessionTranscriptWorkerValues[K]) => T,
-  prepare: (input: Input) => Extract<SessionHistoryWorkerPreparedInput, { kind: K }>,
-): (input: Input, signal?: AbortSignal) => Promise<T>;
-function reader<K extends SessionHistoryWorkerPreparedInput["kind"], Input extends object, T>(
-  kind: K,
-  project: (value: SessionTranscriptWorkerValues[K]) => T,
-  prepare?: (input: Input) => Extract<SessionHistoryWorkerPreparedInput, { kind: K }>,
+function reader<Input extends object, Request extends SessionHistoryWorkerPreparedInput, T>(
+  prepare: (input: Input) => Request,
+  project: (value: SessionTranscriptWorkerValues[Request["kind"]]) => T,
 ): (input: Input, signal?: AbortSignal) => Promise<T> {
   return async function (this: ReaderContext, input, signal) {
-    return this.runRequest(
+    return this.runRequest<Request, T>(
       () => {
-        const request =
-          prepare?.(input) ??
-          // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
-          ({ kind, ...input } as Extract<SessionHistoryWorkerPreparedInput, { kind: K }>);
+        const request = prepare(input);
         // Windows environments can be Proxies; only plain snapshots cross the worker boundary.
         if ("scope" in request && request.scope.env) {
           return { ...request, scope: { ...request.scope, env: { ...request.scope.env } } };
@@ -122,7 +106,10 @@ function reader<K extends SessionHistoryWorkerPreparedInput["kind"], Input exten
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
-  readTrajectoryEvents: reader("trajectory-events", (value) => value.events),
+  readTrajectoryEvents: reader(
+    (input) => ({ kind: "trajectory-events", ...input }),
+    (value) => value.events,
+  ),
   readTrajectoryRetention(input, options) {
     const captured = {
       ...input,
@@ -139,27 +126,79 @@ const readers: Readers & ThisType<ReaderContext> = {
       options.timeoutMs,
     );
   },
-  readCleanup: reader("session-cleanup", (value) => value),
-  readRawDelta: reader("transcript-raw-delta", (value) => value.result),
-  readLatestAssistant: reader("transcript-latest-assistant", (value) => value.result),
-  readVisibleDelta: reader("transcript-visible-delta", (value) => value.result),
-  readSessionMemoryCapture: reader("session-memory-capture", (value) => value.result),
-  readBoardSnapshot: reader("board-snapshot", (result) => result.value),
-  readBoardWidgetDocument: reader("board-widget-document", (result) => result.value),
-  readBranchSummaries: reader("branch-summaries", (value) => value.result),
-  readMessagePresence: reader("transcript-message-presence", (value) => value.present),
-  readAnchors: reader("transcript-anchors", (value) => value.facts),
-  readRuntimeTarget: reader("session-runtime-target", (value) => value.target),
-  readConversations: reader("conversation-rows", (value) => value.rows),
-  readConversationBindings: reader("conversation-bindings", (value) => value.snapshot),
-  prewarm: reader("prewarm", () => undefined),
-  readRetirement: reader("session-retirement-read", (value) => value.result),
-  readPendingArchives: reader("session-pending-archives", (value) => value.pending),
-  readLifecycleArtifactPlan: reader("lifecycle-artifact-plan", (value) => value),
-  readTranscriptStatsBatch: reader("transcript-stats-batch", (value) => value.stats),
+  readCleanup: reader(
+    (input) => ({ kind: "session-cleanup", ...input }),
+    (value) => value,
+  ),
+  readRawDelta: reader(
+    (input) => ({ kind: "transcript-raw-delta", ...input }),
+    (value) => value.result,
+  ),
+  readLatestAssistant: reader(
+    (input) => ({ kind: "transcript-latest-assistant", ...input }),
+    (value) => value.result,
+  ),
+  readVisibleDelta: reader(
+    (input) => ({ kind: "transcript-visible-delta", ...input }),
+    (value) => value.result,
+  ),
+  readSessionMemoryCapture: reader(
+    (input) => ({ kind: "session-memory-capture", ...input }),
+    (value) => value.result,
+  ),
+  readBoardSnapshot: reader(
+    (input) => ({ kind: "board-snapshot", ...input }),
+    (result) => result.value,
+  ),
+  readBoardWidgetDocument: reader(
+    (input) => ({ kind: "board-widget-document", ...input }),
+    (result) => result.value,
+  ),
+  readBranchSummaries: reader(
+    (input) => ({ kind: "branch-summaries", ...input }),
+    (value) => value.result,
+  ),
+  readMessagePresence: reader(
+    (input) => ({ kind: "transcript-message-presence", ...input }),
+    (value) => value.present,
+  ),
+  readAnchors: reader(
+    (input) => ({ kind: "transcript-anchors", ...input }),
+    (value) => value.facts,
+  ),
+  readRuntimeTarget: reader(
+    (input) => ({ kind: "session-runtime-target", ...input }),
+    (value) => value.target,
+  ),
+  readConversations: reader(
+    (input) => ({ kind: "conversation-rows", ...input }),
+    (value) => value.rows,
+  ),
+  readConversationBindings: reader(
+    (input) => ({ kind: "conversation-bindings", ...input }),
+    (value) => value.snapshot,
+  ),
+  prewarm: reader(
+    (input) => ({ kind: "prewarm", ...input }),
+    () => undefined,
+  ),
+  readRetirement: reader(
+    (input) => ({ kind: "session-retirement-read", ...input }),
+    (value) => value.result,
+  ),
+  readPendingArchives: reader(
+    (input) => ({ kind: "session-pending-archives", ...input }),
+    (value) => value.pending,
+  ),
+  readLifecycleArtifactPlan: reader(
+    (input) => ({ kind: "lifecycle-artifact-plan", ...input }),
+    (value) => value,
+  ),
+  readTranscriptStatsBatch: reader(
+    (input) => ({ kind: "transcript-stats-batch", ...input }),
+    (value) => value.stats,
+  ),
   readTranscriptInstances: reader(
-    "session-transcript-instances",
-    (value) => value.instances,
     (input) => ({
       kind: "session-transcript-instances",
       ...input,
@@ -168,10 +207,9 @@ const readers: Readers & ThisType<ReaderContext> = {
         env: captureSessionTranscriptStorageEnvironment(input.scope.env ?? process.env),
       },
     }),
+    (value) => value.instances,
   ),
   readMemorySessionTargets: reader(
-    "memory-session-targets",
-    (value) => value.targets,
     (input) => ({
       kind: "memory-session-targets",
       ...input,
@@ -180,33 +218,34 @@ const readers: Readers & ThisType<ReaderContext> = {
         env: captureSessionTranscriptStorageEnvironment(input.params.env),
       },
     }),
+    (value) => value.targets,
   ),
   readArchiveInventory: reader(
-    "session-archive-inventory",
-    (value) => value.archives,
     (input) => ({
       kind: "session-archive-inventory",
       ...input,
       env: captureSessionTranscriptStorageEnvironment(input.env ?? process.env),
     }),
+    (value) => value.archives,
   ),
   readCorpusInventory: reader(
-    "session-corpus-inventory",
-    (value) => value.entries,
     (input) => ({
       kind: "session-corpus-inventory",
       ...input,
       scope: { ...input.scope, env: captureSessionTranscriptStorageEnvironment(input.scope.env) },
     }),
+    (value) => value.entries,
   ),
-  readArchivePresence: reader("session-archive-presence", (value) => value.registered),
+  readArchivePresence: reader(
+    (input) => ({ kind: "session-archive-presence", ...input }),
+    (value) => value.registered,
+  ),
   findTranscriptEvent: reader(
-    "transcript-match",
-    (value) => value.result,
     (request) => ({ kind: "transcript-match", request }),
+    (value) => value.result,
   ),
   readHistoricalEvictionCandidates: reader(
-    "historical-eviction-candidates",
+    (input) => ({ kind: "historical-eviction-candidates", ...input }),
     (value) => {
       if (!("sessionIds" in value)) {
         throw new Error(
@@ -215,10 +254,9 @@ const readers: Readers & ThisType<ReaderContext> = {
       }
       return value.sessionIds;
     },
-    (input) => ({ kind: "historical-eviction-candidates", ...input }),
   ),
   readArchivedEvictionCandidates: reader(
-    "historical-eviction-candidates",
+    (input) => ({ kind: "historical-eviction-candidates", ...input }),
     (value) => {
       if (!("batch" in value)) {
         throw new Error(
@@ -227,11 +265,19 @@ const readers: Readers & ThisType<ReaderContext> = {
       }
       return value.batch;
     },
-    (input) => ({ kind: "historical-eviction-candidates", ...input }),
   ),
-  readArchivePruning: reader("session-archive-pruning", (value) => value.result),
-  readColdMetadata: reader("cold-metadata", (value) => value),
-  readColdStorageInventory: reader("cold-storage-inventory", (value) => value),
+  readArchivePruning: reader(
+    (input) => ({ kind: "session-archive-pruning", ...input }),
+    (value) => value.result,
+  ),
+  readColdMetadata: reader(
+    (input) => ({ kind: "cold-metadata", ...input }),
+    (value) => value,
+  ),
+  readColdStorageInventory: reader(
+    (input) => ({ kind: "cold-storage-inventory", ...input }),
+    (value) => value,
+  ),
   searchTranscripts(params, readIndexStatus) {
     return this.runRequest(
       () => ({ kind: "transcript-search", params }),
@@ -246,11 +292,26 @@ const readers: Readers & ThisType<ReaderContext> = {
       },
     );
   },
-  readPreview: reader("session-preview", (value) => value.items),
-  readTitleFields: reader("session-title-fields", (value) => value.fields),
-  readWatermark: reader("transcript-watermark", (value) => value.watermark),
-  readStats: reader("transcript-stats", (value) => value.stats),
-  readActivitySummarySource: reader("session-activity-summary-source", (value) => value.source),
+  readPreview: reader(
+    (input) => ({ kind: "session-preview", ...input }),
+    (value) => value.items,
+  ),
+  readTitleFields: reader(
+    (input) => ({ kind: "session-title-fields", ...input }),
+    (value) => value.fields,
+  ),
+  readWatermark: reader(
+    (input) => ({ kind: "transcript-watermark", ...input }),
+    (value) => value.watermark,
+  ),
+  readStats: reader(
+    (input) => ({ kind: "transcript-stats", ...input }),
+    (value) => value.stats,
+  ),
+  readActivitySummarySource: reader(
+    (input) => ({ kind: "session-activity-summary-source", ...input }),
+    (value) => value.source,
+  ),
   async run(prepare, inputBytes) {
     return this.runRequest(prepare, inputBytes, (value) => value);
   },
@@ -304,15 +365,42 @@ const readers: Readers & ThisType<ReaderContext> = {
       input.limits ? undefined : receiveChunk,
     );
   },
-  readMaintenance: reader("transcript-maintenance", (value) => value),
-  readCurrentTurnEntry: reader("current-turn-entry", (value) => value),
-  readRecentActiveEvents: reader("recent-active-events", (value) => value.events),
-  readLatestActiveMessage: reader("latest-active-message", (value) => value.message),
-  readVoiceSessions: reader("voice-sessions", (value) => value),
-  readMembershipFacts: reader("session-membership-facts", (value) => value),
-  readMembers: reader("session-members", (value) => value),
-  readSuggestions: reader("session-suggestions", (value) => value.suggestions),
-  readReactions: reader("session-reactions", (value) => value.reactions),
+  readMaintenance: reader(
+    (input) => ({ kind: "transcript-maintenance", ...input }),
+    (value) => value,
+  ),
+  readCurrentTurnEntry: reader(
+    (input) => ({ kind: "current-turn-entry", ...input }),
+    (value) => value,
+  ),
+  readRecentActiveEvents: reader(
+    (input) => ({ kind: "recent-active-events", ...input }),
+    (value) => value.events,
+  ),
+  readLatestActiveMessage: reader(
+    (input) => ({ kind: "latest-active-message", ...input }),
+    (value) => value.message,
+  ),
+  readVoiceSessions: reader(
+    (input) => ({ kind: "voice-sessions", ...input }),
+    (value) => value,
+  ),
+  readMembershipFacts: reader(
+    (input) => ({ kind: "session-membership-facts", ...input }),
+    (value) => value,
+  ),
+  readMembers: reader(
+    (input) => ({ kind: "session-members", ...input }),
+    (value) => value,
+  ),
+  readSuggestions: reader(
+    (input) => ({ kind: "session-suggestions", ...input }),
+    (value) => value.suggestions,
+  ),
+  readReactions: reader(
+    (input) => ({ kind: "session-reactions", ...input }),
+    (value) => value.reactions,
+  ),
   async readExactEntries(input, signal) {
     const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
     return this.runRequest(
@@ -342,24 +430,48 @@ const readers: Readers & ThisType<ReaderContext> = {
       },
     );
   },
-  readProgressCard: reader("session-progress-card", (value) => value.card),
-  readPendingInputHistory: reader("session-pending-input-history", (value) => value.snapshot),
-  readPendingInputReceipts: reader("session-pending-input-receipts", (value) => value.receipts),
-  readHarnessCompletionSource: reader(
-    "session-harness-completion-source",
+  readProgressCard: reader(
+    (input) => ({ kind: "session-progress-card", ...input }),
+    (value) => value.card,
+  ),
+  readPendingInputHistory: reader(
+    (input) => ({ kind: "session-pending-input-history", ...input }),
     (value) => value.snapshot,
   ),
-  readPendingInputSource: reader("session-pending-input-source", (value) => value.snapshot),
-  readConversationDelivery: reader("conversation-delivery", (value) => value.record),
-  readGoalOperationReceipt: reader("goal-operation-receipt", (value) => value.result),
-  readEntryResult: reader("session-entry-read", (value) => ({
-    ...(value.readError
-      ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-      : ok(shareSummaryIdentityStrings(value.entry))),
-    source: value.source,
-    facts: value.facts && shareSummaryRowStrings(value.facts),
-  })),
-  readEntryCurrent: reader("session-entry-current", (value) => value.entry),
+  readPendingInputReceipts: reader(
+    (input) => ({ kind: "session-pending-input-receipts", ...input }),
+    (value) => value.receipts,
+  ),
+  readHarnessCompletionSource: reader(
+    (input) => ({ kind: "session-harness-completion-source", ...input }),
+    (value) => value.snapshot,
+  ),
+  readPendingInputSource: reader(
+    (input) => ({ kind: "session-pending-input-source", ...input }),
+    (value) => value.snapshot,
+  ),
+  readConversationDelivery: reader(
+    (input) => ({ kind: "conversation-delivery", ...input }),
+    (value) => value.record,
+  ),
+  readGoalOperationReceipt: reader(
+    (input) => ({ kind: "goal-operation-receipt", ...input }),
+    (value) => value.result,
+  ),
+  readEntryResult: reader(
+    (input) => ({ kind: "session-entry-read", ...input }),
+    (value) => ({
+      ...(value.readError
+        ? err(decodeSessionTranscriptWorkerReadError(value.readError))
+        : ok(shareSummaryIdentityStrings(value.entry))),
+      source: value.source,
+      facts: value.facts && shareSummaryRowStrings(value.facts),
+    }),
+  ),
+  readEntryCurrent: reader(
+    (input) => ({ kind: "session-entry-current", ...input }),
+    (value) => value.entry,
+  ),
   // The native reader validates the selected file. Replacement after that read is best effort.
   async readEntries(scope, continuation, expectedIdentity, ifRevision) {
     const captured = expectedIdentity && { ...expectedIdentity };
@@ -375,13 +487,24 @@ const readers: Readers & ThisType<ReaderContext> = {
       shareSummaryRowStrings,
     );
   },
-  readStoreProjection: reader("session-store-projection", shareSummaryRowStrings),
-  readStoreSummary: reader("session-store-summary", (value) => value.summary),
-  readIdentityEvidence: reader("session-identity-evidence", (value) => value.evidence),
-  readProjectionStatus: reader("projection-status", (value) => value),
-  readEntryPresence: reader(
-    "session-row-presence",
+  readStoreProjection: reader(
+    (input) => ({ kind: "session-store-projection", ...input }),
+    shareSummaryRowStrings,
+  ),
+  readStoreSummary: reader(
+    (input) => ({ kind: "session-store-summary", ...input }),
+    (value) => value.summary,
+  ),
+  readIdentityEvidence: reader(
+    (input) => ({ kind: "session-identity-evidence", ...input }),
+    (value) => value.evidence,
+  ),
+  readProjectionStatus: reader(
+    (input) => ({ kind: "projection-status", ...input }),
     (value) => value,
+  ),
+  readEntryPresence: reader(
     (scope) => ({ kind: "session-row-presence", scope }),
+    (value) => value,
   ),
 };

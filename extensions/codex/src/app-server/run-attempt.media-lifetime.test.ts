@@ -4,7 +4,7 @@ import { createHostTtsRuntimeContract } from "openclaw/plugin-sdk/agent-runtime-
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi, type MockInstance } from "vitest";
 import * as dynamicTools from "./dynamic-tools.js";
-import { installResultMiddleware } from "./dynamic-tools.test-support.js";
+import { createDynamicToolCall, installResultMiddleware } from "./dynamic-tools.test-support.js";
 import {
   createTestParams,
   createCodexRuntimePlanFixture,
@@ -62,14 +62,7 @@ it("delivers earlier accepted TTS but discards audio whose result timed out", as
       harness.handleServerRequest({
         id: callId,
         method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId,
-          namespace: null,
-          tool: "tts",
-          arguments: args,
-        },
+        params: createDynamicToolCall("tts", args, callId),
       });
     expect(await speak("earlier-tts", { text: "Earlier accepted audio." })).toMatchObject({
       success: true,

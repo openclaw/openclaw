@@ -8,6 +8,7 @@ import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/senti
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as authProfileRecords from "./auth-profiles/profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -130,21 +131,14 @@ beforeEach(() => {
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   preparedModelRuntime = {
-    catalogOwner: undefined,
-    agentDir: "/tmp/openclaw-agent",
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      createStores: () => ({ authStorage, modelRegistry }),
+    }),
     workspaceDir: "/tmp/runtime-workspace",
-    config: {},
     observationConfig: {},
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    allowGatewaySubagentBinding: false,
-    modelCatalog: { entries: [], routeVariants: [] },
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    activeProjectKeys: [],
-    createStores: () => ({ authStorage, modelRegistry }),
   };
   hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
     snapshot: preparedModelRuntime,

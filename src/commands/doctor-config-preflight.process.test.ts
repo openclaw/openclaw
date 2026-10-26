@@ -11,6 +11,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cronOwnerHardeningEntrypoints } from "../cron/owner-hardening-runtime.test-support.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, loadCronQuarantinedJobs } from "../cron/store.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -94,7 +95,7 @@ function writeText(file: string, value: string) {
 
 function expectConfigUntouched(configPath: string, stateDir: string, raw: string) {
   expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-  const files = fs.readdirSync(stateDir, { recursive: true, encoding: "utf8" });
+  const files = listDirectoryTreeStrictSync(stateDir).map((entry) => entry.relativePath);
   expect(files.filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file))).toEqual(
     [],
   );

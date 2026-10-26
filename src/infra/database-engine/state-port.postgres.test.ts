@@ -81,6 +81,15 @@ describe.skipIf(!connection)("shared-state database port", () => {
       assertCurrent() {},
     });
     expect(staged).toEqual({ tables: before.tables, allocations: before.allocations });
+    const plannerRows = async (schema: string) =>
+      (
+        await client.query(
+          `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = $1 AND c.relname = 'user_profiles'`,
+          [schema],
+        )
+      ).rows;
+    expect(await plannerRows(namespace)).toEqual([{ reltuples: 1 }]);
     expect((await client.query(`SELECT sequence FROM "${namespace}".audit_events`)).rows).toEqual([
       { sequence: "9007199254740993" },
     ]);
@@ -152,6 +161,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
         assertCurrent() {},
       });
       namespaces.add(restored.namespace);
+      expect(await plannerRows(restored.namespace)).toEqual([{ reltuples: 1 }]);
       expect(readBackupEngine(restoredPath)).toEqual({
         engine: "postgres",
         storeId,

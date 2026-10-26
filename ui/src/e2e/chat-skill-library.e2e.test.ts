@@ -137,7 +137,7 @@ suite.define(() => {
       });
       const { getRequests } = gateway;
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Use $release");
       const references = page.getByRole("listbox", { name: "Skill references" });

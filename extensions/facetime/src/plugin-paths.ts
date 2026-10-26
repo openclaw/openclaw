@@ -73,8 +73,13 @@ export async function inspectFaceTimeArtifacts(): Promise<{
       return false;
     }
   };
-  const helperTempDirs = ["com.apple.FaceTime", "com.apple.mobilephone"].map((bundle) =>
-    resolve(homedir(), "Library", "Containers", bundle, "Data", "tmp"),
+  const helperTempDir = resolve(
+    homedir(),
+    "Library",
+    "Containers",
+    "com.apple.FaceTime",
+    "Data",
+    "tmp",
   );
   const countHelpers = async (directory: string) => {
     try {
@@ -97,9 +102,7 @@ export async function inspectFaceTimeArtifacts(): Promise<{
     readable(resolveHelperDylib(), constants.R_OK),
     readable(resolveHelperStateFile("helper-ipc-key"), constants.R_OK),
     readable(resolveHelperStateFile("helper-build.sha256"), constants.R_OK),
-    Promise.all(helperTempDirs.map(countHelpers)).then((counts) =>
-      counts.reduce((total, count) => total + count, 0),
-    ),
+    countHelpers(helperTempDir),
     readable(
       resolve(
         homedir(),

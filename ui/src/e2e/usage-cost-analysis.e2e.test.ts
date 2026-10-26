@@ -2,6 +2,7 @@ import type { BrowserContextOptions, Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
@@ -91,13 +92,7 @@ function emptyUsageResponses() {
       sessions: [],
       totals: emptyTotals,
       aggregates: {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
+        ...buildAggregatesFromSessions([]),
         costDaily: [],
       },
     },

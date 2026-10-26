@@ -7,6 +7,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
 } from "./terminal-panel.test-support.ts";
@@ -74,9 +75,8 @@ describe("terminal panel readiness", () => {
       const siblingOpen = createDeferred<ReturnType<typeof terminalOpenResult>>();
       const requests: Array<{ method: string; params: unknown }> = [];
       let listener: Parameters<TerminalGatewayClient["addEventListener"]>[0] | undefined;
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(method: string, params?: unknown) => {
+      const client: TerminalGatewayClient = createTerminalGatewayClient(
+        async <T>(method: string, params?: unknown) => {
           requests.push({ method, params });
           if (method === "terminal.open" && !(params as { catalog?: unknown }).catalog) {
             return siblingOpen.promise as Promise<T>;
@@ -87,13 +87,13 @@ describe("terminal panel readiness", () => {
               : { ok: true }
           ) as T;
         },
-        addEventListener: (nextListener) => {
+        (nextListener) => {
           listener = nextListener;
           return () => {
             listener = undefined;
           };
         },
-      };
+      );
       const panel = createReadinessPanel();
       panel.client = client;
       panel.available = true;

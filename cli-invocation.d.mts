@@ -40,6 +40,7 @@ export function isEmbeddedStandaloneModule(modulePath: string): boolean;
 export function runtimeHasSourceLoader(): boolean;
 export function resolveStandaloneNpmCliPath(): string | undefined;
 export function resolveRuntimeScriptEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
+export function resolveStandaloneSidecarRoot(executable?: string): string | undefined;
 export function resolveOpenClawCliInvocation(params?: {
   execPath?: string;
   /** Null selects an executable CLI command without inheriting the current script. */

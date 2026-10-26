@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 
 const mocks = vi.hoisted(() => ({
@@ -173,18 +174,14 @@ function repeatReceipt(title: string) {
 }
 
 describe("doctorCommand", () => {
-  const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const ttyMock = createCliTtyMock([process.stdin]);
 
   afterEach(() => {
-    if (stdinIsTTY) {
-      Object.defineProperty(process.stdin, "isTTY", stdinIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
   });
 
   beforeEach(() => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    ttyMock.set(true);
     vi.clearAllMocks();
     mocks.claimSessionSqliteMigrationGithubIssue.mockImplementation(
       (_manifestPath: string, issue: { marker: string; title: string }) => ({
@@ -335,7 +332,7 @@ describe("doctorCommand", () => {
   });
 
   it("creates a GitHub issue for --yes recovery without interactive input", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    ttyMock.set(false);
     const supportIssue = {
       body: "sanitized body",
       bodyPath: "/tmp/session.failure.md",
@@ -531,7 +528,7 @@ describe("doctorCommand", () => {
     { label: "noninteractive mode", json: false, nonInteractive: true, isTTY: true },
     { label: "redirected input", json: false, nonInteractive: false, isTTY: false },
   ])("records why GitHub issue creation is skipped for $label", async (mode) => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: mode.isTTY });
+    ttyMock.set(mode.isTTY);
     const { report, runtime } = recovery();
 
     await runDoctor(runtime, {

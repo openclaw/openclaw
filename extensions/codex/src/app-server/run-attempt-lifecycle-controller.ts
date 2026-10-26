@@ -42,6 +42,7 @@ export function createCodexAttemptLifecycleController(
   // can lag. Only rawResponse/completed closes the model's call inventory.
   let modelResponse: ModelResponse | undefined;
   let lastClosedResponseId: string | undefined;
+  let terminalSteeringDrainPending = false;
   const resolveAuthoredResponse = () => {
     if (!modelResponse?.closed || modelResponse.calls.size === 0) {
       return undefined;
@@ -62,6 +63,7 @@ export function createCodexAttemptLifecycleController(
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (
       state.terminalDynamicToolReleaseCheckScheduled ||
+      terminalSteeringDrainPending ||
       (!state.pendingTerminalDynamicToolRelease &&
         !state.currentTurnHadNonTerminalDynamicToolResult &&
         !resolveAuthoredResponse())
@@ -92,8 +94,8 @@ export function createCodexAttemptLifecycleController(
         pendingOpenClawDynamicToolCompletionIds.size === 0
       ) {
         // Tool response flush plus sibling classification commits terminal release.
-        // Fence steering now; active Codex items may delay the actual interrupt.
-        turnRuntime.steeringQueueRef.current?.cancel();
+        // Fence new input now, but keep submitted input eligible for consumption.
+        turnRuntime.steeringQueueRef.current?.sealAdmission();
       }
       if (
         state.activeAppServerTurnRequests > 0 ||
@@ -114,6 +116,15 @@ export function createCodexAttemptLifecycleController(
         runAbortController.signal.aborted ||
         (!value.response.success && !deliveredFinal)
       ) {
+        return;
+      }
+      const steeringDrain = turnRuntime.steeringQueueRef.current?.drainBeforeCancel();
+      if (steeringDrain) {
+        terminalSteeringDrainPending = true;
+        void steeringDrain.then(() => {
+          terminalSteeringDrainPending = false;
+          scheduleTerminalDynamicToolReleaseCheck();
+        });
         return;
       }
       state.pendingTerminalDynamicToolRelease = undefined;
@@ -137,9 +148,6 @@ export function createCodexAttemptLifecycleController(
         tool: value.call.tool,
         durationMs: value.durationMs,
       });
-      // Interrupt drops accepted pending input. Reject unconsumed steering first so
-      // completion delivery can use its fallback path instead of reporting success.
-      turnRuntime.steeringQueueRef.current?.cancel();
       // Foreground yield may complete immediately, but subscription transfer must
       // join the exact native turn's stop before another parent turn can start.
       state.abortCleanup = turnRuntime

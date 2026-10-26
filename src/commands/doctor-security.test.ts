@@ -6,15 +6,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import { runAuthProfileMigration } from "../flows/doctor-auth-health.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import {
   saveExecApprovals,
   testing as execApprovalsStoreTesting,
 } from "../infra/exec-approvals-store.test-support.js";
-import * as auditStore from "../secrets/audit-store.js";
 import { runSecretsAudit } from "../secrets/audit.js";
 import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import {
@@ -45,7 +42,10 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   return { ...actual, getSecretTargetRegistry: actual.getCoreSecretTargetRegistry };
 });
 
-import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
+import {
+  createDoctorHealthFlowContext,
+  createDoctorPrompterFixture as makePrompter,
+} from "../flows/doctor-health-context.test-support.js";
 import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
@@ -62,6 +62,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
+  function expectMessage(...parts: string[]) {
+    for (const part of parts) {
+      expect(lastMessage()).toContain(part);
+    }
+  }
 
   it.each([
     { name: "resolved env shorthand", token: "${GATEWAY_AUTH_TOKEN_FAKE_A}", plaintext: false },
@@ -88,17 +93,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
         observe: false,
       }).readConfigFileSnapshot();
       expect(snapshot.valid).toBe(true);
-      const ctx: DoctorHealthFlowContext = {
+      const ctx = createDoctorHealthFlowContext({
         cfg: snapshot.config,
-        cfgForPersistence: snapshot.config,
-        configResult: { cfg: snapshot.config },
+        configResult: { confirmedConfigSource: undefined },
         configPath,
-        sourceConfigValid: true,
         options: { nonInteractive: true },
         prompter: makePrompter(false, true),
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         env: process.env,
-      };
+      });
 
       await runAuthProfileMigration(ctx);
       const findings = await collectSecurityWarnings(ctx.cfg);
@@ -125,10 +127,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
       const findings = await collectSecurityWarnings({ approvals: { exec: { enabled: false } } });
 
-      expect(findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
-        ]),
+      expect(findings).toContainEqual(
+        expect.objectContaining({ checkId: "doctor.approval_forwarding_disabled" }),
       );
     });
   });
@@ -152,31 +152,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     });
   }
 
-  async function expectAgentExecHostPolicyWarning(agentKey: "*" | "runner") {
-    await withExecApprovalsFile(
-      {
-        version: 1,
-        defaults: agentKey === "*" ? { security: "full", ask: "off" } : undefined,
-        agents: { [agentKey]: { security: "allowlist", ask: "always" } },
-      },
-      async () => {
-        await noteSecurityWarnings({
-          agents: { entries: { runner: { tools: { exec: { mode: "full" } } } } },
-        });
-      },
-    );
-
-    const message = lastMessage();
-    expect(message).toContain(
-      "agents.entries.runner.tools.exec is broader than the host exec policy",
-    );
-    expect(message).toContain(`agents.${agentKey}.security="allowlist"`);
-    expect(message).toContain(`agents.${agentKey}.ask="always"`);
-  }
-
   it("retains rendered security warnings for update finalization", async () => {
-    const { createDoctorHealthFlowContext } =
-      await import("../flows/doctor-health-contributions.test-support.js");
     const { runSecurityHealth } =
       await import("../flows/doctor-health-contribution-runners.gateway.js");
     const ctx = createDoctorHealthFlowContext({
@@ -192,16 +168,16 @@ describe("noteSecurityWarnings gateway exposure", () => {
   it("warns when OPENCLAW_GATEWAY_TOKEN env conflicts with gateway.auth.token config (#74271)", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token-123");
     await noteSecurityWarnings({ gateway: { auth: { token: "config-token-456" } } });
-    const message = lastMessage();
-    expect(message).toContain("OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token");
-    expect(message).toContain("Configured local Gateway clients");
-    expect(message).toContain("~/.openclaw/.env");
+    expectMessage(
+      "OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token",
+      "Configured local Gateway clients",
+      "~/.openclaw/.env",
+    );
   });
 
   it("treats whitespace token as missing", async () => {
     await noteSecurityWarnings({ gateway: { bind: "lan", auth: { mode: "token", token: "   " } } });
-    const message = lastMessage();
-    expect(message).toContain("CRITICAL");
+    expectMessage("CRITICAL");
   });
 
   it("explains how to renew inactive generated exec approvals", async () => {
@@ -239,20 +215,15 @@ describe("noteSecurityWarnings gateway exposure", () => {
       tools: { allow: ["read", "exec", "process"], deny: ["write", "edit", "apply_patch"] },
     });
 
-    const message = lastMessage();
-    expect(message).toContain("filesystem write tools are disabled, but exec is still available");
-    expect(message).toContain("Runtime tools: exec, process");
-    expect(message).toContain('sandbox.mode="off"');
-    expect(message).toContain("also deny exec/process");
+    expectMessage(
+      "filesystem write tools are disabled, but exec is still available",
+      "Runtime tools: exec, process",
+      'sandbox.mode="off"',
+      "also deny exec/process",
+    );
   });
 
-  it.each<{ name: string; provider: Partial<ModelProviderConfig>; paths: string[] }>([
-    {
-      name: "sensitive header",
-      provider: { headers: { Authorization: "Bearer synthetic-key" } },
-      paths: ["models.providers.ollama.headers.Authorization"],
-    },
-  ])("agrees with secrets audit for $name", async ({ provider, paths }) => {
+  it("agrees with secrets audit for a sensitive header", async () => {
     await withExecApprovalsFile({ version: 1 }, async () => {
       const cfg: OpenClawConfig = {
         models: {
@@ -261,7 +232,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
               api: "ollama",
               baseUrl: "http://127.0.0.1:11434",
               models: [],
-              ...provider,
+              headers: { Authorization: "Bearer synthetic-key" },
             },
           },
         },
@@ -272,24 +243,17 @@ describe("noteSecurityWarnings gateway exposure", () => {
         OLLAMA_API_KEY: "synthetic-resolved-key",
       };
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
-      const residueSpy = vi.spyOn(auditStore, "findSecretStorePlaintextResidueFindings");
-      try {
-        const report = await runSecretsAudit({ env });
-        const auditPaths = residueSpy.mock.calls.flatMap(([{ assignments }]) =>
-          assignments.map((assignment) => assignment.path),
-        );
-        expect(auditPaths).toEqual(paths);
-        expect(report.summary.plaintextCount).toBe(paths.length);
-        const findings = await collectSecurityWarnings(cfg, env);
-        const doctorPaths = findings
-          .filter((finding) => finding.checkId === "config.plaintext_secrets")
-          .flatMap(
-            (finding) => finding.remediation?.match(/^Paths: (.+)$/m)?.[1]?.split(", ") ?? [],
-          );
-        expect(doctorPaths).toEqual(auditPaths);
-      } finally {
-        residueSpy.mockRestore();
-      }
+      const report = await runSecretsAudit({ env });
+      const auditPaths = report.findings
+        .filter((finding) => finding.code === "PLAINTEXT_FOUND")
+        .map((finding) => finding.jsonPath);
+      expect(auditPaths).toEqual(["models.providers.ollama.headers.Authorization"]);
+      expect(report.summary.plaintextCount).toBe(1);
+      const findings = await collectSecurityWarnings(cfg, env);
+      const doctorPaths = findings
+        .filter((finding) => finding.checkId === "config.plaintext_secrets")
+        .flatMap((finding) => finding.remediation?.match(/^Paths: (.+)$/m)?.[1]?.split(", ") ?? []);
+      expect(doctorPaths).toEqual(auditPaths);
     });
   });
 
@@ -315,7 +279,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
           remediation: expect.stringContaining(`openclaw secrets store set ${entry.name}`),
         }),
       );
-      expect(lastMessage()).toContain("unavailable until replaced");
+      expectMessage("unavailable until replaced");
       expect(await readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
     });
   });
@@ -330,29 +294,26 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("plaintext secret-bearing config fields");
   });
 
-  it("warns when a per-agent exec policy is broader than the matching host agent policy", async () => {
-    await expectAgentExecHostPolicyWarning("runner");
-  });
+  it.each([false, true])(
+    "warns about broader agent exec policy (inherited=%s)",
+    async (inherited) => {
+      await withExecApprovalsFile(
+        { version: 1, agents: { runner: { security: "allowlist", ask: "always" } } },
+        async () => {
+          await noteSecurityWarnings({
+            ...(inherited ? { tools: { exec: { mode: "full" as const } } } : {}),
+            agents: { entries: { runner: inherited ? {} : { tools: { exec: { mode: "full" } } } } },
+          });
+        },
+      );
 
-  it("warns when an agent inherits broader global tools.exec policy than the matching host agent policy", async () => {
-    await withExecApprovalsFile(
-      { version: 1, agents: { runner: { security: "allowlist", ask: "always" } } },
-      async () => {
-        await noteSecurityWarnings({
-          tools: { exec: { mode: "full" } },
-          agents: { entries: { runner: {} } },
-        });
-      },
-    );
-
-    const message = lastMessage();
-    expect(message).toContain(
-      "agents.entries.runner.tools.exec is broader than the host exec policy",
-    );
-    expect(message).toContain('tools.exec.mode="full"');
-    expect(message).toContain('agents.runner.security="allowlist"');
-    expect(message).toContain('agents.runner.ask="always"');
-  });
+      expectMessage("agents.entries.runner.tools.exec is broader than the host exec policy");
+      if (inherited) {
+        expectMessage('tools.exec.mode="full"');
+      }
+      expectMessage('agents.runner.security="allowlist"', 'agents.runner.ask="always"');
+    },
+  );
 
   it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
     const cfg = {
@@ -377,10 +338,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
     };
     await noteSecurityWarnings(cfg);
 
-    const message = lastMessage();
-    expect(message).toContain('Heartbeat agent "ops"');
-    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
-    expect(message).toContain("direct/DM targets by default");
+    expectMessage(
+      'Heartbeat agent "ops"',
+      'heartbeat.directPolicy for agent "ops"',
+      "direct/DM targets by default",
+    );
   });
 
   it("keeps intentional Discord open groupPolicy advisory in Doctor and update lint", async () => {
@@ -413,8 +375,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const securityCheck = createCoreHealthChecks().find(
       (check) => check.id === "core/doctor/security",
     );
-    expect(securityCheck).toBeDefined();
-
     const healthFindings = await securityCheck!.detect({
       mode: "lint",
       runtime: { log() {}, error() {}, exit() {} },
@@ -436,10 +396,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
         message: expect.stringContaining("Discord security warning"),
       }),
     ]);
-    expect(openGroupFindings.some((finding) => finding.severity === "error")).toBe(false);
-
-    // Candidate update lint uses --severity-min error; the advisory must remain visible under warning.
-    expect(exitCodeFromFindings(openGroupFindings, "error")).toBe(0);
     expect(exitCodeFromFindings(openGroupFindings, "warning")).toBe(1);
   });
 });

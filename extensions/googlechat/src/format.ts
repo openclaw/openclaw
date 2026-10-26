@@ -1,4 +1,5 @@
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
+import { formatTextWithAttachmentLinks } from "openclaw/plugin-sdk/reply-payload";
 import {
   FormatCapabilityProfile,
   markdownToIR,
@@ -40,6 +41,31 @@ export function sanitizeGoogleChatText(text: string): string {
   return sanitizeForPlainText(sanitizeAssistantVisibleText(text), {
     style: "markdown",
   });
+}
+
+export function formatGoogleChatMediaText(
+  text: string | undefined,
+  mediaUrls: readonly string[],
+): string {
+  const remoteUrls = mediaUrls.filter((value) => {
+    // Controls are ASCII; check code units before URL parsing strips them.
+    if (
+      value.split("").some((character) => character <= " " || character === "\u007f") ||
+      !/^https?:\/\//iu.test(value)
+    ) {
+      return false;
+    }
+    try {
+      return Boolean(new URL(value).hostname);
+    } catch {
+      return false;
+    }
+  });
+  if (remoteUrls.length !== mediaUrls.length) {
+    throw new Error("Google Chat outbound attachments require remote HTTP(S) URLs.");
+  }
+  // Preserve Markdown indentation; the shared plain-text formatter trims captions.
+  return [text, formatTextWithAttachmentLinks(undefined, remoteUrls)].filter(Boolean).join("\n\n");
 }
 
 /** Renders CommonMark into byte-bounded Google Chat app-message chunks. */

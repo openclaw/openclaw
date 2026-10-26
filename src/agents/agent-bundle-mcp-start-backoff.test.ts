@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
@@ -9,7 +10,11 @@ import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.t
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { saveMcpOAuthAccessTokenForTest } from "./mcp-oauth.test-support.js";
 import * as mcpTransport from "./mcp-transport.js";
+import { acquireNativeMcpServer } from "./native-mcp-runtime.js";
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -29,6 +34,7 @@ let remoteToolName = "probe";
 let reachable = false;
 let invalidListing = false;
 let listToolsGate: Promise<void> | undefined;
+let oauthRequired = false;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -39,64 +45,74 @@ beforeEach(() => {
   reachable = false;
   invalidListing = false;
   listToolsGate = undefined;
+  oauthRequired = false;
   warn.mockClear();
   vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation((serverName: string) => {
+    const fetchFixture = async (_input: string | URL, init?: RequestInit) => {
+      if (init?.method !== "POST") {
+        return new Response(null, { status: 405 });
+      }
+      if (oauthRequired && !new Headers(init.headers).has("authorization")) {
+        initializes += 1;
+        return new Response(null, { status: 401 });
+      }
+      const message = JSON.parse(await new Response(init.body).text()) as {
+        id?: number;
+        method: string;
+      };
+      if (message.method === "initialize") {
+        initializes += 1;
+        if (!reachable && serverName === "remote") {
+          return new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("Fixture request aborted", { cause: init.signal?.reason })),
+              { once: true },
+            );
+          });
+        }
+      }
+      if (message.id === undefined) {
+        return new Response(null, { status: 202 });
+      }
+      if (message.method === "tools/list" && serverName === "remote") {
+        await listToolsGate;
+      }
+      return Response.json({
+        jsonrpc: "2.0",
+        id: message.id,
+        result:
+          message.method === "initialize"
+            ? {
+                protocolVersion: "2025-06-18",
+                capabilities: { tools: { listChanged: true } },
+                serverInfo: { name: "fixture", version: "1" },
+              }
+            : {
+                tools: [
+                  {
+                    name: serverName === "remote" ? remoteToolName : "healthy_tool",
+                    inputSchema:
+                      invalidListing && serverName === "remote"
+                        ? { type: "array", items: { type: "number" } }
+                        : { type: "object" },
+                  },
+                ],
+              },
+      });
+    };
     const transport = new OpenClawStreamableHTTPClientTransport(
       new URL("https://mcp.invalid/mcp"),
       {
-        fetch: async (_input, init) => {
-          if (init?.method !== "POST") {
-            return new Response(null, { status: 405 });
-          }
-          if (typeof init.body !== "string") {
-            throw new Error("Expected a serialized JSON-RPC request body");
-          }
-          const message = JSON.parse(init.body) as { id?: number; method: string };
-          if (message.method === "initialize") {
-            initializes += 1;
-            if (!reachable && serverName === "remote") {
-              return new Promise<Response>((_resolve, reject) => {
-                init.signal?.addEventListener(
-                  "abort",
-                  () =>
-                    reject(new Error("Fixture request aborted", { cause: init.signal?.reason })),
-                  { once: true },
-                );
-              });
-            }
-          }
-          if (message.id === undefined) {
-            return new Response(null, { status: 202 });
-          }
-          if (message.method === "tools/list" && serverName === "remote") {
-            await listToolsGate;
-          }
-          return new Response(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: message.id,
-              result:
-                message.method === "initialize"
-                  ? {
-                      protocolVersion: "2025-06-18",
-                      capabilities: { tools: { listChanged: true } },
-                      serverInfo: { name: "fixture", version: "1" },
-                    }
-                  : {
-                      tools: [
-                        {
-                          name: serverName === "remote" ? remoteToolName : "healthy_tool",
-                          inputSchema:
-                            invalidListing && serverName === "remote"
-                              ? { type: "array", items: { type: "number" } }
-                              : { type: "object" },
-                        },
-                      ],
-                    },
-            }),
-            { headers: { "content-type": "application/json" } },
-          );
-        },
+        fetch: oauthRequired
+          ? withMcpOAuthBearer({
+              fetchFn: fetchFixture,
+              authFetchFn: fetchFixture,
+              identity: operatorMcpOAuthIdentity(serverName, "https://mcp.invalid/mcp", {
+                mcp: { servers: { remote: { url: "https://mcp.invalid/mcp", auth: "oauth" } } },
+              }),
+            })
+          : fetchFixture,
       },
     );
     transports.push(transport);
@@ -111,6 +127,69 @@ beforeEach(() => {
   });
 });
 
+it.each(["embedded", "native"])(
+  "remembers %s OAuth-required startup until the credential owner changes",
+  async (mode) => {
+    await withOpenClawTestState({ prefix: "mcp-startup-oauth-" }, async () => {
+      oauthRequired = true;
+      reachable = true;
+      const catalogFor = async (runtime: SessionMcpRuntime) => {
+        if (mode === "embedded") {
+          return runtime.getCatalog();
+        }
+        const view = await acquireNativeMcpServer(runtime, "remote", {
+          capabilityContext: {},
+          capabilities: {},
+          roots: { roots: [] },
+          assertCurrent() {},
+        }).catch(() => undefined);
+        if (!view) {
+          return runtime.getCatalog();
+        }
+        try {
+          return await view.runtime.getCatalog();
+        } finally {
+          await view.release();
+        }
+      };
+      const first = makeRuntime();
+      const denied = await catalogFor(first);
+      expect(toolNames(denied)).toEqual([]);
+      expect(denied.diagnostics?.[0]?.message).toContain("Sign in from Settings");
+      await vi.advanceTimersByTimeAsync(86_400_000);
+      for (let index = 0; index < 8; index++) {
+        expect(toolNames(await catalogFor(makeRuntime()))).toEqual([]);
+      }
+      const otherWorkspace = createSessionMcpRuntime({
+        sessionId: "other-workspace",
+        workspaceDir: "/other-workspace",
+        agentDir: "/other-agent",
+        cfg: { mcp: { servers: { remote: remoteServer } } },
+      });
+      runtimes.push(otherWorkspace);
+      expect(toolNames(await catalogFor(otherWorkspace))).toEqual([]);
+      expect(initializes).toBe(1);
+      expect(transports).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await saveMcpOAuthAccessTokenForTest(
+        operatorMcpOAuthIdentity("other", remoteServer.url),
+        "synthetic-other",
+      );
+      expect(toolNames(await first.getCatalog())).toEqual([]);
+      expect(initializes).toBe(1);
+      await saveMcpOAuthAccessTokenForTest(
+        operatorMcpOAuthIdentity("remote", remoteServer.url),
+        "synthetic-remote",
+      );
+      expect(toolNames(await catalogFor(first))).toEqual(["probe"]);
+      expect(toolNames(await catalogFor(makeRuntime()))).toEqual(["probe"]);
+      expect(toolNames(await catalogFor(otherWorkspace))).toEqual(["probe"]);
+      expect(initializes).toBe(4);
+    });
+  },
+);
+
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));
   await disposeAllSessionMcpRuntimes();
@@ -118,16 +197,24 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function makeRuntime(url = "https://mcp.invalid/mcp", requesterScope?: SessionMcpRequesterScope) {
+const remoteServer = { url: "https://mcp.invalid/mcp" };
+function makeRuntime(
+  url = remoteServer.url,
+  requesterScope?: SessionMcpRequesterScope,
+  servers: NonNullable<OpenClawConfig["mcp"]>["servers"] = { remote: { url } },
+) {
   const runtime = createSessionMcpRuntime({
     sessionId: `run-${runtimes.length}`,
     workspaceDir: "/workspace",
     requesterScope,
-    cfg: { mcp: { servers: { remote: { url } } } },
+    cfg: { mcp: { servers } },
   });
   runtimes.push(runtime);
   return runtime;
 }
+
+const toolNames = (catalog: Awaited<ReturnType<SessionMcpRuntime["getCatalog"]>>) =>
+  catalog.tools.map((tool) => tool.toolName);
 
 async function discover(runtime: SessionMcpRuntime) {
   let settled = false;
@@ -143,102 +230,48 @@ async function discover(runtime: SessionMcpRuntime) {
   return { catalog: await pending, waitedMs: Date.now() - started };
 }
 
-it("bounds the first connection and never waits for known-failed retries", async () => {
-  const runtime = makeRuntime();
-  expect((await discover(runtime)).waitedMs).toBe(30_000);
-  expect((await discover(makeRuntime())).waitedMs).toBe(0);
-  await vi.advanceTimersByTimeAsync(4_999);
-  expect((await discover(runtime)).waitedMs).toBe(0);
-  expect(initializes).toBe(1);
+it.each(["connection", "listing"] as const)(
+  "keeps %s failures stable while recovering without stalling healthy siblings",
+  async (failure) => {
+    reachable = failure === "listing";
+    invalidListing = failure === "listing";
+    const runtime = makeRuntime(undefined, undefined, {
+      remote: remoteServer,
+      healthy: { url: "https://healthy.invalid/mcp" },
+    });
+    const failed = await discover(runtime);
+    expect(failed.waitedMs).toBe(failure === "connection" ? 30_000 : 0);
+    expect(toolNames(failed.catalog)).toEqual(["healthy_tool"]);
+    const diagnostics = structuredClone(failed.catalog.diagnostics);
+    expect(diagnostics).toEqual([expect.objectContaining({ serverName: "remote" })]);
+    if (failure === "connection") {
+      expect(diagnostics?.[0]?.message).toContain("server unavailable");
+    }
+    expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
 
-  await vi.advanceTimersByTimeAsync(1);
-  expect((await discover(runtime)).waitedMs).toBe(0);
-  expect(initializes).toBe(2);
-  // New sessions must not join the pending retry, even after their cooldown expires.
-  await vi.advanceTimersByTimeAsync(25_000);
-  expect((await discover(makeRuntime())).waitedMs).toBe(0);
-  await vi.advanceTimersByTimeAsync(5_000);
-  const failedRetry = await discover(runtime);
-  expect(failedRetry.waitedMs).toBe(0);
-  expect(failedRetry.catalog.diagnostics?.[0]?.message).toContain(
-    new Date(Date.now() + 60_000).toISOString(),
-  );
-  expect(warn).toHaveBeenCalledTimes(2);
-});
-
-it("keeps one catalog diagnostic per failure episode and publishes recovery next turn", async () => {
-  const runtime = makeRuntime();
-  const failed = await discover(runtime);
-  expect(failed.catalog.tools).toEqual([]);
-  const diagnostics = structuredClone(failed.catalog.diagnostics);
-  expect(diagnostics).toEqual([
-    expect.objectContaining({
-      serverName: "remote",
-      message: expect.stringContaining("server unavailable"),
-    }),
-  ]);
-  expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
-  reachable = true;
-  await vi.advanceTimersByTimeAsync(5_000);
-  const listing = Promise.withResolvers<void>();
-  listToolsGate = listing.promise;
-  const turn = await discover(runtime);
-  expect(turn.waitedMs).toBe(0);
-  expect(turn.catalog.tools).toEqual([]);
-  expect(turn.catalog.diagnostics).toEqual(diagnostics);
-  expect(initializes).toBe(2);
-
-  listing.resolve();
-  await vi.advanceTimersByTimeAsync(0);
-  const recovered = await runtime.getCatalog();
-  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
-  expect(recovered.diagnostics ?? []).toEqual([]);
-  expect(turn.catalog.tools).toEqual([]);
-});
-
-it("retries failed listings in the background without stalling healthy siblings", async () => {
-  reachable = true;
-  invalidListing = true;
-  const runtime = createSessionMcpRuntime({
-    sessionId: "listing-retry",
-    workspaceDir: "/workspace",
-    cfg: {
-      mcp: {
-        servers: {
-          remote: { url: "https://mcp.invalid/mcp" },
-          healthy: { url: "https://healthy.invalid/mcp" },
-        },
-      },
-    },
-  });
-  runtimes.push(runtime);
-  const failed = await runtime.getCatalog();
-  expect(
-    failed.tools.map((tool) => tool.toolName),
-    JSON.stringify(failed.diagnostics),
-  ).toEqual(["healthy_tool"]);
-  expect(failed.diagnostics?.[0]?.serverName).toBe("remote");
-
-  invalidListing = false;
-  const listing = Promise.withResolvers<void>();
-  listToolsGate = listing.promise;
-  await vi.advanceTimersByTimeAsync(5_000);
-  const turn = await discover(runtime);
-  expect(turn.waitedMs).toBe(0);
-  expect(turn.catalog.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
-  listing.resolve();
-  await vi.advanceTimersByTimeAsync(0);
-  const recovered = await runtime.getCatalog();
-  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool", "probe"]);
-  expect(recovered.diagnostics).toBeUndefined();
-  expect(initializes).toBe(3);
-});
+    reachable = true;
+    invalidListing = false;
+    const listing = Promise.withResolvers<void>();
+    listToolsGate = listing.promise;
+    await vi.advanceTimersByTimeAsync(5_000);
+    const turn = await discover(runtime);
+    expect(turn).toMatchObject({ waitedMs: 0, catalog: { diagnostics } });
+    expect(toolNames(turn.catalog)).toEqual(["healthy_tool"]);
+    listing.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    const recovered = await runtime.getCatalog();
+    expect(toolNames(recovered)).toEqual(["healthy_tool", "probe"]);
+    expect(recovered.diagnostics ?? []).toEqual([]);
+    expect(toolNames(turn.catalog)).toEqual(["healthy_tool"]);
+    expect(initializes).toBe(3);
+  },
+);
 
 it("refreshes a connected session while a sibling with the same startup key is unavailable", async () => {
   reachable = true;
   const healthy = makeRuntime();
   const before = await healthy.getCatalog();
-  expect(before.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(before)).toEqual(["probe"]);
   const transport = transports[0]!;
 
   reachable = false;
@@ -250,10 +283,10 @@ it("refreshes a connected session while a sibling with the same startup key is u
   transport.onmessage?.({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
   await vi.advanceTimersByTimeAsync(0);
   const refreshed = await healthy.getCatalog();
-  expect(refreshed.tools.map((tool) => tool.toolName)).toEqual(["replacement"]);
+  expect(toolNames(refreshed)).toEqual(["replacement"]);
   expect(refreshed.diagnostics).toBeUndefined();
   expect(initializes).toBe(2);
-  expect(before.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(before)).toEqual(["probe"]);
 });
 
 it("clears inherited failure cooldowns when the live runtime is explicitly reloaded", async () => {
@@ -261,7 +294,7 @@ it("clears inherited failure cooldowns when the live runtime is explicitly reloa
   const params = {
     workspaceDir: "/workspace",
     agentDir: "/agent",
-    cfg: { mcp: { servers: { remote: { url: "https://mcp.invalid/mcp" } } } },
+    cfg: { mcp: { servers: { remote: remoteServer } } },
   };
   const first = await acquireSessionMcpRuntime({ ...params, sessionId: "first" });
   const second = await acquireSessionMcpRuntime({ ...params, sessionId: "second" });
@@ -271,7 +304,7 @@ it("clears inherited failure cooldowns when the live runtime is explicitly reloa
     reachable = true;
     await reloadSessionMcpRuntimes({ cfg: params.cfg });
     const reloaded = await second.runtime.getCatalog();
-    expect(reloaded.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+    expect(toolNames(reloaded)).toEqual(["probe"]);
   } finally {
     first.releaseLease();
     second.releaseLease();
@@ -280,12 +313,27 @@ it("clears inherited failure cooldowns when the live runtime is explicitly reloa
 
 it("doubles background retry intervals to ten minutes and resets after recovery", async () => {
   const runtime = makeRuntime();
-  await discover(runtime);
-  await vi.advanceTimersByTimeAsync(5_000);
+  expect((await discover(runtime)).waitedMs).toBe(30_000);
+  expect((await discover(makeRuntime())).waitedMs).toBe(0);
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect((await discover(runtime)).waitedMs).toBe(0);
+  expect(initializes).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
   for (const delay of [60_000, 120_000, 240_000, 480_000, 600_000, 600_000]) {
     expect((await discover(runtime)).waitedMs).toBe(0);
-    await vi.advanceTimersByTimeAsync(30_000);
+    if (delay === 60_000) {
+      expect(initializes).toBe(2);
+      // A new session must not join an in-flight retry after its cooldown expires.
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect((await discover(makeRuntime())).waitedMs).toBe(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+    } else {
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
     const failed = await discover(runtime);
+    if (delay === 60_000) {
+      expect(warn).toHaveBeenCalledTimes(2);
+    }
     expect(failed.catalog.diagnostics?.[0]?.message).toContain(
       `server unavailable; retry after ${new Date(Date.now() + delay).toISOString()}. Check server reachability`,
     );
@@ -298,7 +346,7 @@ it("doubles background retry intervals to ten minutes and resets after recovery"
   reachable = true;
   expect((await discover(runtime)).waitedMs).toBe(0);
   await vi.advanceTimersByTimeAsync(0);
-  expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(await runtime.getCatalog())).toEqual(["probe"]);
   reachable = false;
   const failedAgain = await discover(makeRuntime());
   expect(failedAgain.waitedMs).toBe(30_000);

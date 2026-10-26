@@ -12,6 +12,7 @@ import {
   runWithOwner,
   Show,
   Switch,
+  untrack,
   type Accessor,
 } from "solid-js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -24,6 +25,7 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -38,7 +40,6 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
@@ -77,8 +78,11 @@ function FrameBody(props: {
   // Canvas widgets move between these foreign-DOM ranges without disconnecting.
   // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
+  const parent = document.createElement("div");
+  parent.className = "chat-agent-run-body";
+  parent.style.display = "contents";
   const anchor = document.createComment("frame-body");
-  const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
+  parent.append(anchor);
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
     // Native descendants must park their widgets while the range is still connected.
@@ -91,11 +95,6 @@ function FrameBody(props: {
     }
   };
   onSettled(() => {
-    const committedParent = anchor.parentElement;
-    if (!committedParent) {
-      throw new Error("Run frame body anchor was not committed");
-    }
-    setParent(committedParent);
     return () => {
       for (const range of ranges.values()) {
         retire(range);
@@ -103,66 +102,75 @@ function FrameBody(props: {
       ranges.clear();
     };
   });
-  createEffect(
-    () => ({
-      parent: readParent(),
-      parts: props.parts,
-      options: props.options,
-      render: props.children,
-    }),
-    ({ parent, parts, options, render }) => {
-      if (!parent) {
-        return;
+  const update = ({
+    parts,
+    options,
+    render,
+  }: {
+    parts: readonly BodyPart[];
+    options: AgentRunFrameOptions;
+    render: typeof props.children;
+  }) => {
+    const keys = new Set(parts.map((part) => `${part.kind}:${part.key}`));
+    // Park outgoing canvas views before a new range looks them up.
+    for (const [key, range] of ranges) {
+      if (!keys.has(key)) {
+        retire(range);
+        ranges.delete(key);
       }
-      const keys = new Set(parts.map((part) => `${part.kind}:${part.key}`));
-      // Park outgoing canvas views before a new range looks them up.
-      for (const [key, range] of ranges) {
-        if (!keys.has(key)) {
-          retire(range);
-          ranges.delete(key);
-        }
+    }
+    const ordered = parts.map((value) => {
+      const key = `${value.kind}:${value.key}`;
+      const existing = ranges.get(key);
+      if (existing) {
+        existing.write({ part: value, options });
+        return existing;
       }
-      const ordered = parts.map((value) => {
-        const key = `${value.kind}:${value.key}`;
-        const existing = ranges.get(key);
-        if (existing) {
-          existing.write({ part: value, options });
-          return existing;
-        }
-        const start = document.createComment("frame-part");
-        const end = document.createComment("/frame-part");
-        parent.insertBefore(start, anchor);
-        parent.insertBefore(end, anchor);
-        const range = runWithOwner(owner, () =>
-          createRoot((dispose): PartRange => {
-            // The headline's connection scope must change with its activity.
-            const [readInput, write] = createSignal({ part: value, options }, { ownedWrite: true });
-            insert(parent, render(readInput), end);
-            return { start, end, write, dispose };
-          }),
-        );
-        ranges.set(key, range);
-        return range;
-      });
-      let reference: Node = anchor;
-      for (const range of ordered.toReversed()) {
-        if (range.end.nextSibling !== reference) {
-          const after = range.end.nextSibling;
-          for (let node: Node | null = range.start; node && node !== after;) {
-            const following: Node | null = node.nextSibling;
-            if (parent.isConnected && typeof parent.moveBefore === "function") {
-              parent.moveBefore(node, reference);
-            } else {
-              parent.insertBefore(node, reference);
-            }
-            node = following;
+      const start = document.createComment("frame-part");
+      const end = document.createComment("/frame-part");
+      parent.insertBefore(start, anchor);
+      parent.insertBefore(end, anchor);
+      const range = runWithOwner(owner, () =>
+        createRoot((dispose): PartRange => {
+          // The headline's connection scope must change with its activity.
+          const [readInput, write] = createSignal(
+            { part: value, options },
+            {
+              ownedWrite: true,
+              equals: (before, after) =>
+                before.part === after.part && before.options === after.options,
+            },
+          );
+          insert(parent, render(readInput), end);
+          return { start, end, write, dispose };
+        }),
+      );
+      ranges.set(key, range);
+      return range;
+    });
+    let reference: Node = anchor;
+    for (const range of ordered.toReversed()) {
+      if (range.end.nextSibling !== reference) {
+        const after = range.end.nextSibling;
+        for (let node: Node | null = range.start; node && node !== after;) {
+          const following: Node | null = node.nextSibling;
+          if (parent.isConnected && typeof parent.moveBefore === "function") {
+            parent.moveBefore(node, reference);
+          } else {
+            parent.insertBefore(node, reference);
           }
+          node = following;
         }
-        reference = range.start;
       }
-    },
-  );
-  return anchor;
+      reference = range.start;
+    }
+  };
+  const input = () => ({ parts: props.parts, options: props.options, render: props.children });
+  // Sample once without subscribing the frame owner; the effect owns later range updates.
+  // Detached rows include their body immediately, while widgets still adopt after settlement.
+  update(untrack(input));
+  createEffect(input, update);
+  return parent;
 }
 
 function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions) {

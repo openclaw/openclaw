@@ -16,6 +16,7 @@ import {
   callGatewayCli,
   mockWindowsTaskkillSuccess,
   mockLingeringGatewayListener,
+  readActiveGatewayLockIdentity,
   readGatewayOwnerLease,
   readWindowsProcessStartTimeSync,
   restartScheduledTask,
@@ -45,6 +46,34 @@ const taskAction = (...actions: string[]) =>
   schtasksCalls.some(([action]) => action !== undefined && actions.includes(action));
 const killedOwner = () => spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
 const processList = (pid = 4242) => `"node.exe","${pid}","Console","1","1 K"`;
+function mockOwnerlessInstalledGateway() {
+  readGatewayOwnerLease.mockReturnValue(undefined);
+  spawnSync.mockImplementation((exe, args) => {
+    if (args?.includes("-EncodedCommand")) {
+      return scheduledTaskProbeResult();
+    }
+    if (exe.endsWith("taskkill.exe")) {
+      return spawnSyncResult("");
+    }
+    if (exe.endsWith("tasklist.exe")) {
+      return spawnSyncResult(killedOwner() ? "No tasks" : processList());
+    }
+    return spawnSyncResult(
+      JSON.stringify(
+        killedOwner()
+          ? []
+          : [{ ProcessId: GATEWAY_OWNER.pid, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
+      ),
+    );
+  });
+}
+const gatewayFileLock = {
+  pid: GATEWAY_OWNER.pid,
+  ownerId: GATEWAY_OWNER.owner,
+  port: GATEWAY_OWNER.port,
+  createdAt: "2026-10-25T00:00:00.000Z",
+  startTime: GATEWAY_OWNER.startedAt ?? undefined,
+};
 function expectNoNativeMutation() {
   expect(taskAction("/End", "/Run")).toBe(false);
   expect(killedOwner()).toBe(false);
@@ -294,17 +323,20 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
   test.for([
     { name: "restart", control: restartScheduledTask },
     { name: "stop after lost reply", control: stopScheduledTask, lostReply: true },
+    { name: "stop without a database owner", control: stopScheduledTask, fileLock: true },
   ])(
     "$name requests graceful exit before ending the task",
-    async ({ control, lostReply }, { env, stdout }) => {
+    async ({ control, lostReply, fileLock }, { env, stdout }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mockWindowsTaskkillSuccess();
       readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
+      if (fileLock) {
+        mockOwnerlessInstalledGateway();
+        readActiveGatewayLockIdentity.mockResolvedValue(gatewayFileLock);
+      }
       const onMutation = vi.fn();
       callGatewayCli.mockImplementation(async (options) => {
-        if (lostReply) {
-          options.assertDispatchCurrent();
-        }
+        options.assertDispatchCurrent();
         expect(taskAction("/End")).toBe(false);
         readGatewayOwnerLease.mockReturnValue(undefined);
         spawnSync.mockImplementation((exe) =>
@@ -334,6 +366,25 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       expect(taskAction("/End")).toBe(false);
       expect(killedOwner()).toBe(false);
       expect(taskAction("/Run")).toBe(control === restartScheduledTask);
+    },
+  );
+
+  test.for([
+    { name: "another process", lock: { ...gatewayFileLock, pid: 5252 } },
+    { name: "another port", lock: { ...gatewayFileLock, port: 18790 } },
+    { name: "an uncorrelated owner", lock: { ...gatewayFileLock, ownerId: undefined } },
+  ])(
+    "keeps native stop recovery when the file lock belongs to $name",
+    async ({ lock }, { env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockOwnerlessInstalledGateway();
+      readActiveGatewayLockIdentity.mockResolvedValue(lock);
+
+      await stopScheduledTask({ env, stdout });
+
+      expect(callGatewayCli).not.toHaveBeenCalled();
+      expect(killedOwner()).toBe(true);
+      expect(taskAction("/Run")).toBe(false);
     },
   );
 

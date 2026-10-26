@@ -151,33 +151,37 @@ class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
     super();
   }
 
-  update(runId: string, entry: SubagentRunRecord, operation: "add" | "remove"): void {
-    const key = this.keyFor(entry);
-    if (!key) {
-      return;
-    }
-    const indexedRuns = this.get(key);
-    if (operation === "remove") {
-      if (indexedRuns?.get(runId) !== entry) {
-        return;
-      }
-      indexedRuns.delete(runId);
-      if (indexedRuns.size === 0) {
-        this.delete(key);
-        this.latest.delete(key);
-      } else if (this.latest.get(key) === entry) {
-        for (const remaining of indexedRuns.values()) {
-          this.latest.set(key, remaining);
+  update(runId: string, previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
+    const previousKey = previous && this.keyFor(previous);
+    const key = entry && this.keyFor(entry);
+    if (previousKey && previousKey !== key) {
+      const bucket = this.get(previousKey);
+      if (bucket?.get(runId) === previous) {
+        bucket.delete(runId);
+        if (bucket.size === 0) {
+          this.delete(previousKey);
+          this.latest.delete(previousKey);
+        } else if (this.latest.get(previousKey) === previous) {
+          for (const remaining of bucket.values()) {
+            this.latest.set(previousKey, remaining);
+          }
         }
       }
-    } else {
-      if (indexedRuns) {
-        indexedRuns.set(runId, entry);
-      } else {
-        this.set(key, new Map([[runId, entry]]));
-      }
-      this.latest.set(key, entry);
     }
+    if (!key || !entry) {
+      return;
+    }
+    const bucket = this.get(key);
+    if (bucket) {
+      // Singleton status updates retain their bucket; larger groups keep replacement order.
+      if (bucket.size > 1) {
+        bucket.delete(runId);
+      }
+      bucket.set(runId, entry);
+    } else {
+      this.set(key, new Map([[runId, entry]]));
+    }
+    this.latest.set(key, entry);
   }
 
   getLatest(key: string): SubagentRunRecord | undefined {
@@ -625,15 +629,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (prev && prev !== entry && isSameSubagentRunOwner(prev, entry)) {
       this.publishRuntimeOwner(prev, entry);
     }
-    if (prev) {
-      for (const index of runIndexes) {
-        index.update(runId, prev, "remove");
-      }
-    }
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
     for (const index of runIndexes) {
-      index.update(runId, entry, "add");
+      index.update(runId, prev, entry);
     }
     this.workIndex.set(runId, entry);
     return this;
@@ -645,7 +644,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
-        index.update(runId, prev, "remove");
+        index.update(runId, prev);
       }
     }
     return super.delete(runId);
@@ -730,12 +729,12 @@ export function getSubagentChildSessionCandidates(
 }
 
 /** Iterate live generations for one child session without scanning the registry. */
-export function* getSubagentRunsForChildSession(
+export function getSubagentRunsForChildSession(
   childSessionKey: string,
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
   const key = childSessionOwnerKey({ childSessionKey, childAgentId });
-  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
+  return (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */

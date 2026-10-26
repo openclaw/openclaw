@@ -46,6 +46,72 @@ function fixture() {
 }
 
 describe("standalone compiled plugin contract", () => {
+  it.each([
+    { name: "no package manifest", manifest: undefined, filename: "index.js", setup: false },
+    {
+      name: "no extension metadata",
+      manifest: { name: "fixture" },
+      filename: "index.mjs",
+      setup: false,
+    },
+    {
+      name: "setup metadata without an extension declaration",
+      manifest: { openclaw: { setupEntry: "./setup.mts" } },
+      filename: "index.cjs",
+      setup: true,
+    },
+  ])("binds the default index with $name", ({ manifest, filename, setup }) => {
+    const { root, write, plugins, embeddedPaths } = fixture();
+    const packagePath = "dist/extensions/zeta-package/package.json";
+    if (manifest === undefined) {
+      fs.unlinkSync(path.join(root, packagePath));
+    } else {
+      write(packagePath, manifest);
+    }
+    const source = `dist/extensions/zeta-package/${filename}`;
+    write(source, "must not execute");
+    embeddedPaths[source] = "/image/default-index.mjs";
+    const contract = createStandalonePluginContract({ runtimeRoot: root, plugins, embeddedPaths });
+    expect(contract.plugins.alpha).toEqual({
+      runtime: [{ source, entry: "/image/default-index.mjs" }],
+      ...(setup
+        ? {
+            setup: {
+              source: "dist/extensions/zeta-package/setup.mjs",
+              entry: "/image/alpha-setup.mjs",
+            },
+          }
+        : {}),
+    });
+    delete embeddedPaths[source];
+    expect(() =>
+      createStandalonePluginContract({ runtimeRoot: root, plugins, embeddedPaths }),
+    ).toThrow("Bundled plugin alpha is missing its compiled entry");
+  });
+
+  it.each([
+    { name: "non-object metadata", metadata: [] },
+    {
+      name: "non-array entries",
+      metadata: { extensions: "./index.js" },
+    },
+    {
+      name: "empty entries",
+      metadata: { extensions: [] },
+    },
+    {
+      name: "blank entries",
+      metadata: { extensions: [" "] },
+    },
+  ])("rejects $name even when a default index exists", ({ metadata }) => {
+    const { root, write, plugins, embeddedPaths } = fixture();
+    write("dist/extensions/zeta-package/package.json", { openclaw: metadata });
+    write("dist/extensions/zeta-package/index.js", "must not execute");
+    expect(() =>
+      createStandalonePluginContract({ runtimeRoot: root, plugins, embeddedPaths }),
+    ).toThrow("Bundled plugin alpha");
+  });
+
   it("binds public SDK exports and manifest runtime/setup identities without evaluating code", () => {
     const { root, plugins, embeddedPaths } = fixture();
     expect(createStandalonePluginContract({ runtimeRoot: root, plugins, embeddedPaths })).toEqual({

@@ -141,9 +141,7 @@ export function createGatewayHttpRequestHandler(
       ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
-      if (!res.destroyed) {
-        res.destroy(error instanceof Error ? error : undefined);
-      }
+      res.destroy(error instanceof Error ? error : undefined);
     });
   };
 

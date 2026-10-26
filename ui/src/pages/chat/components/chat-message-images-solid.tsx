@@ -7,6 +7,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { ChatImageActions } from "./chat-image-actions.tsx";
+import { imageTitle } from "./chat-image-presentation.ts";
 import {
   MIN_CHAT_IMAGE_PREVIEW_WIDTH,
   resolveChatImagePreviewSize,
@@ -30,7 +31,7 @@ import {
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { imageTitle, openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
+import { openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,

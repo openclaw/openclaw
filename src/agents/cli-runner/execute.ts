@@ -33,6 +33,7 @@ import {
   buildCliLiveOwnerKey,
   restartCliLiveSession,
 } from "./cli-live-session-registry.js";
+import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import { NODE_CLAUDE_FORWARD_ENV_KEYS, resolveNodeClaudeAuthEnv } from "./execute-logging.js";
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
@@ -130,9 +131,18 @@ export async function executePreparedCliRun(
   let systemPromptFile: Awaited<ReturnType<typeof writeCliSystemPromptFile>> | undefined;
   const nodeSystemPrompt = nodePlacement && shouldSendSystemPrompt ? systemPromptArg : undefined;
 
-  const basePrompt = cliSessionIdToUse
+  const attemptPrompt = cliSessionIdToUse
     ? params.prompt
     : (context.openClawHistoryPrompt ?? params.prompt);
+  // Recovery reuses preparation. Only the same native resume receives this handoff.
+  const basePrompt = composeCliPromptContext(attemptPrompt, {
+    prependContext:
+      useResume &&
+      cliSessionIdToUse === resolveCliSessionId(context.reusableCliSession) &&
+      !params.forkCliSessionOnResume
+        ? context.resumeContext
+        : undefined,
+  });
   let prompt =
     params.controlOperation !== undefined
       ? basePrompt

@@ -40,16 +40,15 @@ function makeSettledIdleWriteAttempt(options?: {
   terminal?: EmbeddedRunAttemptResult["terminal"];
   stalePriorTurn?: boolean;
 }) {
-  const toolUseAssistant = toolAssistant(["tool_1", "write"]);
+  const batch = settledBatch(["tool_1", "write"]);
   const abortedAssistant = textAssistant(undefined, { stopReason: "aborted" });
   return makeAttempt({
     terminal: options?.terminal ?? { kind: "timeout", phase: "prompt", source: "idle" },
     toolMetas: [{ toolName: "write", replaySafe: false }],
-    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    itemLifecycle: batch.itemLifecycle,
     messagesSnapshot: [
       { role: "user", content: [{ type: "text", text: "old turn" }] },
-      toolUseAssistant,
-      { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+      ...batch.messagesSnapshot,
       ...(options?.stalePriorTurn
         ? [{ role: "user", content: [{ type: "text", text: "current turn" }] }]
         : []),
@@ -61,30 +60,41 @@ function makeSettledIdleWriteAttempt(options?: {
   });
 }
 
-function failedToolInput(assistant: ReturnType<typeof toolAssistant>) {
+function failedToolInput(
+  assistant = toolAssistant(["tool_1", "exec"]),
+  resultToolName = "exec",
+  lastErrorToolName = "exec",
+) {
   return {
     assistantTexts: [],
-    toolMetas: [{ toolName: "exec", isError: true }],
     itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    toolMetas: [{ toolName: resultToolName, isError: true }],
     messagesSnapshot: [
       assistant,
-      { role: "toolResult", toolCallId: "tool_1", toolName: "exec", isError: true },
+      { role: "toolResult", toolCallId: "tool_1", toolName: resultToolName, isError: true },
     ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
-    lastToolError: { toolName: "exec", error: "post-processing error" },
+    lastToolError: { toolName: lastErrorToolName, error: "post-processing error" },
+  };
+}
+
+function emptyStop(overrides: Partial<EmbeddedRunAttemptResult> = {}) {
+  const assistant = textAssistant();
+  return {
+    assistantTexts: [],
+    toolMetas: [{ toolName: "write" }],
+    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    ...overrides,
   };
 }
 
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
     const attempt = makeAttempt({
-      lastAssistant: {
-        stopReason: "toolUse",
-        provider: "openai",
-        model: "gpt-5.4",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      lastAssistant: textAssistant(undefined, { stopReason: "toolUse", model: "gpt-5.4" }),
     });
     const incompleteTurnText = "⚠️ Agent couldn't generate a response. Please try again.";
 
@@ -199,36 +209,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction?.instruction ?? null).toBe(CONTINUATION);
   });
 
-  it.each([
-    {
-      label: "provider failure with finalization context",
-      hasContext: true,
-      expectedContinuation: true,
-    },
-    {
-      label: "provider failure without finalization context",
-      hasContext: false,
-      expectedContinuation: false,
-    },
-  ])(
-    "$label after settled tools returns continuation=$expectedContinuation",
-    ({ hasContext, expectedContinuation }) => {
+  it.each([true, false])(
+    "continues provider failure after settled tools only with finalization context (%s)",
+    (hasContext) => {
       const attempt = makeSettledIdleWriteAttempt({
         terminal: { kind: "failed", source: "prompt", error: new Error("provider failure") },
       });
-      const instruction = continuation(
-        hasContext
-          ? {
-              ...attempt,
-              settledTurnFinalizationContext: {
-                source: "openclaw-transcript",
-                messages: attempt.messagesSnapshot,
-              },
-            }
-          : attempt,
-      );
+      if (hasContext) {
+        attempt.settledTurnFinalizationContext = {
+          source: "openclaw-transcript",
+          messages: attempt.messagesSnapshot,
+        };
+      }
+      const instruction = continuation(attempt);
 
-      expect(instruction?.instruction === CONTINUATION).toBe(expectedContinuation);
+      expect(instruction?.instruction === CONTINUATION).toBe(hasContext);
     },
   );
 
@@ -287,22 +282,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it.each([
-    {
-      label: "a matching failure summary",
-      lastToolError: { toolName: "exec", error: "post-processing error" },
-    },
-    { label: "no remaining failure summary", lastToolError: undefined },
-    {
-      label: "a terminal-marked failed tool",
-      lastToolError: { toolName: "exec", error: "post-processing error" },
-      failedToolTerminate: true,
-    },
-  ])(
-    "recognizes successful and failed current-batch tools with $label (#118274)",
-    ({ lastToolError, failedToolTerminate }) => {
-      const toolUseAssistant = toolAssistant(["tool_ok", "read"], ["tool_failed", "exec"]);
+    ["a matching failure summary", true, false],
+    ["no remaining failure summary", false, false],
+    ["a terminal-marked failed tool", true, true],
+  ] as const)(
+    "recognizes successful and failed current-batch tools with %s (#118274)",
+    (_label, hasError, failedToolTerminate) => {
       const instruction = continuation({
         assistantTexts: [],
+        ...settledBatch(["tool_ok", "read"], ["tool_failed", "exec", true]),
         toolMetas: [
           { toolName: "read" },
           {
@@ -312,15 +300,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             ...(failedToolTerminate ? { terminate: true } : {}),
           },
         ],
-        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
-        messagesSnapshot: [
-          toolUseAssistant,
-          { role: "toolResult", toolCallId: "tool_ok", toolName: "read", isError: false },
-          { role: "toolResult", toolCallId: "tool_failed", toolName: "exec", isError: true },
-        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
-        lastAssistant: toolUseAssistant,
-        currentAttemptAssistant: toolUseAssistant,
-        lastToolError,
+        lastToolError: hasError ? { toolName: "exec", error: "post-processing error" } : undefined,
       });
 
       expect(instruction?.instruction).toContain(CONTINUATION);
@@ -344,12 +324,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       replyDeliveryState,
       expectedFinalization,
     ) => {
-      const emptyStopAssistant = textAssistant();
       const instruction = continuation(
-        {
-          assistantTexts: [],
-          toolMetas: [{ toolName: "write" }],
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        emptyStop({
           didSendViaMessagingTool: true,
           didDeliverSourceReplyViaMessageTool,
           messagingToolSentTexts: ["Writing note.txt…"],
@@ -362,9 +338,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               sourceReplyFinal,
             },
           ],
-          lastAssistant: emptyStopAssistant,
-          currentAttemptAssistant: emptyStopAssistant,
-        },
+        }),
         { allowEmptyStopContinuation: true, replyDeliveryState },
       );
 
@@ -373,37 +347,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   );
 
   it.each([
-    {
-      label: "an unrelated current-batch failure summary",
-      resultToolName: "exec",
-      lastErrorToolName: "read",
-    },
-    {
-      label: "a failed result with the wrong tool identity",
-      resultToolName: "read",
-      lastErrorToolName: "exec",
-    },
-  ])("does not finalize $label (#118274)", ({ resultToolName, lastErrorToolName }) => {
-    const toolUseAssistant = toolAssistant(["tool_1", "exec"]);
-    const instruction = continuation({
-      assistantTexts: [],
-      toolMetas: [{ toolName: resultToolName, isError: true }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      messagesSnapshot: [
-        toolUseAssistant,
-        {
-          role: "toolResult",
-          toolCallId: "tool_1",
-          toolName: resultToolName,
-          isError: true,
-        },
-      ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
-      lastAssistant: toolUseAssistant,
-      currentAttemptAssistant: toolUseAssistant,
-      lastToolError: { toolName: lastErrorToolName, error: "post-processing error" },
-    });
-
-    expect(instruction).toBeNull();
+    ["an unrelated current-batch failure summary", "exec", "read"],
+    ["a failed result with the wrong tool identity", "read", "exec"],
+  ])("does not finalize %s (#118274)", (_label, resultToolName, lastErrorToolName) => {
+    expect(continuation(failedToolInput(undefined, resultToolName, lastErrorToolName))).toBeNull();
   });
 
   it("does not settle same-name terminal calls from one failed result (#118274)", () => {
@@ -447,76 +394,45 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(attempt.lastToolError).toBe(lastToolError);
   });
 
-  it.each([
-    {
-      label: "an async tool is still running",
-      attemptOverrides: { toolMetas: [{ toolName: "exec", isError: true, asyncStarted: true }] },
-    },
-    {
-      label: "an accepted child session owns the response",
-      attemptOverrides: {
+  it.each<[string, Partial<EmbeddedRunAttemptResult>]>([
+    ["async tool", { toolMetas: [{ toolName: "exec", isError: true, asyncStarted: true }] }],
+    [
+      "accepted child",
+      {
         acceptedSessionSpawns: [
           { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
         ],
       },
-    },
-    {
-      label: "a client tool remains pending",
-      attemptOverrides: { clientToolCalls: [{ name: "pending", params: {} }] },
-    },
-    {
-      label: "the turn yielded",
-      attemptOverrides: { yieldDetected: true },
-    },
-    {
-      label: "an approval prompt was already delivered",
-      attemptOverrides: { didSendDeterministicApprovalPrompt: true },
-    },
-  ])("does not finalize a failed terminal tool when $label (#118274)", ({ attemptOverrides }) => {
-    const toolUseAssistant = toolAssistant(["tool_1", "exec"]);
-    const instruction = continuation({
-      ...failedToolInput(toolUseAssistant),
-      ...attemptOverrides,
-    });
-
-    expect(instruction).toBeNull();
+    ],
+    ["pending client tool", { clientToolCalls: [{ name: "pending", params: {} }] }],
+    ["yielded turn", { yieldDetected: true }],
+    ["delivered approval", { didSendDeterministicApprovalPrompt: true }],
+  ])("does not finalize a failed terminal tool with %s (#118274)", (_label, overrides) => {
+    expect(continuation({ ...failedToolInput(), ...overrides })).toBeNull();
   });
 
   it.each([
-    { label: "background trigger", allowEmptyStopContinuation: false },
-    {
-      label: "active tool",
-      allowEmptyStopContinuation: true,
-      completedCount: 0,
-      activeCount: 1,
-    },
-    {
-      label: "partially completed tool batch",
-      allowEmptyStopContinuation: true,
-      startedCount: 2,
-      completedCount: 1,
-    },
-    { label: "async tool", allowEmptyStopContinuation: true, asyncStarted: true },
-    { label: "failed tool", allowEmptyStopContinuation: true, isError: true },
-  ])(
-    "does not continue an empty stop after $label activity",
-    ({
+    ["background trigger", false, 1, 1, 0, undefined, undefined],
+    ["active tool", true, 1, 0, 1, undefined, undefined],
+    ["partially completed batch", true, 2, 1, 0, undefined, undefined],
+    ["async tool", true, 1, 1, 0, true, undefined],
+    ["failed tool", true, 1, 1, 0, undefined, true],
+  ] as const)(
+    "does not continue an empty stop after %s activity",
+    (
+      _label,
       allowEmptyStopContinuation,
-      startedCount = 1,
-      completedCount = 1,
-      activeCount = 0,
+      startedCount,
+      completedCount,
+      activeCount,
       asyncStarted,
       isError,
-    }) => {
-      const emptyStopAssistant = textAssistant();
+    ) => {
       const instruction = continuation(
-        {
-          assistantTexts: [],
+        emptyStop({
           toolMetas: [{ toolName: "write", asyncStarted, isError }],
           itemLifecycle: { startedCount, completedCount, activeCount },
-          lastAssistant: emptyStopAssistant,
-          currentAttemptAssistant: emptyStopAssistant,
-        },
+        }),
         { allowEmptyStopContinuation },
       );
 
@@ -525,17 +441,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   );
 
   it("does not use a stale prior-turn empty stop to prove a settled continuation", () => {
-    const staleEmptyStopAssistant = textAssistant();
-    const instruction = continuation(
-      {
-        assistantTexts: [],
-        toolMetas: [{ toolName: "write" }],
-        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-        lastAssistant: staleEmptyStopAssistant,
-        currentAttemptAssistant: undefined,
-      },
-      { allowEmptyStopContinuation: true },
-    );
+    const instruction = continuation(emptyStop({ currentAttemptAssistant: undefined }), {
+      allowEmptyStopContinuation: true,
+    });
 
     expect(instruction).toBeNull();
   });

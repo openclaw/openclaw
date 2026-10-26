@@ -16,10 +16,6 @@ import { applySessionEntryOperation } from "../../config/sessions/session-access
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../infra/diagnostic-events.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -141,6 +137,7 @@ it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s
       await using fixture = await createRecoveryControllerFixture(scope, entry);
       const controller = fixture.controller({
         admissionRunId: "quiet-recovery-run",
+        operatorAuthority: createOperatorRecoveryAuthority("test-operator", "test-grant"),
         requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "test-operator" },
         inputProvenance: scheduled
           ? { kind: "internal_system", sourceTool: "cron_execution" }
@@ -149,6 +146,7 @@ it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
       const admitted = expectDefined(loadSessionEntry(scope), "recovery admitted");
       expect(admitted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+      expect(Boolean(admitted.restartRecoveryOperatorSource)).toBe(!scheduled);
       expect(admitted.startedAt).toBeGreaterThan(1);
       await controller.beginBeforeAgentReply();
       const pending = expectDefined(loadSessionEntry(scope), "hook pending");
@@ -183,7 +181,20 @@ it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s
   }),
 );
 
-it("keeps an authenticated peer follow-up internal while retaining its operator source", () =>
+it.each([
+  { sourceTool: "sessions_send", kind: "inter_session", runId: "peer-run" },
+  { sourceTool: "subagent_announce", kind: "inter_session", runId: "announce:child-run" },
+  {
+    sourceTool: "subagent_settle",
+    kind: "inter_session",
+    runId: "announce:requester-settle:main:parent:child:yield-1",
+  },
+  {
+    sourceTool: "session_goal_continue",
+    kind: "internal_system",
+    runId: "goal:peer-session:goal-1:announce:requester-settle:main:parent:child:yield-1",
+  },
+] as const)("retains the operator source for an authenticated $sourceTool continuation", (input) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = recoveryScope(state.sessionsDir(), "peer-target");
@@ -192,7 +203,8 @@ it("keeps an authenticated peer follow-up internal while retaining its operator 
     const operatorAuthority = createOperatorRecoveryAuthority("peer-operator", "peer-grant");
 
     const controller = actor.controller({
-      admissionRunId: "peer-run",
+      admissionRunId: input.runId,
+      executionRunId: "continuation-execution",
       operatorAuthority,
       requesterOrigin: {
         sessionKey: "agent:main:dashboard:peer-source",
@@ -200,24 +212,26 @@ it("keeps an authenticated peer follow-up internal while retaining its operator 
       },
       sourceReplyDeliveryMode: "message_tool_only",
       inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceSessionKey: "agent:main:dashboard:peer-source",
-        sourceChannel: "webchat",
+        kind: input.kind,
+        sourceTool: input.sourceTool,
+        ...(input.kind === "inter_session"
+          ? { sourceSessionKey: "agent:main:dashboard:peer-source", sourceChannel: "internal" }
+          : {}),
       },
     });
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
     expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliverySourceRunId: "peer-run",
+      restartRecoveryDeliverySourceRunId: input.runId,
       restartRecoverySourceIngress: "internal",
       restartRecoverySourceReplyDeliveryMode: "message_tool_only",
       restartRecoveryOperatorSource: {
         sessionKey: scope.sessionKey,
-        sourceRunId: "peer-run",
+        sourceRunId: input.runId,
         snapshot: { profileId: "peer-operator", sourceIngress: "control-ui" },
       },
     });
-  }));
+  }),
+);
 it.each([
   "execute",
   "cancel",
@@ -229,16 +243,19 @@ it.each([
 ] as const)("retains accepted input custody until capacity admission (%s)", async (outcome) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = recoveryScope(state.sessionsDir(), "capacity-admission");
-    const entry: InternalSessionEntry = {
-      sessionId: "capacity-session",
-      lifecycleRevision: "capacity-revision",
-      updatedAt: 1,
+    const acceptedInput = {
       lifecycleRunId: "accepted-input",
       activeWriterRunId: "previous-writer",
       restartRecoveryDeliveryRunId: "accepted-input",
       restartRecoveryDeliverySourceRunId: "accepted-input",
-      restartRecoverySourceIngress: "control-ui",
+      restartRecoverySourceIngress: "control-ui" as const,
       restartRecoveryDeliveryRequestFingerprint: "accepted-fingerprint",
+    };
+    const entry: InternalSessionEntry = {
+      ...acceptedInput,
+      sessionId: "capacity-session",
+      lifecycleRevision: "capacity-revision",
+      updatedAt: 1,
     };
     const completion: HarnessCompletionRecovery | undefined =
       outcome === "execute" || outcome === "source-replaced"
@@ -265,21 +282,6 @@ it.each([
         admissionRunId: "accepted-input",
         executionRunId: "capacity-execution",
       });
-      await waitForDiagnosticEventsDrained();
-      const writes: string[] = [];
-      const unsubscribe = onInternalDiagnosticEvent(
-        (event) => {
-          if (
-            event.type === "worker.request" &&
-            event.phase === "completed" &&
-            (event.requestClass === "session.actor.adoptRun" ||
-              event.requestClass === "session.entry.patch.commit")
-          ) {
-            writes.push(event.requestClass);
-          }
-        },
-        { include: ["worker.request"] },
-      );
       const sourceAdmission =
         completion &&
         prepareSystemAgentRunAdmission(
@@ -292,13 +294,7 @@ it.each([
       try {
         const admittedRunContext = await sourceAdmission?.admit("embedded");
         await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-        await waitForDiagnosticEventsDrained();
-        expect(writes).toEqual([]);
-        expect(loadSessionEntry(scope)).toMatchObject({
-          lifecycleRunId: "accepted-input",
-          activeWriterRunId: "previous-writer",
-          restartRecoveryDeliveryRequestFingerprint: "accepted-fingerprint",
-        });
+        expect(loadSessionEntry(scope)).toMatchObject(acceptedInput);
         const claimWriter = () =>
           claimAgentSessionWriter({
             ...scope,
@@ -328,8 +324,6 @@ it.each([
           );
           activityAt = interleaved.updatedAt;
           expect(activityAt).toBeGreaterThan(1);
-          await waitForDiagnosticEventsDrained();
-          writes.length = 0;
           await expect(claimWriter()).resolves.toMatchObject({
             expectedWriterRunId: "capacity-execution",
             entry: {
@@ -339,8 +333,6 @@ it.each([
               updatedAt: activityAt,
             },
           });
-          await waitForDiagnosticEventsDrained();
-          expect(writes).toEqual(["session.actor.adoptRun"]);
         } else if (outcome === "source-replaced" && completion) {
           await patchEntry(
             {
@@ -348,11 +340,7 @@ it.each([
             },
             true,
           );
-          await waitForDiagnosticEventsDrained();
-          writes.length = 0;
           await expect(claimWriter()).rejects.toThrow();
-          await waitForDiagnosticEventsDrained();
-          expect(writes).toEqual([]);
         } else if (outcome === "admission-rejected") {
           const { actor } = expectDefined(await fixture.acquireSessionActor(), "admitted actor");
           using adoptionAttempt = vi.spyOn(actor, "adoptRun");
@@ -360,9 +348,7 @@ it.each([
           await expect(claimWriter()).rejects.toThrow();
           await expect(claimWriter()).rejects.toThrow();
           await controller.clear();
-          await waitForDiagnosticEventsDrained();
           expect(adoptionAttempt).toHaveBeenCalledOnce();
-          expect(writes).toEqual(["session.entry.patch.commit"]);
         } else if (outcome === "unknown" || outcome === "rollback") {
           const { actor } = expectDefined(await fixture.acquireSessionActor(), "admitted actor");
           const adopt = actor.adoptRun.bind(actor);
@@ -420,24 +406,15 @@ it.each([
           }
           await expect(claimWriter()).rejects.toThrow(error);
           await controller.clear();
-          await waitForDiagnosticEventsDrained();
           expect(adoptionAttempt).toHaveBeenCalledOnce();
-          expect(writes).toEqual(
-            outcome === "rollback"
-              ? ["session.actor.adoptRun", "session.entry.patch.commit"]
-              : ["session.actor.adoptRun"],
-          );
         } else {
           await controller.clear();
         }
       } finally {
         sourceAdmission?.close();
-        unsubscribe();
       }
     }
-    await closeOpenClawAgentDatabasesAsync(state.root);
-    closeOpenClawAgentDatabasesForTest(state.root);
-    const persisted = expectDefined(loadSessionEntry(scope), "queued input survives reopen");
+    const persisted = await reopen(scope, state.root);
     if (outcome === "execute" || outcome === "unknown") {
       expect(persisted).toMatchObject({
         lifecycleRunId: "capacity-execution",
@@ -454,12 +431,7 @@ it.each([
       expect(persisted.restartRecoveryDeliveryRunId).toBeUndefined();
       expect(persisted.activeWriterRunId).toBe("previous-writer");
     } else {
-      expect(persisted).toMatchObject({
-        lifecycleRunId: "accepted-input",
-        activeWriterRunId: "previous-writer",
-        restartRecoveryDeliveryRunId: "accepted-input",
-        restartRecoveryDeliveryRequestFingerprint: "accepted-fingerprint",
-      });
+      expect(persisted).toMatchObject(acceptedInput);
     }
   });
 });

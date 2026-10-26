@@ -241,6 +241,8 @@ export type ChatItem =
       /** Total identical failures represented by the latest display notice. */
       repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
+      /** Retained input that ended interrupted or cancelled and may be dismissed. */
+      retiredPendingInput?: { id: string; status: "interrupted" | "cancelled"; preview: string };
     }
   | {
       kind: "divider";
@@ -493,6 +495,8 @@ export type ToolCard = {
   resultMessageId?: string;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
+  /** Bounded external preview; does not authorize full-message recovery. */
+  catalogTruncated?: boolean;
   toolOutput?: ToolOutputMetadata;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;

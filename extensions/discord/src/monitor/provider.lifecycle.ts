@@ -1,10 +1,9 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
@@ -29,6 +28,12 @@ const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READ
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
+
+const INFO_DEBUG_MARKERS = [
+  "Gateway websocket closed",
+  "Gateway reconnect scheduled in",
+  "Gateway forcing fresh IDENTIFY after",
+];
 
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
 
@@ -83,10 +88,7 @@ export async function runDiscordGatewayLifecycle(params: {
   const gatewayReadyAtLifecycleStart = gateway.isConnected;
   registerGateway(params.accountId, gateway);
   const gatewayEmitter = params.gatewaySupervisor.emitter;
-  const stopGatewayLogging = attachDiscordGatewayLogging({
-    emitter: gatewayEmitter,
-    runtime: params.runtime,
-  });
+  const loggingRuntime = params.runtime;
   let lifecycleStopping = false;
 
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
@@ -158,6 +160,11 @@ export async function runDiscordGatewayLifecycle(params: {
   };
 
   const onGatewayDebug = (msg: unknown) => {
+    const logMessage = String(msg);
+    logVerbose(`discord gateway: ${logMessage}`);
+    if (INFO_DEBUG_MARKERS.some((marker) => logMessage.includes(marker))) {
+      loggingRuntime.log?.(`discord gateway: ${logMessage}`);
+    }
     if (shouldStop()) {
       return;
     }
@@ -262,7 +269,14 @@ export async function runDiscordGatewayLifecycle(params: {
       }
     }
   };
+  const onGatewayWarning = (warning: unknown) => {
+    const message = `discord gateway warning: ${String(warning)}`;
+    logVerbose(message);
+    loggingRuntime.log?.(warn(message));
+  };
+
   gatewayEmitter.on("debug", onGatewayDebug);
+  gatewayEmitter.on("warning", onGatewayWarning);
   let lastTransportActivityStatusAt: number | undefined;
   const onGatewayTransportActivity = (event: unknown) => {
     if (lifecycleStopping || params.abortSignal?.aborted) {
@@ -394,7 +408,7 @@ export async function runDiscordGatewayLifecycle(params: {
       lifecycleStopping = true;
       params.gatewaySupervisor.detachLifecycle();
       unregisterGateway(params.accountId);
-      stopGatewayLogging();
+      gatewayEmitter.removeListener("warning", onGatewayWarning);
       clearReadyWatch();
       forceStopHandler = undefined;
       queuedForceStopError = undefined;

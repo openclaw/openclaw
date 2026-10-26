@@ -27,7 +27,7 @@ import {
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,

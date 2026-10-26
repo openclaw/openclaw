@@ -23,6 +23,7 @@ import {
   getUpdateDoctorConfigFailureReason,
   type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
+import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -102,6 +103,10 @@ type PackageDoctorOptions = {
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
+  const doctorTimeoutMs = resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs);
+  const remaining = createDoctorServiceInspectionBudget(
+    doctorTimeoutMs === undefined ? undefined : Date.now() + doctorTimeoutMs,
+  );
   const assertRequesterCurrent = params.assertCurrent;
   const context = params.getDoctorContext?.();
   const assertCurrent = () => {
@@ -222,7 +227,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
           params.restart === false ? "0" : UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
       },
-      timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
+      timeoutMs: remaining(),
       runCommand: sectionTiming.wrap(runCommand ?? runCommandWithTimeout),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
@@ -246,6 +251,10 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
                 databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
+                get serviceInspectionDeadlineAtMs() {
+                  const budget = remaining();
+                  return budget === undefined ? undefined : Date.now() + budget;
+                },
               },
             },
             runDoctor,

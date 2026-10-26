@@ -58,6 +58,16 @@ describe("formatMSTeamsMarkdown", () => {
     expect(output).toContain("![x](https://e.test/x.png)");
   });
 
+  it("ends a code block inside a list item before the next item", () => {
+    const steps =
+      "1. Install:\n   ```bash\n   npm install\n   ```\n2. Run:\n   ```bash\n   npm start\n   ```";
+    const output = formatMSTeamsMarkdown(steps, "off");
+    expect(output).toBe("1. Install:\n```\nnpm install\n```\n2. Run:\n```\nnpm start\n```");
+    const html = new MarkdownIt().render(output);
+    expect(html.match(/<pre><code>/g)).toHaveLength(2);
+    expect(html).toContain("<li>Run:</li>");
+  });
+
   it("tracks fences opened on list continuation lines", () => {
     const before = "- item\n  ```\n  code\n\n| A | B |\n|---|---|\n[x](https://host/a)";
     expect(formatMSTeamsMarkdown(before, "off")).toContain("[x](https://host/a)");

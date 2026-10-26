@@ -54,8 +54,11 @@ class TestGatewayPlugin extends GatewayPlugin {
   connectCalls: boolean[] = [];
   urls: string[] = [];
 
-  constructor(options: ConstructorParameters<typeof GatewayPlugin>[0] = {}) {
-    super({ url: "wss://gateway.example.test", ...options });
+  constructor(
+    options: ConstructorParameters<typeof GatewayPlugin>[0] = {},
+    gatewayInfo?: ConstructorParameters<typeof GatewayPlugin>[1],
+  ) {
+    super({ url: "wss://gateway.example.test", ...options }, gatewayInfo);
   }
 
   override connect(resume = false): void {
@@ -106,7 +109,6 @@ function expectConnections(gateway: TestGatewayPlugin, calls: boolean[]) {
 }
 
 type GatewayInternals = {
-  handlePayload(payload: { op: number; t?: string; s?: number; d: unknown }, resume: boolean): void;
   sessionId: string | null;
   resumeGatewayUrl: string | null;
   sequence: number | null;
@@ -161,7 +163,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("emits async dispatch failures as gateway errors", async () => {
-    const gateway = new GatewayPlugin({});
+    const gateway = new TestGatewayPlugin();
     const error = new Error("listener failed");
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent: async () => {
@@ -171,15 +173,11 @@ describe("GatewayPlugin", () => {
     const errorSpy = vi.fn();
     gateway.emitter.on("error", errorSpy);
 
-    gatewayInternals(gateway).handlePayload(
-      {
-        op: GatewayOpcodes.Dispatch,
-        t: GatewayDispatchEvents.MessageCreate,
-        s: 1,
-        d: { id: "m1", channel_id: "c1", author: { id: "u1", username: "user" } },
-      },
-      false,
-    );
+    gateway.openSocket().dispatch(GatewayDispatchEvents.MessageCreate, {
+      id: "m1",
+      channel_id: "c1",
+      author: { id: "u1", username: "user" },
+    });
 
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledWith(error));
   });
@@ -525,8 +523,7 @@ describe("GatewayPlugin", () => {
     sessionState.resumeGatewayUrl = "wss://resume.example.test";
     sessionState.sequence = 123;
 
-    gateway.openSocket();
-    gatewayInternals(gateway).handlePayload({ op: GatewayOpcodes.InvalidSession, d: false }, true);
+    gateway.openSocket().payload(GatewayOpcodes.InvalidSession, false);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.connectCalls).toEqual([false, false]);
@@ -619,18 +616,17 @@ describe("GatewayPlugin", () => {
       shards: 2,
       session_start_limit: { total: 1000, remaining: 1000, reset_after: 0, max_concurrency: 1 },
     };
-    const first = new GatewayPlugin({}, info);
-    const second = new GatewayPlugin({}, info);
+    const first = new TestGatewayPlugin({}, info);
+    const second = new TestGatewayPlugin({}, info);
     (first as unknown as { client: unknown }).client = { options: { token: "token" } };
     (second as unknown as { client: unknown }).client = { options: { token: "token" } };
-    const firstSend = attachOpenSocket(first);
-    const secondSend = attachOpenSocket(second);
+    const firstSocket = first.openSocket();
+    const secondSocket = second.openSocket();
+    const firstSend = firstSocket.send;
+    const secondSend = secondSocket.send;
 
-    for (const gateway of [first, second]) {
-      gatewayInternals(gateway).handlePayload(
-        { op: GatewayOpcodes.Hello, d: { heartbeat_interval: 45_000 } },
-        false,
-      );
+    for (const socket of [firstSocket, secondSocket]) {
+      socket.hello();
     }
 
     await vi.advanceTimersByTimeAsync(0);

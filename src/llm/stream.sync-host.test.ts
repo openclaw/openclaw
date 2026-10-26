@@ -8,8 +8,8 @@ import type {
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { formatUserFacingAssistantErrorText } from "../agents/embedded-agent-helpers/error-text.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
 import {
   classifyGatewayStorageFailure,
@@ -35,16 +35,13 @@ describe("LLM synchronous stream transport host", () => {
       contextWindow: 1024,
       maxTokens: 512,
     });
-    const message = {
-      role: "assistant",
+    const message: AssistantMessage = makeAgentAssistantMessage({
       content: [{ type: "text", text: "configured" }],
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: createZeroUsageFixture(),
-      stopReason: "stop",
       timestamp: Date.now(),
-    } satisfies AssistantMessage;
+    });
     const providerStream = vi.fn(
       (runtimeModel: Model, context: Context): AssistantMessageEventStreamContract => {
         expect(getAiTransportHost().plugin.wrapSimpleCompletionStream).not.toBe(inertWrapper);

@@ -60,6 +60,8 @@ import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./ty
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
+let legacyIssuesModule: Promise<typeof import("./io.legacy-issues.runtime.js")> | undefined;
+
 type InternalReadOptions = {
   prepareValidation?: "runtime" | "strict";
   allowCurrentPluginMetadata?: boolean;
@@ -297,7 +299,8 @@ async function readConfigSnapshot(
         ? undefined
         : () => preparePluginMetadataMachineStateAsync({ env: deps.env });
       const collect = async () => {
-        const { collectInvalidConfigLegacyIssues } = await import("./io.legacy-issues.runtime.js");
+        const { collectInvalidConfigLegacyIssues } = await (legacyIssuesModule ??=
+          import("./io.legacy-issues.runtime.js"));
         return collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed, {
           coreOnly: context.options.pluginValidation === "core-only",
           preparePluginDiagnostics,
@@ -477,6 +480,7 @@ export async function prepareConfigRecoveryFromContext(
     );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
+      measure: previewContext.deps.measure,
       configPath: context.configPath,
       raw: current.raw,
       parsed: current.parsed,

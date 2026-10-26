@@ -191,8 +191,6 @@ export function createSidebarSessionWindow(
         ...(scroll.element() ? [scroll.element()!] : []),
         ...(scroll.content() ? [scroll.content()!] : []),
       ],
-      // Navigation readiness settles after the first visible rows have committed.
-      changeTiming: "sync",
     },
   );
   createResizeObserver(

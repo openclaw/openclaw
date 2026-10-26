@@ -13,7 +13,7 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 
 const suite = createChatFlowE2eSuite();
 const visiblePane = ".chat-pane-cache__pane--visible";
-const skeletonSelector = `${visiblePane} .chat-thread openclaw-panel-loading-skeleton`;
+const skeletonSelector = `${visiblePane} .chat-thread :is(openclaw-panel-loading-skeleton, .lazy-view-state--loading)`;
 const textInThread = (page: Page, text: string, root = ".chat-thread") =>
   page.locator(root).getByText(text);
 const sessionLink = (page: Page, session: string) =>
@@ -28,6 +28,7 @@ suite.define(() => {
     const previousText = "Previous conversation.";
     const destinationText = "Destination conversation.";
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup", "chat.history"],
       sessionKey: "agent:main:session-a",
       historyMessages: [{ role: "assistant", content: previousText }],
@@ -156,6 +157,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
       const marker = "The selected conversation survived canonical navigation.";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         historyMessages: [{ role: "assistant", content: "Initial conversation." }],
         sessionTranscripts: {
@@ -229,6 +231,7 @@ suite.define(() => {
     const marker = "Retained transcript";
     const failure = "History refresh failed.";
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
     });
     await page.goto(`${suite.server.baseUrl}chat`);

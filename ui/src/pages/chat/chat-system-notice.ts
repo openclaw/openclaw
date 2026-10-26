@@ -18,7 +18,12 @@ registerChatSessionEnglish();
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
   normalized?: NormalizedMessage | null,
-  pending?: { status: PendingInputStatus; key: string; timestamp: number },
+  pending?: {
+    status: PendingInputStatus;
+    key: string;
+    timestamp: number;
+    retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
+  },
 ): ChatItem[] {
   const raw = asRecord(item.message);
   if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
@@ -64,6 +69,7 @@ export function projectChatSystemNotice(
             key: pending.key,
             timestamp: pending.timestamp,
             text: pendingText,
+            ...(pending.retired ? { retiredPendingInput: pending.retired } : {}),
           },
         ]
       : [];
@@ -148,6 +154,7 @@ export function projectChatSystemNotice(
       text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
+      ...(pendingSummaryKey && pending?.retired ? { retiredPendingInput: pending.retired } : {}),
     },
     ...(pendingSummaryKey ? [] : pendingItems),
   ];

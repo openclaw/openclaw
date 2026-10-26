@@ -38,20 +38,22 @@ export function registerGatewayStartupReadinessTests(params: {
   it.each([true, false])(
     "admits update canary readiness only for attributed plugin failures (attributed=%s)",
     async (attributed) => {
+      const error = "synthetic registration failure";
+      const diagnostic = {
+        level: "error" as const,
+        message: error,
+        ...(attributed ? { pluginId: "startup-fixture" } : {}),
+      };
       const pluginRegistry = createEmptyPluginRegistry();
       pluginRegistry.plugins.push(
         createPluginRecord({
           id: "startup-fixture",
           source: params.path("startup-fixture", "index.js"),
           status: "error",
-          error: "synthetic registration failure",
+          error,
         }),
       );
-      pluginRegistry.diagnostics.push({
-        level: "error",
-        message: "synthetic registration failure",
-        ...(attributed ? { pluginId: "startup-fixture" } : {}),
-      });
+      pluginRegistry.diagnostics.push({ ...diagnostic });
       const onStartupPluginsLoaded =
         vi.fn<NonNullable<PostAttachParams["onStartupPluginsLoaded"]>>();
       const onSidecarsReady = vi.fn();
@@ -64,34 +66,25 @@ export function registerGatewayStartupReadinessTests(params: {
       });
       const runtimeDeps = params.createRuntimeDeps();
       const startup = params.start(startupParams, runtimeDeps);
-
       if (attributed) {
         await startup;
-        expect(onSidecarsReady).toHaveBeenCalledOnce();
-        expect(startupParams.unlockStartupMethods).toHaveBeenCalledOnce();
       } else {
         await expect(startup).rejects.toThrow(
           "Candidate plugin registry reported an unattributed error",
         );
-        expect(onSidecarsReady).not.toHaveBeenCalled();
-        expect(startupParams.unlockStartupMethods).not.toHaveBeenCalled();
       }
+      expect(onSidecarsReady).toHaveBeenCalledTimes(Number(attributed));
+      expect(startupParams.unlockStartupMethods).toHaveBeenCalledTimes(Number(attributed));
       const published = onStartupPluginsLoaded.mock.lastCall?.[0].pluginRegistry;
-      expect(published?.plugins).toEqual([
-        expect.objectContaining({
+      expect(published?.plugins).toMatchObject([
+        {
           id: "startup-fixture",
           status: "error",
           activated: true,
-          error: "synthetic registration failure",
-        }),
-      ]);
-      expect(published?.diagnostics).toEqual([
-        {
-          level: "error",
-          message: "synthetic registration failure",
-          ...(attributed ? { pluginId: "startup-fixture" } : {}),
+          error,
         },
       ]);
+      expect(published?.diagnostics).toEqual([diagnostic]);
       expect(startupParams.startChannels).not.toHaveBeenCalled();
       params.expectAutonomousSidecarsNotStarted();
       expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();

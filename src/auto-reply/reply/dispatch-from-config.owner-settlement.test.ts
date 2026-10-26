@@ -31,6 +31,7 @@ import {
   createHookCtx,
   emptyConfig,
   hookMocks,
+  mockSessionStorePath,
   sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
@@ -130,7 +131,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     let successorDispatch: Promise<unknown> | undefined;
     let dispatcherSettlement: Promise<unknown> | undefined;
     const source = reserveSessionControllerSource(sessionKey, {
-      target: captureSessionTarget({ storeScope: "/tmp/mock-sessions.json", sessionKey }),
+      target: captureSessionTarget({ storeScope: mockSessionStorePath, sessionKey }),
       policy: { mode: "followup" },
       adapter: { signal, onSettled: cleanup.wait },
     });
@@ -213,7 +214,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     const sessionKey = "agent:main:fenced-source-claim";
     const sourceSettled = vi.fn();
     const source = reserveSessionControllerSource(sessionKey, {
-      target: captureSessionTarget({ storeScope: "/tmp/mock-sessions.json", sessionKey }),
+      target: captureSessionTarget({ storeScope: mockSessionStorePath, sessionKey }),
       policy: { mode: "followup" },
       adapter: { onSettled: sourceSettled },
     });
@@ -341,7 +342,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       const queued = mode !== "owned";
       const sessionKey = "agent:main:discord:channel:resolver-race";
       const sessionId = "resolver-session";
-      const scope = { scope: "/tmp/mock-sessions.json", identities: [sessionKey, sessionId] };
+      const scope = { scope: mockSessionStorePath, identities: [sessionKey, sessionId] };
       sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
       const predecessor = queued
         ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })

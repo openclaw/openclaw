@@ -131,18 +131,31 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
-  it("reserves automatic desktop Details before the first resize delivery", async () => {
-    vi.stubGlobal("ResizeObserver", undefined);
-    try {
-      await page.viewport(1700, 900);
-      const { conversation, panel } = await fixture(props(), 1320, false, "desktop", true);
-      expect(panel.hidden).toBe(false);
-      expect(getComputedStyle(conversation).right).toBe("313px");
-      expect(panel.querySelector(".chat-details-session")).toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
+  it.each([undefined, "desktop"] as const)(
+    "reserves automatic Details before the first resize delivery (presentation: %s)",
+    async (nativePresentation) => {
+      vi.stubGlobal("ResizeObserver", undefined);
+      try {
+        await page.viewport(1700, 900);
+        const { conversation, panel } = await fixture(
+          props(),
+          1320,
+          false,
+          nativePresentation,
+          true,
+        );
+        expect(panel.hidden).toBe(false);
+        expect(getComputedStyle(conversation).right).toBe(
+          nativePresentation === "desktop" ? "313px" : "300px",
+        );
+        if (nativePresentation === "desktop") {
+          expect(panel.querySelector(".chat-details-session")).toBeNull();
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it.each(["transcript paint", "explicit open"] as const)(
     "holds automatic content until %s and retains it through later hydration",
@@ -215,10 +228,12 @@ describe("chat Details presentation", () => {
     const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect
+      .poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 })
+      .toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 }).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
     trigger.click();

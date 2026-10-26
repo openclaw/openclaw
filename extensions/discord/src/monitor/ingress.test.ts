@@ -1,3 +1,4 @@
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import {
   preflightDiscordMessageMock,
@@ -144,7 +145,9 @@ describe("Discord durable ingress", () => {
       ]);
       expect(JSON.stringify(pending)).not.toContain("PRIVATE_PAYLOAD_SENTINEL");
       expect(JSON.stringify(pending)).not.toContain("private-upload");
-      for (const entry of await fs.readdir(stateDir, { recursive: true, withFileTypes: true })) {
+      for (const entry of (await listDirectoryTreeStrict(stateDir)).map(
+        (walkEntry) => walkEntry.dirent,
+      )) {
         if (entry.isFile()) {
           const bytes = await fs.readFile(path.join(entry.parentPath, entry.name));
           expect(bytes.includes(Buffer.from("PRIVATE_PAYLOAD_SENTINEL"))).toBe(false);

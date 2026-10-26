@@ -1,7 +1,8 @@
 /** Real Gateway + bundled iMessage, synthetic JSON-RPC bridge, frozen SQL observer. */
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,6 +35,8 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     resources: { type: "boolean", default: false },
     "session-polling": { type: "boolean", default: false },
+    "orphan-recovery": { type: "boolean", default: false },
+    "orphan-transient-control": { type: "boolean", default: false },
     sessions: { type: "string", default: "2600" },
     placements: { type: "string", default: "177" },
     bound: { type: "string", default: "46" },
@@ -44,9 +47,18 @@ if (!values.out || !values.observer) {
   throw new Error("--out and --observer required");
 }
 const output = path.resolve(values.out);
+const orphanRecovery = values["orphan-recovery"];
+const transientControl = values["orphan-transient-control"];
+const observeOrphans = orphanRecovery || transientControl;
+const sessionPolling = values["session-polling"] || observeOrphans;
+if (orphanRecovery && transientControl) {
+  throw new Error("Run the transient control separately from parked identities");
+}
 const idleSeconds = Number(values["idle-seconds"]);
 const sparseEvents = Number(values["sparse-events"]);
-const settleSeconds = Number(values["settle-seconds"] ?? (values["session-polling"] ? 90 : 2));
+const settleSeconds = Number(
+  values["settle-seconds"] ?? (observeOrphans ? 2 : sessionPolling ? 90 : 2),
+);
 if (
   !(idleSeconds > 0) ||
   !(settleSeconds >= 0) ||
@@ -66,6 +78,11 @@ const evidence = {
   phases: [] as { phase: string; start: number; end: number }[],
   latencyMs: [] as number[],
   resources: [] as unknown[],
+  orphanDiscovery: undefined as { at: number } | undefined,
+  orphanSweeps: [] as { phase: string; at: number; attempts: number; initial: boolean }[],
+  restoration: undefined as
+    | { sessionId: string; requestedAt: number; cleanedAt: number }
+    | undefined,
   ok: false,
 };
 let phase = "boot";
@@ -108,22 +125,26 @@ function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
   children.push(child);
   return child;
 }
-async function until(predicate: () => boolean, label: string) {
-  const deadline = Date.now() + 120_000;
+async function until(predicate: () => boolean, label: string, timeoutMs = 120_000, pollMs = 25) {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) {
       throw new Error(`${label} timeout`);
     }
-    await delay(25);
+    await delay(pollMs);
   }
 }
 try {
   const port = await getFreePort();
   const mockPort = await getFreePort();
   const cfg: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
+  const token = observeOrphans ? `synthetic-${randomUUID()}` : undefined;
+  if (token) {
+    cfg.gateway = { ...cfg.gateway, auth: { mode: "token", token } };
+  }
   applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
   const agentList = [{ id: "main", workspace: path.join(fixture, "workspace") }];
-  if (values["session-polling"]) {
+  if (sessionPolling) {
     for (const id of ["second", "third"]) {
       agentList.push({ id, workspace: path.join(fixture, id) });
     }
@@ -161,18 +182,20 @@ try {
   const configPath = writeGatewayBenchConfig(fixture, cfg, {
     agentList,
   });
-  if (values["session-polling"]) {
+  if (sessionPolling) {
     const seed = launch(
       [
         "--import",
         "./scripts/tsx.mjs",
         "scripts/perf/session-polling-fixture.ts",
         "--sessions",
-        values.sessions,
+        transientControl ? "1" : values.sessions,
         "--placements",
-        values.placements,
+        transientControl ? "1" : values.placements,
         "--bound",
-        values.bound,
+        transientControl ? "0" : values.bound,
+        ...(orphanRecovery ? ["--orphan-recovery"] : []),
+        ...(transientControl ? ["--orphan-transient-control"] : []),
       ],
       createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
       "seed",
@@ -198,17 +221,25 @@ try {
     throw new Error("Mock provider unavailable");
   }
   const gateway = launch(
-    buildGatewayBenchChildArgs("dist/entry.js", port, [
-      ...(values["cpu-profile"] ? gatewayBenchCpuProfileArgs(output) : []),
-      ...(values.resources
-        ? [
-            "--import",
-            "./scripts/tsx.mjs",
-            "--import",
-            "./scripts/lib/gateway-bench-profile-preload.ts",
-          ]
-        : []),
-    ]),
+    buildGatewayBenchChildArgs(
+      "dist/entry.js",
+      port,
+      [
+        ...(observeOrphans
+          ? ["--import", path.resolve("scripts/perf/orphan-recovery-observer.mjs")]
+          : []),
+        ...(values["cpu-profile"] ? gatewayBenchCpuProfileArgs(output) : []),
+        ...(values.resources
+          ? [
+              "--import",
+              "./scripts/tsx.mjs",
+              "--import",
+              "./scripts/lib/gateway-bench-profile-preload.ts",
+            ]
+          : []),
+      ],
+      token ? "token" : "none",
+    ),
     {
       ...createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
       OPENAI_API_KEY: "synthetic-ingress-fixture",
@@ -218,6 +249,32 @@ try {
     },
     "gateway",
   );
+  if (observeOrphans) {
+    gateway.on("message", (message: unknown) => {
+      if (
+        typeof message === "object" &&
+        message !== null &&
+        "type" in message &&
+        message.type === "orphan-recovery-sweep" &&
+        "at" in message &&
+        typeof message.at === "number" &&
+        "attempts" in message &&
+        typeof message.attempts === "number" &&
+        "initial" in message &&
+        typeof message.initial === "boolean"
+      ) {
+        evidence.orphanSweeps.push({
+          phase,
+          at: message.at,
+          attempts: message.attempts,
+          initial: message.initial,
+        });
+        if (message.initial) {
+          evidence.orphanDiscovery = { at: message.at };
+        }
+      }
+    });
+  }
   const ready = await waitForInitialProbe({
     port,
     path: "/readyz",
@@ -229,7 +286,7 @@ try {
     throw new Error("Gateway unavailable");
   }
   await until(() => watches > 0, "iMessage watch");
-  if (values["session-polling"]) {
+  if (sessionPolling) {
     client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
     await client.waitOpen();
     assert.equal(
@@ -245,6 +302,7 @@ try {
           },
           role: "operator",
           scopes: ["operator.read", "operator.write"],
+          ...(token ? { auth: { token } } : {}),
           caps: [],
         })
       ).ok,
@@ -252,6 +310,10 @@ try {
       "Synthetic client admission failed",
     );
     assert.equal((await client.request("sessions.subscribe", {})).ok, true);
+    setPhase(observeOrphans ? "initial-discovery" : "settle");
+  }
+  if (observeOrphans) {
+    await until(() => evidence.orphanDiscovery !== undefined, "Initial orphan discovery", 300_000);
     setPhase("settle");
   }
   await delay(settleSeconds * 1_000);
@@ -267,6 +329,59 @@ try {
     evidence.resources.push(
       measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway, { includeWorkers: true })),
     );
+  }
+  if (orphanRecovery) {
+    assert.ok(client);
+    const restoration: {
+      agentId: string;
+      sessionKey: string;
+      sessionId: string;
+      root: string;
+      cleanupRef: string;
+    } = JSON.parse(
+      readFileSync(path.join(fixture, "state", "orphan-recovery-fixture.json"), "utf8"),
+    );
+    const refExists = () => {
+      try {
+        execFileSync("git", [
+          "-C",
+          restoration.root,
+          "show-ref",
+          "--verify",
+          "--quiet",
+          restoration.cleanupRef,
+        ]);
+        return true;
+      } catch (error) {
+        if ((error as { status?: number }).status === 1) {
+          return false;
+        }
+        throw error;
+      }
+    };
+    assert.ok(refExists(), "The unavailable workspace must retain its orphan before restoration");
+    setPhase("restoration");
+    const requestedAt = Date.now();
+    const restored = await client.request(
+      "sessions.create",
+      {
+        key: restoration.sessionKey,
+        agentId: restoration.agentId,
+        message: "",
+        cwd: restoration.root,
+        worktree: true,
+        worktreeName: "synthetic-restored-orphan",
+      },
+      120_000,
+    );
+    assert.equal(restored.ok, true, JSON.stringify(restored.error));
+    assert.equal(
+      (restored.payload as { sessionId?: string }).sessionId,
+      restoration.sessionId,
+      "Restoration must preserve the retained placement identity",
+    );
+    await until(() => !refExists(), "Restored orphan cleanup", 8 * 60_000, 1_000);
+    evidence.restoration = { sessionId: restoration.sessionId, requestedAt, cleanedAt: Date.now() };
   }
   for (let index = 0; index < sparseEvents; index++) {
     setPhase(`sparse-${index}`);

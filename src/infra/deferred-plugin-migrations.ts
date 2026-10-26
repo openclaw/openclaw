@@ -150,8 +150,6 @@ export async function readConfigWritePendingMigrations(
 
 export class DeferredPluginMigrationConflictError extends Error {
   readonly pending: readonly DeferredPluginMigration[];
-  readonly expected?: readonly DeferredPluginMigration[];
-  readonly phase: string;
 
   constructor(
     pending: readonly DeferredPluginMigration[],
@@ -169,8 +167,6 @@ export class DeferredPluginMigrationConflictError extends Error {
     );
     this.name = "DeferredPluginMigrationConflictError";
     this.pending = pending;
-    this.expected = context.expected;
-    this.phase = phase;
   }
 }
 
@@ -187,19 +183,17 @@ function formatChangedObligationFields(
   expected: readonly DeferredPluginMigration[],
   current: readonly DeferredPluginMigration[],
 ): string {
-  const expectedById = new Map(expected.map((entry) => [entry.pluginId, entry]));
   const currentById = new Map(current.map((entry) => [entry.pluginId, entry]));
   const fields = deferredPluginMigrationSchema.keyof().options;
   const changed: string[] = [];
-  for (const pluginId of [...expectedById.keys()].toSorted()) {
-    const before = expectedById.get(pluginId);
-    const after = currentById.get(pluginId);
-    if (!before || !after) {
+  for (const before of expected) {
+    const after = currentById.get(before.pluginId);
+    if (!after) {
       continue;
     }
     for (const field of fields) {
       if (!isDeepStrictEqual(before[field], after[field])) {
-        changed.push(`${pluginId}:${field}`);
+        changed.push(`${before.pluginId}:${field}`);
       }
     }
   }
@@ -322,23 +316,27 @@ export async function readDeferredPluginMigrationsAsync(
 export async function withLeasePinnedDeferredPluginMigrations<T>(
   options: {
     env: NodeJS.ProcessEnv;
-    lease: { databasePath: string; assertOwned: () => void };
+    lease: {
+      databasePath: string;
+      assertOwned: () => void | Promise<void>;
+      assertCurrent: () => void;
+    };
   },
   run: (pending: readonly DeferredPluginMigration[], assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
-  options.lease.assertOwned();
+  await options.lease.assertOwned();
   const pending = await readDeferredPluginMigrationsAsync({
     env: options.env,
     path: options.lease.databasePath,
   });
-  options.lease.assertOwned();
+  await options.lease.assertOwned();
   const read: PinnedMigrationRead = {
     invalidated: false,
     ...(pinnedMigrationRead.getStore() ? { parent: pinnedMigrationRead.getStore() } : {}),
   };
   return await pinnedMigrationRead.run(read, async () =>
     run(pending, () => {
-      options.lease.assertOwned();
+      options.lease.assertCurrent();
       if (read.invalidated) {
         throw new Error("Deferred plugin migration policy changed since review.");
       }
@@ -609,10 +607,10 @@ export async function recordDeferredPluginMigrations(
     settlements: params.settlements,
     expectedPending: params.expectedPending,
   });
-  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
   const { runWithOpenClawStateLeaseWorker } =
     await import("../state/openclaw-state-lease-worker-operation.js");
-  return withPluginLifecycleLease({ env: params.env }, async (lease) => {
+  return withPluginLifecycleLeaseAsync({ env: params.env }, async (lease) => {
     const context = captureOpenClawStateWorkerContext({
       env: params.env,
       path: lease.databasePath,
@@ -632,8 +630,7 @@ export async function recordDeferredPluginMigrations(
     );
     if (result.kind === "conflict") {
       throw new DeferredPluginMigrationConflictError(result.pending, {
-        expected: result.expected,
-        phase: result.phase,
+        expected: input.expectedPending,
       });
     }
     if (result.kind === "invalid") {

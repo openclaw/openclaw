@@ -36,6 +36,10 @@ const { values } = parseArgs({
     "snapshot-minutes": { type: "string" },
     "module-census": { type: "boolean" },
     coverage: { type: "boolean" },
+    "lazy-import-trace": { type: "boolean" },
+    "turn-count": { type: "string" },
+    "gateway-preload": { type: "string" },
+    "shell-turns": { type: "boolean" },
     "idle-minutes": { type: "string" },
     "ready-file": { type: "string" },
     "start-file": { type: "string" },
@@ -69,6 +73,9 @@ const clientCount = positiveInteger(values.clients, "clients");
 const port = positiveInteger(values.port, "port");
 const rpcInterval = positiveInteger(values["rpc-interval-ms"], "rpc-interval-ms");
 const turnInterval = positiveInteger(values["turn-interval-ms"], "turn-interval-ms");
+const turnCount = values["turn-count"]
+  ? positiveInteger(values["turn-count"], "turn-count")
+  : Infinity;
 if (port < 40000 || port > 65533) {
   throw new Error("port and two adjacent mock ports must fit 40000–65535");
 }
@@ -133,6 +140,9 @@ config.agents.entries = Object.fromEntries(
   }),
 );
 const turnDriver = await configureHeapRigTurns(config, root, port + 1);
+if (values["shell-turns"]) {
+  config.tools.exec = { security: "full", ask: "off" };
+}
 await configureHeapRigCatalog(config, root);
 const configPath = path.join(root, "openclaw.json");
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -320,6 +330,10 @@ try {
   const coldStarted = performance.now();
   const gateway = start(
     [
+      ...(values["gateway-preload"] ? ["--import", path.resolve(values["gateway-preload"])] : []),
+      ...(values["lazy-import-trace"]
+        ? ["--import", path.resolve("scripts/perf/lazy-import-trace-preload.mjs")]
+        : []),
       ...(values["module-census"]
         ? ["--import", path.resolve("scripts/perf/main-module-census-preload.mjs")]
         : []),
@@ -329,6 +343,9 @@ try {
       String(port),
     ],
     "gateway",
+    values["lazy-import-trace"]
+      ? { OPENCLAW_LAZY_IMPORT_TRACE_DIR: path.join(root, "lazy-import-trace") }
+      : {},
   );
   async function census(action, label) {
     if (!values["module-census"]) {
@@ -570,7 +587,11 @@ try {
   }
   tasks.push(
     (async () => {
-      for (let index = 0; !abort.signal.aborted && performance.now() < deadline; index++) {
+      for (
+        let index = 0;
+        index < turnCount && !abort.signal.aborted && performance.now() < deadline;
+        index++
+      ) {
         await workloadReady;
         if (abort.signal.aborted || performance.now() >= deadline) {
           break;
@@ -578,6 +599,7 @@ try {
         const turnWork = turnDriver.runTurn(admin.rpc, index, {
           agentId: index % 2 === 0 ? "main" : "second",
           canStart: () => !abort.signal.aborted && performance.now() < deadline,
+          shell: values["shell-turns"],
         });
         currentTurn = turnWork;
         const turn = await turnWork;

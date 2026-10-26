@@ -1,11 +1,11 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Model } from "../../llm/types.js";

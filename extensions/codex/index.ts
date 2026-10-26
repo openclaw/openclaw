@@ -156,6 +156,11 @@ export default definePluginEntry({
         const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
         return await preparePluginStateRead(openBindingMutationStore(), key);
       },
+      prepareGuard: async (key, assertValueCurrent) => {
+        const { preparePluginStateGuard } =
+          await import("openclaw/plugin-sdk/plugin-state-runtime");
+        return await preparePluginStateGuard(openBindingMutationStore(), key, assertValueCurrent);
+      },
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
         lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),
@@ -236,9 +241,6 @@ export default definePluginEntry({
         {
           contextVersion: 2,
           create: (context) => {
-            if (context.senderIsOwner !== true) {
-              return [];
-            }
             const resolveToolRuntimeConfig = () =>
               context.getRuntimeConfig?.() ??
               context.runtimeConfig ??
@@ -250,7 +252,9 @@ export default definePluginEntry({
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
               withAuthProfileIdAtEffect: withCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-              senderIsOwner: context.senderIsOwner,
+              get senderIsOwner() {
+                return context.senderIsOwner === true;
+              },
               assertInvocationCurrent: context.assertInvocationCurrent,
             });
           },

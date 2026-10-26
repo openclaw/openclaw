@@ -1,6 +1,8 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   readOpenClawAgentDatabaseRegistryToken,
   registerOpenClawAgentDatabase,
@@ -23,6 +25,7 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
 import {
   captureSessionStoreReadCandidates,
@@ -81,6 +84,50 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("retains locked full entry facts without announcing an unchanged entry, and publishes real changes", async () => {
+    const target = scope("agent:main:retained-turn");
+    const entry = {
+      sessionId,
+      updatedAt: 1,
+      delivery: { kind: "none" as const },
+      skillsSnapshot: { prompt: "Stable synthetic prompt", skills: [] },
+    };
+    replaceSessionEntrySync(target, entry);
+    await retainEntry(target);
+    const changes: string[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+        changes.push(change.scope ?? "unspecified");
+      }
+    });
+    const retained = () =>
+      readRetainedSessionEntryFacts(
+        { agentId: "main", path: database().path },
+        { sessionKeys: [target.sessionKey], projection: "full" },
+      )?.entries[0]?.entry;
+    try {
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message }],
+        touchSessionEntry: false,
+      });
+      expect(changes).toEqual([]);
+      expect(retained()).toEqual(entry);
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Changed entry turn" } }],
+        touchSessionEntry: true,
+      });
+      expect(changes).toEqual(["session-entry"]);
+      expect(retained()).toMatchObject({
+        sessionId,
+        skillsSnapshot: entry.skillsSnapshot,
+        updatedAt: expect.any(Number),
+      });
+      expect(retained()?.updatedAt).toBeGreaterThan(entry.updatedAt);
+    } finally {
+      stop();
+    }
+  });
+
   it("resolves the current transcript and lifecycle revision across entry writes", async () => {
     const selected = scope("agent:main:current");
     replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
@@ -110,6 +157,22 @@ describe("transcript turn physical identity", () => {
       selectedSessionId: sessionId,
       selectedLifecycleRevision: "run",
     });
+    const originalBase = loadSessionEntryReadOnly(base);
+    for (const content of ["First shared-ID turn", "Second shared-ID turn"]) {
+      await expect(
+        persistSessionTranscriptTurn(base, {
+          messages: [{ message: { role: "user", content } }],
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({
+        messages: [{ appended: true }],
+        sessionEntry: { sessionId, lifecycleRevision: "run" },
+      });
+    }
+    expect(loadSessionEntryReadOnly(base)).toEqual(originalBase);
+    expect(
+      loadTranscriptEventsSync(run).filter((event) => isRecord(event) && event.type === "message"),
+    ).toHaveLength(2);
   });
 
   it("reuses a selected target until an owning registry write reassigns it", async () => {

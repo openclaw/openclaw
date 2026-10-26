@@ -4,6 +4,7 @@ import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat composer boundary" });
@@ -24,12 +25,7 @@ suite.define(() => {
         },
         async ({ page }) => {
           await installMockGateway(page, {
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "Ready to review the next change." }],
-              },
-            ],
+            historyMessages: [chatMessage("assistant", "Ready to review the next change.")],
           });
           await page.goto(suite.server.baseUrl + "chat");
           const footer = page.locator(".chat-footer");

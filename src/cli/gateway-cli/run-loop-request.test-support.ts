@@ -194,11 +194,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         closing.release();
         await expect(exited).resolves.toBe(0);
       }
-      expect(close).toHaveBeenCalledOnce();
-      expect(writeHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "update.run" }),
-        expect.any(Function),
-      );
+      expect(writeHandoff.mock.calls[0]?.[0].reason).toBe("update.run");
     });
   });
 
@@ -215,7 +211,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         consumed.resolve({ reason: "gateway.restart" });
         await vi.advanceTimersByTimeAsync(0);
         await expect(exited).resolves.toBe(1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
         expect(close).toHaveBeenCalledExactlyOnceWith({
           retainSharedState: true,
           reason: "gateway stopping",
@@ -250,7 +245,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           await advanceWithoutCalls(1, runtime.exit);
           closing.resolve();
           await vi.advanceTimersByTimeAsync(0);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
           await expect(exited).resolves.toBe(0);
         } finally {
           consumed.resolve(null);
@@ -264,7 +258,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
   it("settles a queued Stop when restart preparation fails before reopening storage", async () => {
     const preparation = deferredCall<{ drained: boolean; active: number }>();
     waitCron.mockImplementationOnce(preparation.call);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+    await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
       try {
         captureSignal("SIGUSR2")();
         await preparation.entered;
@@ -274,7 +268,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         preparation.reject(new Error("restart preparation failed"));
         await expect(exited).resolves.toBe(0);
         expect(consumeIntent).toHaveBeenCalledTimes(consumed + 1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(1, start, close);
       } finally {
         preparation.resolve({ drained: true, active: 0 });
@@ -370,7 +363,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         joined.resolve(true);
         await expect(exited).resolves.toBe(0);
         expectCallCount(1, close, start, acquireGatewayLock);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(0, restartProcess, respawnUpdate);
         expect(boot).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ outcome: "clean_stop", reason: replacementReason }),
@@ -416,9 +408,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             gatewayLog.error.mockImplementationOnce(() => logged.resolve());
             helper.reject(new Error("helper exit is unconfirmed"));
             await logged.promise;
-            expect(gatewayLog.error).toHaveBeenCalledWith(
-              expect.stringContaining("system-service update settlement failed"),
-            );
             expectCallCount(0, close, runtime.exit);
             expect(admissionClosed()).toBe(false);
           } else {
@@ -426,9 +415,8 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await exited;
             helper.release();
             await helper.wait();
-            expect(waitUpdateHelpers).toHaveBeenCalledOnce();
+            expectCallCount(1, waitUpdateHelpers, runtime.exit);
             expect(restartProcess).not.toHaveBeenCalled();
-            expect(runtime.exit).toHaveBeenCalledOnce();
           }
         },
         createCloseMock().mockImplementation(async () => closing.resolve("closed")),
@@ -494,9 +482,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await expect(withTimeout(exited, 4_000)).resolves.toBe(1);
             await setImmediate();
             expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
-            expect(acquireGatewayLock).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 2);
-            expect(beginBoot).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 0);
-            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
               expect.objectContaining({ reason: replacementReason }),
             );

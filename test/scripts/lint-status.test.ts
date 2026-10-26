@@ -65,6 +65,8 @@ async function prepareScripts() {
   await prepareCopiedSourceModules(
     root,
     compiled.map((name) => `scripts/${name}.mts`),
+    // This linked CommonJS dependency stays external, as it does in the real wrappers.
+    { externalModules: { json5: new URL(import.meta.resolve("json5")) } },
   );
   for (const name of compiled) {
     fs.copyFileSync(
@@ -99,7 +101,7 @@ import fs from "node:fs";
 import { waitForFile } from ${JSON.stringify(pathToFileURL(waitForFile).href)};
 const step = ${JSON.stringify(step)};
 const mode = ${JSON.stringify(step === phase ? mode : "success")};
-const shard = process.argv.includes("scripts") ? "scripts" : process.argv.includes("src") ? "core" : "extensions";
+const shard = process.argv.includes("config/oxlint/resource-safety.json") ? "scripts:resource-safety" : process.argv.includes("scripts") ? "scripts" : process.argv.includes("src") ? "core" : "extensions";
 const name = step === "oxlint" ? shard : step;
 const lock = ".artifacts/dist-artifacts.lock";
 fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
@@ -464,7 +466,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
             .filter((step) => step.step === "oxlint")
             .map((step) => step.shard)
             .toSorted(),
-        ).toEqual(["core", "extensions", "scripts"]);
+        ).toEqual(["core", "extensions", "scripts", "scripts:resource-safety"]);
       }
     }),
   );

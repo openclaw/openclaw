@@ -7,6 +7,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
@@ -133,14 +134,9 @@ describe("Crabbox worker doctor", () => {
       );
       await mkdir(path.dirname(binary), { recursive: true });
       await writeFile(binary, version);
-      const command = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
-        stdout: version,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      const command = vi
+        .spyOn(processRuntime, "runCommandWithTimeout")
+        .mockResolvedValue(commandResult({ stdout: version }));
       const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
       const ctx = context({ binary: "/nonexistent/crabbox" }, { env });
       const check = captureCrabboxDoctorCheck();

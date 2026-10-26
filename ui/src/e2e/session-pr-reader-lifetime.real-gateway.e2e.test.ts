@@ -4,10 +4,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient, isGatewayProtocolResponseError } from "../../../src/gateway/client.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
@@ -22,7 +23,6 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -30,6 +30,7 @@ import {
   openDetailsPullRequests,
 } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:pr-reader-lifetime";
 const checksMethod = "controlUi.sessionPullRequests.checks";
@@ -302,35 +303,13 @@ suite.define(() => {
           controlUiEnabled: false,
           sidecarStartup: "defer",
         });
-        const forwarded = (email: string) => ({
-          "x-forwarded-for": "192.0.2.10",
-          "x-forwarded-proto": "http",
-          "x-forwarded-user": email,
-        });
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/retiring": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(retiringEmail),
-                rewrite: () => "/",
-              },
-              "/": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(viewerEmail),
-              },
-            },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/retiring": {
+            ...gatewayProxyRoute(port, retiringEmail),
+            rewrite: () => "/",
           },
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];

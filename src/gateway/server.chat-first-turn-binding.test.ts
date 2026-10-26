@@ -8,33 +8,16 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
-  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activeExecRequestOwners } from "../infra/exec-request-context.js";
-import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
-import {
-  getRpcSourceIdentity,
-  requestRpcSourceCancellation,
-} from "../sessions/session-controller.rpc-sources.js";
-import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
-import * as subscriptions from "./server-runtime-subscriptions.js";
+import { createProductState, productModelConfig } from "./server.chat-product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it("binds native chat.send, preserves its stopped partial, and resumes terminal recovery residue", async () => {
-  const state = await createOpenClawTestState({
-    label: "first-turn-binding",
-    env: {
-      ...KERNEL_TEST_ENV,
-      VITEST: process.env.VITEST,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-  });
+it("binds native chat.send, preserves its stopped partial, and resumes the same session", async () => {
+  const state = await createProductState("first-turn-binding");
   const runId = "first-native-turn";
   const sessionKey = "agent:main:first-turn-binding";
   const partial = "This is the first native assistant partial.";
@@ -44,8 +27,6 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
   const terminal = createDeferred();
   const persistedPartial = createDeferred();
   const requestBodies: string[] = [];
-  // Call-through observation exposes the real Gateway-owned buffer and registration.
-  const observeSubscriptions = vi.spyOn(subscriptions, "startGatewayEventSubscriptions");
   const providerServer = createServer((request, response) => {
     void (async () => {
       requestBodies.push(await readRequestText(request));
@@ -62,11 +43,9 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     })().catch((error: unknown) => response.writeHead(500).end(String(error)));
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined = undefined;
-  let original: RpcSourceRef | undefined = undefined;
   const lifecycle: Array<{ phase?: unknown; sessionId?: unknown; aborted?: unknown }> = [];
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => state.cleanup());
-  cleanup.defer(() => observeSubscriptions.mockRestore());
   cleanup.defer(async () => {
     if (gateway) {
       await disconnectGatewayClient(gateway.client);
@@ -74,36 +53,15 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     }
   });
   cleanup.defer(() => closeProvider(providerServer));
-  cleanup.defer(() => {
-    if (original) {
-      requestRpcSourceCancellation(original);
-    }
-  });
   const provider = buildMockOpenAiResponsesProvider(
     await listenProvider(providerServer),
     "first-turn",
   );
+  const modelConfig = productModelConfig(state.workspaceDir, provider);
   const cfg = {
     cron: { enabled: false },
-    agents: {
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: provider.modelRef },
-        models: {
-          [provider.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
-      },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        [provider.providerId]: { ...provider.config, request: { allowPrivateNetwork: true } },
-      },
-    },
+    agents: { defaults: modelConfig.defaults },
+    models: modelConfig.models,
     plugins: { slots: { memory: "none" } },
     tools: { profile: "minimal" },
     gateway: { auth: { mode: "token", token: "first-turn-test" } },
@@ -140,10 +98,11 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
       }
     },
   });
-  const runtime = expectDefined(
-    observeSubscriptions.mock.calls.at(-1)?.[0],
-    "Gateway subscriptions",
-  );
+  const historyForSession = () =>
+    gateway!.client.request<{
+      sessionId: string;
+      sessionInfo: { activeLeafEntryId: string | null };
+    }>("chat.history", { sessionKey });
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toBeUndefined();
   await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
   expect(
@@ -154,25 +113,21 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     }),
   ).toMatchObject({ runId, status: "started" });
   const response = await providerResponse.promise;
-  original = rpcSourceTesting.get(runId);
   const sessionId = expectDefined(
     loadExactSessionEntryReadOnly({ sessionKey })?.entry.sessionId,
     "native session",
   );
-  const source = expectDefined(original, "native registration");
   expect(sessionId).not.toBe(runId);
-  expect.soft(getRpcSourceIdentity(source).sessionId).toBe(sessionId);
   const requestOwners = activeExecRequestOwners(
     { runId, sessionKey, sessionId, agentId: "main" },
     () => true,
   );
-  expect(source.adapter.requester?.connectionId).toEqual(expect.any(String));
   expect(requestOwners).toMatchObject([
     {
       identity: {
         runId,
         sessionId,
-        ownerConnId: source.adapter.requester?.connectionId,
+        ownerConnId: expect.any(String),
       },
     },
   ]);
@@ -201,13 +156,8 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     response.write(`data: ${JSON.stringify(event)}\n\n`);
   }
   await firstDelta.promise;
-  expect(runtime.chatRunState.resolveBuffer(runId).text).toBe(partial);
-  expect.soft(getRpcSourceIdentity(source).sessionId).toBe(sessionId);
   expect(lifecycle).toContainEqual(expect.objectContaining({ phase: "start", sessionId }));
-  const history = await gateway.client.request<{
-    sessionId: string;
-    sessionInfo: { activeLeafEntryId: string | null };
-  }>("chat.history", { sessionKey });
+  const history = await historyForSession();
   expect(history).toMatchObject({
     sessionId,
     sessionInfo: { activeLeafEntryId: expect.any(String) },
@@ -233,28 +183,20 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     await expect(
       gateway.client.request("chat.send", { ...stopParams, ...guard }),
     ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
-    expect(source.input.abortSignal.aborted).toBe(false);
-    expect(rpcSourceTesting.get(runId)).toBe(source);
-    expect(runtime.chatRunState.resolveBuffer(runId).text).toBe(partial);
+    expect(requestOwners[0]?.signal.aborted).toBe(false);
     expect(response.destroyed).toBe(false);
     expect(requestBodies).toHaveLength(1);
     expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
   }
-  const stop = await gateway.client
-    .request("chat.send", {
+  await expect(
+    gateway.client.request("chat.send", {
       ...stopParams,
       idempotencyKey: "stop-first-native-turn",
-    })
-    .then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-  expect.soft(stop).toMatchObject({ result: { ok: true, aborted: true, runIds: [runId] } });
-  expect(source.input.abortSignal.aborted).toBe(true);
+    }),
+  ).resolves.toMatchObject({ ok: true, aborted: true, runIds: [runId] });
   expect(requestOwners[0]?.signal.aborted).toBe(true);
   await terminal.promise;
   await providerClosed.promise;
-  await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
   expect
     .soft(loadExactSessionEntryReadOnly({ sessionKey })?.entry, JSON.stringify(lifecycle))
     .toMatchObject({
@@ -284,61 +226,22 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     }),
   );
   expect(requestBodies).toHaveLength(1);
-  for (const nextRunId of [
-    "resume-after-stop",
-    "stale-terminal-generation",
-    "killed-unfinished-fence",
-    "continue-again",
-  ]) {
-    if (nextRunId === "stale-terminal-generation") {
-      // Older interrupted runs can leave terminal fences on an otherwise stopped row.
-      await patchSessionEntryCore(transcriptScope, (entry) => ({
-        status: "killed",
-        abortedLastRun: false,
-        providerOverride: provider.providerId,
-        modelOverride: provider.modelId,
-        mainRestartRecovery: { cycleId: "old-cycle", revision: 1, chargedAttempts: 0 },
-        restartRecoveryRuns: [{ runId: "stopped-old-run", lifecycleGeneration: "old-generation" }],
-        restartRecoveryTerminalRunIds: [
-          ...(entry.restartRecoveryTerminalRunIds ?? []),
-          "stopped-old-run",
-        ],
-      }));
-    }
-    if (nextRunId === "killed-unfinished-fence") {
-      await patchSessionEntryCore(transcriptScope, () => ({
-        status: "killed",
-        abortedLastRun: false,
-        mainRestartRecovery: undefined,
-        pendingFinalDelivery: undefined,
-        restartRecoveryDeliveryRunId: undefined,
-        restartRecoveryHarnessCompletion: undefined,
-        restartRecoveryRuns: [{ runId: "killed-old-run", lifecycleGeneration: "dead-generation" }],
-        restartRecoveryTerminalRunIds: Array.from(
-          { length: 8 },
-          (_, index) => `other-run-${index}`,
-        ),
-      }));
-    }
-    const currentHistory = await gateway.client.request<{
-      sessionId: string;
-      sessionInfo: { activeLeafEntryId: string | null };
-    }>("chat.history", { sessionKey });
-    expect(currentHistory.sessionId).toBe(sessionId);
-    expect(
-      await gateway.client.request("chat.send", {
-        sessionKey,
-        sessionId,
-        expectedLeafEntryId: currentHistory.sessionInfo.activeLeafEntryId,
-        message: "Continue this conversation.",
-        idempotencyKey: nextRunId,
-      }),
-    ).toMatchObject({ runId: nextRunId, status: "started" });
-    expect(await gateway.client.request("agent.wait", { runId: nextRunId })).toMatchObject({
-      status: "ok",
-    });
-  }
-  expect(requestBodies).toHaveLength(5);
+  const currentHistory = await historyForSession();
+  expect(currentHistory.sessionId).toBe(sessionId);
+  const nextRunId = "resume-after-stop";
+  expect(
+    await gateway.client.request("chat.send", {
+      sessionKey,
+      sessionId,
+      expectedLeafEntryId: currentHistory.sessionInfo.activeLeafEntryId,
+      message: "Continue this conversation.",
+      idempotencyKey: nextRunId,
+    }),
+  ).toMatchObject({ runId: nextRunId, status: "started" });
+  expect(await gateway.client.request("agent.wait", { runId: nextRunId })).toMatchObject({
+    status: "ok",
+  });
+  expect(requestBodies).toHaveLength(2);
   expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
 });

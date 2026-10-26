@@ -161,10 +161,6 @@ function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset
   return images;
 }
 
-function isGeminiImageModel(model: string): boolean {
-  return model.startsWith("google/gemini-");
-}
-
 function buildInputReferences(req: ImageGenerationRequest) {
   return (req.inputImages ?? []).map((image) => ({
     type: "image_url" as const,
@@ -219,7 +215,7 @@ function buildMessageContent(
 }
 
 function buildImageConfig(req: ImageGenerationRequest, model: string): Record<string, string> {
-  if (!isGeminiImageModel(model)) {
+  if (!model.startsWith("google/gemini-")) {
     return {};
   }
   const imageConfig: Record<string, string> = {};

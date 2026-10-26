@@ -6,10 +6,6 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
 import {
-  enterAgentInputRecoveryContext,
-  getAgentInputRecoveryContext,
-} from "../../state/agent-input-recovery-context.js";
-import {
   getPluginExecutionFrame,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
@@ -51,16 +47,19 @@ function runWithPluginGatewayScope<T>(
   if (
     runtime?.gatewayScope === gatewayScope &&
     runtime.invocation === call &&
-    getAgentInputRecoveryContext() === gatewayScope
+    runtime.inputRecoveryContext === gatewayScope
   ) {
     return run();
   }
   return runWithPluginExecutionFrame(
-    new PluginRuntimeExecutionFrame(current ?? {}, gatewayScope, runtime?.generationRegistry, call),
-    () => {
-      enterAgentInputRecoveryContext(gatewayScope);
-      return run();
-    },
+    new PluginRuntimeExecutionFrame(
+      current ?? {},
+      gatewayScope,
+      runtime?.generationRegistry,
+      call,
+      gatewayScope,
+    ),
+    run,
   );
 }
 

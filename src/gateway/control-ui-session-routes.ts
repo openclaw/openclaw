@@ -27,6 +27,10 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
+let publicSessionModule:
+  | Promise<typeof import("./control-ui-public-session.runtime.js")>
+  | undefined;
+
 function isControlUiPublicSessionPath(pathname: string, basePath: string): boolean {
   return (
     pathname === `${basePath}/share/session` || pathname === `${basePath}/share/session/card.png`
@@ -119,7 +123,7 @@ export function createControlUiSessionRoutes(options: {
       if (isControlUiPublicSessionPath(pathname, basePath)) {
         const requestGate = publicGate();
         const { PUBLIC_SESSION_CONTENT_SECURITY_POLICY, servePublicSessionRepresentation } =
-          await import("./control-ui-public-session.runtime.js");
+          await (publicSessionModule ??= import("./control-ui-public-session.runtime.js"));
         const card = {
           pullRequests: options.getGatewayRequestContext?.()?.controlUiSessionPullRequests,
           render: async (cardInput: Parameters<PublicSessionCardRenderer["render"]>[0]) => {
@@ -265,7 +269,9 @@ export function createControlUiSessionRoutes(options: {
         }
       }
       if (pathname !== controlUiSessionEntryPath(basePath)) {
-        return (await import("./control-ui-public-session.runtime.js")).serveControlUiPublicChat({
+        return (
+          await (publicSessionModule ??= import("./control-ui-public-session.runtime.js"))
+        ).serveControlUiPublicChat({
           ...params,
           basePath,
           projection,

@@ -1,5 +1,7 @@
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 
+let clientModule: Promise<typeof import("@modelcontextprotocol/client")> | undefined;
+
 export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
   const timeouts = new WeakSet<object>();
   return {
@@ -11,8 +13,9 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
       parentSignal?: AbortSignal,
     ): Promise<T> => {
       const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
-      let deadline = Date.now() + timeoutMs;
-      const { SdkError, SdkErrorCode } = await import("@modelcontextprotocol/client");
+      let deadline = performance.now() + timeoutMs;
+      const { SdkError, SdkErrorCode } = await (clientModule ??=
+        import("@modelcontextprotocol/client"));
       requestSignal?.throwIfAborted();
       const abortController = new AbortController();
       const signal = requestSignal
@@ -29,21 +32,24 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
       let humanInputStartedAt = 0;
       let humanInputWaits = 0;
       let finished = false;
-      let timeout = setTimeout(onTimeout, Math.max(0, deadline - Date.now()));
+      let timeout = setTimeout(onTimeout, Math.max(0, deadline - performance.now()));
       timeout.unref?.();
       const armTimeout = (expiresAt: number) => {
         clearTimeout(timeout);
-        timeout = setTimeout(onTimeout, Math.max(0, expiresAt - Date.now()));
+        timeout = setTimeout(onTimeout, Math.max(0, expiresAt - performance.now()));
         timeout.unref?.();
       };
       const holdForHumanInput = () => {
         if (humanInputWaits++ === 0) {
-          humanInputStartedAt = Date.now();
+          humanInputStartedAt = performance.now();
           armTimeout(deadline + humanInputRemainingMs);
         }
         return () => {
           if (--humanInputWaits === 0 && !finished && !signal.aborted) {
-            const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
+            const elapsed = Math.min(
+              performance.now() - humanInputStartedAt,
+              humanInputRemainingMs,
+            );
             humanInputRemainingMs -= elapsed;
             deadline += elapsed;
             armTimeout(deadline);
@@ -51,7 +57,7 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
         };
       };
       try {
-        if (Date.now() >= deadline) {
+        if (performance.now() >= deadline) {
           onTimeout();
         }
         signal.throwIfAborted();

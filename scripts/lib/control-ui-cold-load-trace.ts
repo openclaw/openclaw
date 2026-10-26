@@ -36,11 +36,41 @@ export function summarizeScriptCoverage(entry: {
   return { loadedBytes, executedBytes, unusedBytes: loadedBytes - executedBytes };
 }
 
+/** Resource Timing includes completed modulepreloads, even without V8 coverage. */
+export function summarizeJavaScriptResources(
+  resources: readonly {
+    url: string;
+    decodedBytes: number;
+    encodedBytes: number;
+    transferBytes: number;
+  }[],
+  coverage?: readonly { url: string }[],
+) {
+  const scripts = resources.filter((entry) =>
+    /\.m?js$/u.test(URL.parse(entry.url)?.pathname ?? ""),
+  );
+  const sum = (entries: typeof scripts) => ({
+    requests: entries.length,
+    rawBytes: entries.reduce((total, entry) => total + entry.decodedBytes, 0),
+    encodedBytes: entries.reduce((total, entry) => total + entry.encodedBytes, 0),
+    transferBytes: entries.reduce((total, entry) => total + entry.transferBytes, 0),
+  });
+  const observed = coverage && new Set(coverage.map((entry) => entry.url));
+  return {
+    ...sum(scripts),
+    outsideCoverage: observed
+      ? sum(scripts.filter((entry) => !observed.has(entry.url)))
+      : undefined,
+  };
+}
+
 export type ColdLoadTraceEvent = {
   name?: string;
   ph: string;
   ts: number;
   dur?: number;
+  tts?: number;
+  tdur?: number;
   pid: number;
   tid: number;
   args?: {
@@ -61,7 +91,9 @@ export function prepareColdLoadTraceEvent(value: unknown): ColdLoadTraceEvent {
     typeof event.ts !== "number" ||
     typeof event.pid !== "number" ||
     typeof event.tid !== "number" ||
-    (event.dur !== undefined && typeof event.dur !== "number")
+    (event.dur !== undefined && typeof event.dur !== "number") ||
+    (event.tts !== undefined && typeof event.tts !== "number") ||
+    (event.tdur !== undefined && typeof event.tdur !== "number")
   ) {
     throw new Error("Invalid Chrome trace event envelope");
   }
@@ -76,6 +108,8 @@ export function prepareColdLoadTraceEvent(value: unknown): ColdLoadTraceEvent {
     pid: event.pid,
     tid: event.tid,
     dur: event.dur,
+    tts: event.tts,
+    tdur: event.tdur,
     args: args
       ? {
           name: typeof args.name === "string" ? args.name : undefined,
@@ -205,7 +239,7 @@ function isTask(name: string | undefined): boolean {
   return name === "RunTask" || name === "ThreadControllerImpl::RunTask";
 }
 
-function unionDuration(intervals: readonly Interval[]): number {
+function unionDuration(intervals: readonly Pick<Interval, "start" | "end">[]): number {
   let total = 0;
   let end = -Infinity;
   for (const interval of intervals.toSorted((left, right) => left.start - right.start)) {
@@ -213,6 +247,105 @@ function unionDuration(intervals: readonly Interval[]): number {
     end = Math.max(end, interval.end);
   }
   return total;
+}
+
+/** Coarse V8 parse/compile spans in the capture; not an exhaustive compiler profile. */
+function summarizeCompilationTrace(
+  events: readonly ColdLoadTraceEvent[],
+  renderer: { pid: number; tid: number },
+  start: number,
+  end: number,
+) {
+  const intervals: {
+    tid: number;
+    wall: { start: number; end: number };
+    cpu?: { start: number; end: number };
+  }[] = [];
+  const names = new Map<string, number>();
+  const stacks = new Map<number, ColdLoadTraceEvent[]>();
+  const add = (event: ColdLoadTraceEvent, finish: number, cpuFinish?: number) => {
+    // Exclude JSON parsing and compile-wait spans, which are not compiler work.
+    if (
+      !event.name ||
+      !/^(?:v8\.compile(?:Module)?|v8\.parseOnBackground|v8\.deserializeOnBackground|V8\.(?:Compile|Parse(?:Program|Function|Lazy)|DeserializeCode))/u.test(
+        event.name,
+      ) ||
+      /Wait/u.test(event.name)
+    ) {
+      return;
+    }
+    const wall = { start: Math.max(start, event.ts), end: Math.min(end, finish) };
+    if (wall.end <= wall.start) {
+      return;
+    }
+    // Thread clocks cannot be clipped proportionally to wall time on a loaded host.
+    const cpu =
+      event.ts >= start && finish <= end && event.tts !== undefined && cpuFinish !== undefined
+        ? { start: event.tts, end: cpuFinish }
+        : undefined;
+    intervals.push({ tid: event.tid, wall, cpu });
+    names.set(event.name, (names.get(event.name) ?? 0) + 1);
+  };
+  for (const event of events) {
+    if (event.pid !== renderer.pid) {
+      continue;
+    }
+    if (event.ph === "X" && event.dur !== undefined) {
+      add(
+        event,
+        event.ts + event.dur,
+        event.tts !== undefined && event.tdur !== undefined ? event.tts + event.tdur : undefined,
+      );
+    } else if (event.ph === "B") {
+      const stack = stacks.get(event.tid) ?? [];
+      stack.push(event);
+      stacks.set(event.tid, stack);
+    } else if (event.ph === "E") {
+      const begin = stacks.get(event.tid)?.pop();
+      if (begin) {
+        add(begin, event.ts, event.tts);
+      }
+    }
+  }
+  const summarize = (tid?: number) => {
+    const selected = intervals.filter((interval) => tid === undefined || interval.tid === tid);
+    const threads = [...new Set(selected.map((interval) => interval.tid))];
+    return {
+      events: selected.length,
+      // Union nested events per thread; parallel threads contribute independent work.
+      wallMs:
+        threads.reduce(
+          (total, thread) =>
+            total +
+            unionDuration(
+              selected
+                .filter((interval) => interval.tid === thread)
+                .map((interval) => interval.wall),
+            ),
+          0,
+        ) / 1_000,
+      threadCpuMs:
+        selected.length && selected.every((interval) => interval.cpu !== undefined)
+          ? threads.reduce(
+              (total, thread) =>
+                total +
+                unionDuration(
+                  selected
+                    .filter((interval) => interval.tid === thread)
+                    .map((interval) => interval.cpu!),
+                ),
+              0,
+            ) / 1_000
+          : null,
+    };
+  };
+  return {
+    mainThread: summarize(renderer.tid),
+    allRendererThreads: summarize(),
+    eventNames: [...names]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, count]) => ({ name, count })),
+  };
 }
 
 export function summarizeColdLoadTrace(events: readonly ColdLoadTraceEvent[], durationMs: number) {
@@ -308,6 +441,7 @@ export function summarizeColdLoadTrace(events: readonly ColdLoadTraceEvent[], du
     layoutMs: unionDuration(layouts) / 1_000,
     forcedLayouts: forcedLayouts.length,
     forcedLayoutMs: unionDuration(forcedLayouts) / 1_000,
+    compilation: summarizeCompilationTrace(events, renderer, start, end),
   };
 }
 

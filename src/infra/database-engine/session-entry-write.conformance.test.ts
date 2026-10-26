@@ -483,10 +483,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         const untimestampedParticipant = { identity: { type: "agent", id: "z" } };
         expect(coldPatch).toMatchObject({
           entry: {
-            participants:
-              engine === "sqlite"
-                ? [untimestampedParticipant, ...timestampedParticipants]
-                : [...timestampedParticipants, untimestampedParticipant],
+            participants: [untimestampedParticipant, ...timestampedParticipants],
           },
         });
         // Actor hydration has always normalized NULL timestamps first on both engines.

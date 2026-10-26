@@ -11,7 +11,7 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
+import { catalogTool, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -1385,18 +1385,14 @@ describe("Tool Search", () => {
         }),
       ],
     } satisfies McpToolCatalog;
-    const mcpRuntime = {
+    const mcpRuntime = staticRuntime({
       sessionId,
       workspaceDir: "/tmp",
       configFingerprint: "retained-catalog",
-      createdAt: 0,
-      lastUsedAt: 0,
-      markUsed: () => {},
       getCatalog: async () => retainedCatalog,
       peekCatalog: () => retainedCatalog,
       callTool: vi.fn(async () => ({ content: [{ type: "text" as const, text: "echo" }] })),
-      dispose: async () => {},
-    } satisfies SessionMcpRuntime;
+    }) satisfies SessionMcpRuntime;
 
     const firstMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });
     const secondMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });

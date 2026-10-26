@@ -26,6 +26,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { mainLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
@@ -3208,7 +3209,8 @@ writePluginInstallIndexForE2E(${JSON.stringify(index)}, { stateDir: ${JSON.strin
         writeDiagnosticJson(join(state, "plugins", "installs.json"), index);
       }
       const stateFiles = () =>
-        readdirSync(state, { recursive: true, withFileTypes: true })
+        listDirectoryTreeStrictSync(state)
+          .map((walkEntry) => walkEntry.dirent)
           .filter((entry) => entry.isFile())
           .map((entry) => {
             const file = join(entry.parentPath, entry.name);

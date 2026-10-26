@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
+import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.js";
 
 type Task = {
   calls: number;
@@ -23,6 +24,7 @@ let consume: number | undefined;
 let frame: Frame | undefined;
 let window = "startup";
 let detailed = false;
+let materializationStart = getSessionRowSelectionMetrics().materialization;
 let search = {
   executions: 0,
   matches: 0,
@@ -270,6 +272,7 @@ export function r2Materialized(
   }
 }
 function snapshot() {
+  const current = getSessionRowSelectionMetrics().materialization;
   return {
     window,
     search: structuredClone(search),
@@ -290,10 +293,26 @@ function snapshot() {
       readObjectPairs: [...presentation.reads.values()].reduce((n, ids) => n + ids.size, 0),
     },
     materialization: structuredClone(materialization),
+    materializationWork: {
+      created: current.created - materializationStart.created,
+      reused: current.reused - materializationStart.reused,
+      rebuilt: current.rebuilt - materializationStart.rebuilt,
+      skipped: current.skipped - materializationStart.skipped,
+      deepComparisons: current.deepComparisons - materializationStart.deepComparisons,
+      sampledFirstDifferences: Object.fromEntries(
+        Object.entries(current.sampledFirstDifferences)
+          .map(([field, count]) => [
+            field,
+            count - (materializationStart.sampledFirstDifferences[field] ?? 0),
+          ])
+          .filter(([, count]) => count !== 0),
+      ),
+    },
   };
 }
 Reflect.set(globalThis, "sessionRowChurnProbe", {
   begin(label: string, detail = false) {
+    materializationStart = getSessionRowSelectionMetrics().materialization;
     detailed = detail;
     window = label;
     tasks.clear();

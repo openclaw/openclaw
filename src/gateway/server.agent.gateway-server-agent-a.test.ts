@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -94,18 +94,13 @@ async function setGatewayModelCatalogForTest(
     { refreshPreparedModelRuntimeSnapshots },
     { clearRuntimeConfigSnapshot, getRuntimeConfig, writeConfigFile },
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
-  await writeConfigFile({
-    models: {
-      providers: {
-        "ollama-cloud": {
-          baseUrl: "https://ollama-cloud.example.test/v1",
-          models: models.map((model) =>
-            modelDefinition(model.id, { ...model, reasoning: false, contextWindow: 128_000 }),
-          ),
-        },
-      },
-    },
-  });
+  await writeConfigFile(
+    configFor("ollama-cloud", "https://ollama-cloud.example.test/v1", {
+      models: models.map((model) =>
+        modelDefinition(model.id, { ...model, reasoning: false, contextWindow: 128_000 }),
+      ),
+    }),
+  );
   clearRuntimeConfigSnapshot();
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }

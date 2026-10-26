@@ -554,6 +554,15 @@ are opened through `openEngineStore`, without a public connection constructor.
 See [Database engine adapters](/plugins/sdk-overview/infrastructure#database-engine-adapters-experimental)
 for the contracts and boundary.
 
+Core worker transports carry PostgreSQL I/O pool endpoints into their children.
+An externally constructed worker, including one created with `createCpuTrackedWorker`,
+can still open PostgreSQL without that private capability: on first use it starts
+its own four I/O services through the same pool owner. This emits a once-per-thread
+warning and `openclaw.postgres.pool.self-root` diagnostic (`threadId`, `owner`), and
+increments `postgresPoolSelfRootCount` in worker diagnostics. The public worker
+constructor and connection ownership contracts are unchanged. Prefer the existing
+core worker transports when available to share the process pool.
+
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
 issuing SQL or a worker request. Retained row caches may reuse results only when

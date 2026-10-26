@@ -8,8 +8,8 @@ import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/cha
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";

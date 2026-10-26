@@ -235,6 +235,14 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
       sessionRowSelections: {
         selections: [{ kind: "parent" as const, task: "control-ui-pr", calls: 4, rows: 12 }],
         resets: 2,
+        materialization: {
+          created: 0,
+          reused: 0,
+          rebuilt: 0,
+          skipped: 0,
+          deepComparisons: 0,
+          sampledFirstDifferences: {},
+        },
       },
     });
     if (!retired) {

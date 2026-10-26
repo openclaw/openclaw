@@ -8,6 +8,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 import type { PlaybackMediaProbeResult } from "./media-probe.js";
 import {
   observePlaybackSourceOpen,
+  readPlaybackSource,
   waitForPlaybackSourceCleanup,
 } from "./playback-transcode.test-support.js";
 
@@ -78,17 +79,7 @@ beforeEach(() => {
 async function createSource(fileName: string, contents = "source") {
   const fixturePath = path.join(tempHome.home, fileName);
   await fs.writeFile(fixturePath, contents);
-  const sourcePath = await fs.realpath(fixturePath);
-  const sourceStat = await fs.stat(sourcePath);
-  return {
-    sourcePath,
-    sourceStat: {
-      size: sourceStat.size,
-      mtimeMs: sourceStat.mtimeMs,
-      ctimeMs: sourceStat.ctimeMs,
-      exactIdentity: await fs.stat(sourcePath, { bigint: true }),
-    },
-  };
+  return await readPlaybackSource(fixturePath);
 }
 
 function videoRequest(source: Awaited<ReturnType<typeof createSource>>, mimeType = "video/mp4") {

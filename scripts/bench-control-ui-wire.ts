@@ -19,6 +19,7 @@ import { createServer, connect, type Socket } from "node:net";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { inflateRawSync, constants as zlibConstants } from "node:zlib";
@@ -45,6 +46,7 @@ const { values } = parseArgs({
     auth: { type: "string", default: "none" },
     port: { type: "string" },
     worker: { type: "boolean", default: false },
+    "controlled-worker": { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
   },
 });
@@ -60,6 +62,9 @@ if (
 }
 if (values["compare-bundle-dir"] && !values["compare-source-dir"]) {
   throw new Error("--compare-bundle-dir requires --compare-source-dir (use . for the same source)");
+}
+if (values["controlled-worker"] && !values.worker) {
+  throw new Error("--controlled-worker requires --worker");
 }
 const output = path.resolve(values.output);
 const pairs = Number(values.pairs);
@@ -83,6 +88,7 @@ const bundle = path.resolve(values["bundle-dir"]);
 const remote = values.profile === "remote";
 const SYNTHETIC_GATEWAY_TOKEN = "synthetic-wire-benchmark-gateway-token";
 const sessionKeys = ["agent:main:wire-fixture-a", "agent:main:wire-fixture-b"];
+const workerMessagePrefix = "OPENCLAW_WIRE_WORKER ";
 type WireFrame = {
   direction: "sent" | "received";
   connection: number;
@@ -592,8 +598,34 @@ async function runWorker() {
         executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
         headless: true,
       });
+      const commands = values["controlled-worker"]
+        ? createInterface({ input: process.stdin, crlfDelay: Infinity })
+        : undefined;
+      const commandIterator = commands?.[Symbol.asyncIterator]();
       try {
+        if (commandIterator) {
+          console.log(`${workerMessagePrefix}${JSON.stringify({ type: "ready" })}`);
+        }
         for (let pair = 0; pair < pairs; pair++) {
+          if (commandIterator) {
+            const next = await commandIterator.next();
+            if (next.done) {
+              break;
+            }
+            const command: unknown = JSON.parse(next.value);
+            if (
+              !command ||
+              typeof command !== "object" ||
+              !("type" in command) ||
+              command.type !== "sample" ||
+              !("sample" in command) ||
+              command.sample !== pair + 1
+            ) {
+              throw new Error(`Expected sample command ${pair + 1}`);
+            }
+          }
+          // A closed context has no remaining sample to attribute these frames to.
+          proxy.frames.length = 0;
           const sampleOutput = path.join(output, String(pair + 1).padStart(2, "0"));
           await mkdir(sampleOutput, { recursive: true });
           const context = await browser.newContext({
@@ -1013,7 +1045,8 @@ async function runWorker() {
               page.goto(entryUrl, { waitUntil: "domcontentloaded" }),
             );
             // Persistence is deferred beyond paint; token auth also needs its real boot receipt.
-            const snapshotDeadline = Date.now() + 10_000;
+            // Loaded hosts can delay the boot receipt behind catalog reads; setup is unmeasured.
+            const snapshotDeadline = Date.now() + 60_000;
             for (;;) {
               const persisted = await page.evaluate(
                 async ({ sessionKey, bootRecordKey }) => {
@@ -1159,8 +1192,18 @@ async function runWorker() {
           } finally {
             await context.close();
           }
+          if (commandIterator) {
+            console.log(
+              `${workerMessagePrefix}${JSON.stringify({ type: "sample", sample: pair + 1 })}`,
+            );
+          }
+        }
+        // Keep shutdown work out of the other source's final measured sample.
+        if (commandIterator && !(await commandIterator.next()).done) {
+          throw new Error("Expected end of controlled worker input after final sample");
         }
       } finally {
+        commands?.close();
         await browser.close();
       }
     } finally {
@@ -1175,9 +1218,11 @@ if (values.worker) {
   await runWorker();
   process.exit(0);
 } else {
-  const ownSource = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const ownSource = await realpath(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+  );
   const otherSource = values["compare-source-dir"]
-    ? path.resolve(values["compare-source-dir"])
+    ? await realpath(values["compare-source-dir"])
     : undefined;
   const otherBundle = values["compare-bundle-dir"]
     ? path.resolve(values["compare-bundle-dir"])
@@ -1204,22 +1249,20 @@ if (values.worker) {
       await copyFile(path.join(ownSource, relative), path.join(otherSource, relative));
     }
   }
-  async function collect(
-    source: string,
-    label: string,
-    directory: string,
-    workerPairs: number,
-    pairOffset: number,
-  ) {
+  const persistentComparison = Boolean(
+    otherSource &&
+    !values.port &&
+    (otherSource !== ownSource || (await realpath(otherBundle)) === (await realpath(bundle))),
+  );
+  async function bindBundle(source: string, directory: string) {
+    const resolvedDirectory = await realpath(directory);
     const defaultRoot = path.join(source, "dist/control-ui");
     const backup = `${defaultRoot}.wire-backup-${process.pid}`;
     const existing = await lstat(defaultRoot).catch(() => undefined);
     let displaced = false;
     let linked = false;
-    const workerOutput = path.join(output, `${String(pairOffset + 1).padStart(2, "0")}-${label}`);
-    await mkdir(workerOutput, { recursive: true });
     try {
-      if ((await realpath(defaultRoot).catch(() => "")) !== (await realpath(directory))) {
+      if ((await realpath(defaultRoot).catch(() => "")) !== resolvedDirectory) {
         await mkdir(path.dirname(defaultRoot), { recursive: true });
         if (existing) {
           await rename(defaultRoot, backup);
@@ -1228,98 +1271,307 @@ if (values.worker) {
         await symlink(directory, defaultRoot, "dir");
         linked = true;
       }
-      const args = [
-        "--import",
-        path.join(source, "scripts/tsx.mjs"),
-        path.join(source, "scripts/bench-control-ui-wire.ts"),
-        "--worker",
-        "--bundle-dir",
-        directory,
-        "--pairs",
-        String(workerPairs),
-        "--profile",
-        values.profile,
-        "--auth",
-        values.auth,
-        "--output",
-        workerOutput,
-      ];
-      if (values.port) {
-        args.push("--port", values.port);
+    } catch (error) {
+      if (displaced) {
+        await rename(backup, defaultRoot);
       }
-      if (pairOffset === 0) {
-        args.push("--screenshots");
-      }
-      const child = spawn(process.execPath, args, {
-        cwd: source,
-        env: { ...process.env, TSX_TSCONFIG_PATH: path.join(source, "tsconfig.json") },
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: process.platform !== "win32",
-      });
-      const log = createWriteStream(path.join(workerOutput, "process.log"));
-      child.stdout.pipe(log, { end: false });
-      child.stderr.pipe(log, { end: false });
-      let stopping: Promise<unknown> | undefined;
-      const stop = () => {
-        stopping ??= stopChild(child);
-      };
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
-      const code = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", resolve);
-      });
-      await (stopping ?? stopChild(child));
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
-      await new Promise<void>((resolve) => {
-        log.end(resolve);
-      });
-      if (code !== 0) {
-        throw new Error(`Wire sample failed (${code}); inspect ${workerOutput}`);
-      }
-      for (let pair = 0; pair < workerPairs; pair++) {
-        const report = JSON.parse(
-          await readFile(
-            path.join(workerOutput, String(pair + 1).padStart(2, "0"), "sample.json"),
-            "utf8",
-          ),
-        );
-        reports.push({ pair: pairOffset + pair + 1, label, ...report });
-        console.log(
-          JSON.stringify({
-            pair: pairOffset + pair + 1,
-            label,
-            summary: report.samples.map(
-              (sample: { name: string; readiness: unknown; summary: object }) =>
-                Object.assign({ name: sample.name, readiness: sample.readiness }, sample.summary),
-            ),
-          }),
-        );
-      }
-      await writeFile(
-        path.join(output, "report.json"),
-        JSON.stringify(
-          {
-            comparisonOrder: otherSource
-              ? "alternating base/candidate source pairs"
-              : "single source repeated samples",
-            reports,
-          },
-          null,
-          2,
-        ),
-      );
-    } finally {
+      throw error;
+    }
+    return async () => {
       if (linked) {
         await unlink(defaultRoot);
       }
       if (displaced) {
         await rename(backup, defaultRoot);
       }
+    };
+  }
+  const ownedStops = new Set<() => void>();
+  let interrupted = false;
+  const stopWorkers = () => {
+    interrupted = true;
+    ownedStops.forEach((stop) => stop());
+  };
+  process.once("SIGINT", stopWorkers);
+  process.once("SIGTERM", stopWorkers);
+  async function startWorker(
+    source: string,
+    directory: string,
+    workerOutput: string,
+    workerPairs: number,
+    controlled: boolean,
+    screenshots: boolean,
+  ) {
+    await mkdir(workerOutput, { recursive: true });
+    if (interrupted) {
+      throw new Error("Wire benchmark interrupted");
+    }
+    const args = [
+      "--import",
+      path.join(source, "scripts/tsx.mjs"),
+      path.join(source, "scripts/bench-control-ui-wire.ts"),
+      "--worker",
+      "--bundle-dir",
+      directory,
+      "--pairs",
+      String(workerPairs),
+      "--profile",
+      values.profile,
+      "--auth",
+      values.auth,
+      "--output",
+      workerOutput,
+    ];
+    if (values.port) {
+      args.push("--port", values.port);
+    }
+    if (controlled) {
+      args.push("--controlled-worker");
+    }
+    if (screenshots) {
+      args.push("--screenshots");
+    }
+    const child = spawn(process.execPath, args, {
+      cwd: source,
+      env: { ...process.env, TSX_TSCONFIG_PATH: path.join(source, "tsconfig.json") },
+      stdio: [controlled ? "pipe" : "ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    const log = createWriteStream(path.join(workerOutput, "process.log"));
+    child.stdout!.pipe(log, { end: false });
+    child.stderr!.pipe(log, { end: false });
+    let failure: Error | undefined;
+    let exited = false;
+    let closingRequested = false;
+    let waiting:
+      | {
+          type: "ready" | "sample";
+          sample?: number;
+          resolve: () => void;
+          reject: (error: Error) => void;
+        }
+      | undefined;
+    const fail = (error: Error) => {
+      failure ??= error;
+      waiting?.reject(failure);
+      waiting = undefined;
+    };
+    const waitForNotice = (type: "ready" | "sample", sample?: number) => {
+      if (failure || exited || waiting) {
+        return Promise.reject(
+          failure ?? new Error(exited ? "Wire worker already exited" : "Wire sample overlap"),
+        );
+      }
+      return new Promise<void>((resolve, reject) => {
+        waiting = { type, sample, resolve, reject };
+      });
+    };
+    const ready = controlled ? waitForNotice("ready") : Promise.resolve();
+    const completion = new Promise<number | null>((resolve, reject) => {
+      child.once("error", (error) => {
+        fail(error);
+        reject(error);
+      });
+      child.once("close", (exitCode) => {
+        exited = true;
+        if (exitCode !== 0 || waiting || (controlled && !closingRequested)) {
+          fail(new Error(`Wire worker exited (${exitCode}); inspect ${workerOutput}`));
+        }
+        resolve(exitCode);
+      });
+    });
+    // Readiness can fail before the caller starts waiting for process completion.
+    void completion.catch(() => {});
+    child.stdin?.on("error", fail);
+    const notices = controlled
+      ? createInterface({ input: child.stdout!, crlfDelay: Infinity })
+      : undefined;
+    notices?.on("line", (line) => {
+      if (!line.startsWith(workerMessagePrefix)) {
+        return;
+      }
+      try {
+        const notice: unknown = JSON.parse(line.slice(workerMessagePrefix.length));
+        if (
+          !notice ||
+          typeof notice !== "object" ||
+          !waiting ||
+          !("type" in notice) ||
+          notice.type !== waiting.type ||
+          (waiting.type === "sample" && (!("sample" in notice) || notice.sample !== waiting.sample))
+        ) {
+          throw new Error(`Unexpected wire worker notice; inspect ${workerOutput}`);
+        }
+        const admitted = waiting;
+        waiting = undefined;
+        admitted.resolve();
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    let stopping: Promise<unknown> | undefined;
+    const stop = () => {
+      fail(new Error(`Wire worker interrupted; inspect ${workerOutput}`));
+      stopping ??= stopChild(child);
+    };
+    ownedStops.add(stop);
+    let closing: Promise<void> | undefined;
+    const close = () =>
+      (closing ??= (async () => {
+        closingRequested = true;
+        child.stdin?.end();
+        if (failure) {
+          stopping ??= stopChild(child);
+        }
+        await completion.catch(() => {});
+        await (stopping ?? stopChild(child));
+        ownedStops.delete(stop);
+        notices?.close();
+        await new Promise<void>((resolve) => {
+          log.end(resolve);
+        });
+        if (failure) {
+          throw failure;
+        }
+      })());
+    try {
+      await ready;
+    } catch (error) {
+      await close();
+      throw error;
+    }
+    return {
+      workerOutput,
+      run: async (sample: number) => {
+        const notice = waitForNotice("sample", sample);
+        child.stdin!.write(`${JSON.stringify({ type: "sample", sample })}\n`, (error) => {
+          if (error) {
+            fail(error);
+          }
+        });
+        await notice;
+      },
+      wait: async () => {
+        const exitCode = await completion;
+        if (failure || exitCode !== 0) {
+          throw failure ?? new Error(`Wire sample failed (${exitCode}); inspect ${workerOutput}`);
+        }
+      },
+      close,
+    };
+  }
+  async function recordSample(workerOutput: string, label: string, sample: number, pair: number) {
+    const report = JSON.parse(
+      await readFile(
+        path.join(workerOutput, String(sample).padStart(2, "0"), "sample.json"),
+        "utf8",
+      ),
+    );
+    reports.push({ pair, label, ...report });
+    console.log(
+      JSON.stringify({
+        pair,
+        label,
+        summary: report.samples.map(
+          (entry: { name: string; readiness: unknown; summary: object }) =>
+            Object.assign({ name: entry.name, readiness: entry.readiness }, entry.summary),
+        ),
+      }),
+    );
+    await writeFile(
+      path.join(output, "report.json"),
+      JSON.stringify(
+        {
+          comparisonOrder: otherSource
+            ? "alternating base/candidate source pairs"
+            : "single source repeated samples",
+          workerLifecycle: persistentComparison
+            ? "persistent-per-source"
+            : otherSource
+              ? "per-comparison-sample"
+              : "single-source",
+          reports,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  async function collect(
+    source: string,
+    label: string,
+    directory: string,
+    workerPairs: number,
+    pairOffset: number,
+  ) {
+    const restore = await bindBundle(source, directory);
+    try {
+      const worker = await startWorker(
+        source,
+        directory,
+        path.join(output, `${String(pairOffset + 1).padStart(2, "0")}-${label}`),
+        workerPairs,
+        false,
+        pairOffset === 0,
+      );
+      try {
+        await worker.wait();
+        for (let pair = 0; pair < workerPairs; pair++) {
+          await recordSample(worker.workerOutput, label, pair + 1, pairOffset + pair + 1);
+        }
+      } finally {
+        await worker.close();
+      }
+    } finally {
+      await restore();
     }
   }
-  if (otherSource) {
+  if (otherSource && persistentComparison) {
+    const workers: Awaited<ReturnType<typeof startWorker>>[] = [];
+    const restores: Array<() => Promise<void>> = [];
+    let cleanupFailure: PromiseRejectedResult | undefined;
+    try {
+      restores.push(await bindBundle(otherSource, otherBundle));
+      if (ownSource !== otherSource) {
+        restores.push(await bindBundle(ownSource, bundle));
+      }
+      const base = await startWorker(
+        otherSource,
+        otherBundle,
+        path.join(output, "base"),
+        pairs,
+        true,
+        true,
+      );
+      workers.push(base);
+      const candidate = await startWorker(
+        ownSource,
+        bundle,
+        path.join(output, "candidate"),
+        pairs,
+        true,
+        true,
+      );
+      workers.push(candidate);
+      for (let pair = 0; pair < pairs; pair++) {
+        const order = [
+          [base, "base"],
+          [candidate, "candidate"],
+        ] as const;
+        for (const [worker, label] of pair % 2 ? order.toReversed() : order) {
+          await worker.run(pair + 1);
+          await recordSample(worker.workerOutput, label, pair + 1, pair + 1);
+        }
+      }
+    } finally {
+      const closed = await Promise.allSettled(workers.map((worker) => worker.close()));
+      const restored = await Promise.allSettled(restores.map((restore) => restore()));
+      cleanupFailure = [...closed, ...restored].find((result) => result.status === "rejected");
+    }
+    if (cleanupFailure) {
+      throw cleanupFailure.reason;
+    }
+  } else if (otherSource) {
     for (let pair = 0; pair < pairs; pair++) {
       const order = [
         [otherSource, "base"],
@@ -1331,5 +1583,10 @@ if (values.worker) {
     }
   } else {
     await collect(ownSource, "base", bundle, pairs, 0);
+  }
+  process.off("SIGINT", stopWorkers);
+  process.off("SIGTERM", stopWorkers);
+  if (interrupted) {
+    throw new Error("Wire benchmark interrupted");
   }
 }

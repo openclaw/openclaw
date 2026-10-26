@@ -74,7 +74,7 @@ export function createTestBridge(options: Partial<TestBridgeOptions> = {}): Test
   });
 }
 
-export async function startRealtimeBridge(bridge: TestBridge, index = 0, conversationId?: string) {
+async function startRealtimeBridge(bridge: TestBridge, index = 0, conversationId?: string) {
   const connecting = bridge.connect();
   await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(index + 1));
   const socket = requireSocket(index);

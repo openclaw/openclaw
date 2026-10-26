@@ -21,6 +21,10 @@ const placement = (key: string, fields: Partial<GatewaySessionRow>) =>
   listed(key, { updatedAt: 2, worktree, ...fields }, 2);
 const background = { reconciliation: "background" } as const;
 const model = "openai/gpt-5.6-sol";
+const thinkingEntry = (key: string, fields: Partial<GatewaySessionRow> = {}) => ({
+  key,
+  entry: { thinkingLevel: "xhigh", updatedAt: 1, ...fields },
+});
 
 async function createPrepared(
   sessions: ReturnType<typeof createTestSessionCapability>,
@@ -104,12 +108,12 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
     });
     const created = await createPrepared(sessions, key);
     const patch = sessions
-      .patch(key, { model: claim === "newer" ? "openai/gpt-5.6-sol" : "openai/gpt-5-mini" })
+      .patch(key, { model: claim === "newer" ? model : "openai/gpt-5-mini" })
       .catch((error: unknown) => error);
     if (claim === "failed-before-list") {
       pendingPatch.reject(new Error("model rejected"));
       expect(await patch).toEqual(new Error("model rejected"));
-      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
+      expect(sessions.state.modelOverrides[key]).toBe(model);
     }
 
     pendingList.resolve(
@@ -127,9 +131,7 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
     }
     expect(created).toHaveBeenCalledOnce();
     expect(sessions.isPreparedWorkSession(key)).toBe(false);
-    expect(sessions.state.modelOverrides[key]).toBe(
-      claim === "newer" ? "openai/gpt-5.6-sol" : undefined,
-    );
+    expect(sessions.state.modelOverrides[key]).toBe(claim === "newer" ? model : undefined);
     if (claim === "newer") {
       pendingPatch.resolve({ ok: true, key, entry: {} });
       await patch;
@@ -146,16 +148,12 @@ it.each([{ updatedAt: 2 }, { sessionId: "created-session" }])(
     const pendingCanonicalList = createDeferred<SessionsListResult>();
     const key = "agent:main:created-in-background";
     const { sessions, emitEvent } = harness({
-      "sessions.create": () => ({
-        key,
-        entry: {
+      "sessions.create": () =>
+        thinkingEntry(key, {
           sessionId: "created-session",
           modelProvider: "openai",
           model: "gpt-5.6-sol",
-          thinkingLevel: "xhigh",
-          updatedAt: 1,
-        },
-      }),
+        }),
       "sessions.list": vi
         .fn()
         .mockReturnValueOnce(listed("agent:main:main", { updatedAt: 1 }, 1))
@@ -209,7 +207,7 @@ it.each([{ updatedAt: 2 }, { sessionId: "created-session" }])(
 it("clears a created thinking claim for an unversioned removal", async () => {
   const key = "agent:main:created-then-archived";
   const { sessions, emitEvent } = harness({
-    "sessions.create": () => ({ key, entry: { thinkingLevel: "xhigh", updatedAt: 1 } }),
+    "sessions.create": () => thinkingEntry(key),
     "sessions.list": () => listed(key, { thinkingLevel: "high", updatedAt: 0 }, 2),
   });
   await sessions.createResult({ agentId: "main" });
@@ -222,13 +220,10 @@ it("clears a created thinking claim for an unversioned removal", async () => {
 it("isolates delayed raw-global thinking claims by agent", async () => {
   const pendingList = createDeferred<SessionsListResult>();
   const { sessions, gateway } = harness({
-    "sessions.create": (params) => ({
-      key: "global",
-      entry: {
+    "sessions.create": (params) =>
+      thinkingEntry("global", {
         thinkingLevel: asOptionalRecord(params)?.agentId === "alpha" ? "xhigh" : "medium",
-        updatedAt: 1,
-      },
-    }),
+      }),
     "sessions.list": () => pendingList.promise,
   });
   gateway.snapshot.sessionKey = "global";
@@ -314,7 +309,7 @@ it("retires prepared work placement when the session is deleted", async () => {
 it("retires a created thinking claim before replacement state is published", async () => {
   const key = "agent:main:created-before-reconnect";
   const { sessions, publish, request } = harness({
-    "sessions.create": () => ({ key, entry: { thinkingLevel: "xhigh", updatedAt: 1 } }),
+    "sessions.create": () => thinkingEntry(key),
     "sessions.list": () => listed(key, { thinkingLevel: "high", updatedAt: 0 }, 1),
     "sessions.subscribe": () => ({ subscribed: true }),
   });

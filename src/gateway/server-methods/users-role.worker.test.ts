@@ -144,24 +144,16 @@ it.each(["failed delivery", "self downgrade"] as const)(
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.read",
       ]);
-      expect(harness.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: "role-delivery",
-          ...(scenario === "self downgrade"
-            ? {
-                ok: true,
-                payload: expect.objectContaining({
-                  profile: expect.objectContaining({ id: requester.id, role: "reader" }),
-                }),
-              }
-            : {
-                ok: false,
-                error: expect.objectContaining({
-                  code: "UNAVAILABLE",
-                  message: expect.stringContaining("synthetic committed role delivery failure"),
-                }),
-              }),
-        }),
+      expect(await harness.awaitResponseFrame("role-delivery")).toMatchObject(
+        scenario === "self downgrade"
+          ? { ok: true, payload: { profile: { id: requester.id, role: "reader" } } }
+          : {
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("synthetic committed role delivery failure"),
+              },
+            },
       );
       expect(scenario === "self downgrade" ? clientClose : targetClose).toHaveBeenCalledOnce();
       expect(scenario === "self downgrade" ? targetClose : clientClose).not.toHaveBeenCalled();
@@ -207,16 +199,13 @@ it("preserves the cold missing-profile RPC error without disconnecting a client"
       },
       client,
     );
-    expect(harness.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "cold-missing-role",
-        ok: false,
-        error: expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("user profile not found"),
-        }),
-      }),
-    );
+    expect(await harness.awaitResponseFrame("cold-missing-role")).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("user profile not found"),
+      },
+    });
     expect(disconnectClientsForUserProfile).not.toHaveBeenCalled();
   } finally {
     await state.cleanup();

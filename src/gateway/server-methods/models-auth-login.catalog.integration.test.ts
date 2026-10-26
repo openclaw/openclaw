@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -6,30 +5,26 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { WizardNextResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import {
   observeCatalogWorkerTasks,
   waitForCatalogPublication,
 } from "./models-auth-catalog.test-support.js";
-import { catalogDiscoverySource } from "./models-catalog-fixture.test-support.js";
+import {
+  catalogDiscoverySource,
+  createCatalogModel,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
+import {
+  createModelsTestState,
+  serveModelsEndpoint,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
 
 it.for([false, true])(
   "models.authLogin publishes delayed account rows to passive models.list (configured: %s)",
   { timeout: 120_000 },
   async (configured, { signal }) => {
-    const state = await createOpenClawTestState({
-      label: "login-discovery",
-      layout: "state-only",
-      env: {
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    await using state = await createModelsTestState("login-discovery", { layout: "state-only" });
     const provider = "login-discovery-fixture";
     const catalogWork = observeCatalogWorkerTasks();
     const requests: string[] = [];
@@ -82,49 +77,11 @@ it.for([false, true])(
       }
     });
     try {
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Fixture endpoint has no TCP address");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
-      await state.writeJson("login-plugin/openclaw.plugin.json", {
-        id: provider,
-        providers: [provider],
-        modelCatalog: {
-          discovery: { [provider]: "refreshable" },
-          providers: {
-            [provider]: {
-              baseUrl,
-              api: "openai-completions",
-              models: [
-                {
-                  id: "known-chat",
-                  name: "Known chat",
-                  input: ["text"],
-                  contextWindow: 32768,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-        configSchema: { type: "object", additionalProperties: false },
-        providerAuthChoices: [
-          {
-            provider,
-            method: "oauth",
-            choiceId: "fixture-oauth",
-            choiceLabel: "Fixture account",
-            appGuidedAuth: "device-code",
-            credentialOnly: true,
-            channelLogin: {},
-          },
-        ],
-      });
-      const pluginPath = await state.writeText(
-        "login-plugin/index.cjs",
+      await using listener = await serveModelsEndpoint(endpoint, true);
+      const { baseUrl } = listener;
+      const pluginPath = await writeCatalogPlugin(
+        state,
+        provider,
         `module.exports = {
       id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({
         id: ${JSON.stringify(provider)}, label: "Fixture account", formatApiKey: credential => credential.access,
@@ -143,6 +100,29 @@ it.for([false, true])(
         } }], ${catalogDiscoverySource(provider, baseUrl, { error: "Fixture catalog rejected account" })},
       }); }
     };`,
+        {
+          modelCatalog: {
+            discovery: { [provider]: "refreshable" },
+            providers: {
+              [provider]: {
+                baseUrl,
+                api: "openai-completions",
+                models: [createCatalogModel("known-chat", "Known chat")],
+              },
+            },
+          },
+          providerAuthChoices: [
+            {
+              provider,
+              method: "oauth",
+              choiceId: "fixture-oauth",
+              choiceLabel: "Fixture account",
+              appGuidedAuth: "device-code",
+              credentialOnly: true,
+              channelLogin: {},
+            },
+          ],
+        },
       );
       const token = "login-discovery-gateway-token";
       const cfg = {
@@ -154,12 +134,8 @@ it.for([false, true])(
         gateway: { mode: "local", auth: { mode: "token", token } },
       };
       await state.writeConfig(cfg);
-      const { client, server } = await startGatewayWithClient({
-        cfg,
-        configPath: state.configPath,
-        token,
-        scopes: ["operator.admin"],
-      });
+      await using gateway = await startModelsGateway(state, cfg, token);
+      const { client, server } = gateway;
       try {
         await server.startupSettled;
         const list = async (refresh = false) => {
@@ -209,22 +185,24 @@ it.for([false, true])(
           });
         }
         expect(wizard.status, wizard.error).toBe("done");
-        const observePassiveReads = async (stage: "early" | "final") => {
+        const expectPassiveReads = async (ids: string[], pending = false) => {
           const before = requests.filter((url) => url === "/models").length;
           const reads = await Promise.all([list(), list()]);
-          return {
-            stage,
-            before,
-            after: requests.filter((url) => url === "/models").length,
-            reads,
-          };
+          expect.soft(requests.filter((url) => url === "/models")).toHaveLength(before);
+          for (const read of reads) {
+            expect.soft(read.elapsedMs).toBeLessThan(1_000);
+            expect.soft(read.ids).toEqual(ids);
+            if (pending) {
+              expect.soft(read.result.pendingProviders).toContain(provider);
+            }
+          }
         };
         await withTestTimeout(
           automaticRequestStarted.promise,
           10_000,
           "Login did not start automatic catalog discovery",
         );
-        const observations = [await observePassiveReads("early")];
+        await expectPassiveReads(["known-chat"], true);
         await waitForCatalogPublication({
           signal,
           start: () => {
@@ -234,7 +212,7 @@ it.for([false, true])(
           read: list,
           ready: ({ ids }) => ids.includes("account-exclusive"),
         });
-        observations.push(await observePassiveReads("final"));
+        await expectPassiveReads(["account-exclusive"]);
         expect(requests.filter((url) => url === "/models")).toHaveLength(1);
         expect(catalogWork.read()).toMatchObject({
           maxWorkers: 1,
@@ -316,31 +294,11 @@ it.for([false, true])(
         });
         expect(manualRefresh.ids).toContain("account-exclusive");
         expect(requests.filter((url) => url === "/token")).toHaveLength(1);
-        for (const observation of observations) {
-          expect.soft(observation.after).toBe(observation.before);
-          for (const read of observation.reads) {
-            expect.soft(read.elapsedMs).toBeLessThan(1_000);
-            if (observation.stage === "early") {
-              expect.soft(read.ids).toEqual(["known-chat"]);
-              expect.soft(read.result.pendingProviders).toContain(provider);
-            }
-            if (observation.stage === "final") {
-              expect.soft(read.ids).toEqual(["account-exclusive"]);
-            }
-          }
-        }
       } finally {
         releaseEarlyResponse.resolve();
-        await disconnectGatewayClient(client);
-        await server.close();
       }
     } finally {
       catalogWork.close();
-      endpoint.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        endpoint.close((error) => (error ? reject(error) : resolve()));
-      });
-      await state.cleanup();
     }
   },
 );

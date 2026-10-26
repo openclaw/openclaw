@@ -97,8 +97,14 @@ export function replaceSessionActorStoredEntry(
   postimage: Pick<SessionEntryWritePostimage, "entry" | "row" | "window">,
 ): void {
   const entry = structuredClone(postimage.entry);
+  const {
+    skills_snapshot_json: _skills,
+    system_prompt_report_json: _systemPrompt,
+    session_diff_baseline_json: _diffBaseline,
+    ...row
+  } = postimage.row;
   state.entryRows = writableSessionActorMap(state.entryRows);
-  state.entryRows.set(sessionKey, { entry, row: postimage.row });
+  state.entryRows.set(sessionKey, { entry, row });
   state.hot.entry = entry;
   state.window = postimage.window;
 }

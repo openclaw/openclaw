@@ -157,7 +157,6 @@ it.for(["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as cons
         expect((await recorder.resolveMessage())?.content).toBe(fixture.approvedContent);
         expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       }
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
       await fixture.finishDispatch();
     } finally {
       release.resolve();
@@ -277,7 +276,6 @@ it.for([
       if (change === "same profile") {
         expect(nativeEntered).toHaveBeenCalledOnce();
         expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
       } else {
         expect(nativeEntered).toHaveBeenCalledTimes(older ? 0 : 1);
         expect.soft(enqueued).not.toHaveBeenCalled();

@@ -104,12 +104,8 @@ import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-clien
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
 import { responsesLoopbackModel } from "./openai-responses-loopback.test-support.js";
-import {
-  normalizeOpenAIResponsesFunctionCallId,
-  shouldNormalizeOpenAIResponsesToolCallId,
-  splitOpenAIFunctionCallPairing,
-} from "./openai-responses-tool-call-id-shape.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 const client = {
   apiKey: "test-key",
@@ -137,10 +133,7 @@ const output = (text: string, id = "msg_1") => ({
 const completed = (
   id: string,
   result: Array<ReturnType<typeof output> | ReturnType<typeof makeToolCall>> = [output("answer")],
-) => ({
-  type: "response.completed",
-  response: { id, status: "completed", output: result },
-});
+) => completedResponse(id, result);
 const accepted = {
   type: "response.steer.accepted",
   steer: { id: "steer_1", previous_response_id: "resp_1" },
@@ -160,12 +153,14 @@ const makeToolResult = (call_id = "call_1") => ({
   output: "lookup result",
 });
 const created = (id = "resp_1") => ({ type: "response.created", response: { id } });
+type ActiveControl = Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0];
+const readyControl = () => createDeferred<ActiveControl>();
 const createRequests = (socket: (typeof sockets.instances)[number]) =>
   socket.requests.filter((request) => request.type === "response.create");
 const runDetached = AsyncLocalStorage.snapshot();
 
 async function startTransport(context: Context, options: StreamOptions = {}) {
-  const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+  const ready = readyControl();
   const stream = createOpenAIResponsesTransportStreamFn();
   const first = (
     await stream(model, context, {
@@ -220,7 +215,7 @@ function start(
   request: Record<string, unknown> = {},
   input: NonNullable<ResponsesContinuationRequest["input"]> = [initialUser],
 ) {
-  const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+  const ready = readyControl();
   const cleanup = vi.fn();
   const first = createStream(
     input,
@@ -269,8 +264,7 @@ describe("Responses WebSocket steering handoff", () => {
       const references: WeakRef<object>[] = [];
       const completeTurn = async () => {
         const caller = { content: "request-only callback state" };
-        const ready =
-          createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+        const ready = readyControl();
         const steeringInput = () => [user(caller.content)];
         references.push(new WeakRef(caller), new WeakRef(steeringInput));
         const first = createOpenAIResponsesWebSocketStream({
@@ -585,17 +579,9 @@ describe("Responses WebSocket steering handoff", () => {
     expect(createRequests(harness.socket)).toHaveLength(1);
 
     // Replay must match delivery: the automatic response never saw the tool result.
-    const pairedId = `${callId}|${itemId}`;
-    const replayedId = shouldNormalizeOpenAIResponsesToolCallId(pairedId)
-      ? normalizeOpenAIResponsesFunctionCallId(pairedId)
-      : pairedId;
-    const replayedIds = splitOpenAIFunctionCallPairing(replayedId);
-    const replayedToolCall = {
-      ...toolCall,
-      id: replayedIds.itemId ?? itemId,
-      call_id: replayedIds.callId,
-    };
-    const replayedToolResult = { ...toolResult, call_id: replayedIds.callId };
+    const replayedCallId = "call_functions_gateway_0_fc_tmp_kegospxl46_8ea5d0ca62";
+    const replayedToolCall = { ...toolCall, call_id: replayedCallId };
+    const replayedToolResult = { ...toolResult, call_id: replayedCallId };
     const third = createStream([
       initialUser,
       replayedToolCall,
@@ -717,7 +703,7 @@ describe("Responses WebSocket steering handoff", () => {
   });
 
   it("closes unresolved admission when the stream consumer returns early", async () => {
-    const ready = createDeferred<Parameters<NonNullable<StreamOptions["onActiveResponse"]>>[0]>();
+    const ready = readyControl();
     const first = createStream([initialUser], (control) => {
       ready.resolve(control);
     });

@@ -153,7 +153,7 @@ suite.define(() => {
         __openclaw: { id: "shared-session-second-user", idempotencyKey: `${runId}:user`, seq: 2 },
       };
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       // Even an envelope-only event reads back with its canonical transcript identity.
       await gateway.setHistoryMessages([persistedUserMessage]);
       await emitDelta(gateway, runId, partial);
@@ -220,7 +220,7 @@ suite.define(() => {
         seq: 2,
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await emitDelta(gateway, runId, finalText);
       await streamingText(page, finalText).waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({ runId, text: finalText });

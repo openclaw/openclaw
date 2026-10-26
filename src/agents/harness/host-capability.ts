@@ -474,7 +474,7 @@ export function createAgentHarnessHostCapabilities(params: {
     retainSourceAuthority: () =>
       retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
     reportOutputTokens: (outputTokens) => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       const data = emitAgentRunOutputTokens({
         runId,
         lifecycleGeneration,
@@ -492,9 +492,9 @@ export function createAgentHarnessHostCapabilities(params: {
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
     ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
-    ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
+    ...bindHarnessTrajectory(attempt, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       return preparedRunEnvironment;
     },
     activeComputerContext: () => {

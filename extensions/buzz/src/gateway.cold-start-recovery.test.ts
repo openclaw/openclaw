@@ -11,6 +11,7 @@ import {
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -320,12 +321,7 @@ beforeEach(() => {
         createPluginStateKeyedStoreForTests<T>("buzz", options),
     },
   } as never);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      Response.json({ self: RELAY_PUBLIC_KEY, software: "https://github.com/block/buzz" }),
-    ),
-  );
+  vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
 });
 
 afterEach(async () => {

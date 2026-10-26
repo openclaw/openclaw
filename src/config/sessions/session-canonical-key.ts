@@ -38,6 +38,10 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  hasOpenClawAgentCanonicalValidationReceiptColumn,
+  loadOpenClawAgentCanonicalValidationReceipt,
+} from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "../../state/openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -82,6 +86,16 @@ const mainKeyReader = createSqliteQueryCache((db) =>
       .selectFrom("session_key_contract")
       .select("main_key")
       .where("id", "=", 1),
+  ),
+);
+const startupContractReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<void, { main_key: string; canonical_ready: string | null }>(
+    db,
+    () =>
+      getNodeSqliteKysely<CanonicalSessionDatabase>(db)
+        .selectFrom("session_key_contract")
+        .select(["main_key", "canonical_ready"])
+        .where("id", "=", 1),
   ),
 );
 const mainKeyAdmission = {
@@ -393,9 +407,11 @@ export function readCanonicalSessionMainKey(database: { db: EngineConnection }):
   return normalizeMainKey(readStoredCanonicalSessionMainKey(database) ?? undefined);
 }
 
-export function readStoredCanonicalSessionMainKey(database: {
-  db: EngineConnection;
-}): string | null {
+/** Startup also loads canonical proof; historical readers keep the main-key projection. */
+export function readStoredCanonicalSessionMainKey(
+  database: { db: EngineConnection },
+  startupAgentId?: string,
+): string | null {
   const pending = readerAdmissions.get(database.db)?.pendingMainKey;
   if (database.db.isTransaction && pending !== undefined) {
     return pending.mainKey;
@@ -416,7 +432,20 @@ export function readStoredCanonicalSessionMainKey(database: {
   if (revision && policy?.revision === revision) {
     return policy.stored;
   }
-  const stored = mainKeyReader(database.db)()?.main_key ?? null;
+  let stored: string | null;
+  if (
+    startupAgentId !== undefined &&
+    hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)
+  ) {
+    const contract = startupContractReader(database.db)();
+    loadOpenClawAgentCanonicalValidationReceipt(
+      { db: database.db, agentId: startupAgentId },
+      { canonicalReady: contract?.canonical_ready ?? null },
+    );
+    stored = contract?.main_key ?? null;
+  } else {
+    stored = mainKeyReader(database.db)()?.main_key ?? null;
+  }
   // Schema repair can seed a missing row; only existing policy survives unrelated DDL.
   if (stored !== null) {
     publishSqliteDatabaseAdmission(database.db, mainKeyAdmission, stored);

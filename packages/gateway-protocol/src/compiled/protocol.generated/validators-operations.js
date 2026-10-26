@@ -84,6 +84,7 @@ export {
   isCronUpdateParams,
   isCronRemoveParams,
   isCronRunParams,
+  isCronBindParams,
   isCronRunsParams,
   isCronHistoryParams,
   isCronScratchGetParams,

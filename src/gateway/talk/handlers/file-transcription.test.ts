@@ -40,6 +40,17 @@ const cfg: OpenClawConfig = {
   },
 };
 
+const audioModel = (model = "whisper", maxBytes?: number): MediaUnderstandingModelConfig => ({
+  provider: "local-stt",
+  model,
+  capabilities: ["audio"],
+  ...(maxBytes === undefined ? {} : { maxBytes }),
+});
+const withModels = (models: MediaUnderstandingModelConfig[]): OpenClawConfig => ({
+  ...cfg,
+  tools: { media: { ...cfg.tools?.media, models } },
+});
+
 function fileRpc(
   config = cfg,
   handlers: GatewayRequestHandlers = talkSessionHandlers,
@@ -218,9 +229,7 @@ describe("configured file transcription through Talk RPCs", () => {
             audio: { enabled: true, headers: { "x-source": "audio", "x-audio": "yes" } },
             models: [
               {
-                provider: "local-stt",
-                model: "whisper",
-                capabilities: ["audio"],
+                ...audioModel(),
                 baseUrl: "https://speech.example/v1",
                 headers: { "x-source": "entry" },
                 profile: "local-stt:audio",
@@ -397,17 +406,13 @@ describe("configured file transcription through Talk RPCs", () => {
 
   it("enforces the largest audio fallback capture limit before dispatch", async () => {
     const models: MediaUnderstandingModelConfig[] = [
-      { provider: "local-stt", model: "small", capabilities: ["audio"], maxBytes: 4096 },
-      { provider: "local-stt", model: "large", capabilities: ["audio"], maxBytes: 16384 },
+      audioModel("small", 4096),
+      audioModel("large", 16384),
       { provider: "local-stt", model: "vision", capabilities: ["image"], maxBytes: 65536 },
     ];
     const maxBytes = 16384;
     await withFileProvider(async (requests) => {
-      const config: OpenClawConfig = {
-        ...cfg,
-        tools: { media: { ...cfg.tools?.media, models } },
-      };
-      const { open, append, context } = fileRpc(config);
+      const { open, append, context } = fileRpc(withModels(models));
       const sessionId = await open();
       const accepted = await append(sessionId, Buffer.alloc((maxBytes - 44) / 2, 0xff));
       expectRespondOk(accepted);
@@ -460,32 +465,23 @@ describe("configured file transcription through Talk RPCs", () => {
     "does not advertise or admit file transcription with %s",
     async (reason) => {
       await withFileProvider(async (requests) => {
-        const config: OpenClawConfig = {
-          ...cfg,
-          models:
-            reason === "missing credentials"
-              ? { providers: { "local-stt": { baseUrl: "https://unused.invalid", models: [] } } }
-              : cfg.models,
-          tools: {
-            media: {
-              ...cfg.tools?.media,
-              models:
-                reason === "unknown provider"
-                  ? [{ provider: "missing-stt", model: "whisper", capabilities: ["audio"] }]
-                  : reason === "missing credentials"
-                    ? cfg.tools?.media?.models
-                    : [
-                        {
-                          type: "cli",
-                          command:
-                            reason === "missing CLI" ? "/missing/speech-command" : process.execPath,
-                          args: reason === "missing CLI" ? ["{{AttachmentPath}}"] : [],
-                          capabilities: ["audio"],
-                        },
-                      ],
-            },
-          },
-        };
+        const config = withModels([
+          reason === "unknown provider"
+            ? { ...audioModel(), provider: "missing-stt" }
+            : reason === "missing credentials"
+              ? audioModel()
+              : {
+                  type: "cli",
+                  command: reason === "missing CLI" ? "/missing/speech-command" : process.execPath,
+                  args: reason === "missing CLI" ? ["{{AttachmentPath}}"] : [],
+                  capabilities: ["audio"],
+                },
+        ]);
+        if (reason === "missing credentials") {
+          config.models = {
+            providers: { "local-stt": { baseUrl: "https://unused.invalid", models: [] } },
+          };
+        }
         const { call } = fileRpc(config, talkHandlers);
         const result = expectRespondOk(await call("talk.catalog"));
         expect(result).toMatchObject({ transcription: { ready: false } });
@@ -505,18 +501,10 @@ describe("configured file transcription through Talk RPCs", () => {
 
   it("advertises and uses a viable file fallback after an unknown provider", async () => {
     await withFileProvider(async (requests) => {
-      const config: OpenClawConfig = {
-        ...cfg,
-        tools: {
-          media: {
-            ...cfg.tools?.media,
-            models: [
-              { provider: "missing-stt", model: "missing", capabilities: ["audio"] },
-              { provider: "local-stt", model: "whisper", capabilities: ["audio"] },
-            ],
-          },
-        },
-      };
+      const config = withModels([
+        { provider: "missing-stt", model: "missing", capabilities: ["audio"] },
+        audioModel(),
+      ]);
       const { open, append, call } = fileRpc(config, talkHandlers);
       const catalog = await call("talk.catalog");
       expect(expectRespondOk(catalog)).toMatchObject({
@@ -548,28 +536,20 @@ describe("configured file transcription through Talk RPCs", () => {
     "preserves $name selection instead of falling back to file audio",
     async ({ params, streaming, unconfigured, imageOnly }) => {
       await withFileProvider(async (requests) => {
-        const config: OpenClawConfig = {
-          ...(unconfigured ? {} : cfg),
-          ...(imageOnly
-            ? {
-                agents: { ownership: "explicit", entries: { first: {}, second: {} } },
-                tools: {
-                  media: {
-                    models: [{ provider: "local-stt", model: "vision", capabilities: ["image"] }],
-                  },
-                },
-              }
-            : {}),
-          ...(streaming
-            ? {
-                plugins: {
-                  entries: {
-                    "voice-call": { config: { streaming: { provider: "streaming-only" } } },
-                  },
-                },
-              }
-            : {}),
-        };
+        const config: OpenClawConfig = { ...(unconfigured ? {} : cfg) };
+        if (imageOnly) {
+          config.agents = { ownership: "explicit", entries: { first: {}, second: {} } };
+          config.tools = {
+            media: {
+              models: [{ provider: "local-stt", model: "vision", capabilities: ["image"] }],
+            },
+          };
+        }
+        if (streaming) {
+          config.plugins = {
+            entries: { "voice-call": { config: { streaming: { provider: "streaming-only" } } } },
+          };
+        }
         const { call } = fileRpc(config);
         expectRespondError(
           await call("talk.session.create", { mode: "transcription", ...params }),

@@ -1,13 +1,13 @@
 import type { WorktreeRecord } from "../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  type ControlUiSessionPullRequestSnapshot,
+} from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { isNativeLocalGateway } from "../app/native-editor-locality.runtime.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { primarySessionPullRequest } from "../lib/session-pull-request-presentation.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SessionMenuWork } from "./session-menu-solid.tsx";

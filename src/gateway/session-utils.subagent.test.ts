@@ -42,7 +42,6 @@ async function withRegistry<T>(fn: () => Promise<T>, resetRuntimeConfig = false)
     }),
   );
 }
-
 const fixtureStorePath = useSessionStoreFixture("openclaw-session-subagent-list-");
 
 function childEntry(

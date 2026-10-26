@@ -664,6 +664,31 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
   });
 
+  it.each<[string, TransportDropScenario, boolean]>([
+    ["no output after settled tools", { content: [] }, true],
+    ["no output before work", { content: [], noTools: true, replaySafe: true }, true],
+    ["partial reasoning", {}, false],
+    ["a native harness thread", { content: [], pluginHarnessOwnsTransport: true }, false],
+    ["an active lifecycle item", { content: [], activeCount: 1 }, false],
+    [
+      "a thrown prompt failure",
+      { content: [], ...promptError(providerError(undefined, "429 provider rate limit")) },
+      false,
+    ],
+  ])("replays the user turn after a rate limit with %s: %s", async (_name, scenario, replays) => {
+    const fixture = await recoverAfterTransportDrop({
+      errorMessage: "Rate limit reached on tokens per min (TPM). Please try again in 25ms.",
+      diagnostics: [],
+      ...scenario,
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      includeToolFailureInstruction: false,
+      messages: fixture.attempt.messagesSnapshot,
+      ...(replays ? { replayCurrentUserTurn: true } : {}),
+    });
+  });
+
   it.each<[string, TransportDropScenario]>([
     ["WebSocket drop", {}],
     ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],

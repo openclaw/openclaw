@@ -136,6 +136,10 @@ memory framing in the Generative Agents research.
 
 Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. Each sweep with useful material combines its Light, REM, and successfully promoted Deep inputs into one short diary entry, including when nothing qualifies for durable promotion. The tool-free background completion uses the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
 
+Diary updates require valid UTF-8 and leave malformed `DREAMS.md` files unchanged.
+Preserve the original and convert a copy to UTF-8 before retrying. A malformed
+diary is omitted from optional context so other dreaming work can continue.
+
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 
 Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,

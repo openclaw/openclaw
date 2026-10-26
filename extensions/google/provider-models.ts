@@ -73,10 +73,6 @@ function isGoogleGeminiCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === GOOGLE_GEMINI_CLI_PROVIDER_ID;
 }
 
-function isGoogleAntigravityProvider(providerId: string): boolean {
-  return normalizeOptionalLowercaseString(providerId) === GOOGLE_ANTIGRAVITY_PROVIDER_ID;
-}
-
 function templateIdsForProvider(
   templateProviderId: string,
   family: GoogleForwardCompatFamily,
@@ -84,7 +80,7 @@ function templateIdsForProvider(
   if (isGoogleGeminiCliProvider(templateProviderId)) {
     return family[1];
   }
-  if (isGoogleAntigravityProvider(templateProviderId)) {
+  if (normalizeOptionalLowercaseString(templateProviderId) === GOOGLE_ANTIGRAVITY_PROVIDER_ID) {
     return family[2] ?? family[0];
   }
   return family[0];

@@ -36,11 +36,10 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       }
       throwSqliteLifecycleErrors(errors, "Terminal shared-state failure cleanup failed");
     },
-    read<T>(pathname: string, operation: (database: OpenClawStateDatabase) => T): T | undefined {
-      const database = owner.cachedDatabases.get(pathname);
-      if (!database) {
-        return undefined;
-      }
+    read<T>(
+      database: OpenClawStateDatabase,
+      operation: (database: OpenClawStateDatabase) => T,
+    ): T | undefined {
       if (!database.db.isOpen) {
         return operation(database);
       }

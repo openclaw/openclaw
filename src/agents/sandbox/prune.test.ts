@@ -90,6 +90,20 @@ const prunePolicy = { idleHours: 1, maxAgeDays: 0 };
 const pruneConfig: OpenClawConfig = {
   agents: { defaults: { sandbox: { mode: "all", prune: prunePolicy } } },
 };
+const browserEntry = (image = "openclaw-sandbox-browser:trixie-slim") => ({
+  ...entry("browser-1", "coder", { image }),
+  cdpPort: 9222,
+});
+function cacheBrowser() {
+  const cached = { containerName: "browser-1", bridge: { server: {} } as never };
+  BROWSER_BRIDGES.set("agent:coder:main", cached);
+  return cached;
+}
+function expectBrowserRetained(cached: ReturnType<typeof cacheBrowser>) {
+  expect(BROWSER_BRIDGES.get("agent:coder:main")).toBe(cached);
+  expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+  expect(registryMocks.removeBrowserRegistryEntry).not.toHaveBeenCalled();
+}
 function entry(
   containerName: string,
   agentId = "main",
@@ -235,8 +249,6 @@ describe("maybePruneSandboxes", () => {
   });
 
   it("keeps the registry entry when runtime removal fails", async () => {
-    // The registry is the retry source; keep it until the backend confirms the
-    // runtime was removed.
     backendMocks.removeRuntime.mockRejectedValueOnce(new Error("docker rm failed"));
 
     await maybePruneSandboxes(pruneConfig);
@@ -281,24 +293,14 @@ describe("maybePruneSandboxes", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     registryMocks.readRegistry.mockResolvedValue({ entries: [] });
     registryMocks.readBrowserRegistry.mockResolvedValue({
-      entries: [
-        {
-          ...entry("browser-1", "coder"),
-          backendId: undefined,
-          image: "openclaw-sandbox-browser:trixie-slim",
-          cdpPort: 9222,
-        },
-      ],
+      entries: [{ ...browserEntry(), backendId: undefined }],
     });
-    const cached = { containerName: "browser-1", bridge: { server: {} } as never };
-    BROWSER_BRIDGES.set("agent:coder:main", cached);
+    const cached = cacheBrowser();
     bridgeMocks.stopBrowserBridgeServer.mockRejectedValueOnce(new Error("bridge cleanup failed"));
 
     await maybePruneSandboxes(pruneConfig);
 
-    expect(BROWSER_BRIDGES.get("agent:coder:main")).toBe(cached);
-    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
-    expect(registryMocks.removeBrowserRegistryEntry).not.toHaveBeenCalled();
+    expectBrowserRetained(cached);
     expect(runtimeMocks.error).toHaveBeenCalledWith(
       "Sandbox prune failed to remove browser-1: bridge cleanup failed",
     );
@@ -326,7 +328,7 @@ describe("maybePruneSandboxes", () => {
 describe("sandbox management", () => {
   beforeEach(() => {
     registryMocks.readBrowserRegistry.mockResolvedValue({
-      entries: [{ ...entry("browser-1", "coder", { image: "stale-entry-image" }), cdpPort: 9222 }],
+      entries: [browserEntry("stale-entry-image")],
     });
   });
 
@@ -342,10 +344,7 @@ describe("sandbox management", () => {
   });
 
   it("removes browser runtimes with BrowserImage config label kind", async () => {
-    BROWSER_BRIDGES.set("agent:coder:main", {
-      containerName: "browser-1",
-      bridge: { server: {} } as never,
-    });
+    cacheBrowser();
     await management.removeSandboxBrowserContainer("browser-1");
     const runtimeOrder = backendMocks.removeRuntime.mock.invocationCallOrder[0]!;
     expect(bridgeMocks.stopBrowserBridgeServer.mock.invocationCallOrder[0]).toBeLessThan(
@@ -383,15 +382,12 @@ describe("sandbox management", () => {
   });
 
   it("retains the exact bridge owner when cleanup fails", async () => {
-    const cached = { containerName: "browser-1", bridge: { server: {} } as never };
-    BROWSER_BRIDGES.set("agent:coder:main", cached);
+    const cached = cacheBrowser();
     bridgeMocks.stopBrowserBridgeServer.mockRejectedValueOnce(new Error("bridge cleanup failed"));
     await expect(management.removeSandboxBrowserContainer("browser-1")).rejects.toThrow(
       "bridge cleanup failed",
     );
-    expect(BROWSER_BRIDGES.get("agent:coder:main")).toBe(cached);
-    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
-    expect(registryMocks.removeBrowserRegistryEntry).not.toHaveBeenCalled();
+    expectBrowserRetained(cached);
     await expect(management.removeSandboxBrowserContainer("browser-1")).resolves.toBeUndefined();
     expect(BROWSER_BRIDGES.has("agent:coder:main")).toBe(false);
     expect(backendMocks.removeRuntime).toHaveBeenCalledOnce();

@@ -468,7 +468,6 @@ export async function loadBackground({
   return {
     alarmListener,
     clearAlarm,
-    createAlarm,
     debuggerAttach: chromeMock.debugger.attach,
     debuggerDetach: chromeMock.debugger.detach,
     debuggerDetachListener,
@@ -485,9 +484,6 @@ export async function loadBackground({
       const { promise, resolve } = Promise.withResolvers<void>();
       nextStorageSet = promise;
       return resolve;
-    },
-    get gatewaySockets() {
-      return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
     },
     installedListener,
     messageListener,
@@ -557,7 +553,6 @@ export async function loadBackground({
         expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "hello")).toBe(true);
       });
     },
-    setBadgeText,
     sockets,
     storageRemove,
     storageGet,
@@ -581,7 +576,6 @@ export async function loadBackground({
     tabsGroup: chromeMock.tabs.group,
     tabsQuery: chromeMock.tabs.query,
     tabsRemove: chromeMock.tabs.remove,
-    tabsUngroup: chromeMock.tabs.ungroup,
     tabsUpdate: chromeMock.tabs.update,
     tabsUpdatedListener,
     tabsRemovedListener,

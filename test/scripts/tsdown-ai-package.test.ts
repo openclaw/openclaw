@@ -23,7 +23,7 @@ function linkDependencies(root: string, dependencies: Record<string, string>) {
   }
 }
 
-it("streams Mistral from the built AI package without installing the SDK", async () => {
+it("loads bundled Mistral and Bun proxy support from production dependencies", async () => {
   const root = createTempDir("openclaw-ai-package-");
   const outDir = path.join(root, "dist");
   const { bundles } = await build({
@@ -104,6 +104,39 @@ it("streams Mistral from the built AI package without installing the SDK", async
       assert(loadedDependencies.has("zod-to-json-schema"));
       if (process.argv[1] === "with-telemetry") {
         assert(loadedDependencies.has("@opentelemetry/semantic-conventions/incubating"));
+      }
+      if (process.argv[1] === "without-telemetry") {
+        // Exercise the computed Bun import with only the package's declared dependencies.
+        Object.defineProperty(process.versions, "bun", { value: "fixture" });
+        for (const name of [
+          "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
+          "NO_PROXY", "no_proxy", "npm_config_http_proxy", "npm_config_https_proxy",
+          "npm_config_proxy", "npm_config_no_proxy"
+        ]) {
+          delete process.env[name];
+        }
+        process.env.HTTP_PROXY = "http://127.0.0.1:9";
+        let reachedProxy = false;
+        globalThis.WebSocket = class {
+          constructor(_url, options) {
+            assert.equal(options.proxy, process.env.HTTP_PROXY);
+            reachedProxy = true;
+            throw new Error("synthetic socket stop");
+          }
+        };
+        const payload = Buffer.from(JSON.stringify({
+          "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" }
+        })).toString("base64url");
+        const proxyResult = await createNodeLlmRuntime(registry).stream({
+          id: "synthetic-model", name: "Synthetic", api: "openai-chatgpt-responses",
+          provider: "openai", baseUrl: "http://proxy-target.invalid/backend-api",
+          reasoning: false, input: ["text"], contextWindow: 8192, maxTokens: 128,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        }, { messages: [{ role: "user", content: "hello", timestamp: 0 }] }, {
+          apiKey: "synthetic." + payload + ".synthetic", transport: "websocket", maxRetries: 0
+        }).result();
+        assert(reachedProxy, JSON.stringify(proxyResult));
+        assert(loadedDependencies.has("proxy-from-env"));
       }
     `;
     for (const mode of ["without-telemetry", "with-telemetry"]) {

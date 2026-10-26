@@ -50,6 +50,7 @@ function openStores(openStore: PluginRuntime["state"]["openKeyedStoreV2"]) {
 
 export class ReefTrustStore {
   readonly #prefix: string;
+  #readOperation?: PluginStateOperation<ReefTrustStateOperations>;
   readonly operationState: ReefTrustOperationState;
 
   constructor(
@@ -88,7 +89,7 @@ export class ReefTrustStore {
     watchStores: readonly number[] = [0],
     ifEmptyStore?: number,
   ): Promise<PluginStateOperationReceipt<ReefTrustStateOperations[Type]["output"]>> {
-    const operation = this.#operation();
+    const operation = (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type, input },
       {
@@ -306,7 +307,7 @@ export class ReefTrustStore {
   }
 
   async pendingOutboundRejections(): Promise<ReefDeliveryRejection[]> {
-    const operation = this.#operation();
+    const operation = (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type: "pendingRejections", input: { prefix: this.#prefix } },
       { writeStores: [], missingValue: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },

@@ -55,11 +55,14 @@ class ChatRunPresentation<T extends object> {
         enumerable: true,
         get: () => Reflect.get(this.values, key),
         set: (value: unknown) => {
-          if (Object.is(Reflect.get(this.values, key), value)) {
+          const previous = Reflect.get(this.values, key);
+          if (Object.is(previous, value)) {
             return;
           }
           Object.defineProperty(this.values, key, { value });
-          this.nonTextChanged ||= key !== "chatStream";
+          // Arrival and removal change row membership; continuing text does not.
+          this.nonTextChanged ||=
+            key !== "chatStream" || (typeof previous === "string") !== (typeof value === "string");
           if (this.depth > 0) {
             this.changed = true;
           } else {

@@ -59,7 +59,10 @@ try:
    for side,proc in children.items(): assert proc.poll() is None,f'{side} exited before wave {wave} ready'
    time.sleep(.1)
   at=int(time.time()*1000)+2500
-  Path(f'{prefix}.wave-{wave}.go').write_text(str(at))
+  go=Path(f'{prefix}.wave-{wave}.go')
+  pending=go.with_name(go.name+'.tmp')
+  pending.write_text(str(at))
+  pending.replace(go)
   meta['sync'].append({'wave':wave,'startEpochMs':at,'ready':[json.loads(f.read_text()) for f in files]})
  for side,proc in children.items():
   code=proc.wait(timeout=240)

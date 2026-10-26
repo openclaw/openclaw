@@ -12,6 +12,7 @@ import {
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
 import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
+import { projectImportedMessageForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -23,7 +24,6 @@ import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recomm
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
-import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
 
@@ -372,81 +372,6 @@ function resolveDeliveryReplyTarget(
       : null;
 }
 
-function expandTextContent(
-  text: string,
-  delivery: MessageDelivery | undefined,
-  projectedCanvasPreviews: readonly CanvasPreview[],
-): MessageContentItem[] {
-  const extracted = extractCanvasShortcodes(text);
-  const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
-  const parts: MessageContentItem[] = [];
-  const audioAsVoice = delivery?.audioAsVoice === true;
-  const replyTarget = resolveDeliveryReplyTarget(delivery);
-  const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
-
-  for (const segment of segments) {
-    if (segment.type === "media") {
-      const url = segment.url;
-      const ext = getMediaFileExtension(url);
-      const mimeType = ext ? MIME_BY_EXT[ext] : undefined;
-      const inferredKind = mediaKindFromMime(mimeType);
-      const kind =
-        !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
-          ? "document"
-          : inferredKind;
-      const label = (() => {
-        try {
-          if (/^https?:\/\//i.test(url)) {
-            const parsedUrl = new URL(url);
-            const name = parsedUrl.pathname.split("/").pop()?.trim();
-            return name || parsedUrl.hostname || url;
-          }
-        } catch {
-          // Malformed URLs still get a filename label from the original path below.
-        }
-        const name = url.split(/[\\/]/).pop()?.trim();
-        return name || url;
-      })();
-      parts.push({
-        type: "attachment",
-        attachment: {
-          url: segment.url,
-          kind,
-          mimeType,
-          label,
-          ...(kind === "audio" && audioAsVoice ? { isVoiceNote: true } : {}),
-        },
-      });
-      continue;
-    }
-
-    if (segment.text) {
-      parts.push({ type: "text", text: segment.text });
-    }
-  }
-  for (const preview of extracted.previews) {
-    if (
-      preview.surface !== "assistant_message" ||
-      projectedCanvasPreviews.some((projected) => canvasPreviewsMatch(preview, projected))
-    ) {
-      continue;
-    }
-    parts.push({
-      type: "canvas",
-      preview: { ...preview, surface: "assistant_message" },
-      rawText: null,
-    });
-  }
-
-  const content = mergeAdjacentTextItems(parts);
-
-  return content.length > 0
-    ? content
-    : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-      ? [{ type: "text", text: parsed.text }]
-      : [];
-}
-
 const normalizedMessages = new WeakMap<object, NormalizedMessage>();
 
 export function normalizeMessage(message: unknown): NormalizedMessage {
@@ -479,11 +404,76 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   let audioAsVoice = false;
   let replyTarget = resolveDeliveryReplyTarget(delivery);
   const normalizeText = (text: string, block = false): MessageContentItem[] => {
-    if (!isAssistantMessage) {
+    if (!isAssistantMessage || asOptionalRecord(m["__openclaw"])?.catalogSource === true) {
       return [{ type: "text", text, ...(block ? { name: undefined, args: undefined } : {}) }];
     }
     audioAsVoice = delivery?.audioAsVoice === true;
-    return expandTextContent(text, delivery, projectedCanvasPreviews);
+    const extracted = extractCanvasShortcodes(text);
+    const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
+    const parts: MessageContentItem[] = [];
+    const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
+
+    for (const segment of segments) {
+      if (segment.type === "media") {
+        const url = segment.url;
+        const ext = getMediaFileExtension(url);
+        const mimeType = ext ? MIME_BY_EXT[ext] : undefined;
+        const inferredKind = mediaKindFromMime(mimeType);
+        const kind =
+          !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+            ? "document"
+            : inferredKind;
+        const label = (() => {
+          try {
+            if (/^https?:\/\//i.test(url)) {
+              const parsedUrl = new URL(url);
+              const name = parsedUrl.pathname.split("/").pop()?.trim();
+              return name || parsedUrl.hostname || url;
+            }
+          } catch {
+            // Malformed URLs still get a filename label from the original path below.
+          }
+          const name = url.split(/[\\/]/).pop()?.trim();
+          return name || url;
+        })();
+        parts.push({
+          type: "attachment",
+          attachment: {
+            url: segment.url,
+            kind,
+            mimeType,
+            label,
+            ...(kind === "audio" && audioAsVoice ? { isVoiceNote: true } : {}),
+          },
+        });
+        continue;
+      }
+
+      if (segment.text) {
+        parts.push({ type: "text", text: segment.text });
+      }
+    }
+    for (const preview of extracted.previews) {
+      if (
+        preview.surface !== "assistant_message" ||
+        projectedCanvasPreviews.some((projected) => canvasPreviewsMatch(preview, projected))
+      ) {
+        continue;
+      }
+      parts.push({
+        type: "canvas",
+        preview: { ...preview, surface: "assistant_message" },
+        rawText: null,
+      });
+    }
+
+    const expandedContent = mergeAdjacentTextItems(parts);
+
+    return expandedContent.length > 0
+      ? expandedContent
+      : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+        ? [{ type: "text", text: parsed.text }]
+        : [];
   };
 
   if (typeof contentRaw === "string") {

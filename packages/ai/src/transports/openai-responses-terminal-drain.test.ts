@@ -7,6 +7,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 const model: Model<"openai-responses"> = makeProviderModel(
   "openai-responses",
@@ -40,10 +41,7 @@ describe("Responses terminal body disposal", () => {
           source = controller;
           controller.enqueue(
             new TextEncoder().encode(
-              `data: ${JSON.stringify({
-                type: "response.completed",
-                response: { id: "fixture", status: "completed", output: [] },
-              })}\n\n`,
+              `data: ${JSON.stringify(completedResponse("fixture", []))}\n\n`,
             ),
           );
         },

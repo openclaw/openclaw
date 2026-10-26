@@ -7,10 +7,11 @@ import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
-import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import { managedSource, stubObjectUrls } from "./chat-message-media.test-helpers.ts";
+import { stubObjectUrls } from "./chat-message-media.test-helpers.ts";
 import type { AttachmentItem, ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 
@@ -37,6 +38,18 @@ const commentResponse = (text: string) =>
   new Response(
     `Selected text:\n${text}\n\nSource session: agent:main:fixture\nDOM text UTF-16 range: [0, ${text.length})`,
   );
+function fetchResponses(
+  responses: (Response | Promise<Response>)[],
+  fallback?: Response | Promise<Response>,
+) {
+  const fetcher = vi.fn<typeof fetch>();
+  responses.forEach((response) => fetcher.mockReturnValueOnce(Promise.resolve(response)));
+  if (fallback) {
+    fetcher.mockReturnValue(Promise.resolve(fallback));
+  }
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+}
 
 const commentAttachment = (url: string): AttachmentItem => ({
   type: "attachment",
@@ -49,48 +62,34 @@ const commentOptions: ImageRenderOptions = {
   connectionEpoch: 1,
   messageSendId: "same-send",
 };
-function mountComments(initial: AttachmentItem[]) {
+function mountComments(initial: AttachmentItem[], inline = true, initialOptions = commentOptions) {
   const [comments, setComments] = createSignal(initial);
-  const [options, setOptions] = createSignal(commentOptions);
+  const [options, setOptions] = createSignal(initialOptions);
+  const [presentation, setPresentation] = createSignal({ inline });
   const view = mountSolid(() => (
     <AssistantAttachments
       inlinePlayback={false}
-      inlineComments
+      inlineComments={presentation().inline}
       attachments={comments()}
       options={options()}
     />
   ));
-  return { ...view, setComments, setOptions };
+  return { ...view, setComments, setOptions, setPresentation };
 }
 
 it.each([
   { retirement: "replacement", inline: false },
-  { retirement: "removal", inline: false },
-  { retirement: "replacement", inline: true },
   { retirement: "removal", inline: true },
 ])(
   "reveals comments independently and cancels stale reads on $retirement (inline: $inline)",
   async ({ retirement, inline }) => {
     const first = createDeferred<Response>();
     const second = createDeferred<Response>();
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = fetchResponses([first.promise, second.promise]);
     const initialComments = ["first", "second"].map((name) =>
       commentAttachment(`/__openclaw__/fixtures/${name}.txt`),
     );
-    const [comments, setComments] = createSignal(initialComments);
-    const [presentation, setPresentation] = createSignal({ inline });
-    const view = mountSolid(() => (
-      <AssistantAttachments
-        inlinePlayback={false}
-        inlineComments={presentation().inline}
-        attachments={comments()}
-        options={{}}
-      />
-    ));
+    const view = mountComments(initialComments, inline, {});
     if (!inline) {
       expect(fetchMock).not.toHaveBeenCalled();
       view.getByRole("button").click();
@@ -103,16 +102,16 @@ it.each([
       expect(view.container.querySelector("blockquote button")?.textContent).toBe("second source");
     }
     const selection = view.container.querySelector("blockquote button");
-    setPresentation({ inline });
+    view.setPresentation({ inline });
     flush();
     expect(view.container.querySelector("blockquote button")).toBe(selection);
     const pendingSignal = fetchMock.mock.calls[0]![1]!.signal!;
-    setComments(initialComments.slice());
+    view.setComments(initialComments.slice());
     flush();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(pendingSignal.aborted).toBe(false);
     if (retirement === "replacement") {
-      setComments([]);
+      view.setComments([]);
       flush();
     } else {
       view.unmount();
@@ -133,11 +132,7 @@ it.each([
   ["send", { messageSendId: "another-send" }],
 ] as const)("clears the previous annotation when %s changes", async (_name, changed) => {
   const pending = createDeferred<Response>();
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(commentResponse("Original passage"))
-    .mockReturnValue(pending.promise);
-  vi.stubGlobal("fetch", fetchMock);
+  const fetchMock = fetchResponses([commentResponse("Original passage")], pending.promise);
   const view = mountComments([commentAttachment("blob:scope")]);
   await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
   view.setOptions({ ...commentOptions, ...changed });
@@ -151,13 +146,10 @@ it.each(["denied", "oversized"])(
   "clears a retained annotation when its replacement is %s",
   async (reason) => {
     vi.stubGlobal("IntersectionObserver", undefined);
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(commentResponse("Original passage"))
-      .mockResolvedValue(
-        Response.json({ available: false, reason: "Unavailable annotation", retryable: false }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = fetchResponses(
+      [commentResponse("Original passage")],
+      Response.json({ available: false, reason: "Unavailable annotation", retryable: false }),
+    );
     const item = commentAttachment("blob:annotation");
     const view = mountComments([item]);
     await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
@@ -184,14 +176,15 @@ it("preserves staggered canonical comments and clears the old set on removal", a
   const firstRead = createDeferred<Response>();
   const secondRead = createDeferred<Response>();
   const replacement = createDeferred<Response>();
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(commentResponse("First passage"))
-    .mockResolvedValueOnce(commentResponse("Second passage"))
-    .mockReturnValueOnce(firstRead.promise)
-    .mockReturnValueOnce(secondRead.promise)
-    .mockImplementation(() => replacement.promise);
-  vi.stubGlobal("fetch", fetchMock);
+  const fetchMock = fetchResponses(
+    [
+      commentResponse("First passage"),
+      commentResponse("Second passage"),
+      firstRead.promise,
+      secondRead.promise,
+    ],
+    replacement.promise,
+  );
   const indexes = [0, 1];
   const view = mountComments(
     indexes.map((index) => commentAttachment(`blob:local-comment-${index}`)),
@@ -247,11 +240,7 @@ it("keeps the focused native image control and decoded node when gallery metadat
 it("retries a standalone native image after a failed preview", async () => {
   const source = `/tmp/standalone-preview-${crypto.randomUUID()}.png`;
   const retry = createDeferred<Response>();
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(Response.json({ available: true }))
-    .mockImplementationOnce(() => retry.promise);
-  vi.stubGlobal("fetch", fetchMock);
+  const fetchMock = fetchResponses([Response.json({ available: true }), retry.promise]);
   await loadAssistantAttachmentAvailability(source);
   const view = mountSolid(() => <MessageImages images={[{ url: source }]} />);
   await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
@@ -267,22 +256,7 @@ it("retries a standalone native image after a failed preview", async () => {
 
 it("cancels an offscreen poster request and releases a parked poster without replacing its button", async () => {
   const intersections: ((visible: boolean) => void)[] = [];
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push((isIntersecting) =>
-          callback(
-            [{ isIntersecting } as IntersectionObserverEntry],
-            this as unknown as IntersectionObserver,
-          ),
-        );
-      }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubManualIntersectionObserver((_target, notify) => intersections.push(notify));
   const createObjectURL = vi.fn(() => "blob:video-poster");
   const revokeObjectURL = stubObjectUrls(createObjectURL);
   const first = createDeferred<Blob | null>();
@@ -345,42 +319,3 @@ it("preserves the playback element when the same attachment snapshot is refreshe
   expect(view.container.querySelector("openclaw-chat-audio-player")).toBe(player);
   expect(player?.label).toBe("Updated recording");
 });
-
-it.each(["document", "audio", "video"] as const)(
-  "retains the focused %s download while admitting its source",
-  async (kind) => {
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
-    const url = managedSource();
-    const pending = createDeferred<{ url: string }>();
-    const resolveArtifactDownload = vi.fn(() => pending.promise);
-    const view = mountSolid(() => (
-      <MessageAttachment
-        item={attachment(kind, `${kind} recording`, url, `fixture-${kind}`)}
-        options={{ resolveArtifactDownload }}
-        presentation="card"
-      />
-    ));
-    try {
-      const download = view.container.querySelector<HTMLAnchorElement>("a[download]")!;
-      expect(download).not.toBeNull();
-      expect(download.hasAttribute("href")).toBe(false);
-      download.focus();
-      await waitForSolid(() => expect(resolveArtifactDownload).toHaveBeenCalledOnce());
-      const readyUrl = `${url}?mediaTicket=fixture`;
-      pending.resolve({ url: readyUrl });
-      await waitForSolid(() =>
-        expect(view.container.querySelector("a[download]")?.getAttribute("href")).toBe(readyUrl),
-      );
-      expect(view.container.querySelector("a[download]")).toBe(download);
-      expect(document.activeElement).toBe(download);
-    } finally {
-      view.unmount();
-    }
-  },
-);

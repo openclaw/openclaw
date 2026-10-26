@@ -139,8 +139,7 @@ async function runEmbeddedAttemptOwned(
   let toolSearchCatalogApplied = false;
   let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
   let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-  let abortSessionForYield: (() => void) | null = null;
-  let queueYieldInterruptForSession: (() => void) | null = null;
+  let unsubscribeYieldTurnEnd: (() => void) | undefined;
   const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({
@@ -253,12 +252,6 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
-          // The controller records the yield and closes injection before this
-          // backend ends its own turn; a racing steer stays queued as a followup.
-          params.replyOperation?.yield();
-          queueYieldInterruptForSession?.();
-          runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
-          abortSessionForYield?.();
         },
         runAbortController,
         runTrace,
@@ -371,12 +364,20 @@ async function runEmbeddedAttemptOwned(
           externalAbortController,
           resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
-            abortSessionForYield = () => {
-              yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
-            };
-            queueYieldInterruptForSession = () => {
+            unsubscribeYieldTurnEnd = activeSession.agent.subscribe((event) => {
+              if (
+                event.type !== "turn_end" ||
+                !yieldDetected ||
+                runAbortController.signal.aborted
+              ) {
+                return;
+              }
+              // Keep sibling execution and authority live until their results settle.
+              params.replyOperation?.yield();
               queueSessionsYieldInterruptMessage(activeSession);
-            };
+              runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+              yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
+            });
           },
         }),
       );
@@ -483,6 +484,8 @@ async function runEmbeddedAttemptOwned(
           : {}),
       };
     } finally {
+      unsubscribeYieldTurnEnd?.();
+      unsubscribeYieldTurnEnd = undefined;
       // Retained tool callbacks must not keep the history after cleanup settles.
       const releasedResources = sessionResources.takeForCleanup();
       // Transfer resources to the session cleanup owner before awaiting it. A
@@ -545,8 +548,6 @@ async function runEmbeddedAttemptOwned(
             await releasePreparedTools?.(cleanupReason);
             releasePreparedTools = undefined;
             toolSearchCatalogExecutor = undefined;
-            abortSessionForYield = null;
-            queueYieldInterruptForSession = null;
           } catch {
             recordAgentCleanupFailure();
           }
