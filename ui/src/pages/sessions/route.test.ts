@@ -84,7 +84,12 @@ it("starts the entering Sessions query while its route module is still loading",
   type RouteModule = Awaited<ReturnType<typeof page.component>>;
   const module = createDeferred<RouteModule>();
   const refreshList = vi.fn(async () => {});
-  const router = createRouter<"chat" | "sessions", ApplicationContext, RouteModule>({
+  const router = createRouter<
+    "chat" | "sessions",
+    ApplicationContext,
+    RouteModule,
+    SessionsRouteData
+  >({
     routes: [
       { id: "chat", path: "/chat", component: () => ({ renderSolid: () => null }) },
       { ...page, component: () => module.promise },
