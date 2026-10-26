@@ -2,8 +2,10 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import type { CyberAccessProgram } from "../../../api/types.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -11,6 +13,14 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof ChatModelControls>[0];
+
+// Cold loading is covered by browser proof; these cases exercise the loaded controls.
+beforeAll(async () => {
+  await Promise.all([
+    import("./chat-model-picker-panel.tsx"),
+    import("./chat-effort-picker-panel.tsx"),
+  ]);
+});
 
 async function controls(overrides: Partial<Props>) {
   installModelPickerLayout();
@@ -57,9 +67,10 @@ async function controls(overrides: Partial<Props>) {
   picker.open = true;
   picker.dispatchEvent(new Event("toggle"));
   flush();
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-  );
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull();
+    expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull();
+  });
   const update = (next: Partial<Props>) => {
     setCurrent({ ...current(), ...next });
     flush();
@@ -166,6 +177,36 @@ it("retires and restores an unavailable context-window control with its access g
   ).toBe(true);
 });
 
+it("refreshes context choices when a replaced session has unchanged model facts", async () => {
+  const sessionsResult = createSessionsListResult({ model: "primary", modelProvider: "example" });
+  const contextWindows = [
+    { id: "standard", label: "Standard", contextWindow: 100_000 },
+    { id: "extended", label: "Extended", contextWindow: 200_000 },
+  ];
+  const selectedSession = {
+    ...sessionsResult.sessions[0]!,
+    contextWindow: "standard",
+    contextWindowDefault: "standard",
+    contextWindows,
+  };
+  const onContextWindowSelect = vi.fn();
+  const view = await controls({ selectedSession, sessionsResult, onContextWindowSelect });
+  const toggle = () =>
+    expectDefined(
+      view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]"),
+      "context window toggle",
+    );
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
+
+  view.update({ selectedSession: { ...selectedSession, contextWindow: "extended" } });
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
+  toggle().click();
+  expect(onContextWindowSelect).toHaveBeenCalledExactlyOnceWith("standard", "main");
+
+  view.update({ selectedSession: { ...selectedSession, contextWindows: [] } });
+  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+});
+
 it("updates model selection against a retained and replaced catalog", async () => {
   const view = await controls({});
   const option = (id: string) =>
@@ -205,6 +246,72 @@ it("updates model selection against a retained and replaced catalog", async () =
   });
   expectDefined(option("other"), "refreshed model option").click();
   expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
+});
+
+it("refreshes provider account labels when the locale changes without new props", async () => {
+  const restoreI18n = captureI18nStateForTesting();
+  onTestFinished(restoreI18n);
+  await i18n.setLocale("en");
+  const view = await controls({
+    modelSelectionTarget: "session",
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "example",
+          displayName: "Example",
+          status: "ok",
+          profiles: [{ profileId: "example:oauth", type: "oauth", status: "ok" }],
+        },
+      ],
+    },
+  });
+  const label = () =>
+    view.container.querySelector(
+      '[data-chat-model-provider-group="example"] .chat-controls__auth-meta-label',
+    )?.textContent;
+  expect(label()).toBe("Subscription");
+  await i18n.setLocale("de");
+  await waitForSolid(() => expect(label()).toBe("Abonnement"));
+});
+
+it("refreshes a retained session model when the containing frame changes", async () => {
+  const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
+  const selectedSession = { ...sessions.sessions[0]!, modelOverrideSource: "user" as const };
+  const view = await controls({ selectedSession });
+  expect(view.model.textContent).toContain("primary");
+
+  selectedSession.model = "other";
+  view.update({ stream: "A new activity frame" });
+  await waitForSolid(() => {
+    expect(view.model.textContent).toContain("other");
+    expect(view.option.getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+it("refreshes saved and effective speed on a retained target when the frame changes", async () => {
+  const fastModeTarget: NonNullable<Props["fastModeTarget"]> = {
+    model: "primary",
+    modelProvider: "example",
+    fastMode: false,
+    effectiveFastMode: false,
+  };
+  const view = await controls({ fastModeTarget });
+  expect(view.speed.getAttribute("aria-checked")).toBe("false");
+
+  fastModeTarget.fastMode = true;
+  fastModeTarget.effectiveFastMode = true;
+  view.update({ stream: "Saved speed refreshed" });
+  expect(view.speed.getAttribute("aria-checked")).toBe("true");
+  expectDefined(
+    view.container.querySelector<HTMLButtonElement>("[data-chat-speed-option=off]"),
+    "standard speed option",
+  ).click();
+  expect(view.onFastModeSelect).toHaveBeenCalledWith("off", "main");
+
+  fastModeTarget.effectiveFastMode = false;
+  view.update({ stream: "Effective speed refreshed" });
+  expect(view.speed.getAttribute("aria-checked")).toBe("false");
 });
 
 it("keeps known effort visible but disabled until the same connection returns", async () => {

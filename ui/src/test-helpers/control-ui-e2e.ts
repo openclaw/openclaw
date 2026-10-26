@@ -883,9 +883,15 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
 export function createControlUiMockGatewayInitScript(
   scenario: ControlUiMockGatewayScenario = {},
 ): string {
+  return serializeControlUiMockGatewayInitScript(normalizeScenario(scenario));
+}
+
+function serializeControlUiMockGatewayInitScript(
+  scenario: NormalizedControlUiMockGatewayScenario,
+): string {
   const input = {
     protocolVersion: PROTOCOL_VERSION,
-    scenario: normalizeScenario(scenario),
+    scenario,
   };
   return `${createControlUiPaneRuntimeTestAdapterScript()}\n${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}); })();`;
 }
@@ -2612,10 +2618,11 @@ function installControlUiMockGateway(
 export async function prepareControlUiMockGatewayScenario(
   scenario: ControlUiMockGatewayScenario = {},
 ) {
+  if (!scenario.nativePlugins?.length) {
+    return { scenario, assets: new Map<string, { body: Buffer; contentType: string }>() };
+  }
   const { prepareNativeControlUiPluginFixtures } = await import("./control-ui-plugin-fixture.ts");
-  const { catalog, assets } = await prepareNativeControlUiPluginFixtures(
-    scenario.nativePlugins ?? [],
-  );
+  const { catalog, assets } = await prepareNativeControlUiPluginFixtures(scenario.nativePlugins);
   const preparedScenario = catalog.plugins.length
     ? {
         ...scenario,
@@ -2652,7 +2659,7 @@ export async function installMockGateway(
   const diagnosticEvents = installControlUiE2ePageDiagnosticRing(page);
   await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
     route.fulfill({
-      body: JSON.stringify(createControlUiMockBootstrapConfig(normalizedScenario)),
+      body: JSON.stringify(buildControlUiMockBootstrapConfig(normalizedScenario)),
       contentType: "application/json",
       status: 200,
     }),
@@ -2660,7 +2667,7 @@ export async function installMockGateway(
   await installControlUiE2eUnhandledRejectionRing(page);
   await installMockGatewayScript(
     page,
-    createControlUiMockGatewayInitScript(normalizedScenario),
+    serializeControlUiMockGatewayInitScript(normalizedScenario),
     options,
   );
   const rosterGates = new Set([
