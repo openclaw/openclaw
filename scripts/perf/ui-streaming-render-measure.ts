@@ -66,7 +66,6 @@ const browser = await launchControlUiObservationBrowser({
   viewport: { width: 1440, height: 1000 },
   artifactDir,
   artifactPrefix: "stream",
-  headless: true,
   colorScheme: "light",
 });
 const page = await browser.context.newPage();
