@@ -127,6 +127,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/app/native-gateways.runtime.ts":
     case "ui/src/pages/plugins/icon-loader.ts":
     case "ui/src/pages/plugins/plugin-icon-owner.ts":
+    case "ui/src/components/desktop/desktop-source.ts":
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/lib/session-progress-cards.ts":
       // These shared helpers load together in Chat without retaining its renderers.
@@ -324,6 +325,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-streaming.ts":
     case "ui/src/components/markdown-tokens.ts":
       return "markdown-streaming-runtime";
+    case "ui/src/styles/session-panel-rail.css":
+      // Keep normal rail CSS in Chat; other panels import its neutral inline text.
+      return /[?&]inline(?:[=&]|$)/u.test(id) ? "deferred-ui-support" : undefined;
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";

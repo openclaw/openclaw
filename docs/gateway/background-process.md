@@ -211,6 +211,11 @@ and worker builds in environments that prohibit process-group signaling. An
 unsupported ownership contract fails before launch instead of downgrading to
 transport-only cleanup. A source loader with an independent child reaper cannot
 share this ownership; source installations using one must build their process helpers.
+Process helpers discard inherited instrumentation hooks (`--import`, `--require`,
+`-r`, `--loader`, and `--experimental-loader`) from `NODE_OPTIONS`, while retaining
+other options such as `--max-old-space-size`. The Gateway and executed commands
+keep their instrumentation environment. An explicit source loader needed to run
+an unbuilt helper still prevents it from claiming Linux child ownership.
 Admission uses the runtime's standalone identity and startup hooks, including
 `--import`, `--require`, and loader flags in argv or `NODE_OPTIONS`. A TypeScript
 filename alone does not require a source loader: native TypeScript execution and

@@ -1,10 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { MessagePresentation, MessagePresentationButton } from "../interactive/payload.js";
-import {
-  prepareQuestionReactionPayloadForDelivery,
-  readQuestionReactionBinding,
-  resolveQuestionReactionOverGateway,
-} from "./question-reaction-runtime.js";
+import { questionGatewayRuntime } from "../plugin-sdk/question-gateway-runtime.js";
 
 const hoisted = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway: hoisted.callGateway }));
@@ -27,7 +23,7 @@ function prepare(labels = ["Staging", "Production"], customInput = false) {
       { type: "buttons", buttons },
     ],
   };
-  return prepareQuestionReactionPayloadForDelivery({
+  return questionGatewayRuntime.prepareReactionPayloadForDelivery({
     payload: { channelData: { askUser: { questionId } }, presentation },
     presentation,
   });
@@ -41,7 +37,7 @@ it.each([
   { labels: ["Staging"], custom: false },
 ])("renders reaction choices $labels with custom input=$custom", ({ labels, custom }) => {
   const payload = prepare(labels, custom);
-  expect(readQuestionReactionBinding(payload ?? {})).toEqual({
+  expect(questionGatewayRuntime.readReactionBinding(payload ?? {})).toEqual({
     questionId,
     optionValues: labels,
   });
@@ -57,7 +53,7 @@ it.each([
 
 it("resolves a reordered presentation by its rendered option value", async () => {
   const payload = prepare(["Production", "Staging"]);
-  const binding = readQuestionReactionBinding(payload ?? {});
+  const binding = questionGatewayRuntime.readReactionBinding(payload ?? {});
   expect(binding?.optionValues).toEqual(["Production", "Staging"]);
   hoisted.callGateway
     .mockResolvedValueOnce({
@@ -74,7 +70,7 @@ it("resolves a reordered presentation by its rendered option value", async () =>
     .mockResolvedValueOnce({ status: "answered" });
 
   await expect(
-    resolveQuestionReactionOverGateway({
+    questionGatewayRuntime.resolveReaction({
       cfg: {} as never,
       questionId,
       optionValue: binding!.optionValues[0]!,

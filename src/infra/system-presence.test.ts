@@ -188,7 +188,11 @@ describe("system-presence", () => {
       const deviceId = `${prefix}${index}`;
       upsertPresence(deviceId, { deviceId, host: deviceId, mode: "ui" });
     }
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
     const bounded = listSystemPresence();
+    const copies = copyingSort.mock.calls.length;
+    copyingSort.mockRestore();
+    expect(copies).toBe(0);
     expect(bounded).toHaveLength(200);
     expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
     expect(bounded.some((entry) => entry.text === forged.text)).toBe(false);

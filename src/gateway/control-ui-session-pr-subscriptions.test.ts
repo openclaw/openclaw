@@ -586,5 +586,10 @@ describe("control UI session PR subscriptions", () => {
         },
       ]),
     );
+    const failedTarget = load.mock.calls.find(([params]) => params.sessionKey === "failed")![2]
+      .target;
+    active.readPrepared(failedTarget);
+    const failedRead = await active.read(failedTarget, () => {});
+    expect(failedRead).toBe(active.readPrepared(failedTarget));
   });
 });

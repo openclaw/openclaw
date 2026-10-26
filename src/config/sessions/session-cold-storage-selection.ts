@@ -114,9 +114,9 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
               db
                 .selectFrom("transcript_events")
                 .select((eb) => [
-                  eb.fn.sum<number>("event_utf8_bytes").as("known"),
+                  eb.fn.max<number>("event_utf8_bytes").as("known"),
                   eb.fn
-                    .sum<number>(
+                    .max<number>(
                       eb
                         .case()
                         .when("event_utf8_bytes", "is", null)
@@ -128,9 +128,11 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
                 .where("session_id", "=", sessionId),
             ).rows[0];
             const stored = sizes?.stored ?? 0;
-            const lowerBoundBytes =
-              (sizes?.known ?? 0) + (utf16Storage ? Math.ceil(stored / 2) : stored);
-            // The uncompressed envelope contains every original event body plus restore metadata.
+            const lowerBoundBytes = Math.max(
+              sizes?.known ?? 0,
+              utf16Storage ? Math.ceil(stored / 2) : stored,
+            );
+            // A window can span files; only an individual oversized event prevents archival.
             if (lowerBoundBytes > MAX_COLD_ARCHIVE_BYTES) {
               oversizedTranscripts.push({ sessionId, lowerBoundBytes });
               return [];

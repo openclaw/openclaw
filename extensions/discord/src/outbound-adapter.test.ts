@@ -40,7 +40,7 @@ const {
   sendVoiceMessageDiscordMock: sendVoice,
 } = hoisted;
 
-let outbound: typeof import("./outbound-adapter.js").discordOutbound;
+let outbound: typeof import("./outbound-payload.js").discordOutbound;
 let discordInboundEventDelivery: typeof import("./inbound-event-delivery.js").discordInboundEventDelivery;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -179,7 +179,7 @@ function expectMediaAuthority(
 }
 
 beforeAll(async () => {
-  ({ discordOutbound: outbound } = await import("./outbound-adapter.js"));
+  ({ discordOutbound: outbound } = await import("./outbound-payload.js"));
   ({ discordInboundEventDelivery } = await import("./inbound-event-delivery.js"));
 });
 

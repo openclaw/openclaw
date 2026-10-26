@@ -8,6 +8,7 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
+import { withoutAgentPostgresColdArchiveChunks } from "../../state/openclaw-agent-cold-archive-chunks-schema.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
@@ -150,11 +151,12 @@ export async function loadAgentPortDescriptor(
       return backup;
     }
     // Schema 30 appends columns; 31–36 change only PostgreSQL search, triggers, or indexes.
+    // Schema 37 adds a cold archive companion table.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 36 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 37 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -168,10 +170,11 @@ export async function loadAgentPortDescriptor(
   const legacyTrajectory = sourceVersion < 30;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
-      !legacyTrajectory ||
-      fact.table !== "trajectory_runtime_events" ||
-      !isColumn(fact) ||
-      !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name),
+      !(historical && fact.table === "session_transcript_cold_archive_chunks") &&
+      (!legacyTrajectory ||
+        fact.table !== "trajectory_runtime_events" ||
+        !isColumn(fact) ||
+        !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name)),
   );
   const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
@@ -183,14 +186,16 @@ export async function loadAgentPortDescriptor(
     minimumPostgresVersion: manifest.minimumPostgresVersion,
     sqlite: OPENCLAW_AGENT_SCHEMA_SQL.replace(/^INSERT OR IGNORE INTO[^;]+;/gm, ""),
     tables: [
-      ...metadata.tables.map(({ name, identities }) => ({
-        name,
-        identities,
-        columns: columns
-          .filter((fact) => fact.table === name)
-          .map((fact) => ({ name: fact.value.name, type: fact.value.type })),
-        pk: keys.find((fact) => fact.table === name)?.value ?? [],
-      })),
+      ...metadata.tables
+        .filter(({ name }) => !(historical && name === "session_transcript_cold_archive_chunks"))
+        .map(({ name, identities }) => ({
+          name,
+          identities,
+          columns: columns
+            .filter((fact) => fact.table === name)
+            .map((fact) => ({ name: fact.value.name, type: fact.value.type })),
+          pk: keys.find((fact) => fact.table === name)?.value ?? [],
+        })),
       ...metadata.sqliteTables,
     ],
     triggers: metadata.triggers.map(({ name, table, range }) => ({
@@ -401,7 +406,9 @@ export async function loadAgentPortDescriptor(
   let postData = legacyRevision
     ? withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData)
     : descriptor.postData;
-  postData = withLegacyAgentPostgresMemoryPaths(postData);
+  if (sourceVersion < 36) {
+    postData = withLegacyAgentPostgresMemoryPaths(postData);
+  }
   if (sourceVersion < 35) {
     postData = withLegacyPostgresIndexOrdering(
       postData,
@@ -435,12 +442,14 @@ export async function loadAgentPortDescriptor(
           }))
         : []),
     ],
-    preData: legacyTrajectory
-      ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
-      : descriptor.preData,
-    postData,
+    preData: withoutAgentPostgresColdArchiveChunks(
+      legacyTrajectory
+        ? withLegacyAgentPostgresTrajectoryStorage(descriptor.preData)
+        : descriptor.preData,
+    ),
+    postData: withoutAgentPostgresColdArchiveChunks(postData),
     expectedCatalog: catalog.map((fact) =>
-      fact.kind === "indexes" && fact.table === "memory_index_sources"
+      sourceVersion < 36 && fact.kind === "indexes" && fact.table === "memory_index_sources"
         ? {
             table: fact.table,
             kind: fact.kind,

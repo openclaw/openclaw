@@ -10,6 +10,10 @@ title: "Agents"
 
 Manage isolated agents (workspaces + auth + routing). Running `openclaw agents` with no subcommand is equivalent to `openclaw agents list`.
 
+Creation summaries strip terminal escape sequences and show embedded newlines,
+tabs, and carriage returns as `\n`, `\t`, and `\r`. Workspace paths and other
+values in saved configuration and `--json` output retain their original contents.
+
 ## Examples
 
 ```bash

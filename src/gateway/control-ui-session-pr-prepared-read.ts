@@ -237,7 +237,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
           } catch {
             assertReadCurrent();
             publish(UNAVAILABLE_SNAPSHOT);
-            return { ...UNAVAILABLE_SNAPSHOT };
+            return UNAVAILABLE_SNAPSHOT;
           }
         });
       }),

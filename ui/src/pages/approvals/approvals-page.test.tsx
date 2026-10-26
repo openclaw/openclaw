@@ -141,6 +141,24 @@ const standingGrant = (name: string): ExecApprovalStandingGrant => ({
   useCount: 3,
 });
 
+it("loads and revokes standing grants while approval history is unavailable", async () => {
+  const history = createDeferred<ApprovalHistoryResult>();
+  const p = createPage({
+    history: () => history.promise,
+    grants: () => Promise.resolve(grantReply("Independent automation")),
+    revoke: () => Promise.resolve({ outcome: "revoked" }),
+  });
+
+  await p.waitText(grantsTable, "Independent automation");
+  history.reject(new Error("History unavailable"));
+  await p.waitText('[role="alert"]', "History unavailable");
+  p.button()!.click();
+  flush();
+  await p.waitText(grantsTable, "Revoked");
+  expect(p.request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
+  expect(p.button()).toBeNull();
+});
+
 it("keeps history and grants through a blip without allowing offline actions", async () => {
   const refreshedHistory = createDeferred<ApprovalHistoryResult>();
   const p = createPage({

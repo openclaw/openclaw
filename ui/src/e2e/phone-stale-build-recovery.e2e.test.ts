@@ -243,7 +243,12 @@ suite.define(() => {
       const afterReconnect = await retainedDelivery();
       const retentionRequests = await observeGatewayRequests(page);
       const retentionConnects = requestsFor(retentionRequests, "connect");
-      const retentionTranscripts = requestsFor(retentionRequests, "chat.history", "chat.startup");
+      const retentionTranscripts = requestsFor(
+        retentionRequests,
+        "chat.history",
+        "chat.startup",
+        "sessions.messages.subscribe",
+      );
       const retentionEffects = effects(retentionRequests);
       expect([beforeReconnect, afterReconnect]).toEqual([
         { image: true, timeout: true },

@@ -30,7 +30,7 @@ suite.define(() => {
       await page.goto(
         `${suite.server.baseUrl}chat?session=agent%3Amain%3Aslack%3Agroup%3Aempty-reply`,
       );
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const thread = page.locator(".chat-thread");
       const prompt = thread.getByText("talk to parent session", { exact: true });
       await prompt.waitFor();

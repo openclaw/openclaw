@@ -676,3 +676,28 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
   });
   expect(summary).toEqual(original);
 });
+
+it("sorts private filter inventories without copying them again", () => {
+  const rows: SessionUsageEntry[] = [
+    { key: "z", agentId: "z", channel: "z", modelProvider: "z", model: "z", usage: null },
+    { key: "a", agentId: "a", channel: "a", modelProvider: "a", model: "a", usage: null },
+  ];
+  const before = structuredClone(rows);
+  const copies = vi.spyOn(Array.prototype, "toSorted");
+  let result: ReturnType<typeof overview>;
+  try {
+    result = overview(rows);
+    // The page keeps one copying sort; the five private filter lists need none.
+    expect(copies).toHaveBeenCalledTimes(1);
+  } finally {
+    copies.mockRestore();
+  }
+  expect(result.overview.filterOptions).toEqual({
+    agent: ["a", "z"],
+    channel: ["a", "z"],
+    provider: ["a", "z"],
+    model: ["a", "z"],
+    tool: [],
+  });
+  expect(rows).toEqual(before);
+});

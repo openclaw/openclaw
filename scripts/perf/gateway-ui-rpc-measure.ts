@@ -1,5 +1,8 @@
 // Real CLI + WebSocket proof; external team-shape fixtures are never regenerated here.
 // Source mode: node --import ./scripts/tsx.mjs scripts/perf/gateway-ui-rpc-measure.ts --help
+// Tail-RPC proof: --method agents.list.capabilities --method sessions.branches.list
+// --method talk.config --method progressCard.get --samples 1000 --no-counters.
+// Use --entry dist/entry.js; add --profile --allocations for a separate allocation pass.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
@@ -56,6 +59,7 @@ const { values } = parseArgs({
     "history-limit": { type: "string", default: "80" },
     method: { type: "string", multiple: true },
     profile: { type: "boolean", default: false },
+    allocations: { type: "boolean", default: false },
     "profile-samples": { type: "string", default: "5" },
     help: { type: "boolean", default: false },
   },
@@ -73,6 +77,7 @@ if (values.help) {
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
   --profile                       Main-isolate CPU profile per selected RPC case, outside timing samples.
+  --allocations                   With --profile, sample allocations instead of CPU (separate diagnostic pass).
   --profile-samples 5              Requests per profile; synchronized profiles start after every timed cell.
   --sync <dir> --cohort <nonce> --side base|control|head
                                   Three live Gateways, serial setup and interleaved measured cells.
@@ -85,6 +90,7 @@ main-isolate subsets, not disjoint handler phases. CPU profiles attribute residu
   process.exit(0);
 }
 assert(values.root && values.output, "--root and --output are required");
+assert(!values.allocations || values.profile, "--allocations requires --profile");
 const root = path.resolve(values.root);
 const output = path.resolve(values.output);
 const entry = path.resolve(values.entry);
@@ -201,6 +207,7 @@ type Sample = {
   roundTripMs: number;
   ok: boolean;
   payloadBytes: number;
+  payloadSha256?: string;
   arrayCounts?: Record<string, number>;
   requestParams?: unknown;
   error?: unknown;
@@ -287,6 +294,17 @@ const rpcCases = [
   { id: "config.schema", method: "config.schema", params: {} },
   { id: "models.authStatus", method: "models.authStatus", params: { agentId: "main" } },
   { id: "system.info", method: "system.info", params: {} },
+  { id: "talk.config", method: "talk.config", params: {} },
+  {
+    id: "sessions.branches.list",
+    method: "sessions.branches.list",
+    params: { sessionKey: values["history-key"], agentId: "main" },
+  },
+  {
+    id: "progressCard.get",
+    method: "progressCard.get",
+    params: { sessionKey: values["history-key"], agentId: "main" },
+  },
   {
     id: "agents.list.capabilities",
     method: "agents.list",
@@ -577,6 +595,9 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     roundTripMs,
     ok: response.ok,
     payloadBytes: Buffer.byteLength(JSON.stringify(response.payload ?? null)),
+    payloadSha256: createHash("sha256")
+      .update(JSON.stringify(response.payload ?? null))
+      .digest("hex"),
     requestParams: method === "cron.list" ? params : undefined,
     arrayCounts: isRecord(response.payload)
       ? Object.fromEntries(
@@ -722,7 +743,13 @@ function summaries() {
           .map(read)
           .filter((value): value is number => typeof value === "number");
         return observations.length
-          ? { observations: observations.length, ...summarizeNumbers(observations) }
+          ? {
+              observations: observations.length,
+              ...summarizeNumbers(observations),
+              p99: observations.toSorted((a, b) => a - b)[
+                Math.ceil(observations.length * 0.99) - 1
+              ],
+            }
           : undefined;
       };
       const rpcMetric = (phase: string, key: string) =>
@@ -903,7 +930,7 @@ try {
   assertWatcherHealthy();
   for (const candidate of selected) {
     if (values.profile) {
-      await control("profile-start");
+      await control("profile-start", { allocations: values.allocations });
       try {
         for (let index = 0; index < profileSamples; index++) {
           if (candidate.method === "connect") {
@@ -926,7 +953,13 @@ try {
           }
         }
       } finally {
-        await control("profile-stop", { path: path.join(output, `${candidate.id}.cpuprofile`) });
+        await control("profile-stop", {
+          allocations: values.allocations,
+          path: path.join(
+            output,
+            `${candidate.id}.${values.allocations ? "heapprofile" : "cpuprofile"}`,
+          ),
+        });
       }
     }
     console.log(`${candidate.id}: ${samples} warm samples complete`);
@@ -995,6 +1028,7 @@ try {
       profile: values.profile
         ? {
             samplesPerCase: profileSamples,
+            kind: values.allocations ? "sampled-allocations" : "cpu",
             scope: "unmeasured per-case request loops; main isolate only",
             scheduling: syncRoot
               ? "concurrent across sides after every interleaved timed request completes"

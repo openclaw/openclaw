@@ -246,10 +246,9 @@ export async function executePreparedReplyRun(
       ctx.SenderIsSelf !== true);
   const ctxMediaForPersistence = ctx.media ?? [];
   const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
-  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
-    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
-  );
-  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  // Keep failed pre-reads retryable in the transcript. Only this run skips them:
+  // plugin, CLI, and worker runners can reject unreadable image input.
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const promptMediaForRun = suppressUnresolvedPromptMedia({
     promptMedia: promptMedia ?? [],
     inboundMediaIndexes,
@@ -566,6 +565,7 @@ export async function executePreparedReplyRun(
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,

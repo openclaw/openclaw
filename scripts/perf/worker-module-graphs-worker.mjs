@@ -66,6 +66,8 @@ if (!isMainThread) {
   const port = workerData.diagnostics;
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let active = false;
+  let cpuStart;
+  let allocationStart;
   let measuredAfter = Infinity;
   let samples = [];
   const record = (entries) => {
@@ -97,6 +99,18 @@ if (!isMainThread) {
         samples = [];
         loop.reset();
         loop.enable();
+        cpuStart = process.threadCpuUsage();
+        allocationStart = getHeapStatistics().total_allocated_bytes;
+        if (!Number.isFinite(allocationStart)) {
+          throw new Error("Allocation measurement requires V8 total_allocated_bytes (Node 26.12+)");
+        }
+        if (workerData.sampleAllocation) {
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 16384,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+        }
         measuredAfter = performance.now();
         active = true;
         fs.writeSync(1, `WORKER_GC_BEGIN ${workerData.name}\n`);
@@ -112,7 +126,15 @@ if (!isMainThread) {
           setFlagsFromString("--no-trace-gc-nvp");
         }
         fs.writeSync(1, `WORKER_GC_END ${workerData.name}\n`);
+        const cpu = process.threadCpuUsage(cpuStart);
+        const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
+        if (workerData.sampleAllocation) {
+          const { profile } = await inspector.post("HeapProfiler.stopSampling");
+          fs.writeFileSync(workerData.sampleAllocation, JSON.stringify(profile));
+        }
         value = {
+          cpuMs: (cpu.user + cpu.system) / 1000,
+          allocatedBytes,
           gc: {
             all: distribution(samples.map((sample) => sample.ms)),
             minor: distribution(

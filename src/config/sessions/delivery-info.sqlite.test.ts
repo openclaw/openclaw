@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { extractDeliveryInfo, extractDeliveryInfoBatch } from "./delivery-info.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { historyLane, projectionLane } from "./session-transcript-worker-resources.js";
 
 const sessionKey = "agent:main:delivery-fallback";
 const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId: "default" };
@@ -38,12 +38,18 @@ it("reads distinct delivery targets once per batch and observes owner route writ
       await seed(route.sessionKey, route.context);
     }
     const ordered = [routes[19]!, ...routes.slice(0, 19), routes[19]!];
-    const requests = ordered.map((route) => ({ sessionKey: route.sessionKey }));
-    const expectedRoutes = ordered.map(({ context }) => ({
-      deliveryContext: context,
-      threadId: undefined,
-    }));
+    const requests = [
+      ...ordered.map((route) => ({ sessionKey: route.sessionKey })),
+      { sessionKey: "agent:main:missing" },
+      { sessionKey: "agent:main:matrix:channel:!Missing:example.org" },
+    ];
+    const expectedRoutes = [
+      ...ordered.map(({ context }) => ({ deliveryContext: context, threadId: undefined })),
+      missing,
+      missing,
+    ];
     const selected: Array<readonly string[] | undefined> = [];
+    let inventories = 0;
     const run = projectionLane.pool.run.bind(projectionLane.pool);
     using _ = vi.spyOn(projectionLane.pool, "run").mockImplementation((input, options) =>
       run(async () => {
@@ -54,10 +60,21 @@ it("reads distinct delivery targets once per batch and observes owner route writ
         return request;
       }, options),
     );
+    const historyRun = historyLane.pool.run.bind(historyLane.pool);
+    using inventoryObserver = vi.spyOn(historyLane.pool, "run");
+    inventoryObserver.mockImplementation((input, options) =>
+      historyRun(async () => {
+        const request = typeof input === "function" ? await input() : input;
+        if (request.kind === "session-entry-list") {
+          inventories++;
+        }
+        return request;
+      }, options),
+    );
     const first = await extractDeliveryInfoBatch(requests, { cfg });
     expect(first).toEqual(expectedRoutes);
     expect(selected).toHaveLength(1);
-    expect(selected[0]).toHaveLength(20);
+    expect(selected[0]).toHaveLength(23);
 
     const changed = { ...deliveryContext, to: "telegram:updated-route" };
     await seed(routes[0]!.sessionKey, changed);
@@ -76,6 +93,7 @@ it("reads distinct delivery targets once per batch and observes owner route writ
     });
     expect(selected).toHaveLength(3);
     expect(selected[2]).toHaveLength(1);
+    expect(inventories).toBe(0);
   });
 });
 
@@ -109,6 +127,27 @@ it("preserves pending sibling validation when a combined delivery read fails", a
         { cfg },
       ),
     ).toEqual([missing, missing]);
+  });
+});
+
+it("recovers folded Signal groups from canonical rows and observes route updates", async () => {
+  await withOpenClawTestState({ label: "delivery-signal-alias" }, async () => {
+    const cfg = {};
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:signal:group:AbC";
+    const context = { channel: "signal", to: "signal:group:AbC", accountId: "first" };
+    await seed(key, context);
+    const requests = ["agent:main:signal:group:abc", "signal:group:abc", key].map((lookupKey) => ({
+      sessionKey: lookupKey,
+    }));
+    expect(await extractDeliveryInfoBatch(requests, { cfg })).toEqual(
+      requests.map(() => ({ deliveryContext: context, threadId: undefined })),
+    );
+    const changed = { ...context, accountId: "second" };
+    await seed(key, changed);
+    expect(await extractDeliveryInfoBatch(requests, { cfg })).toEqual(
+      requests.map(() => ({ deliveryContext: changed, threadId: undefined })),
+    );
   });
 });
 

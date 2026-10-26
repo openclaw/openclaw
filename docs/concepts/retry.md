@@ -124,6 +124,11 @@ durable enqueues wake recovery after their database transaction commits. Recover
 keeps retrying while unfinished deliveries remain and stops waking when the queue
 is empty; an idle Gateway does not poll an empty outbound queue.
 
+Background recovery runs up to four independent channel/account groups at once,
+so a slow account does not block every healthy account. Attempts within each
+group remain sequential, including startup and reconnect recovery. Recovery
+shares the existing replay pacing and leaves normal foreground sends independent.
+
 The durable outbound queue has a separate delivery-attempt budget. When a
 delivery uses a producer claim, reservation checks the exact owner and its lease
 before charging an attempt. An expired or replaced claim does not spend the

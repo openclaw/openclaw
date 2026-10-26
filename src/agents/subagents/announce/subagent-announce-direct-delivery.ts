@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -246,7 +247,7 @@ async function sendSubagentAnnounceDirectlyBound(
     // A recovered requester already owns this admitted input. Reuse its final
     // receipt through the normal delivery checks; never execute the old wake again.
     const recovery =
-      !parentOnly && (sourceToolId === "subagent_settle" || isSubagentCompletion)
+      sourceToolId === "subagent_settle" || isSubagentCompletion
         ? resolveRequesterRecoveryDelivery(requesterEntry, params.directIdempotencyKey)
         : undefined;
     if (recovery?.kind === "delivery") {
@@ -464,6 +465,24 @@ async function sendSubagentAnnounceDirectlyBound(
       textCompletionDirectDeliveryKind,
       tryTextCompletionDirectDelivery,
     });
+    const classifyRecoveredResult = (result: RestartRecoveryTerminalDeliveryEvidence) => {
+      if (parentOnly && (!result.captured || result.meta?.error || result.meta?.aborted)) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "recovered private requester did not complete successfully",
+          disposition: "permanent_failure",
+        } satisfies SubagentAnnounceDeliveryResult;
+      }
+      // Recovery processed the same private input. Its retained result replaces
+      // the original RPC receipt without admitting that terminal run again.
+      return classifyResponse({
+        status: "ok",
+        result,
+        ...(parentOnly ? { inputProcessingCompleted: true } : {}),
+      });
+    };
     let directAnnounceResponse: unknown;
     let directFailure: SubagentAnnounceDeliveryResult | undefined;
     let replaySafeTranscriptConflict = false;
@@ -584,13 +603,16 @@ async function sendSubagentAnnounceDirectlyBound(
       };
     }
 
-    const classified = directFailure ?? classifyResponse(directAnnounceResponse);
+    const classified =
+      directFailure ??
+      (recoveredResult
+        ? classifyRecoveredResult(recoveredResult)
+        : classifyResponse(directAnnounceResponse));
     const delivery = classified instanceof Promise ? await classified : classified;
     const originalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(
       asOptionalRecord(directAnnounceResponse),
     );
     if (
-      parentOnly ||
       (sourceToolId !== "subagent_settle" && !isSubagentCompletion) ||
       recoveredResult !== undefined ||
       requesterCanonicalKey !== canonicalRequesterSessionKey ||
@@ -667,7 +689,7 @@ async function sendSubagentAnnounceDirectlyBound(
     // their normal receipt classifier never dispatches or sends the input again.
     return settledRecovery.kind === "delivery"
       ? settledRecovery.delivery
-      : classifyResponse({ status: "ok", result: settledRecovery.result });
+      : classifyRecoveredResult(settledRecovery.result);
   } catch (err) {
     // A failed dispatch receipt has not admitted any delivery; its owner retries preparation.
     if (!dispatchPrepared) {

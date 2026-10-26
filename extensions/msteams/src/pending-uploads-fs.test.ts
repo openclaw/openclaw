@@ -60,7 +60,18 @@ describe("msteams pending uploads (fs-backed)", () => {
   it("stores multi-megabyte uploads with bulk reads", async () => {
     const payload = Buffer.alloc(6 * 1024 * 1024, 7);
 
-    await storeUpload({ id: "upload-large", buffer: payload, filename: "large.bin" });
+    const stringify = vi.spyOn(JSON, "stringify");
+    let chunkSerializations: number;
+    try {
+      await storeUpload({ id: "upload-large", buffer: payload, filename: "large.bin" });
+      chunkSerializations = stringify.mock.calls.filter(
+        ([value]) => typeof value === "object" && value !== null && "dataBase64" in value,
+      ).length;
+    } finally {
+      stringify.mockRestore();
+    }
+    // The store captures each chunk once; a caller-side JSON clone doubles this work.
+    expect(chunkSerializations).toBe(Math.ceil(payload.byteLength / (36 * 1024)));
 
     const reader = await getPendingUploadFs("upload-large");
     expect(reader?.buffer.equals(payload)).toBe(true);

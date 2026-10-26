@@ -84,6 +84,7 @@ function WorkboardColumns(props: {
   statuses: WorkboardStatus[];
   byStatus: Map<WorkboardStatus, WorkboardCard[]>;
   cardRefs: ReturnType<typeof createElementRefs<HTMLElement>>;
+  menuCardId?: string;
 }) {
   const state = workboardViewState(() => props.workboard);
   const boardEdges = boardScrollEdgesRef();
@@ -121,6 +122,7 @@ function WorkboardColumns(props: {
               status={status()}
               cards={props.byStatus.get(status()) ?? []}
               cardRefs={props.cardRefs}
+              menuCardId={props.menuCardId}
               options={{ surface: state().viewMode === "list" ? "list" : "page" }}
             />
           )}
@@ -332,7 +334,7 @@ export function WorkboardView(
   const filterPopover = workboardPopoverRef("end");
   return (
     <WorkboardCardMenus workboard={props} cards={view().filtered}>
-      {(menu) => (
+      {(menu, selectedMenuCardId) => (
         <section class="workboard">
           <div
             class="workboard-main"
@@ -612,6 +614,7 @@ export function WorkboardView(
                 statuses={view().visibleStatuses}
                 byStatus={view().byStatus}
                 cardRefs={cardRefs}
+                menuCardId={selectedMenuCardId()}
               />
             )}
             {menu}

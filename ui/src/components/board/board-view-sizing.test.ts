@@ -73,6 +73,7 @@ describe("board widget sizing", () => {
   it("pins preset resizing and toggles height mode from the menu", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
+    expect(view.querySelector('[role^="menuitem"]')).toBeNull();
     await openBoardMenu(view);
     view.querySelector<HTMLButtonElement>('[data-value="resize:sm"]')!.click();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledWith([resizeOp(3, 3, "fixed")]));

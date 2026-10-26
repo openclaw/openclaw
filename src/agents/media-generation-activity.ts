@@ -200,15 +200,16 @@ export function listMediaGenerationOperations(
   requesterAgentId?: string,
 ): MediaGenerationOperation[] {
   pruneCompletedOperations();
-  const agentId = requesterAgentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+  let keyAgentId: string | undefined;
+  const agentId = requesterAgentId ?? (keyAgentId = parseAgentSessionKey(sessionKey)?.agentId);
   if (!agentId) {
     return [];
   }
   return [...state.operations.values()].filter(
     (operation) =>
       operation.requesterSessionKey === sessionKey &&
-      (operation.requesterAgentId ??
-        parseAgentSessionKey(operation.requesterSessionKey)?.agentId) === agentId &&
+      (operation.requesterAgentId ?? (keyAgentId ??= parseAgentSessionKey(sessionKey)?.agentId)) ===
+        agentId &&
       Boolean(operation.runId && isMediaGenerationOperationCurrent(operation.runId)),
   );
 }

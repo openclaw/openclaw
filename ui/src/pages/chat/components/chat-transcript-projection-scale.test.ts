@@ -3,9 +3,11 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
+import { createInitialChatRealtimeState } from "../chat-realtime.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
@@ -16,6 +18,8 @@ import {
   stubAnimationFrames,
 } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { createRealtimeTalkConversationState } from "../talk/conversation-state.ts";
+import { updateRealtimeTalkConversation } from "../talk/conversation.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -172,6 +176,120 @@ describe("transcript projection", () => {
     flush();
     expect(currentBubble()).toBeNull();
     expect(projectRows).toHaveBeenCalledOnce();
+  });
+
+  it("updates and parks voice captions without projecting the transcript for each fragment", async () => {
+    const paneId = "voice-leaf-projection";
+    const transcript = createTestTranscript(paneId);
+    const talk = createInitialChatRealtimeState().realtimeTalk;
+    const projectRows = vi.spyOn(transcriptIndex, "projectTranscriptIndex");
+    const buildItems = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const prompt = msg("user", "Speak the answer", 1_000);
+    let setVisible!: (visible: boolean) => void;
+    let setMessages!: (messages: unknown[]) => void;
+    const publish = (text: string, final = false, transcriptId?: string) =>
+      talk.update({
+        realtimeTalkConversationState: updateRealtimeTalkConversation(
+          talk.snapshot.realtimeTalkConversationState,
+          { role: "assistant", itemId: "answer", text, final, transcriptId },
+        ),
+      });
+    const view = mountSolid(() => {
+      const captions = projectOwner(
+        talk,
+        (owner) => owner.snapshot.realtimeTalkConversationState.entries,
+        Object.is,
+      );
+      const [visible, updateVisible] = createSignal(true);
+      const [messages, updateMessages] = createSignal<unknown[]>([prompt]);
+      setVisible = updateVisible;
+      setMessages = updateMessages;
+      const props = {
+        ...createChatProps({ paneId, sessionKey: "agent:main:voice-leaf", transcript }),
+        readRealtimeTalkConversation: () => captions.read(),
+        get messages() {
+          return messages();
+        },
+        get transcriptVisible() {
+          return visible();
+        },
+      };
+      const viewFrame = createChatViewFrame(
+        props,
+        () => undefined,
+        createAsyncQuestionPresentation(getTranscriptState(paneId), props),
+      );
+      return createComponent(ChatThread, { props: viewFrame.threadProps, transcript });
+    });
+    onTestFinished(view.unmount);
+    transcript.start();
+    transcript.update();
+    await vi.advanceTimersByTimeAsync(0);
+    projectRows.mockClear();
+
+    publish("First");
+    flush();
+    expect(projectRows).toHaveBeenCalledOnce();
+    const row = view.container.querySelector(".agent-chat__voice-turn")!;
+    expect(row).not.toBeNull();
+    projectRows.mockClear();
+    buildItems.mockClear();
+    for (const fragment of [" second", " third", "."]) {
+      publish(fragment);
+      flush();
+      expect(view.container.querySelector(".agent-chat__voice-turn")).toBe(row);
+    }
+    expect(row.textContent).toContain("First second third.");
+    expect(projectRows).not.toHaveBeenCalled();
+    expect(buildItems).not.toHaveBeenCalled();
+
+    setVisible(false);
+    flush();
+    projectRows.mockClear();
+    publish(" Hidden continuation.");
+    flush();
+    expect(row.textContent).not.toContain("Hidden continuation");
+    expect(projectRows).not.toHaveBeenCalled();
+    setVisible(true);
+    flush();
+    expect(view.container.querySelector(".agent-chat__voice-turn")?.textContent).toContain(
+      "Hidden continuation.",
+    );
+
+    projectRows.mockClear();
+    publish("Final answer.", true, "voice:answer");
+    flush();
+    expect(view.container.querySelector(".agent-chat__voice-turn-text")?.textContent).toBe(
+      "Final answer.",
+    );
+    expect(view.container.querySelector(".agent-chat__voice-turn-stream")).toBeNull();
+    expect(projectRows).not.toHaveBeenCalled();
+
+    setMessages([
+      prompt,
+      {
+        role: "assistant",
+        content: "Final answer.",
+        __openclaw: { id: "voice:answer" },
+      },
+    ]);
+    flush();
+    expect(view.container.querySelector(".agent-chat__voice-turn")).toBeNull();
+    expect(
+      [...view.container.querySelectorAll(".chat-text")].map((element) =>
+        element.textContent?.trim(),
+      ),
+    ).toEqual(["Speak the answer", "Final answer."]);
+    setMessages([prompt]);
+    flush();
+    expect(view.container.querySelector(".agent-chat__voice-turn-text")?.textContent).toBe(
+      "Final answer.",
+    );
+    projectRows.mockClear();
+    talk.update({ realtimeTalkConversationState: createRealtimeTalkConversationState() });
+    flush();
+    expect(projectRows).toHaveBeenCalledOnce();
+    expect(view.container.querySelector(".agent-chat__voice-turn")).toBeNull();
   });
 
   it.each(["answer", "reasoning"] as const)(
@@ -536,12 +654,12 @@ describe("voice reconciliation", () => {
       const messages = [savedMessage("Saved message", "voice:saved")];
       const map = vi.spyOn(messages, "map");
       const props = threadProps(`voice-${kind}`, undefined, messages);
-      props.realtimeTalkConversation =
+      props.readRealtimeTalkConversation =
         kind === "absent"
           ? undefined
           : kind === "empty"
-            ? []
-            : [{ id: "live", role: "user", text: "Still speaking", isStreaming: true }];
+            ? () => []
+            : () => [{ id: "live", role: "user", text: "Still speaking", isStreaming: true }];
 
       expect(voiceProjection(props)()).toEqual(kind === "ID-less" ? ["Still speaking"] : []);
       expect(membershipScans(map.mock.calls)).toEqual([]);
@@ -559,7 +677,7 @@ describe("voice reconciliation", () => {
     ];
     const map = vi.spyOn(messages, "map");
     const props = threadProps("voice-membership", undefined, messages);
-    props.realtimeTalkConversation = [
+    props.readRealtimeTalkConversation = () => [
       caption("saved", "Saved caption", "voice:saved"),
       caption("unsaved", "Unsaved caption", "voice:unsaved"),
       { id: "live", role: "assistant", text: "Live caption", isStreaming: true },

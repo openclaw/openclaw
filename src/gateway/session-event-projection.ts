@@ -258,11 +258,11 @@ export function prepareSessionEventProjection(
         }
         let wirePayload = delivery.payload;
         if (refs || omitMessage) {
-          // Copy retained fields in wire order without deleting properties from the variant.
+          // Copy retained fields in wire order; omitted fields need no entry tuples.
           wirePayload = Object.fromEntries(
-            Object.entries(delivery.payload).filter(
-              ([field]) => (!omitMessage || field !== "message") && !refs?.names.has(field),
-            ),
+            Object.keys(delivery.payload)
+              .filter((field) => (!omitMessage || field !== "message") && !refs?.names.has(field))
+              .map((field) => [field, delivery.payload[field]]),
           );
           if (refs) {
             wirePayload.sessionFieldRefs = refs.indices;

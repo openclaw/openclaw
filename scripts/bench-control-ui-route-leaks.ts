@@ -18,6 +18,10 @@ import {
   pathForRoute,
   type RouteId,
 } from "../ui/src/app-route-paths.ts";
+import {
+  createRfbRawFrame,
+  installScriptedRfbServer,
+} from "../ui/src/e2e/desktop-rfb-test-support.ts";
 import { CONFIG_PAGE_IDS } from "../ui/src/pages/config/config-sections.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
@@ -50,7 +54,7 @@ import {
   type AppsPilotId,
 } from "./route-leaks-apps-pilot.ts";
 
-type ProbeRoute = RouteId | "sharing" | AppsPilotId;
+type ProbeRoute = RouteId | "sharing" | AppsPilotId | "desktop-document" | "portal-embedded";
 let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
 const { values } = parseArgs({
@@ -69,7 +73,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
   );
   process.exit(0);
 }
@@ -108,7 +112,13 @@ const defaults = [
   ]),
 ];
 const routes = (values.routes?.split(",") ?? defaults).map((id) => {
-  if (id !== "sharing" && !isAppsPilotId(id) && !APP_ROUTE_IDS.some((route) => route === id)) {
+  if (
+    id !== "sharing" &&
+    id !== "desktop-document" &&
+    id !== "portal-embedded" &&
+    !isAppsPilotId(id) &&
+    !APP_ROUTE_IDS.some((route) => route === id)
+  ) {
     throw new Error(`Unknown route: ${id}`);
   }
   return id as ProbeRoute;
@@ -140,13 +150,30 @@ const output = createControlUiE2eArtifactDir("route-leaks", values.output);
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 const fields =
   ':is(input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button[role="combobox"]:not(:disabled),[role="switch"]:not([aria-disabled="true"]))';
-function routeTarget(id: ProbeRoute, sessionKey: string) {
+function routeTarget(
+  id: ProbeRoute,
+  sessionKey: string,
+): {
+  route: RouteId | "desktop-document";
+  pathname: string;
+  search: string;
+  selector: string | undefined;
+  requiredMethods?: string[];
+} {
   if (isAppsPilotId(id)) {
     return appsPilotTarget();
   }
   const route =
-    id === "sharing" || id === "settings" ? "chat" : id === "config" ? "appearance" : id;
-  const selectors: Partial<Record<RouteId | "sharing", string>> = {
+    id === "sharing" || id === "settings" || id === "portal-embedded"
+      ? "chat"
+      : id === "config"
+        ? "appearance"
+        : id;
+  const selectors: Partial<Record<ProbeRoute, string>> = {
+    systems: ".systems-desktop .desktop-surface canvas",
+    portals: "openclaw-portals-page .portals-preview__frame",
+    "portal-embedded": "openclaw-portals-page[embedded] .portals-preview__frame",
+    "desktop-document": ".desktop-document .desktop-surface canvas",
     channels: "openclaw-channels-page .channels-item, openclaw-channels-page .channels-empty",
     connection: "openclaw-connection-page .settings-input-with-hint input:not(:disabled)",
     profile:
@@ -193,12 +220,29 @@ function routeTarget(id: ProbeRoute, sessionKey: string) {
   return {
     route,
     pathname:
-      id === "sharing"
-        ? controlUiSessionPath(sessionKey)
-        : id === "agents"
-          ? pathForAgentPanel("main")
-          : pathForRoute(id),
+      id === "desktop-document"
+        ? `/focus/desktop/session/${encodeURIComponent(sessionKey)}`
+        : id === "sharing" || id === "portal-embedded"
+          ? controlUiSessionPath(sessionKey)
+          : id === "agents"
+            ? pathForAgentPanel("main")
+            : pathForRoute(id),
     search: id === "model-setup" ? "?firstRun=explicit" : "",
+    ...(id === "desktop-document"
+      ? { requiredMethods: ["sessions.describe", "environments.status", "desktop.observe"] }
+      : id === "systems"
+        ? {
+            requiredMethods: [
+              "environments.list",
+              "node.list",
+              "system.info",
+              "backup.status",
+              "desktop.observe",
+            ],
+          }
+        : id === "portals" || id === "portal-embedded"
+          ? { requiredMethods: ["portal.list"] }
+          : {}),
     selector:
       selectors[id] ??
       selectors[route] ??
@@ -209,12 +253,13 @@ function routeTarget(id: ProbeRoute, sessionKey: string) {
 function fixtureFor(
   build: { buildId: string; version: string },
   id: ProbeRoute,
+  baseUrl: string,
 ): ControlUiMockGatewayScenario {
   if (isAppsPilotId(id)) {
     if (!appsSandbox) {
       throw new Error("Apps sandbox was not prepared");
     }
-    return appsPilotFixture(fixtureFor(build, "apps"), appsSandbox.descriptor);
+    return appsPilotFixture(fixtureFor(build, "apps", baseUrl), appsSandbox.descriptor);
   }
   const fixture = createInteractionFixture(build.buildId, build.version);
   const workboard = id === "workboard" ? parityWorkboardScenario : {};
@@ -223,6 +268,9 @@ function fixtureFor(
     ...workboard,
     serverBuildId: build.buildId,
     serverVersion: build.version,
+    ...(id === "systems" || id === "desktop-document"
+      ? { deferredMethods: ["desktop.observe"] }
+      : {}),
     ...(id === "profile" || id === "sharing"
       ? { presenceUsers: parityBaseScenario.presenceUsers }
       : {}),
@@ -246,6 +294,17 @@ function fixtureFor(
         ...(id === "sharing" ? ["session.visibility.set", "session.members.listEvidence"] : []),
         ...(id === "profile" || id === "sharing" ? ["users.self", "users.list"] : []),
         ...(id === "secrets" ? ["secrets.store.list"] : []),
+        ...(id === "portals" || id === "portal-embedded" ? ["portal.list"] : []),
+        ...(id === "systems" || id === "desktop-document"
+          ? [
+              "desktop.observe",
+              "environments.list",
+              "environments.status",
+              "node.list",
+              "system.info",
+              "backup.status",
+            ]
+          : []),
         ...(id === "search" ? ["webSearch.status"] : []),
         ...(id === "model-setup" ? ["openclaw.setup.detect"] : []),
         ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
@@ -254,6 +313,50 @@ function fixtureFor(
     methodResponses: {
       ...fixture.methodResponses,
       "config.schema": parityBaseScenario.methodResponses?.["config.schema"],
+      ...(id === "portals" || id === "portal-embedded"
+        ? {
+            "portal.list": {
+              portals: [
+                {
+                  id: "route-probe",
+                  title: "Route probe portal",
+                  port: 3000,
+                  listenPort: 3000,
+                  tokenQuery: "openclaw_portal=synthetic",
+                  createdAtMs: 1,
+                  publicUrl: `${baseUrl}/route-probe-portal/`,
+                  url: `${baseUrl}/route-probe-portal/?openclaw_portal=synthetic`,
+                },
+              ],
+            },
+          }
+        : {}),
+      ...(id === "systems" || id === "desktop-document"
+        ? {
+            "desktop.observe": {
+              transport: "rfb",
+              wsPath: "/desktop/observe?token=route-probe",
+              expiresAtMs: 60_000,
+              control: false,
+            },
+            "environments.status": {
+              id: "gateway",
+              type: "local",
+              label: "Synthetic Gateway",
+              status: "available",
+              desktop: true,
+            },
+            "node.list": { nodes: [] },
+            "backup.status": { targets: [], schedules: [], locations: [] },
+          }
+        : {}),
+      ...(id === "desktop-document"
+        ? {
+            "sessions.describe": {
+              session: { ...fixture.sessions[0], placement: { state: "local" } },
+            },
+          }
+        : {}),
       ...(id === "profile" || id === "sharing"
         ? {
             "users.self": parityBaseScenario.methodResponses?.["users.self"],
@@ -317,6 +420,23 @@ function fixtureFor(
           }
         : {}),
       "backup.status": { targets: [], schedules: [], locations: [] },
+      ...(id === "systems"
+        ? {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Synthetic Gateway",
+                  status: "available",
+                  desktop: true,
+                },
+              ],
+              profiles: [],
+            },
+            "system.info": parityBaseScenario.methodResponses?.["system.info"],
+          }
+        : {}),
       ...(id === "agents" && interactionIds.includes("agents-files")
         ? {
             "agents.files.list": {
@@ -497,7 +617,7 @@ async function save() {
     JSON.stringify(
       {
         workload:
-          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; Agents/Cron interactions use a minimum2,000ms think time, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
+          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron interactions use a minimum2,000ms think time, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
         instrumentation:
           "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
         acceptance:
@@ -808,14 +928,20 @@ try {
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const prepared = await prepareControlUiMockGatewayScenario(
-                fixtureFor(variant.build, route),
+                fixtureFor(variant.build, route, server.baseUrl),
               );
               const fixture = prepared.scenario;
               const bootstrapPayload = JSON.stringify(createControlUiMockBootstrapConfig(fixture));
               server.setFixtureReader((pathname) =>
                 pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH
                   ? { body: bootstrapPayload, contentType: "application/json" }
-                  : prepared.assets.get(pathname),
+                  : (route === "portals" || route === "portal-embedded") &&
+                      pathname === "/route-probe-portal/"
+                    ? {
+                        body: '<!doctype html><title>Route probe portal</title><h1 data-route-probe-portal>Route probe portal</h1><button type="button">Ready</button>',
+                        contentType: "text/html",
+                      }
+                    : prepared.assets.get(pathname),
               );
               const target = routeTarget(route, fixture.sessionKey!);
               result.target = target;
@@ -905,6 +1031,27 @@ try {
               await page.goto(`${server.baseUrl}${target.pathname}${target.search}`, {
                 waitUntil: "domcontentloaded",
               });
+              if (route === "systems" || route === "desktop-document") {
+                const rfb = await installScriptedRfbServer(page);
+                await page.waitForFunction(
+                  () =>
+                    ((window as MockGatewayWindow).openclawControlUiE2eGateway?.findRequests(
+                      "desktop.observe",
+                    ).length ?? 0) > 0,
+                );
+                await page.evaluate(() =>
+                  (window as MockGatewayWindow).openclawControlUiE2eGateway?.resolveDeferred(
+                    "desktop.observe",
+                  ),
+                );
+                await page.waitForFunction(
+                  () =>
+                    (window as typeof window & { desktopRfbEvents?: () => string[] })
+                      .desktopRfbEvents?.()
+                      .includes("authenticated:1") === true,
+                );
+                await rfb.send([createRfbRawFrame()]);
+              }
               if (route === "sharing") {
                 await page
                   .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
@@ -914,8 +1061,34 @@ try {
               if (isAppsPilotId(route)) {
                 await waitForAppsCatalog(page);
               }
+              if (route === "portal-embedded") {
+                const pane = page.locator(".chat-pane-cache__pane--active");
+                await pane.locator(".agent-chat__composer-combobox textarea").waitFor();
+                const toggle = pane
+                  .locator(".sidebar-region__panels-toggle")
+                  .getByRole("button", { name: "Panels", exact: true });
+                if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+                  await toggle.click();
+                }
+                const launcher = pane.locator(".side-panel-launcher");
+                const newTab = pane
+                  .locator('[data-region-header="side"]')
+                  .getByRole("button", { name: "New tab", exact: true });
+                await launcher.or(newTab).filter({ visible: true }).first().waitFor();
+                if (!(await launcher.isVisible())) {
+                  await newTab.click();
+                }
+                await launcher
+                  .getByRole("button")
+                  .filter({
+                    has: page
+                      .getByText("Portal", { exact: true })
+                      .and(page.locator(".side-panel-type-option__label")),
+                  })
+                  .click();
+              }
               await page.waitForFunction(
-                ({ routeId, selector }) => {
+                ({ routeId, probeRoute, selector, requiredMethods }) => {
                   const snapshot = window.openclawControlUi?.snapshot();
                   const approvalsSettled =
                     routeId !== "approvals" ||
@@ -929,12 +1102,63 @@ try {
                         .querySelector(".standing-grants-table .data-table-empty-state")
                         ?.textContent?.trim() ===
                         "No standing grants. Answer an automation approval with Always allow to mint one.");
+                  // SAFETY: Every measured page receives this fixture before navigation.
+                  const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+                  const desktopSettled =
+                    (routeId !== "systems" && routeId !== "desktop-document") ||
+                    (() => {
+                      const panel = document.querySelector("openclaw-desktop-panel");
+                      const canvas =
+                        panel?.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+                      const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
+                      const desktopRequests = gateway?.findRequests("desktop.observe") ?? [];
+                      const source = desktopRequests[0]?.params as
+                        | { source?: { kind?: string }; control?: boolean }
+                        | undefined;
+                      return (
+                        pixel?.join(",") === "24,180,160,255" &&
+                        source?.source?.kind === "host" &&
+                        source?.control === false &&
+                        panel?.querySelector('button[aria-label="Take control"]:not(:disabled)') !==
+                          null
+                      );
+                    })();
+                  const portalSettled =
+                    (probeRoute !== "portals" && probeRoute !== "portal-embedded") ||
+                    (() => {
+                      const frame =
+                        document.querySelector<HTMLIFrameElement>(".portals-preview__frame");
+                      return (
+                        frame?.contentDocument?.querySelector("[data-route-probe-portal]")
+                          ?.textContent === "Route probe portal" &&
+                        frame.contentDocument.querySelector("button:not(:disabled)") !== null
+                      );
+                    })();
+                  const portalRailSettled =
+                    probeRoute !== "portal-embedded" ||
+                    (() => {
+                      const identity = document.querySelector(
+                        "openclaw-portals-page[embedded] .portals-embedded__identity",
+                      );
+                      if (!identity) {
+                        return false;
+                      }
+                      const style = getComputedStyle(identity);
+                      return style.display === "grid" && style.gap === "3px";
+                    })();
                   return (
+                    desktopSettled &&
+                    portalSettled &&
+                    portalRailSettled &&
                     approvalsSettled &&
-                    snapshot?.routeReady &&
-                    snapshot.route?.status === "success" &&
-                    snapshot.route.matches[0]?.routeId === routeId &&
-                    snapshot.route.pendingMatches.length === 0 &&
+                    (routeId === "desktop-document" ||
+                      (snapshot?.routeReady &&
+                        snapshot.route?.status === "success" &&
+                        snapshot.route.matches[0]?.routeId === routeId &&
+                        snapshot.route.pendingMatches.length === 0)) &&
+                    requiredMethods.every(
+                      (method) => (gateway?.findRequests(method).length ?? 0) > 0,
+                    ) &&
                     [...document.querySelectorAll<HTMLElement>(selector)].some(
                       (node) =>
                         node.getClientRects().length &&
@@ -943,7 +1167,12 @@ try {
                     )
                   );
                 },
-                { routeId: target.route, selector: target.selector },
+                {
+                  routeId: target.route,
+                  probeRoute: route,
+                  selector: target.selector,
+                  requiredMethods: target.requiredMethods ?? [],
+                },
                 { timeout: 30_000, polling: "raf" },
               );
               const readyMs = await page.evaluate(
@@ -1183,6 +1412,16 @@ try {
                         getComputedStyle(node).visibility !== "hidden",
                     )
                     .map((node) => node.textContent),
+                  portalIdentity: (() => {
+                    const identity = document.querySelector(
+                      "openclaw-portals-page[embedded] .portals-embedded__identity",
+                    );
+                    if (!identity) {
+                      return null;
+                    }
+                    const style = getComputedStyle(identity);
+                    return { display: style.display, gap: style.gap };
+                  })(),
                 }),
                 readyMs,
               );
@@ -1201,6 +1440,9 @@ try {
                 : undefined;
               result.rpc = data.rpc;
               result.alerts = data.alerts;
+              if (route === "portal-embedded") {
+                result.portalIdentity = data.portalIdentity;
+              }
               const unexpectedAlerts = data.alerts.filter(
                 (alert) =>
                   !(

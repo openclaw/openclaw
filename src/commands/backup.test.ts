@@ -59,6 +59,22 @@ describe("backup commands", () => {
   let tempHome: TempHomeEnv;
   let stateDir: string;
 
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in archive creation output without changing paths",
+    async () => {
+      await mockStateOnlyBackupPlan(stateDir);
+      const output = path.join(tempHome.home, "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz");
+      const runtime = createTestRuntime();
+      const result = await create({ output, includeWorkspace: false }, runtime);
+      const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(report).toContain("café\\nforged\\tend\\rrow.tar.gz");
+      expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(report).not.toContain("\nforged");
+      expect(result.archivePath).toBe(output);
+      expect((await fs.stat(output)).isFile()).toBe(true);
+    },
+  );
+
   async function writeWorkspaceBackupConfig(workspaceDir: string) {
     await fs.writeFile(
       path.join(stateDir, "openclaw.json"),

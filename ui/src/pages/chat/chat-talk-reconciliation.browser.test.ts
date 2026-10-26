@@ -28,7 +28,7 @@ it("reconciles persisted voice while preserving the live tail", async () => {
     assistantName: "Assistant",
     realtimeTalkActive: true,
     messages: [],
-    realtimeTalkConversation: [
+    readRealtimeTalkConversation: () => [
       {
         id: "rt-1",
         role: "user",

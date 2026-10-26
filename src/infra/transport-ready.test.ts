@@ -2,8 +2,8 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { waitForTransportReady } from "../plugin-sdk/transport-ready-runtime.js";
 import { sleepWithAbort } from "./backoff.js";
-import { waitForTransportReady } from "./transport-ready.js";
 
 vi.mock("./backoff.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backoff.js")>();

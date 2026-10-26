@@ -495,6 +495,28 @@ CREATE TABLE "session_transcript_archives" (
   UNIQUE ("archive_name")
 );
 
+CREATE TABLE "session_transcript_cold_archive_chunks" (
+  "session_id" text COLLATE "C" NOT NULL,
+  "chunk_index" bigint NOT NULL,
+  "archive_name" text COLLATE "C" NOT NULL,
+  "archive_sha256" text COLLATE "C" NOT NULL,
+  "first_seq" bigint NOT NULL,
+  "last_seq" bigint NOT NULL,
+  "event_count" bigint NOT NULL,
+  "raw_bytes" bigint NOT NULL,
+  "archive_bytes" bigint NOT NULL,
+  "archive_blob" bytea,
+  PRIMARY KEY ("session_id", "chunk_index"),
+  CHECK (("chunk_index" >= 0)),
+  CHECK ((char_length("archive_sha256") = 64)),
+  CHECK (("last_seq" >= "first_seq")),
+  CHECK (("event_count" >= 1)),
+  CHECK (("raw_bytes" >= 0)),
+  CHECK (("archive_bytes" >= 0)),
+  CHECK ((char_length("archive_name") > 0) AND ("archive_name" NOT IN ('.', '..')) AND (strpos("archive_name", '/') = 0) AND (strpos("archive_name", '\') = 0)),
+  UNIQUE ("archive_name")
+);
+
 CREATE TABLE "session_transcript_cold_archives" (
   "session_id" text COLLATE "C" NOT NULL,
   "generation" text COLLATE "C" NOT NULL,
@@ -797,6 +819,8 @@ ALTER TABLE "session_reactions" ADD FOREIGN KEY ("session_key") REFERENCES "sess
 ALTER TABLE "session_suggestions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_active_events" ADD FOREIGN KEY ("session_id", "event_seq") REFERENCES "transcript_events" ("session_id", "seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_transcript_cold_archive_chunks" ADD FOREIGN KEY ("session_id") REFERENCES "session_transcript_cold_archives" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_cold_archives" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

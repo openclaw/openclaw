@@ -381,5 +381,11 @@ it("reads unbound Gateway transcript state after an in-process append without cr
     storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "absent", env }),
   };
   expect(await readCount(missing)).toBe(0);
+  const emptyTitles = await readSessionTitleFieldsFromTranscriptAsync(missing);
+  expect(emptyTitles).toEqual({ firstUserMessage: null, lastMessagePreview: null });
+  expect(await readSessionTitleFieldsFromTranscriptAsync(missing)).toBe(emptyTitles);
+  expect(readSessionTitleFieldsFromTranscript(missing)).toBe(
+    readSessionTitleFieldsFromTranscript(missing),
+  );
   expect(memorySessionActorOwners.list()).toHaveLength(1);
 });

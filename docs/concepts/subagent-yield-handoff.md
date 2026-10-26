@@ -19,6 +19,11 @@ This design applies equally to an orchestrator spawned from an interactive
 session and one spawned from an isolated cron run. Cron owns delivery of the
 scheduled result, while the registry owns the nested orchestrator's continuation.
 
+An accepted yield stops new steering immediately. Tool calls in the same model
+response settle before the execution ends, preserving each call's own result.
+Stop, timeouts, and permission revocation can still cancel those calls while
+they settle. The handoff does not start another model request.
+
 ## Ownership through the handoff
 
 | Phase                | Owner                                         | Required handoff                                                                                                                                                       |
@@ -70,8 +75,11 @@ cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
 
-Restart restores pending completion reservations in requester FIFO order. When a
-restored wave needs no further delivery, the registry releases its unclaimed
+Restart restores ready completion reservations in requester FIFO order. A cohort
+still waiting for a child or descendant stays with the registry without reserving
+the requester's mailbox, so ordinary user input can run in FIFO order while it
+waits. The existing settlement events make its continuation eligible when ready.
+When a restored wave needs no further delivery, the registry releases its unclaimed
 mailbox reservations after its settlement commits. Already delivered waves must
 not hold later yielded cohorts behind an unprepared input. Claimed turns keep
 their existing execution owner.
@@ -257,9 +265,16 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   an observed terminal delivery outcome, the registry settles that outcome
   without resending an ambiguously committed result. If persistence fails, it
   retains the observed receipt and retries bookkeeping, not the send. The
-  outbound durable delivery queue keeps its own transport retry policy.
+  same rule covers private parent completions resumed by restart recovery:
+  their captured successful result settles the original input, including a
+  silent result, without starting another requester turn. Failed or missing
+  recovery evidence does not establish successful consumption.
+  The outbound durable delivery queue keeps its own transport retry policy.
   Delivery bookkeeping for executions that ended before the current batch's
   earliest child was created cannot block its continuation.
+  After a restart, saved interrupted results finish their own cleanup even if
+  the child session has since run a newer task. That cleanup releases the older
+  mailbox reservation without changing the newer task's session or execution.
   A private handoff's observation timeout does not cancel the underlying Gateway
   turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure
