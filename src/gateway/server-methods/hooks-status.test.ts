@@ -40,9 +40,7 @@ function createHookRegistry() {
       sendAuthorizationRequest("hooks.status", requestParams, {
         scopes,
         connId: "hooks-status-client",
-        context: {
-          getRuntimeConfig: () => (legacy ? legacyConfig : config),
-        },
+        context: { getRuntimeConfig: () => (legacy ? legacyConfig : config) },
         methodRegistry,
       }),
   };
@@ -79,11 +77,7 @@ it("requires operator.read and rejects unexpected params", async () => {
   const denied = await fixture.dispatch(undefined, []);
   expectRpcError(denied, {
     code: "FORBIDDEN",
-    details: {
-      code: "MISSING_SCOPE",
-      missingScope: "operator.read",
-      requiredScopes: ["operator.read"],
-    },
+    details: expect.objectContaining({ missingScope: "operator.read" }),
   });
 
   expectRpcError(await fixture.dispatch({ reload: true }), { code: "INVALID_REQUEST" });

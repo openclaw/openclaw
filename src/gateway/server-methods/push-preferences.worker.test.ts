@@ -78,23 +78,20 @@ it("runs web-push preference get and set without preparing SQLite on the calling
     { profileId, keys: ["notifications.web.v1"] },
     new Set(["preferences-owner"]),
   );
-  expect(respond).toHaveBeenLastCalledWith(
+  expect(respond.mock.calls.at(-1)).toEqual([
     true,
     { scope: "user", preferences: options.params.preferences },
     undefined,
-  );
+  ]);
   await pushHandlers["push.web.preferences.get"]({
     ...options,
     req: { ...options.req, method: "push.web.preferences.get" },
     params: { endpoint },
   });
-  expect(respond).toHaveBeenLastCalledWith(
+  expect(respond.mock.calls.at(-1)).toMatchObject([
     true,
-    expect.objectContaining({
-      durableIdentity: true,
-      user: expect.objectContaining({ detailLevel: "detailed" }),
-    }),
+    { durableIdentity: true, user: { detailLevel: "detailed" } },
     undefined,
-  );
+  ]);
   expect(native).not.toHaveBeenCalled();
 });

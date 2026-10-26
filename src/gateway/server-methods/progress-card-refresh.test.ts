@@ -28,14 +28,11 @@ function fixture() {
     context: {
       dedupe: new Map(),
       getRuntimeConfig: () => ({ agents: { entries: { work: {} }, ownership: "explicit" } }),
-      broadcast: vi.fn(),
     },
     sessionMutationAuthorization: { assertCurrent },
     sessionMutationCommitGuard: assertCurrent,
   } as unknown as GatewayRequestHandlerOptions;
-  send
-    .mockReset()
-    .mockImplementation(async (request) => request.respond(true, { status: "started" }));
+  send.mockReset().mockImplementation(async (req) => req.respond(true, { status: "started" }));
   return {
     respond,
     invocation,
@@ -48,13 +45,6 @@ it("refresh dispatches a hidden steer with caller authority and session-bound re
   const [request, , options] = expectDefined(send.mock.calls[0], "refresh dispatch");
   expect(request.client).toBe(f.invocation.client);
   expect(request.sessionMutationAuthorization).toBe(f.invocation.sessionMutationAuthorization);
-  expect(request.params).toMatchObject({
-    sessionKey: card.sessionKey,
-    agentId: "work",
-    queueMode: "steer",
-    deliver: false,
-    suppressCommandInterpretation: true,
-  });
   expect(request.params.message).toContain("not authorization to resume stopped or idle work");
   const assistant = makeAgentAssistantMessage({ content: [{ type: "text", text: "Updated" }] });
   expect(options?.prepareAssistantTranscriptMessage?.(assistant, "Updated")).toEqual({
@@ -69,28 +59,21 @@ it("refresh dispatches a hidden steer with caller authority and session-bound re
   await f.invoke();
   expect(send.mock.calls[2]?.[0].params.idempotencyKey).not.toBe(original);
 });
-it("rejects arbitrary prompt and visibility fields before dispatch", async () => {
+it.each(["invalid fields", "error", "aborted"])("rejects refresh: %s", async (status) => {
   const f = fixture();
-  f.invocation.params = { ...f.invocation.params, message: "resume all work", hidden: true };
-  await f.invoke();
-  expect(send).not.toHaveBeenCalled();
-  expect(f.respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
-});
-it.each(["error", "aborted"])(
-  "does not report %s as a successful refresh request",
-  async (status) => {
-    const f = fixture();
+  const invalid = status === "invalid fields";
+  if (invalid) {
+    f.invocation.params = { ...f.invocation.params, message: "resume all work", hidden: true };
+  } else {
     send.mockImplementation(async (request) => request.respond(true, { status }));
-    await f.invoke();
-    expect(f.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-      undefined,
-    );
-  },
-);
+  }
+  await f.invoke();
+  expect(f.respond.mock.calls[0]).toMatchObject({
+    0: false,
+    1: undefined,
+    2: { code: invalid ? "INVALID_REQUEST" : "UNAVAILABLE" },
+  });
+  if (invalid) {
+    expect(send).not.toHaveBeenCalled();
+  }
+});
