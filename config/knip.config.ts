@@ -546,6 +546,7 @@ const repositoryScriptEntries = [
   "scripts/perf/state-read-session-list-bench.ts!",
   "scripts/perf/state-read-worker-bench.ts!",
   "scripts/perf/stream-idle-watchdog.ts!",
+  "scripts/perf/typing-timer-churn.ts!",
   "scripts/perf/tool-call-stream-buffer-measure.ts!",
   "scripts/perf/tool-source-reply-completion-measure.mjs!",
   "scripts/perf/transcript-model-context-measure.ts!",
@@ -570,6 +571,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-cost-ready-observer.cjs!",
   "scripts/perf/session-polling-fixture.ts!",
   "scripts/perf/sqlite-reply-census-preload.mjs!",
+  "scripts/perf/timer-census-preload.mjs!",
   "scripts/perf/worker-retained-heap-preload.ts!",
   // These retained proof commands are invoked by
   // their source headers, scripts/perf/README.md, and native-allocation-profile.md.
