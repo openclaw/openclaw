@@ -68,12 +68,23 @@ it("collects unmentioned numeric group ids and flags wildcard", () => {
   });
 });
 
-it("cancels a stalled body within the shared timeout budget", async () => {
+it("reports bot not in group when status is left", async () => {
+  respond = () => membership("left");
+  expect(await auditGroups()).toMatchObject({
+    ok: false,
+    groups: [{ ok: false, status: "left" }],
+  });
+});
+
+it.each([
+  { name: "stalled body", delay: 0, remaining: 50, groupIds: ["-1001"] },
+  { name: "shared timeout budget", delay: 40, remaining: 10, groupIds: ["-1001", "-1002"] },
+])("cancels the $name within the remaining budget", async ({ delay, remaining, groupIds }) => {
   const cancel = vi.fn();
   respond = () =>
-    requests.length === 1
+    delay && requests.length === 1
       ? new Promise<Response>((resolve) => {
-          setTimeout(() => resolve(membership()), 40);
+          setTimeout(() => resolve(membership()), delay);
         })
       : new Response(
           new ReadableStream<Uint8Array>({
@@ -84,45 +95,70 @@ it("cancels a stalled body within the shared timeout budget", async () => {
           }),
         );
   vi.useFakeTimers();
-  const auditPromise = auditGroups(["-1001", "-1002"], 50);
+  const auditPromise = auditGroups(groupIds, 50);
   await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(60);
   expect(await auditPromise).toMatchObject({
     ok: false,
     groups: [
-      { ok: true },
-      { ok: false, error: "Telegram membership audit response body stalled for 5ms" },
+      ...(delay ? [{ ok: true }] : []),
+      {
+        ok: false,
+        error: `Telegram membership audit response body stalled for ${remaining / 2}ms`,
+      },
     ],
   });
   expect(cancel).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
 });
 
-it("reports an audit error and closes transport after malformed JSON", async () => {
-  respond = () => new Response("not-json");
-  expect(await auditGroups()).toMatchObject({ ok: false, checkedGroups: 1 });
-  expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001"));
-  expect(requests[0]?.dispatcher.destroyed).toBe(true);
-});
+it.each(["network failure", "malformed JSON"] as const)(
+  "closes its owned audit transport after %s without changing the request",
+  async (outcome) => {
+    respond = () => {
+      if (outcome === "network failure") {
+        throw new Error("membership fixture failed");
+      }
+      return new Response("not-json");
+    };
+    expect(await auditGroups()).toMatchObject({ ok: false, checkedGroups: 1 });
+    expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001"));
+    expect(requests[0]?.dispatcher.destroyed).toBe(true);
+  },
+);
 
-it("reports a departed membership and keeps transport open until the final body settles", async () => {
-  const body = new TransformStream<Uint8Array>();
-  const writer = body.writable.getWriter();
-  respond = () => (requests.length === 1 ? membership("left") : new Response(body.readable));
-  const readingBody = writer.write(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
+it("keeps the audit transport open until the final group's response body settles", async () => {
+  const readingBody = Promise.withResolvers<void>();
+  const finishBody = Promise.withResolvers<void>();
+  respond = () =>
+    requests.length === 1
+      ? membership()
+      : new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              async pull(controller) {
+                readingBody.resolve();
+                await finishBody.promise;
+                controller.enqueue(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
+                controller.close();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+        );
   const audit = auditGroups(["-1001", "-1002"]);
   try {
-    await readingBody;
+    await readingBody.promise;
     expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001", "-1002"));
     expect(requests[0]?.dispatcher).toBe(requests[1]?.dispatcher);
     expect(requests[1]?.dispatcher.destroyed).toBe(false);
   } finally {
-    await writer.close();
+    finishBody.resolve();
   }
   expect(await audit).toMatchObject({
-    ok: false,
+    ok: true,
     checkedGroups: 2,
     groups: [
-      { chatId: "-1001", status: "left", ok: false },
+      { chatId: "-1001", status: "member" },
       { chatId: "-1002", status: "administrator" },
     ],
   });

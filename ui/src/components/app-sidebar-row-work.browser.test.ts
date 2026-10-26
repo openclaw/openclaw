@@ -36,15 +36,15 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
   sidebar.sessionsShowPreview = true;
   const owner = getAppSidebarOwner(sidebar.hostElement)!;
   owner.setVisibleSessionLimit("ungrouped", 80);
+  await waitForSolid(() => {
+    const rows = sidebar.querySelectorAll("[data-session-key]");
+    expect(rows.length).toBeLessThan(40);
+    expect(rows.item(rows.length - 1)?.getBoundingClientRect().bottom).toBeGreaterThanOrEqual(
+      viewport.getBoundingClientRect().bottom,
+    );
+  });
   await settleLitElement(sidebar);
-  const publishRow = (key: string, fields: Partial<SessionsListResult["sessions"][number]>) => {
-    const current = sessions.sessions.state.result!;
-    const result = {
-      ...current,
-      sessions: current.sessions.map((row) =>
-        row.key === key ? Object.assign({}, row, fields) : row,
-      ),
-    };
+  const publishList = (result: SessionsListResult) => {
     sessions.publishList({ result });
     publishSidebarSessionList(owner.sessionData, {
       result,
@@ -70,7 +70,13 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
       sidebar.devGitBranch = "cosmetic-update";
     },
     () => {
-      publishRow(keys[1]!, { label: "Changed other row" });
+      const result = sessions.sessions.state.result!;
+      publishList({
+        ...result,
+        sessions: result.sessions.map((row) =>
+          row.key === keys[1] ? Object.assign({}, row, { label: "Changed other row" }) : row,
+        ),
+      });
     },
   ].entries()) {
     access.mockClear();
@@ -82,21 +88,45 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
     await settleLitElement(sidebar);
     expect(sidebar.querySelector(`[data-session-key="${keys[0]}"]`)).toBe(first);
     expect
-      .soft(access.mock.calls.map(([request]) => request.session))
-      .not.toContainEqual(expect.objectContaining({ key: keys[0] }));
+      .soft(access)
+      .not.toHaveBeenCalledWith(
+        expect.objectContaining({ session: expect.objectContaining({ key: keys[0] }) }),
+      );
     expect
-      .soft(access.mock.calls.map(([request]) => request.method))
-      .not.toContain("sessions.groups.put");
+      .soft(access.mock.calls.filter(([request]) => request.method === "sessions.groups.put"))
+      .toHaveLength(0);
     expect.soft(subtitlePreparations).toBe(0);
   }
+
+  expect(sidebar.textContent).toContain("Changed other row");
+  const link = first.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")!;
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
+  await settleLitElement(sidebar);
+  expect(sidebar.selectedSessionKeys.has(keys[0]!)).toBe(true);
+  expect(first.classList.contains("sidebar-recent-session--selected")).toBe(true);
+  sidebar.onNavigate = vi.fn();
+  link.click();
+  expect(sidebar.onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/work-0" });
 
   const currentRow = () => sidebar.querySelector(`[data-session-key="${keys[0]}"]`)!;
   const archive = () =>
     currentRow().querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
   expect(archive().disabled).toBe(false);
-  publishRow(keys[0]!, { sharingRole: "viewer" });
+  const publishFirst = (fields: {
+    sharingRole?: "owner" | "viewer";
+    lastMessagePreview?: string;
+  }) => {
+    const result = sessions.sessions.state.result!;
+    publishList({
+      ...result,
+      sessions: result.sessions.map((row) =>
+        row.key === keys[0] ? Object.assign({}, row, fields) : row,
+      ),
+    });
+  };
+  publishFirst({ sharingRole: "viewer" });
   await waitForSolid(() => expect(archive().disabled).toBe(true));
-  publishRow(keys[0]!, { sharingRole: "owner", lastMessagePreview: "Updated preview" });
+  publishFirst({ sharingRole: "owner", lastMessagePreview: "Updated preview" });
   await waitForSolid(() => {
     expect(archive().disabled).toBe(false);
     expect(currentRow().textContent).toContain("Updated preview");

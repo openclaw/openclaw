@@ -22,7 +22,7 @@ it.each(["none", "token"] as const)(
     await withOpenClawTestState(
       { env: { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined } },
       async (state) =>
-        withProtocolGateway(mode, async ({ port, config, httpRequests }) => {
+        withProtocolGateway(mode, async ({ port, config, observed, failures, httpRequests }) => {
           const controlAuth = await resolveReadOnlyLocalGatewayAuth({
             auth: config.gateway?.auth,
             authNone: mode === "none",
@@ -39,8 +39,36 @@ it.each(["none", "token"] as const)(
               minProtocol: protocol,
               maxProtocol: protocol,
             });
-          await expect(probe(retainedProtocol)).rejects.toThrow(/protocol mismatch/);
+          const previous = await probe(retainedProtocol).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+          expect(observed).toHaveLength(1);
+          expect(observed[0]).toMatchObject({
+            minProtocol: retainedProtocol,
+            maxProtocol: retainedProtocol,
+            client:
+              mode === "none"
+                ? { id: "gateway-client", mode: "backend" }
+                : { id: "cli", mode: "cli" },
+          });
+          expect(previous).toMatchObject({
+            error: expect.objectContaining({ message: expect.stringMatching(/protocol mismatch/) }),
+          });
           await expect(probe(PROTOCOL_VERSION)).resolves.toMatchObject({ ok: true });
+          expect(failures).toEqual(["protocol-mismatch"]);
+          expect(observed.map((connect) => connect.client)).toEqual([
+            expect.objectContaining(
+              mode === "none"
+                ? { id: "gateway-client", mode: "backend" }
+                : { id: "cli", mode: "cli" },
+            ),
+            expect.objectContaining(
+              mode === "none"
+                ? { id: "gateway-client", mode: "backend" }
+                : { id: "cli", mode: "cli" },
+            ),
+          ]);
           const actualCallGateway = gatewayCall.callGateway;
           vi.spyOn(gatewayCall, "callGateway").mockImplementation((options) =>
             actualCallGateway({
@@ -64,6 +92,11 @@ it.each(["none", "token"] as const)(
             gatewayBuildId: "fixture-target",
             protocolMismatch: expect.stringContaining("protocol mismatch"),
           });
+          expect(observed.at(-1)).toMatchObject({
+            minProtocol: retainedProtocol,
+            maxProtocol: retainedProtocol,
+          });
+          expect(failures).toEqual(["protocol-mismatch", "protocol-mismatch"]);
           expect(httpRequests).toEqual(expect.arrayContaining(["/startupz", "/readyz"]));
         }),
     );
@@ -71,8 +104,18 @@ it.each(["none", "token"] as const)(
 );
 
 const executorFixture = useExecutorFixture("readiness-connection-authority-");
-it.each([false, true])("real executor readiness with reassigned=%s", async (reassigned) => {
+it.each([
+  {
+    authority: "current",
+    effect: "current lease sends authenticated connect and health; readiness succeeds",
+  },
+  {
+    authority: "reassigned",
+    effect: "reassigned lease sends no connect or health; readiness rejects",
+  },
+] as const)("real executor readiness: $effect", async ({ authority }) => {
   const { root, control } = executorFixture();
+  let revoked = false;
   await withOpenClawTestState(
     { env: { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined } },
     async (state) =>
@@ -82,38 +125,49 @@ it.each([false, true])("real executor readiness with reassigned=%s", async (reas
           let callError: unknown;
           const outcome = await withUpdateCommandExecutor(randomUUID(), async (owner) => {
             const fence = await owner.enter(root);
-            return confirmGatewayReachable({
-              config,
-              auth: config.gateway.auth,
-              env: state.env,
-              port,
-              timeoutMs: 2_000,
-              assertCurrent: fence.assertCurrent,
-            }).catch((error: unknown) => {
+            try {
+              return await confirmGatewayReachable({
+                config,
+                auth: config.gateway.auth,
+                env: state.env,
+                port,
+                timeoutMs: 2_000,
+                assertCurrent: fence.assertCurrent,
+              });
+            } catch (error) {
               callError = error;
               throw error;
-            });
-          }).catch((error: unknown) => error);
-          if (!reassigned) {
+            }
+          }).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+          if (authority === "current") {
             expect(requests).toEqual(["connect", "health"]);
+            expect(observed).toHaveLength(1);
             expect(Boolean(observed[0]?.auth?.token)).toBe(true);
             expect(outcome).toMatchObject({
-              reachable: true,
-              gatewayVersion: "2026.10.23",
-              gatewayBuildId: "fixture-target",
+              value: {
+                reachable: true,
+                gatewayVersion: "2026.10.23",
+                gatewayBuildId: "fixture-target",
+              },
             });
             expect(callError).toBeUndefined();
+            expect(revoked).toBe(false);
             return;
           }
           expect(requests).toEqual([]);
-          expect(outcome).toBe(callError);
+          expect(observed).toEqual([]);
+          expect(revoked).toBe(true);
           expect(callError).toMatchObject({
             message: "Update executor ownership is no longer current.",
           });
+          expect(outcome).toHaveProperty("error");
         },
         {
           beforeChallenge: async () => {
-            if (!reassigned) {
+            if (authority === "current") {
               return;
             }
             // Reassign the real admitted lease while the live socket awaits its challenge.
@@ -123,6 +177,7 @@ it.each([false, true])("real executor readiness with reassigned=%s", async (reas
                 .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
                 .run("replacement", root);
               expect(changed.changes).toBe(1);
+              revoked = true;
             } finally {
               db.close();
             }
