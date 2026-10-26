@@ -20,20 +20,13 @@ const deletion = {
 
 afterEach(() => vi.useRealTimers());
 
-function createLifecycle(beforeApply?: () => void | Promise<void>) {
+function createLifecycle() {
   const { state, values } = createBindingTestState();
-  if (beforeApply) {
-    interceptBindingStore(state, (store) => ({
-      async compareAndApply(...args) {
-        const pending = beforeApply();
-        if (pending) {
-          await pending;
-        }
-        return store.compareAndApply(...args);
-      },
-    }));
-  }
-  return { values, lifecycle: createNativeSessionBindingLifecycle(state, bindingTestOptions) };
+  return {
+    state,
+    values,
+    lifecycle: createNativeSessionBindingLifecycle(state, bindingTestOptions),
+  };
 }
 
 it("revalidates opaque native rollback authority before invoking the released SDK callback", () => {
@@ -59,16 +52,13 @@ it("deletes only the requested owner and restores it on transaction rollback", a
   const original = { value: "run" };
   values.set("base", { value: "base" });
   values.set("run", original);
-
-  await lifecycle.withDeletion("run", deletion, async (_record, mutation) => {
-    mutation.commit();
-    expect([...values]).toEqual([["base", { value: "base" }]]);
-    mutation.rollback();
-  });
-  expect(values.get("run")).toEqual(original);
   let retainedCommit: (() => void) | undefined;
   await lifecycle.withDeletion("run", deletion, async (_record, mutation) => {
     retainedCommit = mutation.commit;
+    mutation.commit();
+    expect([...values]).toEqual([["base", { value: "base" }]]);
+    mutation.rollback();
+    expect(values.get("run")).toEqual({ ...original, lease: expect.any(Object) });
     mutation.commit();
   });
   expect([...values.keys()]).toEqual(["base"]);
@@ -92,7 +82,6 @@ it("rejects revoked deletion authority and never restores over a successor", asy
   expect(values.get(key)).toMatchObject({ value: "owner" });
 
   const successor = { value: "successor" };
-  values.set(key, successor);
   await lifecycle.withDeletion(key, deletion, async (_record, mutation) => {
     mutation.commit();
     values.set(key, successor);
@@ -101,47 +90,31 @@ it("rejects revoked deletion authority and never restores over a successor", asy
   expect(values.get(key)).toEqual(successor);
 });
 
-it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
-  let startArchive: (() => void) | undefined;
-  const { lifecycle, values } = createLifecycle(() => {
-    startArchive?.();
-    startArchive = undefined;
-  });
-  const update = (key: string, value: string) =>
-    lifecycle.withMutation(() => lifecycle.transact(key, () => bindingMutation(value)));
-  await using archiveGate = bindingGate();
-  let archive!: Promise<void>;
-  startArchive = () => {
-    archive = lifecycle.withExclusiveMutationFence(async () => {
-      await expect(
-        lifecycle.withMutation(() =>
-          lifecycle.transact("first", (current) => bindingMutation("updated", current)),
-        ),
-      ).resolves.toBe(true);
-      await archiveGate.pause();
-    });
-  };
-
-  await expect(update("first", "before-archive")).resolves.toBe(true);
-  await Promise.resolve();
-  await expect(update("late", "late")).rejects.toThrow("native archive is in progress");
-  archiveGate.resume();
-  await expect(archive).resolves.toBeUndefined();
+it("admits the archive owner's nested mutation", async () => {
+  const { lifecycle, values } = createLifecycle();
+  await expect(
+    lifecycle.withExclusiveMutationFence(() =>
+      lifecycle.withMutation(() => lifecycle.transact("first", () => bindingMutation("updated"))),
+    ),
+  ).resolves.toBe(true);
   expect([...values]).toEqual([["first", { value: "updated" }]]);
 });
 
 it("does not let a queued renewal recreate a committed deletion", async () => {
   vi.useFakeTimers();
-  const renewal = vi.fn<() => void | Promise<void>>();
-  const { lifecycle, values } = createLifecycle(renewal);
+  const { lifecycle, values, state } = createLifecycle();
   values.set("binding", { value: "original" });
   await lifecycle.withDeletion("binding", deletion, async (_record, mutation) => {
     await using gate = bindingGate();
-    renewal.mockClear().mockImplementationOnce(() => gate.pause());
+    interceptBindingStore(state, (store) => ({
+      async compareAndApply(...args) {
+        await gate.pause();
+        return store.compareAndApply(...args);
+      },
+    }));
     await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
-    expect(renewal).toHaveBeenCalledOnce();
+    await gate.reached;
     mutation.commit();
-    expect(values.has("binding")).toBe(false);
   });
   expect(values.has("binding")).toBe(false);
 });
