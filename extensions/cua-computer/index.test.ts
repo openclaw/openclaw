@@ -16,8 +16,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const artifactMocks = vi.hoisted(() => ({ verify: vi.fn(), registerDoctor: vi.fn() }));
 
-// mock-isolation: Observe registration without writing to the process-global health registry.
-vi.mock("./api.js", () => ({ registerCuaDriverDoctorChecks: artifactMocks.registerDoctor }));
+vi.mock("./api.js", () => ({
+  registerCuaDriverDoctorChecks: artifactMocks.registerDoctor,
+}));
 vi.mock("./src/driver-artifacts.js", () => ({
   verifyInstalledCuaDriverArtifacts: artifactMocks.verify,
 }));
