@@ -24,12 +24,8 @@ it("keeps rejected/accepted selection and keyed nodes authoritative", () => {
   const view = render(() => (
     <>
       <Tabs {...state()} ariaLabel="Example" onSelect={onSelect} />
-      <TabPanel id="ap" tabId="at" active={state().active === "a"}>
-        A
-      </TabPanel>
-      <TabPanel id="bp" tabId="bt" active={state().active === "b"}>
-        B
-      </TabPanel>
+      <TabPanel id="ap" tabId="at" active={state().active === "a"} children="A" />
+      <TabPanel id="bp" tabId="bt" active={state().active === "b"} children="B" />
     </>
   ));
   flush();
@@ -69,13 +65,8 @@ it("keeps manual focus through reorder and activation changes", () => {
       { value: "b", label: "B" },
     ],
   });
-  const view = render(() => (
-    <Tabs
-      {...state()}
-      onSelect={(active) => void set((s) => ({ ...s, active }))}
-      ariaLabel="Manual"
-    />
-  ));
+  const onSelect = (active: string) => void set((s) => ({ ...s, active }));
+  const view = render(() => <Tabs {...state()} onSelect={onSelect} ariaLabel="Manual" />);
   const key = (element: HTMLElement, name: string) => {
     fireEvent.keyDown(element, { key: name });
     flush();
