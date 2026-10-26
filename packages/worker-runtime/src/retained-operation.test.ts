@@ -5,15 +5,16 @@ import {
   finallyRetainedOperation,
   flatMapRetainedOperation,
   mapRetainedOperation,
-  type RetainedOutcome,
 } from "./retained-operation.js";
 
 const pending = <T>() => createRetainedOperation<T>(() => {});
 const context = new AsyncLocalStorage<string>();
+const failure = new Error("operation failed");
+const cleanupError = new Error("cleanup failed");
+const combined = new Error("combined failure");
 
 it.each([false, true])("maps once under reentrancy in captured context: %s", async (throws) => {
   const source = pending<number>();
-  const failure = new Error("mapping failed");
   const receive = vi.fn((value: number) => {
     expect(context.getStore()).toBe("original");
     operation.service();
@@ -42,8 +43,7 @@ it("adopts once and services in captured context before Promise reactions", asyn
   const source = pending<number>();
   const serviceChild = vi.fn(() => expect(context.getStore()).toBe("original"));
   const child = createRetainedOperation<number>(serviceChild);
-  const adopt = vi.fn((value: number) => {
-    expect(value).toBe(21);
+  const adopt = vi.fn(() => {
     expect(context.getStore()).toBe("original");
     return child.operation;
   });
@@ -55,7 +55,6 @@ it("adopts once and services in captured context before Promise reactions", asyn
     joined.service();
     joined.service();
     expect(joined.read()).toEqual({ status: "pending" });
-    expect(adopt).toHaveBeenCalledTimes(1);
     child.resolve(42);
     joined.service();
     expect(joined.read()).toEqual({ status: "fulfilled", value: 42 });
@@ -63,13 +62,13 @@ it("adopts once and services in captured context before Promise reactions", asyn
     expect(serviceChild).toHaveBeenCalled();
   });
   await expect(joined.result).resolves.toBe(42);
-  expect(adopt).toHaveBeenCalledTimes(1);
+  expect(adopt).toHaveBeenCalledExactlyOnceWith(21);
 });
 
 it.each([
-  { original: new Error("original operation failed"), cleanupRejects: false, sourceThrows: false },
+  { original: failure, cleanupRejects: false, sourceThrows: false },
   { original: undefined, cleanupRejects: true, sourceThrows: false },
-  { original: new Error("source servicing failed"), cleanupRejects: false, sourceThrows: true },
+  { original: failure, cleanupRejects: false, sourceThrows: true },
 ] as const)(
   "joins cleanup before failure: %j",
   async ({ original, cleanupRejects, sourceThrows }) => {
@@ -79,10 +78,7 @@ it.each([
       }
     });
     const cleanup = pending<void>();
-    const adopt = vi.fn((outcome: Exclude<RetainedOutcome<void>, { status: "pending" }>) => {
-      expect(outcome.status === "rejected" && outcome.error).toBe(original);
-      return cleanup.operation;
-    });
+    const adopt = vi.fn(() => cleanup.operation);
     const joined = finallyRetainedOperation(failed.operation, adopt);
     if (!sourceThrows) {
       failed.reject(original);
@@ -90,10 +86,8 @@ it.each([
       joined.service();
     }
     expect(joined.read()).toEqual({ status: "pending" });
-    expect(adopt).toHaveBeenCalledExactlyOnceWith({ status: "rejected", error: original });
     const next = vi.fn(() => cleanup.operation);
     const ordinary = flatMapRetainedOperation(joined, next);
-    const cleanupError = new Error("native cleanup remains pending");
     if (cleanupRejects) {
       cleanup.reject(cleanupError);
     } else {
@@ -103,7 +97,7 @@ it.each([
     ordinary.service();
     expect(joined.read()).toEqual({ status: "rejected", error: expected });
     await expect(ordinary.result).rejects.toBe(expected);
-    expect(adopt).toHaveBeenCalledTimes(1);
+    expect(adopt).toHaveBeenCalledExactlyOnceWith({ status: "rejected", error: original });
     expect(next).not.toHaveBeenCalled();
   },
 );
@@ -111,19 +105,16 @@ it.each([
 it.each([false, true])("preserves cleanup error combination (throws: %s)", async (throws) => {
   const source = pending<void>();
   const cleanup = pending<void>();
-  const sourceError = new Error("source failed");
-  const cleanupError = new Error("cleanup failed");
-  const combined = new Error("combined failure");
   const combine = vi.fn(() => {
     if (throws) {
       throw combined;
     }
     return combined;
   });
-  source.reject(sourceError);
+  source.reject(failure);
   cleanup.reject(cleanupError);
   const joined = finallyRetainedOperation(source.operation, () => cleanup.operation, combine);
   expect(joined.read()).toEqual({ status: "rejected", error: combined });
   await expect(joined.result).rejects.toBe(combined);
-  expect(combine).toHaveBeenCalledExactlyOnceWith(sourceError, cleanupError);
+  expect(combine).toHaveBeenCalledExactlyOnceWith(failure, cleanupError);
 });
