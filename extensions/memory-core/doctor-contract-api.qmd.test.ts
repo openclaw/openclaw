@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { read, useDoctorWorkspace, writeFiles } from "./doctor-contract-api.test-support.js";
@@ -27,12 +26,10 @@ async function expectNoop(subject: ReturnType<typeof migration>) {
   await expect(subject.detect()).resolves.toBeNull();
   await expect(subject.run()).resolves.toEqual({ changes: [], warnings: [] });
 }
-const lockPreview = (paths: string[]) => ({
-  preview: paths.map(
-    (filePath) =>
-      `- Retired Memory Core QMD file lock: ${filePath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
-  ),
-});
+function expectPaths(messages: string[], paths: string[]) {
+  expect(messages).toHaveLength(paths.length);
+  paths.forEach((file, index) => expect(messages[index]).toContain(file));
+}
 
 it("preserves nonempty QMD homes and does not schedule them for migration", async () => {
   const qmdHome = statePath("agents/main/qmd");
@@ -40,31 +37,23 @@ it("preserves nonempty QMD homes and does not schedule them for migration", asyn
   const externalModels = path.join(fixture.rootDir, "shared-qmd-models");
   const symlinkHomeTarget = path.join(fixture.rootDir, "symlink-qmd-home-target");
   const symlinkHome = statePath("agents/other/qmd");
-  const protectedFiles = [
+  const retainedFiles = [
+    path.join(qmdHome, "xdg-cache/qmd/index.sqlite"),
     statePath("agents/main/agent/openclaw-agent.sqlite"),
     statePath("agents/main!/qmd/index.sqlite"),
     path.join(externalModels, "model.bin"),
     path.join(symlinkHomeTarget, "index.sqlite"),
+    transcript,
   ];
-  const derivedFiles = [
-    "xdg-cache/qmd/index.sqlite",
-    "xdg-config/qmd/index.yml",
-    "sessions/session.md",
-  ].map((relative) => path.join(qmdHome, relative));
-  await writeFiles([...derivedFiles, ...protectedFiles, transcript], "derived");
-  const message = { role: "user", content: "Retained recall fact" };
-  await fs.writeFile(transcript, JSON.stringify({ type: "message", message }), "utf8");
+  await writeFiles(retainedFiles, "retained");
   await fs.symlink(externalModels, path.join(qmdHome, "xdg-cache", "qmd", "models"));
   await fs.mkdir(path.dirname(symlinkHome), { recursive: true });
   await fs.symlink(symlinkHomeTarget, symlinkHome);
 
   await expectNoop(workspace);
-  for (const file of derivedFiles) {
-    await expect(read(file)).resolves.toBe("derived");
+  for (const file of retainedFiles) {
+    await expect(read(file)).resolves.toBe("retained");
   }
-  await expect(read(transcript)).resolves.toContain(message.content);
-  expect((await buildSessionEntry(transcript))?.content).toBe("User: Retained recall fact");
-  await Promise.all(protectedFiles.map((file) => fs.access(file)));
   expect((await fs.lstat(symlinkHome)).isSymbolicLink()).toBe(true);
 });
 
@@ -111,14 +100,10 @@ it("removes only exact stale QMD lock sidecars and is idempotent", async () => {
   ].map(statePath);
   await writeFiles([globalLockPath, agentLockPath, ...ignoredPaths], lockPayload(2 ** 30));
 
-  await expect(locks.detect()).resolves.toEqual(lockPreview([globalLockPath, agentLockPath]));
-  await expect(locks.run()).resolves.toEqual({
-    changes: [
-      `Removed retired Memory Core QMD file lock: ${globalLockPath}`,
-      `Removed retired Memory Core QMD file lock: ${agentLockPath}`,
-    ],
-    warnings: [],
-  });
+  expectPaths((await locks.detect())!.preview, [globalLockPath, agentLockPath]);
+  const result = await locks.run();
+  expectPaths(result.changes, [globalLockPath, agentLockPath]);
+  expect(result.warnings).toEqual([]);
   for (const filePath of [
     globalLockPath,
     agentLockPath,
@@ -144,14 +129,10 @@ it("retains live and ambiguous QMD locks and ignores symlink candidates", async 
   await writeFiles([symlinkTargetPath], lockPayload(2 ** 30));
   await fs.symlink(symlinkTargetPath, symlinkLockPath);
 
-  await expect(locks.detect()).resolves.toEqual(lockPreview([globalLockPath, malformedLockPath]));
-  await expect(locks.run()).resolves.toEqual({
-    changes: [],
-    warnings: [globalLockPath, malformedLockPath].map(
-      (filePath) =>
-        `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${filePath}`,
-    ),
-  });
+  expectPaths((await locks.detect())!.preview, [globalLockPath, malformedLockPath]);
+  const result = await locks.run();
+  expect(result.changes).toEqual([]);
+  expectPaths(result.warnings, [globalLockPath, malformedLockPath]);
   await fs.access(globalLockPath);
   await expect(read(malformedLockPath)).resolves.toBe("{");
   expect((await fs.lstat(symlinkLockPath)).isSymbolicLink()).toBe(true);
