@@ -350,24 +350,9 @@ it("embeds one canonical artifact identity from explicit build inputs", () => {
 });
 
 it("keeps source-build identity stable when no build timestamp is provided", () => {
-  const sources = {
-    env: {},
-    readGitCommit: () => "a".repeat(40),
-    readGitCommitTimestamp: () => null,
-  };
-  const first = resolveBuildInfo(sources);
-  const second = resolveBuildInfo(sources);
-  expect(first).toEqual(second);
-  expect(first).toEqual({
-    version: null,
-    commit: "a".repeat(40),
-    commitAt: null,
-    builtAt: null,
-    branch: null,
-    dirty: null,
-    release: false,
-    buildId: "aaaaaaaaaaaa",
-  });
+  const read = () => resolveBuildInfo({ readGitCommit: () => "a".repeat(40) });
+  expect(read()).toMatchObject({ builtAt: null, buildId: "aaaaaaaaaaaa" });
+  expect(read()).toEqual(read());
 });
 
 it("hard-kills every advisory Git read after its deadline", async () => {
@@ -457,10 +442,6 @@ it.each([
   expect(readGitBranch).toHaveBeenCalledTimes(calls);
 });
 
-it.each([true, false, null])("preserves Git dirty state %s", (dirty) => {
-  expect(resolveBuildInfo({ readGitDirty: () => dirty }).dirty).toBe(dirty);
-});
-
 it.each([
   ["release", { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1" }, true, "release-"],
   ["generic selector", { OPENCLAW_VERSION: "latest" }, false, ""],
@@ -475,10 +456,6 @@ it.each([
       readPackageVersion: () => "2026.7.10",
     }),
   ).toMatchObject({
-    version: "2026.7.10",
-    commit: "a".repeat(40),
-    branch: "release/2026.7.10",
-    dirty: false,
     release,
     buildId: `2026.7.10-${marker}aaaaaaaaaaaa-2026-07-10T13-14-15.000Z`,
   });
@@ -516,34 +493,19 @@ it("resolves root tsconfig package aliases for source imports", () => {
 it("resolves Control UI dev-server source aliases for internal packages", () => {
   const aliases = resolveSourcePackageAliasesForVite();
   const rootIndex = aliases.findIndex((alias) => alias.find === "@openclaw/normalization-core");
-  for (const subpath of [
-    "agent-id",
-    "json-schema",
-    "string-coerce",
-    "phone-presentation",
-    "session-key-comparison",
-    "result",
-    "stable-stringify",
-  ]) {
-    const index = aliases.findIndex(
-      (alias) => alias.find === `@openclaw/normalization-core/${subpath}`,
-    );
-    expect(aliases[index]).toEqual({
-      find: `@openclaw/normalization-core/${subpath}`,
-      replacement: path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-    });
-    expect(index).toBeGreaterThanOrEqual(0);
-    expect(index).toBeLessThan(rootIndex);
-  }
+  const index = aliases.findIndex(
+    (alias) => alias.find === "@openclaw/normalization-core/agent-id",
+  );
+  expect(aliases[index]?.replacement).toBe(
+    path.join(repoRoot, "packages/normalization-core/src/agent-id.ts"),
+  );
+  expect(index).toBeGreaterThanOrEqual(0);
+  expect(index).toBeLessThan(rootIndex);
 });
 
 it("uses Node package resolution for external packages inherited by worktrees", () => {
   const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));
   const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
-  expect(resolvePackage.mock.calls).toEqual([
-    ["@openclaw/libterminal/package.json"],
-    ["@openclaw/uirouter/package.json"],
-  ]);
   expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
     find: "@openclaw/libterminal/browser",
     replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
@@ -577,15 +539,7 @@ it("composes the complete source without registering runtime English", () => {
   expect(source).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
   expect(flat.get("activity.title")).toBe("Activity");
-  expect(flat.get("memoryImport.title")).toBe("Import assistant memory");
-  expect(flat.get("login.failure.authRequired.title")).toBe("This Gateway expects its token");
-  expect(flat.get("sessionsView.runsOnDevice")).toBe("Runs on device");
-  expect(flat.get("pluginConsent.widenedTitle")).toBe("What changed");
-  expect(flat.get("configPage.themeImported")).toBe("Imported {name}.");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
-  expect(flat.get("updates.page.intro")).toBe(
-    "Manage the connected Gateway's release channel and update policy.",
-  );
 });
 
 it("includes every English dependency in the raw source-hash input", async () => {

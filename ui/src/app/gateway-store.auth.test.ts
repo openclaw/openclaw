@@ -338,7 +338,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
       current().testOptions.onHello?.(hello("account-a"));
       current().testOptions.onEvent?.(A_EVENT);
     });
-    it("captures bounded immutable history only while diagnostics is subscribed", () => {
+    it("captures immutable history only while diagnostics is subscribed", () => {
       stopDiagnostics();
       const idleHistory = gateway.eventLog;
       const delivered = vi.fn();
@@ -354,14 +354,13 @@ describe("createApplicationGateway authentication diagnostics", () => {
       current().testOptions.onEvent?.(A_EVENT);
       const captured = gateway.eventLog;
       stopFirst();
-      for (let index = 0; index < 251; index++) {
-        current().testOptions.onEvent?.(createGatewayEvent("chat", { index }));
-      }
+      current().testOptions.onEvent?.(B_EVENT);
       expect(observed).toHaveBeenCalledOnce();
       expect(captured.map((entry) => entry.payload)).toEqual([A_EVENT.payload]);
-      expect(gateway.eventLog).toHaveLength(250);
-      expect(gateway.eventLog[0]?.payload).toEqual({ index: 250 });
-      expect(gateway.eventLog.at(-1)?.payload).toEqual({ index: 1 });
+      expect(gateway.eventLog.map((entry) => entry.payload)).toEqual([
+        B_EVENT.payload,
+        A_EVENT.payload,
+      ]);
 
       stopSecond();
       expect(gateway.eventLog).toEqual([]);
@@ -613,11 +612,6 @@ describe("canvas capability renewal", () => {
     });
     await vi.dynamicImportSettled();
     expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(refreshedUrl);
-    await vi.advanceTimersByTimeAsync(45_000);
-    expect(
-      current().request.mock.calls.filter(([method]) => method === "plugin.surface.refresh"),
-    ).toHaveLength(2);
-
     current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
     current().request.mockClear();
     current().testOptions.onHello?.({

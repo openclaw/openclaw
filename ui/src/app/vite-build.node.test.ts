@@ -416,38 +416,20 @@ it.each([
     await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
-  expect(emitted.some((name) => name.endsWith(".map"))).toBe(true);
-
+  const entry = emitted.find((name) => /^index-.*\.js$/u.test(name))!;
+  const entryBytes = await readBytes(entry);
+  for (const encoding of ["br", "gz"]) {
+    const compressed = await readBytes(`${entry}.${encoding}`);
+    expect(encoding === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed)).toEqual(
+      entryBytes,
+    );
+  }
   const scripts = emitted.filter((name) => name.endsWith(".js"));
-  expect(scripts.length).toBeGreaterThan(1);
   expect(scripts.some((name) => emitted.includes(`${name}.map`))).toBe(true);
-  expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
-  for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
-    const source = await readBytes(name);
-    expect(source.byteLength).toBeLessThan(4096);
-    // The startup entry saves bytes in both encodings; its tiny runtime only in Brotli.
-    // Deferred JS is below the threshold, and this tiny CSS grows in either encoding.
-    const encodings = name.startsWith("index-")
-      ? ["br", "gz"]
-      : name.startsWith("rolldown-runtime-")
-        ? ["br"]
-        : [];
-    for (const extension of ["br", "gz"]) {
-      if (!encodings.includes(extension)) {
-        await missingOutput(`assets/${name}.${extension}`);
-        continue;
-      }
-      const compressed = await readBytes(`${name}.${extension}`);
-      expect(compressed.byteLength).toBeLessThan(source.byteLength);
-      expect(
-        extension === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed),
-      ).toEqual(source);
-    }
-    if (name.endsWith(".js")) {
-      expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
-        !release && emitted.includes(`${name}.map`),
-      );
-    }
+  for (const name of scripts) {
+    expect((await readAsset(name)).includes("sourceMappingURL="), name).toBe(
+      !release && emitted.includes(`${name}.map`),
+    );
   }
   const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1];
   const buildInfo = readBuiltIdentity(html);

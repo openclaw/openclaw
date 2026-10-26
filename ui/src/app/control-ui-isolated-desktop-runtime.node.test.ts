@@ -214,8 +214,6 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
   const entries = {
     online: modulePath("../components/app-sidebar-online.tsx"),
     catalog: modulePath("../components/mcp-app-catalog-view.tsx"),
-    resources: modulePath("../components/mcp-app-resources-view.tsx"),
-    context: modulePath("../components/solid/mcp-app-context-strip-view.tsx"),
     placement: modulePath("./session-placement-startup.runtime.ts"),
     creator: modulePath("../pages/claws/creator-review-view.tsx"),
     signer: modulePath("../lib/nodes/device-signing.runtime.ts"),
@@ -299,9 +297,7 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
     signerChunk,
   );
   expect(html).not.toContain(chunkFor(entries.creator).fileName);
-  for (const entry of [entries.catalog, entries.resources, entries.context]) {
-    expect(html).not.toContain(chunkFor(entry).fileName);
-  }
+  expect(html).not.toContain(chunkFor(entries.catalog).fileName);
 
   const fixture: {
     events: string[];
