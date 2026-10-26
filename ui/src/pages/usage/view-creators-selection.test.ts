@@ -34,11 +34,7 @@ function mountSessions(sessions: UsageSessionEntry[], limit: number, selectedDay
     selectedDays ? { endDate: "2026-05-15", selectedDays } : {},
   );
   Object.assign(props.callbacks.display, { onExportJson, onExportCsv });
-  return {
-    ...mountView(() => renderUsage(props, { read: () => props, scope: props })),
-    onExportJson,
-    onExportCsv,
-  };
+  return { ...mountView(() => renderUsage(props)), onExportJson, onExportCsv };
 }
 
 const creatorCells = (tokens: string, cost: string) => [tokens, cost, "1"];

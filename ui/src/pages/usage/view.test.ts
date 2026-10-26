@@ -20,7 +20,7 @@ import {
 import { renderUsage } from "./view.tsx";
 
 function mountUsage(props: UsageProps, container = document.createElement("div")) {
-  mountSolid(() => renderUsage(props, { read: () => props, scope: props }), { container });
+  mountSolid(() => renderUsage(props), { container });
   flush();
   return container;
 }

@@ -10,16 +10,17 @@ import { renderUsage } from "./view.tsx";
 
 function mountUsage(sessions: UsageSessionEntry[], filters: () => Partial<UsageProps["filters"]>) {
   const base = createUsageProps();
-  const usage: UsageProps = {
-    ...base,
-    get data() {
-      return { ...base.data, ...projectUsageData(sessions, filters()) };
-    },
-    get filters() {
-      return { ...base.filters, ...filters() };
-    },
-  };
-  const { container } = mountSolid(() => renderUsage(usage, { read: () => usage, scope: usage }));
+  const { container } = mountSolid(() =>
+    renderUsage({
+      ...base,
+      get data() {
+        return { ...base.data, ...projectUsageData(sessions, filters()) };
+      },
+      get filters() {
+        return { ...base.filters, ...filters() };
+      },
+    }),
+  );
   flush();
   return {
     container,

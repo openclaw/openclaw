@@ -62,7 +62,7 @@ describe("DailyChartCompact", () => {
       })),
     );
     usage.callbacks.filters.onSelectDay = onSelectDay;
-    const { container } = mountView(() => renderUsage(usage, { read: () => usage, scope: usage }));
+    const { container } = mountView(() => renderUsage(usage));
     const bar = expectDefined(
       container.querySelector<HTMLElement>(".daily-bar-wrapper"),
       "daily usage bar",
@@ -249,7 +249,7 @@ describe("DailyChartCompact", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
     const { usage, onDatesChange } = usageState({ timeZone: "utc" });
-    const { container } = mountView(() => renderUsage(usage, { read: () => usage, scope: usage }));
+    const { container } = mountView(() => renderUsage(usage));
     try {
       const preset = [
         ...container.querySelectorAll<HTMLButtonElement>(".usage-presets button"),

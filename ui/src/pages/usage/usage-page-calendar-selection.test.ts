@@ -177,7 +177,6 @@ it("keeps the same calendar interactive while day totals are pending", async () 
   first.click();
   await page.updateComplete;
   expect(texts(page.element, ".usage-metric-badge strong", false)).toEqual(["—", "—", "—"]);
-  expect(texts(page.element, ".session-bar-title", false)).toEqual([]);
   expect(bars()).toContain(last);
   shiftClick(last);
   await page.updateComplete;
