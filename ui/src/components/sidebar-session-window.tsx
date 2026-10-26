@@ -17,6 +17,7 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
+  const [rowFloor, setRowFloor] = createSignal(30);
   const [focusedKey, setFocusedKey] = createSignal<string>();
   const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
     items: [],
@@ -35,7 +36,7 @@ export function createSidebarSessionWindow(
     const preview =
       host().sessionsShowPreview &&
       Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
-    const ownHeight = preview ? 50 : 30;
+    const ownHeight = Math.max(preview ? 50 : 30, rowFloor());
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };
     }
@@ -147,6 +148,7 @@ export function createSidebarSessionWindow(
         return undefined;
       }
       const style = getComputedStyle(scroller);
+      const nextRowFloor = Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor"));
       const nextLayout = [
         scroller.clientWidth,
         style.getPropertyValue("--control-ui-text-scale"),
@@ -160,6 +162,8 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
+        // Match the CSS minimum before extrapolating unmounted row heights.
+        setRowFloor(nextRowFloor);
         if (layout !== nextLayout) {
           measured.clear();
         }
