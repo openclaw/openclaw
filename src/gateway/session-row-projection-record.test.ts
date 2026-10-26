@@ -158,6 +158,14 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     expect(rows.get(records.identity(row))).toBe(accepted);
     expect(put).toHaveBeenCalledOnce();
     expect(revisions.sharing()).not.toBe(sharing);
+
+    const committed = { ...original, label: "Committed while lineage was pending" };
+    const deferred = acquire(
+      { ...row, storedEntry: committed, sharingEntry: committed, entryAcquisitionPending: true },
+      committed,
+    );
+    expect(deferred?.entry).toBe(committed);
+    expect(deferred?.entryAcquisitionPending).toBeUndefined();
   });
 });
 
@@ -192,6 +200,11 @@ it("preserves deep change detection for entry metadata and unordered parent memb
           new Set([...parents, "logical:main\0agent:main:other"]),
         ]) {
           row.parents = oldParents;
+          const acquiredParents = records.readSessionRowParents(row, storedEntry, cfg, context);
+          expect(acquiredParents).toEqual(parents);
+          if (isDeepStrictEqual(oldParents, parents)) {
+            expect(acquiredParents).toBe(oldParents);
+          }
           const changed = !isDeepStrictEqual([storedEntry, parents], [previous, oldParents]);
           const marked: records.Row[] = [];
           const next = records.acquireSessionRowEntry({
