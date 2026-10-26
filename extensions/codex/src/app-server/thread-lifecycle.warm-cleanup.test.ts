@@ -46,30 +46,39 @@ function createParams(sessionFile: string, workspaceDir: string) {
   return params;
 }
 
+const workspaceDir = () => path.join(tempDir, "workspace");
+const fixtureParams = (name: string) => createParams(path.join(tempDir, name), workspaceDir());
+const createFixture = (respond: Parameters<typeof createLifecycleRequest>[0]) =>
+  createLeasedCodexLifecycleHarness({
+    agentDir: path.join(tempDir, "agent"),
+    respond: createLifecycleRequest(respond),
+  });
+function expectNoLifecycleRequests(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  expect(
+    fixture.request.mock.calls.some(([method]) =>
+      ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
+    ),
+  ).toBe(false);
+}
+
 setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
 
 describe("Codex warm subscription cleanup", () => {
   it.for([false, true])(
     "recovers warm publication failure with background protection=%s",
     async (backgroundWork) => {
-      const params = createParams(
-        path.join(tempDir, "warm.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
+      const params = fixtureParams("warm.jsonl");
       const threadId = "warm-publication-thread";
       let starts = 0;
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        respond: createLifecycleRequest(async (method) => {
-          if (method === "thread/start") {
-            starts += 1;
-            return threadStartResult(starts === 1 ? threadId : "updated-policy-thread");
-          }
-          if (method === "thread/resume") {
-            return threadStartResult(threadId);
-          }
-          throw new Error(`unexpected method: ${method}`);
-        }),
+      const fixture = await createFixture(async (method) => {
+        if (method === "thread/start") {
+          starts += 1;
+          return threadStartResult(starts === 1 ? threadId : "updated-policy-thread");
+        }
+        if (method === "thread/resume") {
+          return threadStartResult(threadId);
+        }
+        throw new Error(`unexpected method: ${method}`);
       });
       const common = {
         client: fixture.client,
@@ -125,21 +134,17 @@ describe("Codex warm subscription cleanup", () => {
 
   it("keeps the original warm policy usable after rejecting rotation during native background work", async () => {
     const sessionFile = path.join(tempDir, "warm-background-policy-session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createParams(sessionFile, workspaceDir());
     const threadId = "warm-background-policy-thread";
     let pluginFingerprint = "original-plugin-policy";
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: createLifecycleRequest(async (method) => {
-        if (method === "thread/start") {
-          return threadStartResult(threadId);
-        }
-        if (method === "app/installed") {
-          return { apps: [{ id: "fixture-app", enabled: true, callable: true }] };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
+    const fixture = await createFixture(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult(threadId);
+      }
+      if (method === "app/installed") {
+        return { apps: [{ id: "fixture-app", enabled: true, callable: true }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
     });
     const common = {
       client: fixture.client,
@@ -156,28 +161,19 @@ describe("Codex warm subscription cleanup", () => {
       pluginFingerprint = "changed-plugin-policy";
       const failure = await startOrResumeThread(common).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(AgentHarnessPreflightError);
-      expect(failure).toHaveProperty("scope", undefined);
-      expect(failure).toHaveProperty(
-        "message",
-        `Codex thread ${threadId} is claimed by active work; stop it first.`,
-      );
+      expect(failure).toMatchObject({
+        scope: undefined,
+        message: `Codex thread ${threadId} is claimed by active work; stop it first.`,
+      });
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(bindingBefore);
-      expect(
-        fixture.request.mock.calls.some(([method]) =>
-          ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
-        ),
-      ).toBe(false);
+      expectNoLifecycleRequests(fixture);
 
       pluginFingerprint = "original-plugin-policy";
       await expect(startOrResumeThread(common)).resolves.toMatchObject({
         threadId,
         lifecycle: { action: "resumed" },
       });
-      expect(
-        fixture.request.mock.calls.some(([method]) =>
-          ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
-        ),
-      ).toBe(false);
+      expectNoLifecycleRequests(fixture);
       expect(fixture.client.getCloseError()).toBeUndefined();
     } finally {
       releaseProtection();
