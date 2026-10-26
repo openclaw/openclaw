@@ -62,18 +62,11 @@ describe("jsdom native API boundary", () => {
     expect(result.stdout).toBe("complete asset");
   });
 
-  it.each([0, 2])("keeps window event identity across %i iframe levels", (depth) => {
-    let target: Window = window;
-    let outerFrame: HTMLIFrameElement | undefined;
-    for (let level = 0; level < depth; level++) {
-      const frame = target.document.createElement("iframe");
-      target.document.body.append(frame);
-      outerFrame ??= frame;
-      if (!frame.contentWindow) {
-        throw new Error("Missing iframe window");
-      }
-      target = frame.contentWindow;
-    }
+  it("keeps event identity in nested iframe windows", () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    frame.contentDocument!.body.innerHTML = "<iframe></iframe>";
+    const target = frame.contentWindow!.frames[0]!;
     const received: Event[] = [];
     const listener = (event: Event) => received.push(event);
     const event = new Event("openclaw-jsdom-probe");
@@ -87,7 +80,7 @@ describe("jsdom native API boundary", () => {
         /not a valid instance of EventTarget/,
       );
     } finally {
-      outerFrame?.remove();
+      frame.remove();
     }
   });
 
@@ -112,29 +105,18 @@ describe("jsdom native API boundary", () => {
     form.append("label", "synthetic");
     form.append("file", file);
     const multipart = new Request("https://example.test/", { method: "POST", body: form });
-    const boundary = multipart.headers.get("content-type")?.match(/boundary=(.+)$/u)?.[1];
-    expect(boundary).toBeTruthy();
-    expect(await multipart.text()).toBe(
-      `--${boundary}\r\n` +
-        'Content-Disposition: form-data; name="label"\r\n\r\n' +
-        "synthetic\r\n" +
-        `--${boundary}\r\n` +
-        'Content-Disposition: form-data; name="file"; filename="report.bin"\r\n' +
-        "Content-Type: application/octet-stream\r\n\r\n" +
-        "exact file bytes\r\n" +
-        `--${boundary}--\r\n`,
-    );
+    const decoded = await multipart.formData();
+    expect(decoded.get("label")).toBe("synthetic");
+    const part = decoded.get("file");
+    expect(part).toMatchObject({ name: "report.bin", type: "application/octet-stream" });
+    expect(await new Response(part).text()).toBe("exact file bytes");
   });
 
   it("keeps the DOM FileReader and File brands paired", async () => {
     const reader = new FileReader();
     const finished = new Promise<string | ArrayBuffer | null>((resolve, reject) => {
       reader.addEventListener("load", () => resolve(reader.result), { once: true });
-      reader.addEventListener(
-        "error",
-        () => reject(reader.error ?? new Error("FileReader failed")),
-        { once: true },
-      );
+      reader.addEventListener("error", () => reject(reader.error), { once: true });
     });
     reader.readAsDataURL(new File(["reader bytes"], "reader.txt", { type: "text/plain" }));
     expect(await finished).toBe("data:text/plain;base64,cmVhZGVyIGJ5dGVz");

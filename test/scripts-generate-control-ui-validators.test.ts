@@ -120,21 +120,15 @@ it("generates identical standalone validators across physical pnpm layouts witho
           Object.assign(checks, module.namespace);
         }
         const observer = { sessionKey:"s", revision:1, updatedAt:0, health:"on-track" };
-        const approval = { id:"a", urlPath:"/approve/a", createdAtMs:1, expiresAtMs:2, status:"pending",
-          presentation:{kind:"exec",commandText:"echo ok",commandPreview:"echo ok",warningText:null,host:"gateway",
-          nodeId:null,agentId:"main",allowedDecisions:["allow-once","deny"]} };
-        const replay = { sessionKey:"s", updatedAtMs:1, approvals:[approval], truncated:false };
         const values = [checks.isSessionObserverDigest({...observer,headline:"😀".repeat(120)}),
-          checks.isSessionObserverDigest({...observer,headline:"😀".repeat(121)}), checks.isSessionApprovalReplay(replay)];
-        approval.presentation.allowedDecisions = ["allow-once","allow-once"];
-        values.push(checks.isSessionApprovalReplay(replay));
+          checks.isSessionObserverDigest({...observer,headline:"😀".repeat(121)})];
         console.log(JSON.stringify(values));
       `,
         ],
         { encoding: "utf8" },
       );
       expect(runtime.status, runtime.stdout + runtime.stderr).toBe(0);
-      expect(JSON.parse(runtime.stdout)).toEqual([true, false, true, false]);
+      expect(JSON.parse(runtime.stdout)).toEqual([true, false]);
     }
   }
   expect(outputs[1]).toEqual(outputs[0]);

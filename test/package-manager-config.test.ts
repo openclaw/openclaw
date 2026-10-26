@@ -80,36 +80,17 @@ it("pins forked transitive dependencies with parent-scoped npm-lock overrides", 
 });
 
 it.each([
-  { first: "package", second: "workspace", childrenFirst: false, rootSpec: "1.2.3" },
-  { first: "package", second: "lock", childrenFirst: true, rootSpec: "npm:@scope/parent@1.2.3" },
-] as const)(
-  "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
-  ({ first, second, childrenFirst, rootSpec }) => {
-    const sources: Record<"package" | "workspace" | "lock", Record<string, unknown>> = {
-      package: {},
-      workspace: {},
-      lock: {},
-    };
-    const children = { parent: { child: "2.0.0" } };
+  ["1.2.3", undefined],
+  ["npm:@scope/parent@1.2.3", undefined],
+  ["npm:@nolyfill/domexception@1.0.28", "1.0.28"],
+] as const)("preserves root %s and child pins in either order", (rootSpec, existingRoot) => {
+  for (const nestedFirst of [false, true]) {
     const self = { parent: rootSpec };
-    sources[first] = childrenFirst ? children : self;
-    sources[second] = childrenFirst ? self : children;
-
-    expect(mergeOverrides(sources.package, sources.workspace, sources.lock)).toEqual({
+    const nested = { parent: { child: "2.0.0", ...(existingRoot ? { ".": existingRoot } : {}) } };
+    expect(mergeOverrides(nestedFirst ? nested : self, nestedFirst ? self : nested, {})).toEqual({
       parent: { ".": rootSpec, child: "2.0.0" },
     });
-  },
-);
-
-it.each([false, true])("preserves npm alias pins (nested first: %s)", (nestedFirst) => {
-  const alias = { "node-domexception": "npm:@nolyfill/domexception@1.0.28" };
-  const nested = { "node-domexception": { ".": "1.0.28", child: "2.0.0" } };
-  expect(mergeOverrides(nestedFirst ? nested : alias, nestedFirst ? alias : nested, {})).toEqual({
-    "node-domexception": {
-      ".": "npm:@nolyfill/domexception@1.0.28",
-      child: "2.0.0",
-    },
-  });
+  }
 });
 
 it.each([

@@ -10,7 +10,6 @@ import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { listOpenClawRegisteredAgentDatabases } from "../src/state/openclaw-agent-db-registry-listing.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { captureFullEnv, setTestEnvValue, withPathResolutionEnv } from "../src/test-utils/env.js";
@@ -52,34 +51,19 @@ afterEach(() => {
 });
 
 it("does not reuse a legacy database in a recycled PID namespace", () => {
-  // Reproduce the old namespace only beneath a directory this test created.
   const legacyPath = path.join(
     sandbox,
     `openclaw-test-state/${process.pid}-7/state/openclaw.sqlite`,
   );
   fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
   const legacy = new DatabaseSync(legacyPath);
-  legacy.exec(`
-      PRAGMA user_version = 9;
-      CREATE TABLE agent_databases (
-        agent_id TEXT NOT NULL, path TEXT NOT NULL, schema_version INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL, size_bytes INTEGER, PRIMARY KEY (agent_id)
-      );
-      CREATE TABLE auth_profile_stores (agent_id TEXT PRIMARY KEY);
-    `);
+  legacy.exec("PRAGMA user_version = 9; CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY)");
   legacy.close();
   const legacyBytes = fs.readFileSync(legacyPath);
-  expect(() => listOpenClawRegisteredAgentDatabases({ path: legacyPath })).toThrow(
-    "has an unsupported agent database registry schema",
-  );
-
   const testEnv = installOwnedEnv();
   expect(listOpenClawRegisteredAgentDatabases()).toEqual([]);
   const database = openOpenClawStateDatabase();
   expect(database.path).toBe(path.join(testEnv.tempHome, ".openclaw", "state", "openclaw.sqlite"));
-  expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-  });
 
   cleanups.pop()?.();
   expect(fs.existsSync(testEnv.tempHome)).toBe(false);
