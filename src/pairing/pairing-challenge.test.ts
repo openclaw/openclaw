@@ -30,17 +30,11 @@ afterEach(resetGlobalHookRunner);
 it("notifies and replies only when creating a request, preserving metadata and context", async () => {
   const handler = vi.fn(async () => {});
   hooks({ hookName: "channel_pairing_requested", handler });
-  const context = { channelId: "forum", accountId: "alerts", senderId: "123" };
   const meta = { name: "alice" };
   const sendPairingReply = vi.fn(async (_text: string) => {});
   const onCreated = vi.fn();
   const upsertPairingRequest = vi.fn(async () => ({ code: "1111", created: true }));
-  const options = {
-    accountId: "alerts",
-    meta,
-    onCreated,
-    sendPairingReply,
-  };
+  const options = { accountId: "alerts", meta, onCreated, sendPairingReply };
   await issue("1111", {
     ...options,
     upsertPairingRequest,
@@ -52,7 +46,7 @@ it("notifies and replies only when creating a request, preserving metadata and c
   expect(sendPairingReply.mock.calls).toEqual([["custom 1111"]]);
   expect(handler).toHaveBeenCalledExactlyOnceWith(
     { channel: "forum", accountId: "alerts", senderId: "123", code: "1111", metadata: meta },
-    context,
+    { channelId: "forum", accountId: "alerts", senderId: "123" },
   );
 });
 
@@ -61,9 +55,7 @@ it("captures reply errors through onReplyError", async () => {
   const onReplyError = vi.fn();
   await issue("9999", {
     onReplyError,
-    sendPairingReply: async () => {
-      throw error;
-    },
+    sendPairingReply: () => Promise.reject(error),
   });
   expect(onReplyError).toHaveBeenCalledExactlyOnceWith(error);
 });
