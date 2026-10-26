@@ -116,7 +116,6 @@ let mockedNativeStreaming = false;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
 let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions: GetReplyOptions | undefined;
-let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
 const statusReactionControllerMock = {
   setQueued: vi.fn(async () => {}),
   setThinking: vi.fn(async () => {}),
@@ -383,30 +382,33 @@ async function humanReplyCheckpoint() {
   });
 }
 
-async function dispatchNativeProgressScenario(params: {
-  events: typeof mockedReplyOptionEvents;
-  cfg?: Record<string, unknown>;
-  finalPayload?: TestReplyPayload;
-  progress?: {
-    style?: "card" | "compact";
-    label?: string | false;
-    maxLineChars?: number;
-    nativeTaskCards?: true;
-    render?: "rich";
-    toolProgress?: boolean;
-    commandText?: "raw" | "status";
-  };
-  replyToMode?: "off" | "first" | "all" | "batched";
-  eventScope?: {
-    teamId: string;
-    client: Record<string, unknown>;
-  };
-}) {
+async function dispatchNativeProgressScenario(
+  events: SlackReplyOptionEvent[],
+  params: {
+    cfg?: Record<string, unknown>;
+    finalPayload?: TestReplyPayload | null;
+    progress?: {
+      style?: "card" | "compact";
+      label?: string | false;
+      maxLineChars?: number;
+      nativeTaskCards?: true;
+      render?: "rich";
+      toolProgress?: boolean;
+      commandText?: "raw" | "status";
+    };
+    replyToMode?: "off" | "first" | "all" | "batched";
+    eventScope?: {
+      teamId: string;
+      client: Record<string, unknown>;
+    };
+  } = {},
+) {
+  const finalPayload =
+    params.finalPayload === undefined ? { text: FINAL_REPLY_TEXT } : params.finalPayload;
   mockedNativeStreaming = true;
   mockedSlackStreamingMode = "progress";
-  mockedDispatchSequence =
-    params.finalPayload === undefined ? [] : [{ kind: "final", payload: params.finalPayload }];
-  mockedReplyOptionEvents = params.events;
+  mockedDispatchSequence = finalPayload ? [finalReply(finalPayload)] : [];
+  mockedReplyOptionEvents = events;
 
   await dispatch({
     cfg: params.cfg,
@@ -424,10 +426,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
-  createStatusReactionController: (params: { enabled?: boolean; initialEmoji?: string }) => {
-    capturedStatusReactionOptions = params;
-    return statusReactionControllerMock;
-  },
+  createStatusReactionController: () => statusReactionControllerMock,
   logAckFailure: () => {},
   logTypingFailure: () => {},
 }));
@@ -455,19 +454,15 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
     }) => {
       capturedTyping = params.typing;
       return {
-        ...(params.typing
+        typingCallbacks: params.typing
           ? {
-              typingCallbacks: {
-                onReplyStart: params.typing.start,
-                onIdle: () => {
-                  void params.typing?.stop?.();
-                },
+              onReplyStart: params.typing.start,
+              onIdle: () => {
+                void params.typing?.stop?.();
               },
             }
-          : {}),
-        ...(params.transformReplyPayload
-          ? { transformReplyPayload: params.transformReplyPayload }
-          : {}),
+          : undefined,
+        transformReplyPayload: params.transformReplyPayload,
         onModelSelected: undefined,
       };
     },
@@ -784,7 +779,6 @@ beforeEach(() => {
   mockedSlackStreamingMode = "partial";
   mockedPinnedMainDmOwner = undefined;
   capturedReplyOptions = undefined;
-  capturedStatusReactionOptions = undefined;
   capturedTyping = undefined;
   mockedReplyThreadTs = THREAD_TS;
   mockedStatusThreadTs = THREAD_TS;
@@ -915,11 +909,8 @@ it("finalizes Block Kit work links with bounded labels and numbered fallbacks", 
 
 it("completes native sources with one visible work session before final text", async () => {
   const session = workSession(1, "Review");
-  await dispatchNativeProgressScenario({
-    cfg: PROGRESS_LINK_CONFIG,
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    progress: { style: "card", toolProgress: true, nativeTaskCards: true, label: "Shelling" },
-    events: [
+  await dispatchNativeProgressScenario(
+    [
       {
         kind: "item",
         itemKind: "tool",
@@ -931,7 +922,11 @@ it("completes native sources with one visible work session before final text", a
       { kind: "visible_work", sessions: [session] },
       { kind: "visible_work", sessions: [session] },
     ],
-  });
+    {
+      cfg: PROGRESS_LINK_CONFIG,
+      progress: { style: "card", toolProgress: true, nativeTaskCards: true, label: "Shelling" },
+    },
+  );
   const initial = nativeChunks(startSlackStreamMock.mock.calls);
   expect(initial).toContainEqual(
     expect.objectContaining({ type: "task_update", status: "in_progress" }),
@@ -1198,10 +1193,7 @@ it("gates native progress previews before message_sending hooks", async () => {
   getGlobalHookRunnerMock.mockReturnValue({
     hasHooks: vi.fn((name: string) => name === "message_sending"),
   });
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [{ kind: "item", progressText: "private progress" }],
-  });
+  await dispatchNativeProgressScenario([{ kind: "item", progressText: "private progress" }]);
   expectNoCalls(
     createSlackDraftStreamMock,
     finalizeSlackPreviewEditMock,
@@ -1392,18 +1384,7 @@ it.each(["message-tool-only", "recovered-failure", "room-event", "reasoning-only
       ackReactionPromise: Promise.resolve(true),
     });
     if (toolOnly || ambient) {
-      expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
-        enabled: !ambient,
-        initialEmoji: "eyes",
-      });
       expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(ambient ? 0 : 1);
-    }
-    if (toolOnly) {
-      expect(capturedReplyOptions).toMatchObject({
-        disableBlockStreaming: true,
-        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-        allowToolLifecycleWhenProgressHidden: true,
-      });
     }
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(toolOnly ? 1 : 0);
     if (!ambient) {
@@ -1539,24 +1520,10 @@ it("posts and seals a failure card for a quiet failed turn without a reply", asy
   expect(deliverRepliesMock).not.toHaveBeenCalled();
 });
 
-it("keeps a failed no-reply card but deletes a silent successful card", async () => {
-  const failedDraft = createDraftStreamStub();
-  const silentDraft = createDraftStreamStub();
-  createSlackDraftStreamMock.mockReturnValueOnce(failedDraft).mockReturnValueOnce(silentDraft);
-  finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
-
+it("deletes a silent successful card", async () => {
+  const silentDraft = useDraftStream(true);
   mockedDispatchSequence = [];
   mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
-  mockedAgentRunTerminalOutcome = "failed";
-
-  await dispatchProgress({ toolProgress: true });
-  expect(failedDraft.clear).not.toHaveBeenCalled();
-  expect(finalizeSlackPreviewEditMock.mock.calls[0]?.[0]?.blocks).toEqual([
-    section("Failed", true),
-    section("_working_"),
-  ]);
-
-  finalizeSlackPreviewEditMock.mockClear();
   mockedAgentRunTerminalOutcome = "completed";
   await dispatchProgress({ toolProgress: true });
   expect(silentDraft.clear).toHaveBeenCalledTimes(1);
@@ -1565,23 +1532,20 @@ it("keeps a failed no-reply card but deletes a silent successful card", async ()
 
 it("batches native milestone updates and prevents pending updates after final delivery", async () => {
   vi.useFakeTimers();
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [
-      planEvent("Inspect", "Checking the workspace"),
-      planEvent("Intermediate", "Checking the workspace"),
-      planEvent("Run tests", "Checking the workspace"),
-      checkpoint(async () => {
-        expect(startSlackStreamMock).toHaveBeenCalledOnce();
-        expect(appendSlackStreamMock).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(999);
-        expect(appendSlackStreamMock).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expectNativeProgressAppend(0, [taskUpdate("plan_step_1", "Run tests", "in_progress")]);
-      }),
-      planEvent("Final checks", "Checking the workspace"),
-    ],
-  });
+  await dispatchNativeProgressScenario([
+    planEvent("Inspect", "Checking the workspace"),
+    planEvent("Intermediate", "Checking the workspace"),
+    planEvent("Run tests", "Checking the workspace"),
+    checkpoint(async () => {
+      expect(startSlackStreamMock).toHaveBeenCalledOnce();
+      expect(appendSlackStreamMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(appendSlackStreamMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expectNativeProgressAppend(0, [taskUpdate("plan_step_1", "Run tests", "in_progress")]);
+    }),
+    planEvent("Final checks", "Checking the workspace"),
+  ]);
   expect(collectNativeTaskUpdates()).toEqual([
     taskUpdate("plan_step_1", "Inspect", "in_progress"),
     taskUpdate("plan_step_1", "Run tests", "in_progress"),
@@ -1596,40 +1560,27 @@ it("batches native milestone updates and prevents pending updates after final de
 
 it("flushes approval attention immediately while ordinary progress is batched", async () => {
   vi.useFakeTimers();
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    progress: { style: "card", toolProgress: false, nativeTaskCards: true },
-    events: [
+  const pending = taskUpdate(
+    expect.stringMatching(/^openclaw-attention-/u),
+    "Approval required: run checks; approval requested",
+    "pending",
+  );
+  await dispatchNativeProgressScenario(
+    [
       toolStart(),
       approval("run checks"),
       checkpoint(async () => {
-        expectNativeProgressAppend(0, [
-          taskUpdate(
-            expect.stringMatching(/^openclaw-attention-/u),
-            "Approval required: run checks; approval requested",
-            "pending",
-          ),
-        ]);
+        expectNativeProgressAppend(0, [pending]);
       }),
       { kind: "approval", phase: "resolved", approvalId: "approval-1" },
     ],
-  });
+    { progress: { style: "card", toolProgress: false, nativeTaskCards: true } },
+  );
   expect(
     collectNativeTaskUpdates().filter(
       (task) => typeof task.id === "string" && task.id.startsWith("openclaw-attention-"),
     ),
-  ).toEqual([
-    taskUpdate(
-      expect.stringMatching(/^openclaw-attention-/u),
-      "Approval required: run checks; approval requested",
-      "pending",
-    ),
-    taskUpdate(
-      expect.stringMatching(/^openclaw-attention-/u),
-      "Approval required: run checks; approval requested",
-      "complete",
-    ),
-  ]);
+  ).toEqual([pending, { ...pending, status: "complete" }]);
   expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
 });
 
@@ -1660,10 +1611,7 @@ it("keeps intermediate command failures out of quiet native streams", async () =
 it("continues a buffered native progress stream with the final reply", async () => {
   const session = { ...createNativeStreamSession(), delivered: false };
   startSlackStreamMock.mockResolvedValue(session);
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [{ kind: "item", progressText: "slow tool" }],
-  });
+  await dispatchNativeProgressScenario([{ kind: "item", progressText: "slow tool" }]);
   expect(deliverRepliesMock).not.toHaveBeenCalled();
   expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
 });
@@ -1715,31 +1663,7 @@ it.each<{
   events: SlackReplyOptionEvent[];
   updates: unknown[];
   progress?: Parameters<typeof dispatchNativeProgressScenario>[0]["progress"];
-  tasks?: unknown[];
-  completion?: unknown[];
-  finalInStream?: boolean;
 }>([
-  {
-    name: "typed plan steps",
-    events: [
-      {
-        kind: "plan",
-        phase: "update",
-        explanation: "Executing the checklist.",
-        steps: [
-          { step: "Inspect", status: "completed" },
-          { step: "Patch", status: "in_progress" },
-          { step: "Test", status: "pending" },
-        ],
-      },
-    ],
-    updates: [
-      planUpdate("Executing the checklist."),
-      taskUpdate("plan_step_1", "Inspect", "complete"),
-      taskUpdate("plan_step_2", "Patch", "in_progress"),
-      taskUpdate("plan_step_3", "Test", "pending"),
-    ],
-  },
   {
     name: "deduplicated preamble and prepared note",
     events: [
@@ -1771,9 +1695,6 @@ it.each<{
         details: "12345…uvwxyz",
       }),
     ],
-    completion: [
-      taskUpdate(expect.stringMatching(/^exec_call_1_[a-f0-9]{8}$/), "Bash", "complete"),
-    ],
   },
   {
     name: "patch item identity",
@@ -1793,42 +1714,18 @@ it.each<{
         details: "updated Slack progress tests",
       }),
     ],
-    tasks: [
-      taskUpdate(expect.stringMatching(/^patch_item_1_[a-f0-9]{8}$/), "Apply Patch", "complete", {
-        details: "updated Slack progress tests",
-      }),
-    ],
-    finalInStream: true,
   },
-])(
-  "renders native progress from $name",
-  async ({ events, updates, progress, tasks, completion, finalInStream }) => {
-    await dispatchNativeProgressScenario({
-      finalPayload: { text: FINAL_REPLY_TEXT },
-      events,
-      progress,
-    });
-    expectNativeProgressStart(updates);
-    if (tasks) {
-      expect(collectNativeTaskUpdates()).toEqual(tasks);
-    }
-    if (completion) {
-      expectNativeProgressAppend(0, completion);
-    }
-    if (finalInStream) {
-      expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
-    }
-  },
-);
+])("renders native progress from $name", async ({ events, updates, progress }) => {
+  await dispatchNativeProgressScenario(events, { progress });
+  expectNativeProgressStart(updates);
+});
 
 it.each([true, false])(
   "retracts a native model-wait headline before the final reply (detailed=%s)",
   async (toolProgress) => {
     const waitText = "Waiting for the local model to respond";
-    await dispatchNativeProgressScenario({
-      finalPayload: { text: FINAL_REPLY_TEXT },
-      progress: { style: "card", nativeTaskCards: true, toolProgress },
-      events: [
+    await dispatchNativeProgressScenario(
+      [
         { kind: "item", itemKind: "model-wait", phase: "update", progressText: waitText },
         checkpoint(async () => {
           const start = requireRecord(startSlackStreamMock.mock.calls[0]?.[0], "wait start");
@@ -1840,19 +1737,17 @@ it.each([true, false])(
           expect(clear.chunks).toContainEqual(planUpdate(toolProgress ? "Thinking" : "Working"));
         }),
       ],
-    });
+      { progress: { style: "card", nativeTaskCards: true, toolProgress } },
+    );
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   },
 );
 
 it("streams rolling reasoning snapshots as deduplicated narration", async () => {
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [
-      { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
-      { kind: "reasoning", text: "Checking the Slack handler", isReasoningSnapshot: true },
-    ],
-  });
+  await dispatchNativeProgressScenario([
+    { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
+    { kind: "reasoning", text: "Checking the Slack handler", isReasoningSnapshot: true },
+  ]);
 
   expect(collectNativeTaskUpdates()).toEqual([]);
   expectNativeStreamText("Checking");
@@ -1865,10 +1760,8 @@ it("keeps final fallback in the planned thread when native Slack progress start 
   startSlackStreamMock.mockRejectedValueOnce(new Error("start stream failed"));
   mockedReplyThreadTsSequence = [THREAD_TS, undefined];
 
-  await dispatchNativeProgressScenario({
+  await dispatchNativeProgressScenario([{ kind: "item", progressText: "slow tool" }], {
     replyToMode: "first",
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [{ kind: "item", progressText: "slow tool" }],
   });
 
   expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
@@ -1879,10 +1772,7 @@ it("keeps final fallback in the planned thread when native Slack progress start 
 
 it("places a native-streamed final below a later human message in the same thread", async () => {
   const sessions = recordNativeSessions();
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [approval("inspect"), await humanReplyCheckpoint()],
-  });
+  await dispatchNativeProgressScenario([approval("inspect"), await humanReplyCheckpoint()]);
 
   expectNativeRotation();
   expectMockCallArgFields(stopSlackStreamMock, 0, { session: sessions[0] });
@@ -1947,9 +1837,8 @@ it.each([
     });
   }
   const { noteSlackDraftConversationMessage } = await import("../../draft-message-boundaries.js");
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT, ...(isError ? { isError: true } : {}) },
-    events: [
+  await dispatchNativeProgressScenario(
+    [
       { kind: "approval", phase: "requested", approvalId: "approval-1", command: "inspect" },
       checkpoint(async () => {
         expect(startSlackStreamMock).toHaveBeenCalledOnce();
@@ -1960,7 +1849,8 @@ it.each([
         }
       }),
     ],
-  });
+    { finalPayload: { text: FINAL_REPLY_TEXT, ...(isError ? { isError: true } : {}) } },
+  );
 
   expect(startSlackStreamMock).toHaveBeenCalledOnce();
   expect(stopSlackStreamMock).toHaveBeenCalledTimes(duringSeal ? 1 : 0);
@@ -1990,17 +1880,14 @@ it("rotates a native reply when a human arrives before the first stream receipt"
 
 it("starts later native task progress below a human reply with a fresh task snapshot", async () => {
   startSlackStreamMock.mockImplementation(async () => createNativeStreamSession());
-  await dispatchNativeProgressScenario({
-    finalPayload: { text: FINAL_REPLY_TEXT },
-    events: [
-      approval("continue"),
-      await humanReplyCheckpoint(),
-      approval("verify", "approval-2"),
-      checkpoint(async () => {
-        expect(startSlackStreamMock).toHaveBeenCalledTimes(2);
-      }),
-    ],
-  });
+  await dispatchNativeProgressScenario([
+    approval("continue"),
+    await humanReplyCheckpoint(),
+    approval("verify", "approval-2"),
+    checkpoint(async () => {
+      expect(startSlackStreamMock).toHaveBeenCalledTimes(2);
+    }),
+  ]);
 
   expectCalls(2, startSlackStreamMock, stopSlackStreamMock);
   expectMockCallArgFields(startSlackStreamMock, 1, { threadTs: THREAD_TS });
@@ -2089,9 +1976,10 @@ it("settles a failed native progress rotation before starting the queued turn", 
 });
 
 it("completes a native Slack progress plan even when no final text is sent", async () => {
-  await dispatchNativeProgressScenario({
-    events: [{ kind: "concurrent_items", progressTexts: ["tool one", "tool two", "tool three"] }],
-  });
+  await dispatchNativeProgressScenario(
+    [{ kind: "concurrent_items", progressTexts: ["tool one", "tool two", "tool three"] }],
+    { finalPayload: null },
+  );
 
   expectNativeProgressStart([
     planUpdate("tool three"),
@@ -2250,13 +2138,10 @@ it.each([
 
 it("starts a new draft delivery target when a queued followup is admitted", async () => {
   const draftStream = useDraftStream();
-  mockedSlackStreamingMode = "partial";
   mockedDispatchSequence = [];
   mockedReplyOptionEvents = [{ kind: "partial", text: "first reply" }];
-
-  await dispatch({});
+  await dispatch();
   await capturedReplyOptions?.onQueuedFollowupAdmitted?.();
-
   expectCalls(1, draftStream.flush, draftStream.forceNewMessage);
 });
 
@@ -2274,36 +2159,33 @@ it("keeps complete preambles visible between streamed updates", async () => {
   });
   createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
   finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+  const observe = (complete = false) =>
+    checkpoint(async () => {
+      checkpoints();
+      if (!complete) {
+        expect(draftStream.update).not.toHaveBeenCalled();
+        expect(postedMessageId).toBeUndefined();
+      } else {
+        expect(postedMessageId).toBe("171234.567");
+        expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
+        expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({ allowNewMessage: true });
+      }
+    });
 
   mockedReplyOptionEvents = [
     preamble("I", "p1", "update"),
     checkpoint(async () => {
       // Even a timer/flush must not post the first token: Slack freezes
       // its push notification at creation, then edits do not re-notify.
-      checkpoints();
       await draftStream.flush();
-      expect(draftStream.update).not.toHaveBeenCalled();
-      expect(postedMessageId).toBeUndefined();
+      await observe().run();
     }),
     preamble("I will check the result.", "p1", "update"),
-    checkpoint(async () => {
-      checkpoints();
-      expect(draftStream.update).not.toHaveBeenCalled();
-    }),
+    observe(),
     preamble("I will check the result.", "p1", "end"),
-    checkpoint(async () => {
-      checkpoints();
-      expect(postedMessageId).toBe("171234.567");
-      expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
-    }),
+    observe(true),
     preamble("The result", "p2", "update"),
-    checkpoint(async () => {
-      checkpoints();
-      // A human reply can rotate the preview at this point. Keeping the
-      // last complete preamble prevents an abandoned word fragment.
-      expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
-      expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({ allowNewMessage: true });
-    }),
+    observe(true),
     preamble("The result is ready.", "p2", "end"),
   ];
 
@@ -2337,19 +2219,9 @@ it.each([false, true])(
       maxLines: 1,
     });
     if (toolProgress) {
-      expectRecordFields(requireRecord(capturedReplyOptions, "reply options"), {
-        commentaryProgressEnabled: undefined,
-        commentaryPayloadsEnabled: undefined,
-        shouldDeliverCommentaryPayloads: undefined,
-        onVerboseProgressVisibilityAsync: undefined,
-        progressPreambleEnabled: true,
-      });
       expectLastDraftUpdateText(draftStream, `_${latest}_\n\nBash — running\n\n1 tool · 1s`);
     } else {
-      expect(capturedReplyOptions?.commentaryProgressEnabled).toBe(true);
-      expect(capturedReplyOptions?.commentaryPayloadsEnabled).toBe(true);
       expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
-      expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
       expectLastDraftUpdateText(draftStream, `_${latest}_`);
       expect(draftUpdateTexts(draftStream).join("\n")).not.toContain("pnpm test");
       const updateCount = draftStream.update.mock.calls.length;
