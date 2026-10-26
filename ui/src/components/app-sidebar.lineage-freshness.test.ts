@@ -523,24 +523,19 @@ it("resolves the routed child's former global ancestor over a foreign cached row
     ...mainAgents,
     agents: [{ id: "main" }, { id: "work" }, { id: "research" }],
   } satisfies AgentsListResult;
-  const parent: GatewaySessionRow = {
-    key: "global",
+  const parent = mainRow("global", "owned-parent-session", 1, {
     agentId: "work",
-    sessionId: "owned-parent-session",
     kind: "global",
     label: "Owned parent conversation",
-    updatedAt: 1,
-    archived: false,
-  };
-  const child = sessionRow(
+  });
+  const child = mainRow(
     "agent:work:dashboard:20000000-0000-4000-8000-000000000001",
     "work-fork-session",
+    1_000,
     {
       agentId: "work",
       label: "Selected Work fork",
       parentSessionKey: parent.key,
-      updatedAt: 1_000,
-      archived: false,
     },
   );
   const foreign: GatewaySessionRow = {
