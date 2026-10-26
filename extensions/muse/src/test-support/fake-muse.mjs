@@ -61,12 +61,11 @@ function answer() {
       visibleOutput: "file content",
     });
   }
-  const text =
-    active.prompt === "credential"
-      ? `credential:${process.env.META_API_KEY ?? "cli-login"}`
-      : active.prompt === "effort"
-        ? `effort:${active.reasoningEffort}`
-        : `${active.resumed ? "resumed" : "started"}: hello`;
+  const responses = new Map([
+    ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],
+    ["effort", `effort:${active.reasoningEffort}`],
+  ]);
+  const text = responses.get(active.prompt) ?? `${active.resumed ? "resumed" : "started"}: hello`;
   const messageId = item("agentMessage", "inProgress", { text: "" });
   event("item/delta", { itemId: messageId, delta: text.slice(0, 8) });
   event("item/delta", { itemId: messageId, delta: text.slice(8) });
@@ -89,14 +88,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (process.env.MUSE_FIXTURE_INITIALIZE_GATE) {
       const gate = createConnection(process.env.MUSE_FIXTURE_INITIALIZE_GATE);
       gate.on("connect", () => gate.write(String(process.pid)));
-      gate.once("data", () => reply(id, result));
-      return;
+      return gate.once("data", () => reply(id, result));
     }
     reply(id, result);
   } else if (method === "model/list") {
     if (process.env.MUSE_FIXTURE_CATALOG_PATH) {
-      reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
-      return;
+      return reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
     }
     reply(id, {
       providerId: "meta",
@@ -116,8 +113,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       ["busy-session", [-32021, "session in use", "sessionInUse"]],
     ]).get(params.sessionId);
     if (resumed && refusal) {
-      reject(id, ...refusal);
-      return;
+      return reject(id, ...refusal);
     }
     const sessionId = resumed
       ? params.sessionId
