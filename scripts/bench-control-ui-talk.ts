@@ -487,8 +487,8 @@ try {
                 let transcriptRow: ElementHandle<HTMLElement | SVGElement> | null = null;
                 try {
                   await page.evaluate(
-                    ({ phase, externalTranscripts }) =>
-                      window.openclawTalkBench.setState(phase, externalTranscripts),
+                    ({ phase, externalTranscripts: external }) =>
+                      window.openclawTalkBench.setState(phase, external),
                     { phase: state, externalTranscripts },
                   );
                   if (externalTranscripts) {
@@ -578,12 +578,12 @@ try {
                   if (externalTranscripts) {
                     const plannedChunks = Math.floor(durationMs / transcriptPeriodMs);
                     for (let index = 0; index < plannedChunks; index++) {
-                      await new Promise((resolve) =>
+                      await new Promise((resolve) => {
                         setTimeout(
                           resolve,
                           Math.max(0, start + index * transcriptPeriodMs - performance.now()),
-                        ),
-                      );
+                        );
+                      });
                       offeredAt.push(performance.now() - start);
                       await page.evaluate(
                         (expectedHidden) =>
@@ -593,9 +593,9 @@ try {
                       offeredChunks++;
                     }
                   }
-                  await new Promise((resolve) =>
-                    setTimeout(resolve, Math.max(0, start + durationMs - performance.now())),
-                  );
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, Math.max(0, start + durationMs - performance.now()));
+                  });
                   const after = await metrics(cdp);
                   const wallMs = performance.now() - start;
                   const afterProcesses = await processes(browserCdp);
@@ -604,9 +604,9 @@ try {
                     startUs: before.Timestamp! * 1000000,
                     endUs: after.Timestamp! * 1000000,
                   };
-                  const proof = await page.evaluate((externalTranscripts) => {
+                  const proof = await page.evaluate((readExternalTranscript) => {
                     const snapshot = window.openclawTalkBench;
-                    if (externalTranscripts) {
+                    if (readExternalTranscript) {
                       // CPU timing ended above; this observation must not tax each hidden chunk.
                       snapshot.readTranscriptDom();
                     }
