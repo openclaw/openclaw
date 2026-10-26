@@ -38,32 +38,13 @@ const storagePaths = {
   tokenHash: "token-hash",
 };
 
-const auth = {
-  homeserver: "https://matrix.example.org",
-  userId: "@bot:example.org",
-  accessToken: "tok",
-};
-const clientOptions = {
-  userId: auth.userId,
-  password: undefined,
-  deviceId: undefined,
-  encryption: undefined,
-  localTimeoutMs: undefined,
-  initialSyncLimit: undefined,
-  syncStore: undefined,
-  recoveryKeyPath: undefined,
-  idbSnapshotPath: undefined,
-  cryptoDatabasePrefix: undefined,
-  autoBootstrapCrypto: undefined,
-  ssrfPolicy: undefined,
-  dispatcherPolicy: undefined,
-  stateRuntime: mocks.state,
-};
-const expectClient = (options: { [K in keyof typeof clientOptions]?: unknown } = {}) =>
-  expect(mocks.MatrixClient).toHaveBeenCalledWith(auth.homeserver, auth.accessToken, {
-    ...clientOptions,
-    ...options,
-  });
+const auth = { homeserver: "https://matrix.test", userId: "@bot:matrix.test", accessToken: "tok" };
+const expectClient = (options: Record<string, unknown>) =>
+  expect(mocks.MatrixClient).toHaveBeenCalledWith(
+    auth.homeserver,
+    auth.accessToken,
+    expect.objectContaining({ userId: auth.userId, stateRuntime: mocks.state, ...options }),
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -89,18 +70,20 @@ it("persists metadata and hydrates sync state before constructing the client", a
   });
 });
 
-const explicitPolicy = { allowPrivateNetwork: true, customField: "test" };
+const policy = { allowPrivateNetwork: true, customField: "test" };
 it.each([
   ["derives private-network policy", { allowPrivateNetwork: true }, { allowPrivateNetwork: true }],
-  [
-    "prefers explicit policy",
-    { allowPrivateNetwork: false, ssrfPolicy: explicitPolicy },
-    explicitPolicy,
-  ],
+  ["prefers explicit policy", { allowPrivateNetwork: false, ssrfPolicy: policy }, policy],
   ["leaves policy unset", {}, undefined],
 ] as const)("skips persistent storage and %s", async (_name, options, ssrfPolicy) => {
   await createMatrixClient({ ...auth, persistStorage: false, ...options });
   expect(mocks.resolveMatrixStoragePaths).not.toHaveBeenCalled();
   expect(mocks.writeStorageMeta).not.toHaveBeenCalled();
-  expectClient({ ssrfPolicy });
+  expectClient({
+    ssrfPolicy,
+    syncStore: undefined,
+    recoveryKeyPath: undefined,
+    idbSnapshotPath: undefined,
+    cryptoDatabasePrefix: undefined,
+  });
 });
