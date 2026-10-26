@@ -2,11 +2,11 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   requireFetchCallForUrl,
   expectSameOriginGet,
-  mediaTicketPayload,
   stubObjectUrls,
   rejectWhenAborted,
   flushAttachmentChecks,

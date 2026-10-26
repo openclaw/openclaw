@@ -44,13 +44,14 @@ import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
 import "./browser-tab-card.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import {
-  WidgetCardMenu,
-  type WidgetAction,
-  type WidgetRawDetailsLabel,
-} from "./widget-card-menu.tsx";
+import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
+import {
+  isManagedCanvasDocumentPreview,
+  widgetPreviewHeight,
+  widgetPreviewLayoutKey,
+} from "./widget-preview-layout.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -105,29 +106,6 @@ type WidgetCardOptions = {
 };
 
 type WidgetExportSource = HTMLIFrameElement | OpenClawCanvasWidgetView | undefined;
-
-function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): boolean {
-  const viewId = preview.viewId?.trim();
-  const entryUrl = preview.url?.trim();
-  if (!viewId || !entryUrl) {
-    return false;
-  }
-  try {
-    const entry = new URL(entryUrl, "http://localhost");
-    const prefix = "/__openclaw__/canvas/documents/";
-    if (entry.origin !== "http://localhost" || !entry.pathname.startsWith(prefix)) {
-      return false;
-    }
-    const [encodedDocumentId, entrypoint] = entry.pathname.slice(prefix.length).split("/", 2);
-    if (!encodedDocumentId || !entrypoint) {
-      return false;
-    }
-    const documentId = decodeURIComponent(encodedDocumentId);
-    return /^[A-Za-z0-9._-]+$/u.test(documentId) && documentId === viewId;
-  } catch {
-    return false;
-  }
-}
 
 // Sandboxed widget documents report their content height via postMessage so the
 // preview iframe can fit short/tall widgets. The event source must be one of our
@@ -398,16 +376,8 @@ function WidgetContent(props: {
 }) {
   const managed = () =>
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
-  const layoutKey = () =>
-    props.preview.mcpApp
-      ? `mcp:${props.preview.mcpApp.viewId}`
-      : managed()
-        ? `canvas:${props.preview.viewId!.trim()}`
-        : `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`;
-  const height = () =>
-    props.options?.widgetLayout?.read(layoutKey()) ??
-    props.preview.preferredHeight ??
-    (props.preview.mcpApp ? 600 : 420);
+  const layoutKey = () => widgetPreviewLayoutKey(props.preview);
+  const height = () => widgetPreviewHeight(props.preview, props.options?.widgetLayout);
   return (
     <Show
       when={props.options?.mediaReadAllowed !== false}
@@ -489,37 +459,6 @@ function WidgetContent(props: {
       </Show>
     </Show>
   );
-}
-
-function handleWidgetExportAction(
-  value: WidgetAction,
-  source: WidgetExportSource,
-  title: string | undefined,
-  toggleRawDetails: (() => boolean) | undefined,
-): WidgetRawDetailsLabel | void {
-  // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
-  if (value === "raw-details") {
-    return toggleRawDetails?.() ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
-  }
-  const frame = source instanceof HTMLIFrameElement ? source : source?.previewFrame;
-  if (!frame) {
-    showToast({ message: t("chat.toolCards.widgetExportFailed") });
-    return;
-  }
-  const documentHtml = source instanceof HTMLIFrameElement ? undefined : source?.documentHtml;
-  void exportWidget(value, frame, title, { documentHtml })
-    .then((result) => {
-      if (result === "rerender-required") {
-        showToast({ message: t("chat.toolCards.widgetExportRerender") });
-      } else if (result === "html") {
-        showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
-      } else if (value === "copy") {
-        showToast({ message: t("common.copied") });
-      }
-    })
-    .catch(() => {
-      showToast({ message: t("chat.toolCards.widgetExportFailed") });
-    });
 }
 
 function widgetActionsPlacementRef(enabled: () => boolean) {
@@ -623,14 +562,37 @@ function CanvasPreview(props: {
             <WidgetCardMenu
               canExportImage={canExportImage()}
               hasRawDetails={Boolean(props.options?.rawText)}
-              onAction={(value) =>
-                handleWidgetExportAction(
-                  value,
-                  exportSource,
-                  props.preview.title,
-                  props.options?.toggleRawDetails,
-                )
-              }
+              onAction={(value): WidgetRawDetailsLabel | void => {
+                const source = exportSource;
+                const title = props.preview.title;
+                const toggleRawDetails = props.options?.toggleRawDetails;
+                // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
+                if (value === "raw-details") {
+                  return toggleRawDetails?.()
+                    ? "chat.toolCards.hideRawDetails"
+                    : "chat.toolCards.showRawDetails";
+                }
+                const frame = source instanceof HTMLIFrameElement ? source : source?.previewFrame;
+                if (!frame) {
+                  showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                  return;
+                }
+                const documentHtml =
+                  source instanceof HTMLIFrameElement ? undefined : source?.documentHtml;
+                void exportWidget(value, frame, title, { documentHtml })
+                  .then((result) => {
+                    if (result === "rerender-required") {
+                      showToast({ message: t("chat.toolCards.widgetExportRerender") });
+                    } else if (result === "html") {
+                      showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
+                    } else if (value === "copy") {
+                      showToast({ message: t("common.copied") });
+                    }
+                  })
+                  .catch(() => {
+                    showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                  });
+              }}
             />
           </Show>
         </div>

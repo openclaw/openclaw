@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
@@ -33,15 +34,11 @@ function makePrompter(
 }
 
 describe("createDoctorPrompter", () => {
-  const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const ttyMock = createCliTtyMock([process.stdin]);
 
   afterEach(() => {
     vi.resetAllMocks();
-    if (originalStdinIsTTY) {
-      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
     vi.unstubAllEnvs();
   });
 
@@ -109,6 +106,27 @@ describe("createDoctorPrompter", () => {
     const repair = makePrompter({ yes: true }, false);
     await expect(repair.confirmRuntimeRepair(interactivePrompt)).resolves.toBe(false);
     expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit interactive choice for an ambiguous repair under --fix", async () => {
+    const prompt = {
+      message: "Select the default cron partition",
+      options: [{ value: "old", label: "Old partition" }],
+    };
+    selectMock.mockResolvedValueOnce("old");
+    await expect(
+      makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
+    ).resolves.toBe("old");
+    for (const options of [{ yes: true }, { repair: true, nonInteractive: true }]) {
+      await expect(
+        makePrompter(options).selectRuntimeRepair(prompt, undefined),
+      ).resolves.toBeUndefined();
+    }
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    await expect(
+      makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
+    ).resolves.toBeUndefined();
+    expect(selectMock).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("honors interactive consent with force alone: %s", async (approved) => {

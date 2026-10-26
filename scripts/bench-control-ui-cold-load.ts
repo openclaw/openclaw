@@ -13,12 +13,16 @@
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
 // OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
-// --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
+// --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --boot-route chat|new|sessions|settings selects the measured reload destination.
+// --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
+// Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
+// --settings-core-schema replays the server's core config schema, prepared before sampling.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -74,12 +78,17 @@ import {
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import {
+  renderCriticalPathWaterfall,
+  type CriticalPathHttpRequest,
+} from "./lib/control-ui-critical-path-waterfall.ts";
+import {
   criticalPathRoutes,
   criticalPathCpuDelta,
   installCriticalPathProbe,
   navigateCriticalPath,
   readCriticalPath,
   readCriticalPathCpu,
+  type CriticalPathPresentation,
   type CriticalPathRoute,
 } from "./lib/control-ui-critical-path.ts";
 import {
@@ -256,6 +265,10 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "layout-matrix": { type: "boolean", default: false },
+    "layout-route": { type: "string", multiple: true, default: [] },
+    "layout-cell": { type: "string", multiple: true, default: [] },
+    "layout-start": { type: "string", default: "0" },
     "hold-boot-assets": { type: "boolean", default: false },
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
@@ -271,10 +284,12 @@ const { values } = parseArgs({
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
     "critical-path-intent-ms": { type: "string" },
+    "settings-core-schema": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
     "sidebar-avatars": { type: "boolean", default: false },
+    "transcript-avatars": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
@@ -382,7 +397,61 @@ const baselineCpu = values["cpu-profile-compare"]
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
-const runs = Number(values.runs);
+const layoutStart = Number(values["layout-start"]);
+if (
+  !Number.isInteger(layoutStart) ||
+  layoutStart < 0 ||
+  layoutStart > 31 ||
+  values["layout-cell"].some(
+    (cell) =>
+      !/^(desktop|mobile):(light|dark):(chat|new|sessions|settings):(cold|warm)$/u.test(cell),
+  ) ||
+  values["layout-route"].some((route) => !["chat", "new", "sessions", "settings"].includes(route))
+) {
+  throw new Error(
+    "Expected layout-start 0–31, a known layout-route, and layout-cell viewport:theme:route:cold|warm",
+  );
+}
+if (
+  values["layout-matrix"] &&
+  (values["first-load"] || values["critical-path"] || values["gateway-url"])
+) {
+  throw new Error(
+    "layout-matrix owns cold/warm setup and route readiness; exclude first-load, critical-path and external gateway-url modes",
+  );
+}
+const layoutCells = values["layout-matrix"]
+  ? (["desktop", "mobile"] as const)
+      .flatMap((cellViewport) =>
+        (["light", "dark"] as const).flatMap((cellColorScheme) =>
+          (["chat", "new", "sessions", "settings"] as const).flatMap((route) =>
+            [true, false].map((cold) => ({
+              viewport: cellViewport,
+              colorScheme: cellColorScheme,
+              route,
+              cold,
+            })),
+          ),
+        ),
+      )
+      .filter(
+        ({ route }) => !values["layout-route"].length || values["layout-route"].includes(route),
+      )
+      .filter(
+        (cell) =>
+          !values["layout-cell"].length ||
+          values["layout-cell"].includes(
+            `${cell.viewport}:${cell.colorScheme}:${cell.route}:${cell.cold ? "cold" : "warm"}`,
+          ),
+      )
+      .slice(layoutStart)
+  : [];
+if (values["layout-matrix"] && !layoutCells.length) {
+  throw new Error("Layout filters and layout-start must leave at least one matrix cell");
+}
+const layoutVariants = values["layout-matrix"] ? values["compare-bundle-dir"].length + 1 : 1;
+const requestedRuns = Number(values.runs);
+const runs = requestedRuns * (layoutCells.length || 1) * layoutVariants;
 const gatewayUrl = values["gateway-url"] ? new URL(values["gateway-url"]) : undefined;
 const firstLoad = values["first-load"];
 if (
@@ -392,10 +461,20 @@ if (
   throw new Error("hold-boot-assets requires one first-load filmstrip-only run without comparison");
 }
 const bootRoute = values["boot-route"];
-if (bootRoute !== "chat" && bootRoute !== "new") {
-  throw new Error("Expected boot-route chat or new");
+if (
+  bootRoute !== "chat" &&
+  bootRoute !== "new" &&
+  bootRoute !== "sessions" &&
+  bootRoute !== "settings"
+) {
+  throw new Error("Expected boot-route chat, new, sessions or settings");
 }
 const navigationRoutes: CriticalPathRoute[] = [];
+// Cold New has no Chat owner to complete registration, so omit the unused WeakMap shim.
+const captureOwnerRegistration = !firstLoad || bootRoute !== "new";
+const ownerProbes =
+  captureOwnerRegistration && !cpuProfile && !allocations && !values["session-event-churn"];
+const sidebarCounters = captureOwnerRegistration && !cpuProfile;
 for (const route of values["critical-path-route"]) {
   const matched = criticalPathRoutes.find((candidate) => candidate === route);
   if (!matched || navigationRoutes.includes(matched)) {
@@ -413,18 +492,17 @@ if (!Number.isFinite(criticalPathIntentMs) || criticalPathIntentMs < 0) {
 if (values["critical-path-intent-ms"] !== undefined && !values["critical-path"]) {
   throw new Error("critical-path-intent-ms requires critical-path");
 }
-if (values["critical-path"] && !navigationRoutes.length && bootRoute !== "new") {
+if (values["critical-path"] && !navigationRoutes.length && bootRoute === "chat") {
   navigationRoutes.push(...criticalPathRoutes);
 }
 if (
-  bootRoute === "new" &&
-  (!firstLoad ||
-    values["live-events"] ||
+  bootRoute !== "chat" &&
+  (values["live-events"] ||
     values["session-switch"] ||
     values["streaming-reply"] ||
     values["overlay-probe"])
 ) {
-  throw new Error("boot-route new requires first-load without chat interaction phases");
+  throw new Error("Non-chat boot routes exclude chat interaction phases");
 }
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
 const downloadKbps = Number(values["download-kbps"] ?? 0);
@@ -523,9 +601,9 @@ if (
   );
 }
 if (
-  !Number.isInteger(runs) ||
-  runs < 1 ||
-  runs > (values["compare-bundle-dir"].length ? 60 : 20) ||
+  !Number.isInteger(requestedRuns) ||
+  requestedRuns < 1 ||
+  requestedRuns > (values["compare-bundle-dir"].length ? 60 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(connectNotBeforeMs) ||
@@ -602,6 +680,7 @@ const server =
       ? await startBuiltControlUiE2eServer(bundleDir, undefined, port)
       : await startProductionControlUiE2eServer(bundleDir, buildId);
 const baseUrl = gatewayUrl?.origin ?? gatewayHttpServer?.baseUrl ?? server!.baseUrl;
+const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
 const usesGatewayHttp = Boolean(gatewayUrl || gatewayHttpServer);
 const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
   path.resolve(directory),
@@ -613,22 +692,25 @@ async function selectComparisonBundle(index: number, page?: Page) {
   if (!comparisonBundleDirs.length || activeBundle === index) {
     return;
   }
+  const nextBuildId = explicitBuildId ?? (await readBundleBuildId(bundleSlots[index]!));
+  if (page) {
+    await page.evaluate((id) => {
+      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      gateway.setServerBuildId(id);
+    }, nextBuildId);
+    // Retire lazy imports from the old page before its assets leave the served root.
+    await page.goto("about:blank");
+  }
   if (gatewayHttpServer) {
     await gatewayHttpServer.selectBuild(bundleSlots[index]!);
   } else {
     await server!.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
   }
   activeBundle = index;
-  buildId =
-    explicitBuildId ??
-    (await readBundleBuildId(gatewayHttpServer ? bundleSlots[index]! : bundleDir));
-  await page?.evaluate((id) => {
-    const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-    if (!gateway) {
-      throw new Error("Mock Gateway is not installed");
-    }
-    gateway.setServerBuildId(id);
-  }, buildId);
+  buildId = nextBuildId;
 }
 const dashboardFont = values["dashboard-widget"]
   ? await readFile("ui/public/fonts/space-grotesk-latin.woff2")
@@ -663,6 +745,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
   sidebarAvatars: values["sidebar-avatars"],
+  transcriptAvatars: values["transcript-avatars"],
   sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
@@ -696,6 +779,11 @@ let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
+const waterfallArtifacts: Array<{
+  file: string;
+  capture: Awaited<ReturnType<typeof readCriticalPath>>;
+  requests: CriticalPathHttpRequest[];
+}> = [];
 try {
   const terminalEnabled = gatewayUrl
     ? await fetch(new URL("/control-ui-config.json", gatewayUrl)).then(async (response) => {
@@ -705,8 +793,20 @@ try {
         return (await response.json()).terminalEnabled === true;
       })
     : fixture.scenario.terminalEnabled;
+  const settingsCoreSchema = values["settings-core-schema"]
+    ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
+    : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
+    subscriptionInitialHistory: true,
+    ...(settingsCoreSchema
+      ? {
+          methodResponses: {
+            ...fixture.scenario.methodResponses,
+            "config.schema": settingsCoreSchema,
+          },
+        }
+      : {}),
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -741,6 +841,7 @@ try {
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
+        firstRouteReadyMs: null as number | null,
         fontLoadEventsMs: [] as number[],
         staticShellGeometry: null as Record<string, unknown> | null,
         firstLiveShellGeometry: null as Record<string, unknown> | null,
@@ -749,6 +850,7 @@ try {
           value: number;
           hadRecentInput: boolean;
           sources: Array<{
+            nodeName: string | null;
             element: string | null;
             previousRect: unknown;
             currentRect: unknown;
@@ -783,14 +885,17 @@ try {
             atMs: entry.startTime,
             value,
             hadRecentInput,
-            sources: sources.map(({ node, previousRect, currentRect }) => ({
-              element:
-                node instanceof Element
-                  ? `${node.localName}${node.id ? `#${node.id}` : ""}.${[...node.classList].join(".")}`
+            sources: sources.map(({ node, previousRect, currentRect }) => {
+              const element = node instanceof Element ? node : node?.parentElement;
+              return {
+                nodeName: node?.nodeName ?? null,
+                element: element
+                  ? `${element.localName}${element.id ? `#${element.id}` : ""}.${[...element.classList].join(".")}`
                   : null,
-              previousRect: previousRect.toJSON(),
-              currentRect: currentRect.toJSON(),
-            })),
+                previousRect: previousRect.toJSON(),
+                currentRect: currentRect.toJSON(),
+              };
+            }),
           });
           if (!hadRecentInput) {
             milestones.nonRecentInputShiftSum += value;
@@ -840,6 +945,35 @@ try {
           }),
         );
       const sample = () => {
+        const route = location.pathname.split("/")[1] || measuredRoute;
+        const readySelector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : route === "settings"
+                ? "#settings-font-chat"
+                : ".chat-pane-cache__pane--active .chat-virtual-row .chat-text";
+        const readyControl = document.querySelector(readySelector);
+        const activePane = document.querySelector(".chat-pane-cache__pane--active");
+        const routeDataReady =
+          route === "chat" || route === "dashboard"
+            ? activePane &&
+              Reflect.get(activePane, "transcriptReady") === true &&
+              activePane.querySelector("textarea:not(:disabled)")
+            : route === "sessions"
+              ? document.querySelector("openclaw-sessions-page .session-link")
+              : readyControl;
+        if (
+          milestones.firstRouteReadyMs === null &&
+          readyControl &&
+          routeDataReady &&
+          visible(routeDataReady) &&
+          visible(readyControl) &&
+          !readyControl.matches(":disabled")
+        ) {
+          milestones.firstRouteReadyMs = performance.now();
+        }
         const staticShell = document.querySelector("#openclaw-boot-shell");
         if (milestones.firstStaticShellMs === null && staticShell && visible(staticShell)) {
           milestones.firstStaticShellMs = performance.now();
@@ -855,15 +989,14 @@ try {
           milestones.firstLiveShellGeometry === null &&
           shell &&
           visible(shell) &&
-          chatInput &&
-          visible(chatInput)
+          (chatInput ? visible(chatInput) : readyControl && visible(readyControl))
         ) {
           milestones.firstLiveShellMs = performance.now();
           milestones.firstLiveShellGeometry = geometry(shell, {
             sidebar: ".shell-nav",
-            header: ".chat-pane__header, .agent-chat__header--mobile",
-            transcript: ".chat-thread",
-            composer: ".agent-chat__input",
+            header: ".chat-pane__header, .agent-chat__header--mobile, .content-header, .topbar",
+            transcript: ".chat-thread, main.content",
+            composer: ".agent-chat__input, .new-session-page__message",
           });
         }
         if (
@@ -896,9 +1029,11 @@ try {
           milestones.firstNonemptyTranscriptMs = performance.now();
         }
         if (
-          milestones.firstShellInteractiveMs === null ||
-          milestones.firstEnabledComposerMs === null ||
-          (measuredRoute === "chat" && milestones.firstNonemptyTranscriptMs === null)
+          milestones.firstRouteReadyMs === null ||
+          milestones.firstLiveShellGeometry === null ||
+          (milestones.firstShellInteractiveMs === null &&
+            shell &&
+            !shell.classList.contains("shell--mobile-nav"))
         ) {
           requestAnimationFrame(sample);
         }
@@ -1052,7 +1187,7 @@ try {
       if (window !== window.top || location.protocol === "about:") {
         return;
       }
-      if (fixtureUrl) {
+      if (fixtureUrl && location.pathname === "/chat") {
         history.replaceState(null, "", fixtureUrl);
       }
       if (bootstrap) {
@@ -1087,9 +1222,7 @@ try {
     {
       key: controlUiBundledSettingsStorageKey(baseUrl),
       fixtureUrl: usesGatewayHttp
-        ? bootRoute === "new"
-          ? new URL("/new", baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
+        ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
         : null,
       bootstrap: usesGatewayHttp
         ? JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario))
@@ -1105,12 +1238,14 @@ try {
           : "chip",
     },
   );
-  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const warmProbes = values["warm-reload"]
+    ? `\n(${warmReloadProbe.toString()})(${values["transcript-avatars"]});`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1119,18 +1254,20 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
-  const url = usesGatewayHttp
-    ? new URL(bootRoute === "new" ? "/new" : "/chat", baseUrl).href
-    : bootRoute === "new"
-      ? new URL("/new", baseUrl).href
-      : values["full-uuid-route"]
-        ? new URL(
-            `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
-            baseUrl,
-          ).href
-        : values["short-route"]
-          ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
-          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const chatUrl = usesGatewayHttp
+    ? new URL("/chat", baseUrl).href
+    : values["full-uuid-route"]
+      ? new URL(
+          `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+          baseUrl,
+        ).href
+      : values["short-route"]
+        ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
+        : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  const url =
+    bootRoute === "chat"
+      ? chatUrl
+      : new URL(bootRoute === "settings" ? "/settings/appearance" : `/${bootRoute}`, baseUrl).href;
   let releaseBootAssets: (() => void) | undefined;
   const heldBootAssets: Array<{ url: string; type: string }> = [];
   if (values["hold-boot-assets"]) {
@@ -1146,12 +1283,6 @@ try {
       await route.fallback();
     });
   }
-  const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
-  if (firstLoad) {
-    await page.route(coldResetUrl, (route) =>
-      route.fulfill({ body: "", contentType: "text/html" }),
-    );
-  }
   async function resetColdState(cdp: CDPSession, bundleIndex: number) {
     // Retire pagehide writers before clearing the measured origin's persistent state.
     await page.goto("about:blank");
@@ -1162,39 +1293,50 @@ try {
     await cdp.send("Network.clearBrowserCache");
     await selectComparisonBundle(bundleIndex);
     // The empty same-origin document seeds only the existing mock's build identity.
+    await page.route(coldResetUrl, (route) =>
+      route.fulfill({ body: "", contentType: "text/html" }),
+    );
     await page.goto(coldResetUrl);
+    await page.unroute(coldResetUrl);
     await page.evaluate((id) => {
       localStorage.clear();
       sessionStorage.clear();
       Reflect.get(window, "openclawControlUiE2eGateway").setServerBuildId(id);
     }, buildId);
   }
-  async function settle() {
+  async function settle(route = bootRoute) {
     try {
-      if (bootRoute === "new") {
-        await page.locator(".new-session-page__message").waitFor();
-        await page.waitForFunction(() => {
+      const mobile = (page.viewportSize()?.width ?? viewport.width) <= 900;
+      if (route !== "chat") {
+        const selector =
+          route === "new"
+            ? ".new-session-page__message"
+            : route === "sessions"
+              ? ".sessions-toolbar__refresh"
+              : "#settings-font-chat";
+        await page.locator(selector).waitFor();
+        await page.waitForFunction((readySelector) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
-          const composer = document.querySelector<HTMLTextAreaElement>(
-            ".new-session-page__message",
-          );
+          const control = document.querySelector(readySelector);
+          const readyAt = Reflect.get(window, "__coldLoadPresentation")?.firstRouteReadyMs;
           return (
-            composer &&
-            !composer.disabled &&
+            control?.checkVisibility() &&
+            !control.matches(":disabled") &&
+            typeof readyAt === "number" &&
             state &&
             !state.pending &&
             !state.queued &&
             state.idleMs > 750
           );
-        });
+        }, selector);
         return;
       }
       await page
-        .locator(viewportName === "mobile" ? ".agent-chat__header--mobile" : ".chat-pane__header")
+        .locator(mobile ? ".agent-chat__header--mobile" : ".chat-pane__header")
         .first()
         .waitFor();
       // A closed mobile drawer parks its sidebar rows; they are not part of responsive boot.
-      if (viewportName === "desktop") {
+      if (!mobile) {
         if (values["session-event-ancestor-refs"]) {
           await page
             .locator(
@@ -1355,8 +1497,13 @@ try {
   const snapshotSaves: Array<
     Omit<Awaited<ReturnType<typeof persistColdLoadWarmState>>, "storage">
   > = [];
+  const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+    sessionKey: fixture.selectedSessionKey,
+    offRosterSession: values["off-roster-route"],
+    sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
   if (!firstLoad) {
-    await page.goto(url);
+    await page.goto(chatUrl);
     try {
       if (viewportName === "mobile") {
         await navigationDrawerToggle(page).click();
@@ -1383,7 +1530,7 @@ try {
     if (sidebarView === "online") {
       await page.locator('[data-navigation-view="online"]').click();
     }
-    await settle();
+    await settle("chat");
     await expandSidebar();
     if (viewportName === "mobile") {
       await page.keyboard.press("Escape");
@@ -1420,14 +1567,9 @@ try {
           controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat"),
         );
       }
-      await settle();
+      await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
-    const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
-      sessionKey: fixture.selectedSessionKey,
-      offRosterSession: values["off-roster-route"],
-      sidebarView: sidebarView === "online" ? "online" : "sessions",
-    };
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
@@ -1435,15 +1577,25 @@ try {
     warmStates.push(warmStorage);
     snapshotSaves.push(snapshotSave);
     for (let index = 1; index < bundleSlots.length; index++) {
-      await restoreColdLoadWarmState(page, warmStorage);
+      await restoreColdLoadWarmState(page, warmStorage, warmStates[index - 1]);
+      const reloadUrl = page.url();
       await selectComparisonBundle(index, page);
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await settle();
+      await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
+      await settle("chat");
+      if (viewportName === "mobile") {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       await expandSidebar();
       const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
       warmStates.push(storage);
       snapshotSaves.push(saved);
+      if (viewportName === "mobile") {
+        await page.keyboard.press("Escape");
+        await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+      }
     }
+    await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
   }
   let historyValidatorRequests = 0;
   if (historyValidatorDelayMs > 0) {
@@ -1463,8 +1615,42 @@ try {
       await route.fallback();
     });
   }
-  await selectComparisonBundle(0, page);
   for (let run = 0; run < runs; run++) {
+    const bundleIndex = run % bundleSlots.length;
+    const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
+    const runRoute = layoutCell?.route ?? bootRoute;
+    const runUrl =
+      runRoute === "chat"
+        ? values["chat-dashboard-route"]
+          ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat")
+          : chatUrl
+        : new URL(runRoute === "settings" ? "/settings/appearance" : `/${runRoute}`, baseUrl).href;
+    let reloadStorage = warmStates[bundleIndex];
+    if (layoutCell) {
+      await selectComparisonBundle(bundleIndex, page);
+      await page.setViewportSize(
+        layoutCell.viewport === "mobile"
+          ? { width: 390, height: 844 }
+          : { width: 1719, height: 1179 },
+      );
+      await page.emulateMedia({ colorScheme: layoutCell.colorScheme });
+      if (!layoutCell.cold) {
+        // Cold Settings never opens the chat database. Let its native owner
+        // create the schema before restoring the saved warm fixture.
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+        await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        // Save through the native owner at this viewport. Reusing the desktop
+        // seed would measure a width-change restore instead of a warm reload.
+        reloadStorage = (await page.evaluate(persistColdLoadWarmState, warmInput)).storage;
+        if (runRoute !== "chat") {
+          await page.goto(runUrl, { waitUntil: "domcontentloaded" });
+          await settle(runRoute);
+        }
+      }
+    }
     const hostLoadAverage = loadavg();
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
@@ -1492,30 +1678,30 @@ try {
       );
       return { ...mapped, summary };
     }
-    const bundleIndex = run % bundleSlots.length;
     const validatorRequestsBeforeReload = historyValidatorRequests;
     const cdp = await context.newCDPSession(page);
-    if (firstLoad) {
+    if (layoutCell?.cold ?? firstLoad) {
       await resetColdState(cdp, bundleIndex);
     } else {
-      await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+      await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
       await selectComparisonBundle(bundleIndex, page);
     }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
         : "full";
-    const requests: Array<{ url: string; type?: string; timestamp: number; initiator: unknown }> =
-      [];
-    if (firstLoad || values["cold-http-cache"]) {
+    const requests: CriticalPathHttpRequest[] = [];
+    if (firstLoad || values["cold-http-cache"] || values["critical-path"]) {
       await cdp.send("Network.enable");
     }
-    if (firstLoad) {
+    if (firstLoad || values["critical-path"]) {
       cdp.on("Network.requestWillBeSent", (event) => {
         requests.push({
+          requestId: event.requestId,
           url: event.request.url,
           type: event.type,
           timestamp: event.timestamp,
+          wallTime: event.wallTime,
           initiator: event.initiator,
         });
       });
@@ -1644,12 +1830,18 @@ try {
         releaseBootAssets?.();
         await page.waitForLoadState("domcontentloaded");
       }
-    } else if (firstLoad || values["critical-path"]) {
-      await page.goto(url, { waitUntil: "domcontentloaded" });
+    } else if (
+      layoutCell ||
+      firstLoad ||
+      values["critical-path"] ||
+      bootRoute !== "chat" ||
+      comparisonBundleDirs.length
+    ) {
+      await page.goto(runUrl, { waitUntil: "domcontentloaded" });
     } else {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
-    await settle();
+    await settle(runRoute);
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
@@ -1704,6 +1896,9 @@ try {
               ["layoutMs", "LayoutDuration"],
               ["styleMs", "RecalcStyleDuration"],
               ["threadMs", "ThreadTime"],
+              ["compileMs", "V8CompileDuration"],
+              ["devtoolsMs", "DevToolsCommandDuration"],
+              ["otherTaskMs", "TaskOtherDuration"],
             ].map(([key, name]) => {
               const before = threadCpuBefore.find((metric) => metric.name === name)?.value;
               const after = threadCpuAfter.find((metric) => metric.name === name)?.value;
@@ -1735,6 +1930,11 @@ try {
         transferBytes: entry.transferSize,
       }));
       return {
+        display: {
+          width: innerWidth,
+          height: innerHeight,
+          colorScheme: document.documentElement.dataset.themeMode,
+        },
         ...Reflect.get(window, "__coldLoad").read(),
         bootRpcs: Reflect.get(window, "__coldLoad")
           .read()
@@ -1781,6 +1981,12 @@ try {
           rowKeys: rows?.map((row) => row.getAttribute("data-virtual-row-key")) ?? null,
           sessionKey: pane ? Reflect.get(pane, "sessionKey") : null,
           ready: pane ? Reflect.get(pane, "transcriptReady") === true : false,
+          reactionRows: pane
+            ? [...pane.querySelectorAll<HTMLElement>(".chat-message-reactions")].map((element) => ({
+                messageId: element.dataset.messageId,
+                visible: element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+              }))
+            : [],
         },
       };
     });
@@ -1802,7 +2008,19 @@ try {
         JSON.stringify((await cdp.send("Performance.getMetrics")).metrics),
       );
     }
-    await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
+    await writeFile(
+      path.join(artifactDir, `run-${run + 1}.metrics.json`),
+      JSON.stringify({
+        ...metrics,
+        layoutCell,
+        variant: ["base", "candidate", "candidate-2"][bundleIndex],
+        hostLoadAverage,
+        threadCpu,
+        threadCpuSamples: threadCpuBefore
+          ? { before: threadCpuBefore, after: threadCpuAfter }
+          : undefined,
+      }),
+    );
     const profile = !traced && !cpuProfile ? undefined : await cdp.send("Profiler.stop");
     if (captureTrace) {
       const complete = new Promise<void>((resolve) => {
@@ -1811,11 +2029,15 @@ try {
       await cdp.send("Tracing.end");
       await complete;
     }
-    await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
-    await writeFile(
-      path.join(artifactDir, `run-${run + 1}.trace.json`),
-      JSON.stringify({ traceEvents: rawTrace }),
-    );
+    if (!layoutCells.length || run < layoutCells.length * bundleSlots.length) {
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.png`) });
+    }
+    if (captureTrace) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.trace.json`),
+        JSON.stringify({ traceEvents: rawTrace }),
+      );
+    }
     if (profile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpuprofile`),
@@ -2025,7 +2247,11 @@ try {
     let streaming;
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
+      const initialDraft = await composer.inputValue();
       await composer.focus();
+      await composer.evaluate((input: HTMLTextAreaElement) =>
+        input.setSelectionRange(input.value.length, input.value.length),
+      );
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
@@ -2062,9 +2288,11 @@ try {
         runId: fixture.scenario.inFlightRun!.runId,
       });
       const streamingInput = new AbortController();
+      let typedCharacters = 0;
       const nativeInput = (async () => {
         while (!streamingInput.signal.aborted) {
           await page.keyboard.press("x");
+          typedCharacters++;
           await new Promise((resolve) => {
             setTimeout(resolve, 500);
           });
@@ -2075,7 +2303,7 @@ try {
           await page.waitForFunction(
             (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
             Math.floor((streamingReply.deltas.length * quartile) / 4),
-            { timeout: 60_000 },
+            { timeout: 60_000, polling: 50 },
           );
           await page.evaluate(
             () =>
@@ -2115,6 +2343,8 @@ try {
         streamingInput.abort();
         await nativeInput;
       }
+      // Freeze the workload before profiler/trace shutdown adds diagnostic tasks.
+      await page.evaluate(() => Reflect.get(window, "__streamingReply").stop());
       let streamingAllocations;
       const allocationProfile = values["streaming-allocations"]
         ? (await cdp.send("HeapProfiler.stopSampling")).profile
@@ -2160,6 +2390,7 @@ try {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
         allocations: streamingAllocations,
+        typing: { characters: typedCharacters, draft: await composer.inputValue() },
       };
       if (allocationProfile) {
         await writeFile(
@@ -2185,6 +2416,14 @@ try {
         ),
       );
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
+      if (
+        !typedCharacters ||
+        streaming.typing.draft !== initialDraft + "x".repeat(typedCharacters)
+      ) {
+        throw new Error(
+          `Streaming lost composer input: sent ${typedCharacters} characters, retained ${streaming.typing.draft.length}`,
+        );
+      }
       if (
         streaming.tailPosition.scrollHeight <= streaming.tailPosition.initialScrollHeight ||
         Math.abs(streaming.tailPosition.distanceFromBottom) > 2
@@ -2452,12 +2691,12 @@ try {
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
-      // The next owner cycle is a direct chat visible in the fixture's Involving me window.
-      const target = fixture.scenario.sessions![fixture.counts.owners]!;
+      // The first non-main chat is in the initial Involving me page.
+      const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
-      await link.waitFor({ state: "visible" });
+      await link.scrollIntoViewIfNeeded();
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -2527,27 +2766,26 @@ try {
         if (firstLoad) {
           await resetColdState(cdp, bundleIndex);
         }
+        const routeRequestsOffset = requests.length;
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await settle();
         const routeTrace: unknown[] = [];
-        criticalPath.push(
-          await navigateCriticalPath(
-            page,
-            cdp,
-            route,
-            cpuProfile
-              ? async () => {
-                  collectedTrace = routeTrace;
-                  await cdp.send("Profiler.start");
-                  await cdp.send("Tracing.start", {
-                    categories:
-                      "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
-                    transferMode: "ReportEvents",
-                  });
-                }
-              : undefined,
-            criticalPathIntentMs,
-          ),
+        const routeCapture = await navigateCriticalPath(
+          page,
+          cdp,
+          route,
+          cpuProfile
+            ? async () => {
+                collectedTrace = routeTrace;
+                await cdp.send("Profiler.start");
+                await cdp.send("Tracing.start", {
+                  categories:
+                    "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+                  transferMode: "ReportEvents",
+                });
+              }
+            : undefined,
+          criticalPathIntentMs,
         );
         if (cpuProfile) {
           const routeProfile = (await cdp.send("Profiler.stop")).profile;
@@ -2562,12 +2800,82 @@ try {
             JSON.stringify({ traceEvents: routeTrace }),
           );
         }
+        // Observe late shifts after timing/CPU capture without extending those measured intervals.
+        await page.waitForTimeout(500);
+        const presentationSnapshot: Pick<
+          CriticalPathPresentation,
+          "startedMs" | "capturedMs" | "layoutShifts"
+        > = await page.evaluate((startedMs) => {
+          const capturedMs = performance.now();
+          return {
+            startedMs,
+            capturedMs,
+            layoutShifts: Reflect.get(window, "__coldLoadPresentation").layoutShifts.filter(
+              (shift: { atMs: number }) => shift.atMs >= startedMs && shift.atMs <= capturedMs,
+            ),
+          };
+        }, routeCapture.intentStartedMs ?? routeCapture.startedMs);
+        let cls = 0;
+        let nonRecentInputShiftSum = 0;
+        let allShiftSum = 0;
+        let shiftWindowStartMs = 0;
+        let previousShiftMs = 0;
+        let shiftWindowValue = 0;
+        for (const shift of presentationSnapshot.layoutShifts) {
+          allShiftSum += shift.value;
+          if (shift.hadRecentInput) {
+            continue;
+          }
+          nonRecentInputShiftSum += shift.value;
+          if (
+            previousShiftMs === 0 ||
+            shift.atMs - previousShiftMs >= 1000 ||
+            shift.atMs - shiftWindowStartMs >= 5000
+          ) {
+            shiftWindowStartMs = shift.atMs;
+            shiftWindowValue = 0;
+          }
+          previousShiftMs = shift.atMs;
+          shiftWindowValue += shift.value;
+          cls = Math.max(cls, shiftWindowValue);
+        }
+        criticalPath.push({
+          ...routeCapture,
+          presentation: {
+            ...presentationSnapshot,
+            settleMs: 500,
+            cls,
+            nonRecentInputShiftSum,
+            allShiftSum,
+          },
+        });
+        const routeRequests = requests.slice(routeRequestsOffset);
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.${route}.requests.json`),
+          JSON.stringify(
+            {
+              timeOrigin: routeCapture.timeOrigin,
+              startedMs: routeCapture.startedMs,
+              readyMs: routeCapture.readyMs,
+              capturedMs: routeCapture.capturedMs,
+              requests: routeRequests,
+            },
+            null,
+            2,
+          ),
+        );
+        waterfallArtifacts.push({
+          file: path.join(artifactDir, `run-${run + 1}.${route}.waterfall.html`),
+          capture: routeCapture,
+          requests: routeRequests,
+        });
         await saveCriticalPath();
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
     await cdp.detach();
     const result = {
+      layoutCell,
       run: run + 1,
       hostLoadAverage,
       ...(comparisonBundleDirs.length
@@ -2616,6 +2924,7 @@ try {
     console.log(
       JSON.stringify({
         run: result.run,
+        layoutCell,
         variant: result.variant,
         hostLoadAverage,
         presentation: {
@@ -2674,6 +2983,12 @@ try {
   await new Promise<void>((resolve, reject) => {
     sandbox.close((error) => (error ? reject(error) : resolve()));
   });
+  for (const artifact of waterfallArtifacts) {
+    await writeFile(
+      artifact.file,
+      renderCriticalPathWaterfall(artifact.capture, artifact.requests),
+    );
+  }
   await writeFile(
     path.join(artifactDir, "summary.json"),
     JSON.stringify(
@@ -2708,6 +3023,7 @@ try {
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
         criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,
+        settingsCoreSchema: values["settings-core-schema"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],
@@ -2724,6 +3040,8 @@ try {
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,
+        ownerProbes,
+        sidebarCounters,
         metricTimeDomain: performanceTimeDomain,
         cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,

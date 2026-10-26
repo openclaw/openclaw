@@ -74,7 +74,7 @@ import {
   buildMessagingSection,
   resolveSilentReplyPromptMode,
 } from "./system-prompt-messaging.js";
-import { buildRuntimeLine } from "./system-prompt-runtime.js";
+import { blindRuntime, blindWorkspace, buildRuntimeLine } from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
 import {
   buildSystemPromptToolLines,
@@ -365,7 +365,7 @@ export function buildAgentSystemPrompt(params: {
 }) {
   const promptMode = params.promptMode ?? "full";
   const runtimeInfo = params.runtimeInfo;
-  const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
+  const modelIdentityLine = buildModelIdentityPromptLine(blindRuntime(runtimeInfo)?.model);
   if (promptMode === "none") {
     params.onRenderedSkillsPrompt?.("");
     return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
@@ -936,10 +936,10 @@ export function buildAgentSystemPrompt(params: {
     // Only Runtime facts may move behind tools. Close the region before callers
     // append hook instructions or permission notices that must retain their role.
     SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
-    `${buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities)}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+    `${buildRuntimeLine(blindRuntime(runtimeInfo), runtimeChannel, runtimeCapabilities)}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
   );
 
-  return joinPromptLines(lines);
+  return blindWorkspace(joinPromptLines(lines), params);
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

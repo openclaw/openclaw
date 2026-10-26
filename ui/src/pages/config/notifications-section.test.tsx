@@ -83,6 +83,12 @@ it("keeps the send affordance pending until the command settles", async () => {
   expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
     "Sending test",
   );
+  expect(
+    container
+      .querySelector(".settings-status--accent")
+      ?.closest(".settings-row")
+      ?.hasAttribute("role"),
+  ).toBe(false);
   expect(container.textContent).toContain("Test notification");
   button.click();
   expect(onSend).toHaveBeenCalledTimes(1);
@@ -91,6 +97,45 @@ it("keeps the send affordance pending until the command settles", async () => {
     expect(button.disabled).toBe(false);
     expect(button.textContent).toContain("Send test");
   });
+});
+
+it("announces a native test error without populating the success region", () => {
+  const message = "Open System Settings and try again.";
+  const { container } = renderSection({
+    nativeNotifications: { permission: "granted", test: { state: "error", message } },
+  });
+  const announcement = expectDefined(container.querySelector('[role="alert"]'), "alert");
+  expect(announcement.textContent).toContain(message);
+  expect(container.querySelector('.sr-only[role="status"]')?.textContent).toBe("");
+});
+
+it("establishes the polite live region before announcing a successful test", async () => {
+  const [native, setNative] = createSignal<NonNullable<NotificationProps["nativeNotifications"]>>({
+    permission: "granted",
+    test: { state: "pending" },
+  });
+  const { container } = renderSection({
+    get nativeNotifications() {
+      return native();
+    },
+  });
+  const live = expectDefined(
+    container.querySelector<HTMLElement>('.sr-only[role="status"][aria-live="polite"]'),
+    "live status",
+  );
+  expect(live.textContent).toBe("");
+
+  setNative({ permission: "granted", test: { state: "sent" } });
+  await waitForSolid(() => {
+    expect(live.textContent).toContain("Test notification queued");
+  });
+
+  expect(container.querySelector('.sr-only[role="status"]')).toBe(live);
+  expect(
+    Array.from(container.querySelectorAll<HTMLElement>(".settings-row[role]")).some((row) =>
+      ["status", "alert"].includes(row.getAttribute("role") ?? ""),
+    ),
+  ).toBe(false);
 });
 
 it("retires a failed receipt during retry and preserves the send control", async () => {

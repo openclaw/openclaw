@@ -257,16 +257,6 @@ function isMarkdownThematicBreak(text: string): boolean {
   return /^(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(text);
 }
 
-function startsListBlockSyntax(text: string): boolean {
-  return (
-    /^(`{3,}|~{3,})/.test(text) ||
-    text.startsWith(">") ||
-    /^#{1,6}(?:\s|$)/.test(text) ||
-    isMarkdownThematicBreak(text) ||
-    /^(?:[-+*]|\d{1,9}[.)])(?:\s|$)/.test(text)
-  );
-}
-
 function whitespaceColumns(text: string, startColumn = 0): number {
   let column = startColumn;
   for (const char of text) {
@@ -308,7 +298,12 @@ function parseMarkdownListItem(line: string) {
     hasSourceBody: sourceBody.length > 0,
     hasBlockBody:
       sourceBody.length > 0 &&
-      (contentIndent - markerEnd >= 5 || startsListBlockSyntax(sourceBody)),
+      (contentIndent - markerEnd >= 5 ||
+        /^(`{3,}|~{3,})/.test(sourceBody) ||
+        sourceBody.startsWith(">") ||
+        /^#{1,6}(?:\s|$)/.test(sourceBody) ||
+        isMarkdownThematicBreak(sourceBody) ||
+        /^(?:[-+*]|\d{1,9}[.)])(?:\s|$)/.test(sourceBody)),
     hasImages: imageBlocks.length > 0,
     content: inlines,
     ...(checked === undefined ? {} : { checked }),

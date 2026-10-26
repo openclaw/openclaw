@@ -43,15 +43,7 @@ suite.define(() => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "reviewer", name: "Reviewer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", reviewer: "Reviewer" }, "main", "agent"),
           "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },

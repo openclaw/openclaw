@@ -8,6 +8,8 @@ import type { DeferredHookWake } from "../cron/wake-contract.js";
 import type { CronExitWatchers } from "./cron-exit-watchers.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
+  /** Selected opaque partition after a list/job read prepares the serving cron owner. */
+  getStoreKey?(): string;
   /** Cancel exact current definitions under the serving scheduler's operation lock. */
   quiesceJobs(
     jobs: readonly { id: string; revision: string }[],

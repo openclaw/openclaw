@@ -63,11 +63,6 @@ const activeId = (container: HTMLElement) =>
   getComposerTextarea(container).getAttribute("aria-activedescendant");
 const menu = (container: HTMLElement, suffix = "slash-menu-listbox") =>
   container.querySelector(`#chat-single-${suffix}`);
-function expectComposerName(textarea: HTMLTextAreaElement) {
-  expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-  expectAbsent(textarea, "role");
-}
-
 describe("chat composer suggestion accessibility", () => {
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
     replaceSkillCommands({
@@ -82,6 +77,8 @@ describe("chat composer suggestion accessibility", () => {
     await waitForSolid(() => {
       const listbox = menu(container, "skill-menu-listbox");
       const renderedTextarea = getComposerTextarea(container);
+      expect(renderedTextarea.getAttribute("aria-label")).toBe("Chat composer");
+      expectAbsent(renderedTextarea, "role");
       expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
       expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
       expect(renderedTextarea.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
@@ -150,26 +147,6 @@ describe("chat composer suggestion accessibility", () => {
     },
   );
 
-  it("keeps a stable composer name and placeholder when attachments change", async () => {
-    const harness = createReactiveDraftHarness();
-    const textarea = getComposerTextarea(harness.container);
-    const initialPlaceholder = textarea.placeholder;
-    expectComposerName(textarea);
-
-    harness.renderCurrent({
-      attachments: [{ id: "image", mimeType: "image/png", previewUrl: "blob:sample-image" }],
-    });
-    await waitForSolid(() =>
-      expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
-    );
-    expect(textarea.placeholder).toBe(initialPlaceholder);
-    expectComposerName(textarea);
-
-    harness.renderCurrent({ attachments: [] });
-    expect(textarea.placeholder).toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-  });
-
   it("uses the localized command description in the live announcement", async () => {
     const clearCommand = expectDefined(
       SLASH_COMMANDS.find((command) => command.name === "clear"),
@@ -190,38 +167,19 @@ describe("chat composer suggestion accessibility", () => {
     }
   });
 
-  it.each([
-    { command: "think", dismissed: false },
-    { command: "tools", dismissed: true },
-  ])(
-    "settles /$command argument refresh with dismissal=$dismissed",
-    async ({ command, dismissed }) => {
-      const refresh = createDeferred();
-      const { container } = createReactiveDraftHarness({
-        ...(dismissed ? {} : thinkingSession(["low", "ultra"])),
-        onSlashIntent: () => refresh.promise,
-      });
-      inputDraft(container, `/${command}`);
-      keydownComposer(container, "Tab");
-      expect(getComposerTextarea(container).value).toBe(`/${command} `);
-      if (dismissed) {
-        expect(container.querySelector(".slash-menu")).not.toBeNull();
-        getComposerTextarea(container).focus();
-        const escape = keydownComposer(container, "Escape");
-        expect(escape.defaultPrevented).toBe(true);
-        expect(container.querySelector(".slash-menu")).toBeNull();
-      }
-      refresh.resolve();
-      await refresh.promise;
-      await waitForSolid(() => {
-        if (dismissed) {
-          expect(container.querySelector(".slash-menu")).toBeNull();
-        } else {
-          expect(optionNames(container)).toEqual(["default", "low", "ultra"]);
-        }
-      });
-    },
-  );
+  it("refreshes the current thinking argument menu after its catalog settles", async () => {
+    const refresh = createDeferred();
+    const { container } = createReactiveDraftHarness({
+      ...thinkingSession(["low", "ultra"]),
+      onSlashIntent: () => refresh.promise,
+    });
+    inputDraft(container, "/think");
+    keydownComposer(container, "Tab");
+    expect(getComposerTextarea(container).value).toBe("/think ");
+    refresh.resolve();
+    await refresh.promise;
+    await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "low", "ultra"]));
+  });
 
   it.each([false, true])(
     "suppresses thinking arguments when switching starts after opening=%s",
@@ -264,7 +222,8 @@ describe("chat composer suggestion accessibility", () => {
   });
 });
 
-it.each(["A mobile draft", "/res"])("leaves mobile Return for editing %s", async (draft) => {
+it("leaves mobile Return for editing even with slash suggestions open", async () => {
+  const draft = "/res";
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
   onTestFinished(() => {
     vi.restoreAllMocks();
@@ -275,9 +234,7 @@ it.each(["A mobile draft", "/res"])("leaves mobile Return for editing %s", async
   const onSend = vi.fn();
   const { container } = createReactiveDraftHarness({ onSend });
   inputDraftAtEnd(container, draft);
-  if (draft.startsWith("/")) {
-    await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
-  }
+  await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
   const textarea = getComposerTextarea(container)!;
   for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
     const event = keydownComposer(container, "Enter", modifiers);

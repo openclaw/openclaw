@@ -76,6 +76,28 @@ function releasableSource(release: () => void | Promise<void>) {
   });
 }
 
+it("prepares callback patches from complete current owner facts without another entry reply", async () => {
+  await withFixture(async (f) => {
+    const prompt = "synthetic retained instructions ".repeat(1024);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
+    const result = await patchSessionEntryCore(f.scope, (entry) => {
+      expect(entry.skillsSnapshot?.prompt).toBe(prompt);
+      return { label: "prepared from published facts" };
+    });
+    expect(result).toMatchObject({
+      label: "prepared from published facts",
+      skillsSnapshot: { prompt },
+    });
+    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+    expect(f.read()).toEqual(result);
+  });
+});
+
 it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
   await withFixture(async (f) => {
     const initial = f.read()!;
@@ -87,6 +109,13 @@ it("ends an absent live-switch selection without committing and keeps newer flag
       prepareIf: { kind: "live-model-switch-pending" as const },
       onCommitted,
     };
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
+    sessionChanges.invalidate({
+      sessionKey: f.scope.sessionKey,
+      storePath: f.database.path,
+      factsInvalidated: true,
+    });
     delivery.afterPrepare = () => {
       delivery.afterPrepare = undefined;
       replaceSessionEntrySync(f.scope, newer);
@@ -98,6 +127,8 @@ it("ends an absent live-switch selection without committing and keeps newer flag
     expect(onCommitted).not.toHaveBeenCalled();
     expect(f.read()).toMatchObject(newer);
 
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
     delivery.beforeCommit = () => {
       delivery.beforeCommit = undefined;
       replaceSessionEntrySync(f.scope, { ...newer, modelOverride: "latest-selection" });
@@ -106,6 +137,7 @@ it("ends an absent live-switch selection without committing and keeps newer flag
       SqliteSessionMutationConflictError,
     );
     expect(update).toHaveBeenCalledOnce();
+    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
     expect(onCommitted).not.toHaveBeenCalled();
     expect(f.read()).toMatchObject({
       liveModelSwitchPending: true,

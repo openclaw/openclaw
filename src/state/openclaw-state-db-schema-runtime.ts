@@ -21,6 +21,10 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import {
+  migrateCronDefaultStoreIdentity,
+  resolveCronIdentityMigrationDefaultStoreKey,
+} from "./openclaw-state-db-cron-identity-migration.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import {
   assertCurrentStateRuntimeSchema,
@@ -136,6 +140,12 @@ export function ensureOpenClawStateRuntimeSchema(
             includeAgentDeletionJournal:
               initialization.kind === "fresh" || initialization.nativeBootstrapEligible === true,
           });
+          migrateCronDefaultStoreIdentity(db, {
+            previousVersion,
+            legacyDefaultStoreKey: resolveCronIdentityMigrationDefaultStoreKey(env),
+            fresh: true,
+            nowMs: now,
+          });
           writeCurrentStateSchemaMetadata(db, now);
           runtimeReady = true;
           return [];
@@ -172,7 +182,7 @@ export function ensureOpenClawStateRuntimeSchema(
         } else {
           assertStateDatabaseIntegrityOnce(db, pathname);
         }
-        const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+        const boundedChanges = migrateBoundedStateSchema(db, previousVersion, { env });
         if (boundedChanges) {
           writeCurrentStateSchemaMetadata(db, now);
           assertCurrentStateRuntimeSchema(db, pathname);
@@ -207,7 +217,7 @@ export function ensureOpenClawStateRuntimeSchema(
         // v21 only derives predicates; don't replay legacy payload repair on v20 rows.
         ensureAdditiveStateColumns(db, previousVersion < 20 ? "repair" : "runtime");
         for (const migration of versionedStateMigrations) {
-          if (migration.migrate(db, previousVersion)) {
+          if (migration.migrate(db, previousVersion, { env })) {
             changes.push(migration.applied);
           }
         }

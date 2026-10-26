@@ -1,12 +1,12 @@
 import { execFile, execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
@@ -175,12 +175,7 @@ describe("public repository project seeds", () => {
       response.writeHead(401, { "WWW-Authenticate": 'Basic realm="synthetic-test"' });
       response.end();
     });
-    await once(server.listen(0, "127.0.0.1"), "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP authentication fixture did not bind a TCP port");
-    }
-    const f = await fixture(false, `http://127.0.0.1:${address.port}/repository.git`);
+    const f = await fixture(false, `${await listenLoopback(server)}/repository.git`);
     const netrc = "machine 127.0.0.1 login synthetic-user password synthetic-password\n";
     for (const name of [".netrc", "_netrc", "override.netrc"]) {
       await fs.writeFile(path.join(f.home, name), netrc, { mode: 0o600 });

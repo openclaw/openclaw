@@ -2,13 +2,11 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiHost,
-  ControlUiReplacement,
-} from "../../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -224,7 +222,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
-    expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
+    expect(avatar.getAttribute("aria-label")).toBe("Peer");
   });
   const control = view.getByRole("button", { name: "Open image Peer image" });
   const image = control.querySelector("img")!;
@@ -257,7 +255,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(updatedAvatars).toHaveLength(2);
   expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
-    updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
+    updatedAvatars.every((avatar) => avatar.getAttribute("aria-label") === "Peer Updated"),
   ).toBe(true);
 });
 
@@ -309,14 +307,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const listeners = new Set<() => void>();
   const abort = new AbortController();
   // SAFETY: This mounted-view fixture supplies the service objects scoped by the host; it never calls their methods.
-  const pluginHost = {
-    signal: abort.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as ControlUiHost;
+  const pluginHost = createInertViewHost(abort.signal);
   let selected: ControlUiReplacement | undefined;
   const reportError = vi.fn();
   const plugins: ControlUiPluginCapability = {

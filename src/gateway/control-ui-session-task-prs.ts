@@ -1,3 +1,4 @@
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
@@ -60,8 +61,6 @@ function selectTaskPublicationSessions(
   root: PublicationRow,
   allows: PublicationFilter,
 ) {
-  // Registry publications can defer parent-index updates until row preparation.
-  void projection.state;
   const revision = projection.readTaskPublicationRevision();
   const nodes = getOrCreateWeakOwnerMap(nodesByRevision, revision);
   const sharing = projection.sharingRevision;
@@ -99,7 +98,13 @@ function selectTaskPublicationSessions(
     }
     seen.add(identity);
     sessions.push(node.session);
-    node.children ??= projection.selectEntries({ parentSessionKey: row }).map(prepare);
+    // Qualified parents use logical membership; sentinels retain cross-store alias selection.
+    node.children ??=
+      row.key.startsWith("agent:") && !projection.hasLogicalChildEntries(row)
+        ? []
+        : runWithMainThreadTask("gateway:task-pr-lineage", () =>
+            projection.selectEntries({ parentSessionKey: row }).map(prepare),
+          );
     pending.push(...node.children);
   }
   sessions.sort(
@@ -114,14 +119,17 @@ export function prepareTaskPublicationSessions(
   root: PublicationRow,
   getAllows: () => PublicationFilter,
 ) {
-  let prepared = selectTaskPublicationSessions(projection, root, getAllows());
+  // Registry publications can defer parent-index updates until row preparation.
+  const initialAllows = getAllows();
+  void projection.state;
+  let prepared = selectTaskPublicationSessions(projection, root, initialAllows);
   const sessions = prepared.sessions;
   return {
     sessions,
     assertCurrent: () => {
       // Registry publication can defer the lineage update until preparation.
-      void projection.state;
       const allows = getAllows();
+      void projection.state;
       if (prepared.revision === projection.readTaskPublicationRevision()) {
         const sharing = projection.sharingRevision;
         const rows = sharing ? getOrCreateWeakOwnerMap(rowsByRevision, sharing) : undefined;

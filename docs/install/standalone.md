@@ -99,7 +99,10 @@ AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/ru
 Host Code Mode using the Node executor, QA expressions, and plugins fetched after
 the build run interpreted. Each feature emits one performance notice per process;
 use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
-through the normal loader against the compiled SDK. Missing runtime modules and
+through the normal loader against the compiled SDK in both emitted-JavaScript
+and original-TypeScript AOT builds. The loader transfers compiled SDK exports to
+interpreted plugins; virtual SDK paths do not contain readable source files.
+Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
@@ -109,8 +112,17 @@ nodes. It does not retain loose host worker modules. A standalone node uses the
 same executable's generic Bun runner to prewarm and execute a transferred worker
 bundle, preserving its normal bundle and protocol checks. In a run-only AOT build,
 that portable worker graph runs interpreted; embedded host worker threads still
-execute their compiled entries. Qualify this child path on the exact signed
-artifact without adding JIT entitlements or substituting a host runtime.
+execute their compiled entries. Worker repository synchronization and project-setup
+Git commands are generated from configuration data without requiring retained
+function bodies. Qualify this child path on the exact signed artifact without
+adding JIT entitlements or substituting a host runtime.
+
+Portable workers delegate exec process ownership to their admitted host's native
+anchor. The same executable runs that declared entry outside generic Bun mode;
+macOS keeps process-group cleanup and Linux keeps native subreaper cleanup.
+macOS delegates only to bundles advertising the platform-aware native-owner
+capability; older bundles retain their existing startup envelope. Linux also
+accepts the earlier Linux-native-owner capability.
 
 ### Original TypeScript and compiler options
 
@@ -120,6 +132,11 @@ and compiles their original TypeScript. Both modes preserve named entry contract
 shared chunks remain reachable imports. The completed `pnpm build` is required
 for generated files, runtime resources, and source-to-emitted module URL metadata.
 Rerun it when the builder reports missing or stale metadata.
+After source discovery, source AOT relinks the emitted graph from its declared
+entries so exports used only by removed imports do not fail module URL validation.
+This packaging pass preserves the original TypeScript inputs for native compilation.
+Emitted-JavaScript builds keep the first bundle and its resource ownership; they
+may retain unused outputs from eliminated dynamic imports.
 Source AOT also requires the repository-supported Node executable on `PATH` for
 syntax analysis of TypeScript forms that the packaging parser cannot read.
 This analysis preserves source offsets; native compilation receives the original
@@ -384,6 +401,28 @@ exercise native plugin loading. See [macOS signing](/platforms/mac/signing).
 
 ## Update the complete artifact
 
+### Managed Gateway service
+
+Install a complete standalone artifact as the managed Gateway runtime with:
+
+```sh
+./standalone-aot/openclaw gateway install --runtime standalone --runtime-path /absolute/path/to/standalone-aot/openclaw
+```
+
+The service launches `<executable> gateway ...` directly. It does not add a loose
+JavaScript entrypoint or Bun flags. Installation probes the executable's embedded
+runtime-check entry, including SQLite capabilities, and records the exact runtime
+path. Renaming the executable is supported when its adjacent `manifest.json`
+names it correctly. Keep that manifest and the complete `runtime/` directory
+together; older artifacts without the embedded runtime-check entry must be rebuilt.
+
+Reinstallation and Doctor retain an explicit standalone selection. To switch
+artifacts, install the newly verified complete directory with the same two flags
+and `--force`; retain the previous directory until the Gateway and CLI no longer
+reference it. Desktop applications own this handoff for their bundled artifacts.
+
+### Artifact replacement
+
 The standalone executable is not a package-manager or git installation.
 `openclaw update` refuses to modify it and displays a next step: update the owning
 desktop application, or rebuild and replace the standalone output.
@@ -424,8 +463,8 @@ The sealed single-file update-recovery helper uses its existing in-process hashi
 fallback so its recorded recovery artifact remains self-contained. Normal
 installations use the declared hashing workers.
 
-Browser MCP and remote repository bootstrap scripts are generated from typed
-sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
+Browser MCP, widget keyboard shortcuts, and remote repository bootstrap scripts are
+generated from typed sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
 

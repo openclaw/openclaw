@@ -8,7 +8,7 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
   isSubagentSessionKey,

@@ -173,8 +173,27 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const state = runtime.state;
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
-      return owner && projectOwner(owner, (source) => source.snapshot);
+      return (
+        owner && {
+          view: projectOwner(
+            owner,
+            (source) => source.snapshot,
+            (previous, next) =>
+              Object.entries(previous).every(
+                ([key, value]) =>
+                  key === "realtimeTalkConversationState" ||
+                  Object.is(value, Reflect.get(next, key)),
+              ),
+          ),
+          conversation: projectOwner(
+            owner,
+            (source) => source.snapshot.realtimeTalkConversationState.entries,
+            Object.is,
+          ),
+        }
+      );
     });
+    const readRealtimeTalkConversation = () => realtime()?.conversation.read() ?? [];
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
     const controlCommand = projectOwner(
       runtime.chatState.composerDraft,
@@ -268,7 +287,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         parentSession.read();
         transcriptPosition.read();
         progress.read();
-        realtime()?.read();
+        realtime()?.view.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();
@@ -278,7 +297,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         i18nRevision();
         sources.forEach((source) => source?.read());
         prepareRender();
-        return runtime.render(providerReview);
+        return runtime.render(providerReview, readRealtimeTalkConversation);
       },
       () => runtime.presented && runtime.presentation.documentVisible,
     );

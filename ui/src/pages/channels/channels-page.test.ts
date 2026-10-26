@@ -5,7 +5,7 @@ import type {
   ControlUiChannelSettingsSnapshot,
 } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";

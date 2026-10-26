@@ -640,13 +640,15 @@ function createOperationAdmission(
       closed = true;
       // Receipts remain observable; late requests can no longer obtain authority.
       service();
-      for (const decision of decisions) {
-        if (Atomics.load(decision, 0) === REQUESTED) {
-          refuse(
-            decision,
-            new SqliteWorkerError("SQLite worker admission is closed", "closed"),
-            "authority",
-          );
+      if (decisions.size > 0) {
+        for (const decision of decisions) {
+          if (Atomics.load(decision, 0) === REQUESTED) {
+            refuse(
+              decision,
+              new SqliteWorkerError("SQLite worker admission is closed", "closed"),
+              "authority",
+            );
+          }
         }
       }
       port1.close();

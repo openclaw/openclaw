@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -32,11 +33,7 @@ suite.define(() => {
               metadataRequested.resolve();
               await metadataReady.promise;
               await route.fulfill({
-                json: {
-                  available: true,
-                  mediaTicket: "sizing-ticket",
-                  mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                },
+                json: mediaTicketPayload("sizing-ticket", 300_000),
               });
               return;
             }

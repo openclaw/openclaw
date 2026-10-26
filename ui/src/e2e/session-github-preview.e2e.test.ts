@@ -61,9 +61,9 @@ suite.define(() => {
     const card = page.locator(".link-reader-hovercard");
     await card.waitFor({ state: "visible" });
     await expect.poll(() => card.textContent()).toContain("Repair private project preview");
-    const startup = await gateway.waitForRequest("chat.startup");
+    const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
     const sessionKey = "agent:main:main";
-    expect(startup.params).toMatchObject({ sessionKey });
+    expect(subscription.params).toMatchObject({ key: sessionKey });
     expect((await gateway.getRequests("forge.preview")).map(({ params }) => params)).toEqual([
       expect.objectContaining({ url, sessionKey }),
     ]);

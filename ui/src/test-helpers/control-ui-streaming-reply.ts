@@ -34,6 +34,7 @@ function installStreamingReplyProbe() {
   };
   let active = false;
   let startedAt = 0;
+  let stoppedAt = 0;
   let current: Delta | undefined;
   let finalReceived = false;
   let initialScrollHeight = 0;
@@ -131,6 +132,7 @@ function installStreamingReplyProbe() {
   const frames: number[] = [];
   const inputs: Array<{ delayMs: number; nextFrameMs?: number; chars: number }> = [];
   const longFrames: Array<{ start: number; duration: number; blocking: number }> = [];
+  const setupLongFrames: typeof longFrames = [];
   const channel = new MessageChannel();
   const taskEnds: Array<{ delta: Delta; at: number }> = [];
   channel.port1.addEventListener("message", () => {
@@ -285,8 +287,12 @@ function installStreamingReplyProbe() {
       return;
     }
     for (const entry of list.getEntries()) {
+      if (entry.startTime + entry.duration <= startedAt) {
+        continue;
+      }
       const blocking = Reflect.get(entry, "blockingDuration");
-      longFrames.push({
+      const targetFrames = entry.startTime < startedAt ? setupLongFrames : longFrames;
+      targetFrames.push({
         start: entry.startTime - startedAt,
         duration: entry.duration,
         blocking: typeof blocking === "number" ? blocking : 0,
@@ -338,8 +344,11 @@ function installStreamingReplyProbe() {
     read() {
       return { active, delivered: deltas.length, finalReceived };
     },
-    finish() {
+    stop() {
       active = false;
+      stoppedAt = performance.now();
+    },
+    finish() {
       const thread = document.querySelector<HTMLElement>("openclaw-chat-pane .chat-thread")!;
       const tailPosition = {
         initialScrollHeight,
@@ -395,7 +404,7 @@ function installStreamingReplyProbe() {
         measurement:
           "Untraced streaming only. Per-delta taskAndMicrotasksMs is delivery to a MessageChannel task (includes app microtasks and scheduling delay). Parse/geometry/style totals include asynchronous work until the next delta. Frame loss assumes 60 Hz; keydown samples are trusted native input to next rAF, not presentation timestamps.",
         startedAt,
-        elapsedMs: performance.now() - startedAt,
+        elapsedMs: stoppedAt - startedAt,
         pipeline,
         tailPosition,
         rig: {
@@ -413,6 +422,7 @@ function installStreamingReplyProbe() {
           0,
         ),
         longFrames,
+        setupLongFrames,
         longFrameBlockingMs: longFrames.reduce((sum, item) => sum + item.blocking, 0),
         inputs,
         textVisibility,

@@ -1,6 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import {
+  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -61,6 +64,17 @@ import {
 } from "./prepared-model-runtime.owner.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness({ label: "auth-generation-recovery" });
 const { mocks } = fixture;

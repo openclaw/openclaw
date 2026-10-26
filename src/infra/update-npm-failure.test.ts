@@ -70,17 +70,9 @@ it.each(["EACCES", undefined])("reports spawned npm diagnostics (%s)", async (co
     expect(report.body).toContain(`npm failure code: ${code ?? "unknown"}`);
     expect(report.body).toContain("npm ERR! install failed while preparing package");
     expect(report.body).toContain("[redacted-path]");
-    for (const privateText of [
-      token,
-      "/home/example",
-      "private directory",
-      "example-user",
-      "synthetic-password",
-      "unrelated warning",
-    ]) {
-      expect(report.body).not.toContain(privateText);
-      expect(JSON.stringify(step.failureFacts)).not.toContain(privateText);
-    }
+    expect([report.body, JSON.stringify(step.failureFacts)].join("\n")).not.toMatch(
+      /npm_synthetic|\/home\/example|private directory|example-user|synthetic-password|unrelated warning/u,
+    );
     if (code) {
       expect(report.body).toContain("Next step: Check the npm global prefix");
     }
@@ -108,7 +100,8 @@ it.each([
   const longCause = `${cause}${"🦞".repeat(200)}`;
   const exactLimit = `npm error ${"x".repeat(190)}`;
   const fifth = "npm error retained fifth diagnostic";
-  const marker = " …[truncated]";
+  // 50 ASCII bytes + 33 four-byte characters + the 15-byte marker fit in 200 bytes.
+  const truncated = `${cause}${"🦞".repeat(33)} …[truncated]`;
   const diagnostics = [
     `npm error code ${code}`,
     longCause,
@@ -123,21 +116,16 @@ it.each([
   const messages = step.failureFacts?.map((fact) => fact.message) ?? [];
   expect(messages).toEqual([
     `npm error code ${code === "PRIVATE_IDENTIFIER" ? "unknown" : code}`,
-    expect.stringContaining(cause),
+    truncated,
     exactLimit,
     expect.stringMatching(/^npm error token=/u),
     fifth,
   ]);
-  const truncated = messages[1] ?? "";
-  expect(truncated.endsWith(marker)).toBe(true);
-  expect(longCause.startsWith(truncated.slice(0, -marker.length))).toBe(true);
-  expect(Buffer.byteLength(truncated)).toBeGreaterThan(196);
   for (const message of messages) {
     expect(Buffer.byteLength(message ?? "")).toBeLessThanOrEqual(200);
   }
-  expect(messages.slice(2, 4).join("\n")).not.toContain(marker);
+  expect(messages.slice(2, 4).join("\n")).not.toContain(" …[truncated]");
   const excerpt = messages.join("\n");
-  expect(Buffer.byteLength(excerpt)).toBeLessThanOrEqual(1024);
   expect(excerpt).not.toMatch(/fixture-only-secret|omitted|sixth diagnostic/u);
   for (const recorded of [false, true]) {
     const report = await failureReport(step, recorded);

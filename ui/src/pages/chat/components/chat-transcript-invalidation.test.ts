@@ -16,12 +16,11 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
-  activePlacementSession,
   createInitializationContext,
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "../chat-pane.test-support.ts";
+} from "../chat-application-context.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -601,15 +600,23 @@ describe("chat transcript invalidation", () => {
         await session.load;
       }
       const { transcript, container, rerender } = updatingThread(props);
+      const project = () =>
+        transcript.renderSession(props.sessionKey, (session) =>
+          projectChatTranscript({ ...props }, session),
+        );
       try {
         rerender();
         transcript.start();
         await flushDeferredRowPrune();
         expect(required(container, ".chat-question-summary button").textContent).toBe("Answer");
 
+        const previous = project();
         resetTranscriptSession(props.paneId, container);
         presentQuestions();
-        rerender();
+        const current = project();
+        render(previous.renderRows(), container);
+        flush();
+        render(current.renderRows(), container);
         await flushDeferredRowPrune();
         click(container, ".chat-question-summary button");
 

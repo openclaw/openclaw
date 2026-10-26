@@ -55,10 +55,15 @@ export async function makeSnapshot(configPath: string, config: Record<string, un
 export function makeDeps(
   home: string,
   warn = vi.fn(),
-): { deps: ObserveRecoveryDeps; configPath: string; auditPath: string; warn: typeof warn } {
+): {
+  deps: ObserveRecoveryDeps & { logger: Pick<typeof console, "warn" | "error"> };
+  configPath: string;
+  auditPath: string;
+  warn: typeof warn;
+} {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   return {
-    deps: { fs, env: {}, homedir: () => home, logger: { warn } },
+    deps: { fs, env: {}, homedir: () => home, logger: { warn, error: vi.fn() } },
     configPath,
     auditPath: path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
     warn,

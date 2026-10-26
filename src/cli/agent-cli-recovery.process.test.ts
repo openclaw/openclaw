@@ -102,15 +102,12 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
 `,
     ),
   ]);
-  const env = {
+  const fixture = createCliProcessFixture(root, {
     ...process.env,
     HOME: root,
+    USERPROFILE: root,
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     OPENCLAW_STATE_DIR: stateDir,
-  };
-  const fixture = createCliProcessFixture(root, {
-    ...env,
-    USERPROFILE: root,
     TMPDIR: tmpDir,
     NODE_DISABLE_COMPILE_CACHE: "1",
     NODE_ENV: undefined,
@@ -120,6 +117,7 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
     OPENCLAW_NO_RESPAWN: "1",
     VITEST: undefined,
   });
+  const { env } = fixture;
   await fixture.writeConfig({
     session: { store: path.join(stateDir, "agents/{agentId}/sessions/sessions.json") },
     plugins: {

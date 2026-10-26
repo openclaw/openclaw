@@ -161,13 +161,18 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     getSessionRowProjection: deps.getSessionRowProjection,
   });
 
-  const readWatcher = (watched: Watched | undefined) => watched?.readCurrent();
   const currentWatcher = async (connId: string, sessionKey: string) => {
     const watched = subscriptions.get(connId)?.get(sessionKey);
-    const target =
-      deps.isConnectionActive?.(connId) === false
-        ? undefined
-        : await limitReads(readWatcher, watched);
+    let target: ControlUiSessionPrTarget | undefined;
+    if (watched && deps.isConnectionActive?.(connId) !== false) {
+      try {
+        watched.target.assertCurrent?.();
+        target = watched.target.assertCurrent ? watched.target : undefined;
+      } catch {
+        // Only changed grants need queued preparation; current grants stay synchronous.
+      }
+      target ??= await limitReads(watched.readCurrent);
+    }
     const subscription = subscriptions.get(connId);
     if (scope.isClosing || subscription?.get(sessionKey) !== watched) {
       return undefined;

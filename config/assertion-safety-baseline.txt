@@ -567,7 +567,7 @@ extensions/policy/src/policy-routing.ts	2
 extensions/policy/src/policy-state-tools.ts	1
 extensions/qa-channel/src/bus-client.ts	3
 extensions/qa-channel/src/channel-actions.ts	2
-extensions/qa-channel/src/channel-base.ts	6
+extensions/qa-channel/src/channel-base.ts	5
 extensions/qa-channel/src/channel.ts	3
 extensions/qa-channel/src/gateway.ts	2
 extensions/qa-lab/src/auth-profile.fixture.ts	3
@@ -914,7 +914,7 @@ packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	16
 packages/ai/src/providers/openai-completions.ts	1
-packages/ai/src/providers/openai-reasoning-effort.ts	6
+packages/ai/src/providers/openai-reasoning-effort.ts	5
 packages/ai/src/providers/openai-responses-shared.ts	4
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
@@ -955,7 +955,6 @@ packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/credential-redaction.ts	1
 packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts	1
 packages/ai/src/utils/stream-first-event-timeout.ts	2
-packages/ai/src/utils/tls-certificate-errors.ts	1
 packages/gateway-client/src/client.ts	3
 packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
@@ -1421,7 +1420,6 @@ src/channels/plugins/read-only.ts	2
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
 src/channels/plugins/setup-promotion-helpers.ts	1
-src/channels/plugins/setup-promotion-keys.ts	1
 src/channels/plugins/setup-wizard-helpers.ts	12
 src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	1
@@ -1715,9 +1713,9 @@ src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
 src/gateway/call.ts	5
-src/gateway/chat-display-projection.core.ts	5
+src/gateway/chat-display-projection.core.ts	4
 src/gateway/chat-display-projection.history.ts	1
-src/gateway/chat-display-projection.sanitize.ts	5
+src/gateway/chat-display-projection.sanitize.ts	3
 src/gateway/chat-sanitize.ts	3
 src/gateway/cli-session-history.claude.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
@@ -1836,7 +1834,6 @@ src/gateway/tools-invoke-shared.ts	3
 src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	5
 src/gateway/worker-environments/inference-runtime.ts	2
-src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	2
 src/gateway/worker-environments/service-validation.ts	2
@@ -2032,7 +2029,6 @@ src/meeting-bot/runtime-setup.ts	1
 src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
 src/meeting-bot/session-transcript-store.ts	1
-src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
@@ -2060,7 +2056,7 @@ src/plugin-sdk/channel-entry-contract.ts	6
 src/plugin-sdk/channel-inbound.ts	2
 src/plugin-sdk/channel-ingress-runtime.ts	1
 src/plugin-sdk/channel-outbound.ts	1
-src/plugin-sdk/channel-replay-guard.ts	2
+src/plugin-sdk/channel-replay-guard.ts	1
 src/plugin-sdk/core.ts	3
 src/plugin-sdk/dedupe-runtime.ts	1
 src/plugin-sdk/extension-shared.ts	6
@@ -2165,7 +2161,6 @@ src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1
 src/plugins/provider-model-compat.ts	3
 src/plugins/provider-openai-chatgpt-oauth.ts	1
-src/plugins/provider-policy-surface.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
@@ -2369,7 +2364,6 @@ ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
 ui/src/components/lobster-dex.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
-ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/session-data.ts	1

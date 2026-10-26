@@ -15,8 +15,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 32,
-      "agent": 34
+      "state": 34,
+      "agent": 37
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -2476,7 +2476,7 @@
     "@types/ws": "8.18.2",
     "@vitest/browser-playwright": "5.0.5",
     "@vitest/coverage-v8": "5.0.5",
-    "acpx": "0.19.6",
+    "acpx": "0.21.0",
     "ajv": "8.20.0",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",

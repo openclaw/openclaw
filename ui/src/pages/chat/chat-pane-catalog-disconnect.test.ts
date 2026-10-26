@@ -8,10 +8,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
 import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { createGatewayBrowserClientFixture, type TestChatPane } from "./chat-pane.test-support.ts";
+import type { TestChatPane } from "./chat-pane.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,

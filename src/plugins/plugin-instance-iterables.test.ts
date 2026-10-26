@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -33,6 +34,40 @@ async function* yieldingFinally(values: number[], finished = () => {}) {
     finished();
   }
 }
+
+it("reuses the scoped protocol callback across overlapping stream operations", async () => {
+  const instance = owner();
+  const resume = createDeferredCore();
+  const first = { done: false, value: "first" };
+  const second = { done: false, value: "second" };
+  const source = instance.wrap(
+    iterable({
+      async next(value: number) {
+        await resume.promise;
+        return value === 1 ? first : second;
+      },
+      async return() {
+        return { done: true, value: undefined };
+      },
+    }),
+  );
+  const iterator = source[Symbol.asyncIterator]();
+  const scoped = vi.spyOn(AsyncResource.prototype, "runInAsyncScope");
+  try {
+    const pending = [iterator.next(1), iterator.next(2)];
+    resume.resolve();
+    const received = await Promise.all(pending);
+    expect(received[0]).toBe(first);
+    expect(received[1]).toBe(second);
+    const callbacks = scoped.mock.calls.map(([callback]) => callback);
+    expect(callbacks).toHaveLength(2);
+    expect(new Set(callbacks).size).toBe(1);
+  } finally {
+    scoped.mockRestore();
+    resume.resolve();
+    await iterator.return();
+  }
+});
 
 it.each(["promise", "thenable"] as const)(
   "awaits a next() %s with native assimilation and live admission",

@@ -103,6 +103,7 @@ export function preserveSessionLineage(
     | "spawnDepth"
     | "subagentRole"
     | "subagentControlScope"
+    | "blindPrompt"
   >
 > &
   InheritedSessionToolPolicy {
@@ -119,6 +120,7 @@ export function preserveSessionLineage(
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
+    blindPrompt: entry?.blindPrompt,
   };
 }
 

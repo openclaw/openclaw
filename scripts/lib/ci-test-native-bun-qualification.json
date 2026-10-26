@@ -29,7 +29,6 @@
     "packages/markdown-core/src/ir.nested-lists.test.ts": "513d3dcd710c5f313083a8e4cf06d19e7e92ea3ebfc01a00a2db5f7d5dc84cc1",
     "packages/markdown-core/src/ir.table-block.test.ts": "81a19462327441a9d125794283126e46c251fbc52c119714ecbd79a33aea3df1",
     "packages/markdown-core/src/ir.test.ts": "12379e51f55984d4dd0059036f69d1e83ca62d75533d679aed3ceddd70a787b4",
-    "packages/markdown-core/src/render.annotations.test.ts": "0648c358209131bee225405da96963488d209176e2fc341d68a517fc6cdddea3",
     "packages/media-core/src/file-name.test.ts": "0908c0a54e8ab077f77d9023842990eb10d57433708468bbb013a2c30124fd14",
     "packages/media-core/src/inline-image-data-url.test.ts": "ce40173f9720218edeadd6290860145c5c8e72483e1bc531e220940824ce6b7c",
     "packages/memory-host-sdk/src/host/batch-status.test.ts": "5dacc6d632e6bdfa007d59a7b96f5e9ca540c429de28417aacb92be3f5b099f3",

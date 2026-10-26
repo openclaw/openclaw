@@ -4,8 +4,8 @@ import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,

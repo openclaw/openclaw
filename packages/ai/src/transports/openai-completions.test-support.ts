@@ -8,7 +8,7 @@ import {
 } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { Model } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { encodedModelRequestBodyStream } from "./model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
@@ -144,6 +144,12 @@ export function makeCompletionsChunk(
   } as ChatCompletionChunk;
 }
 
+export function makeCompletionsToolDelta(id: string, name: string, args: string) {
+  return {
+    tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: args } }],
+  };
+}
+
 export function createDeepSeekCompletionsModel(): CompletionsModel {
   return modelFixture("deepseek-v4-pro", {
     ...nativeDeepSeekModel,
@@ -151,18 +157,7 @@ export function createDeepSeekCompletionsModel(): CompletionsModel {
   });
 }
 
-export function createAssistantOutput(model: CompletionsModel): OpenAICompletionsOutput {
-  return {
-    role: "assistant" as const,
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
+export { createAssistantOutput };
 
 export function expectedRecoveredTool(name: string, args: Record<string, unknown>) {
   return {
@@ -179,16 +174,7 @@ export async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<
   }
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+export { expectObjectFields as expectRecordFields } from "../../../../src/test-utils/mock-call-assertions.js";
 
 export const openRouterModel = modelFixture("deepseek/deepseek-v4-flash", {
   provider: "openrouter",

@@ -1,5 +1,6 @@
 import type { ChildProcess, Serializable, SpawnOptions } from "node:child_process";
 import type { Duplex } from "node:stream";
+import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -124,6 +125,7 @@ export function spawnServiceChildRelay(params: {
   stdio: SpawnOptions["stdio"];
   env: NodeJS.ProcessEnv;
   detached: boolean;
+  nativeProcessOwner?: string;
   onSpawnCleanup?: (completion: Promise<void>) => void;
 }): {
   child: ChildProcess;
@@ -133,13 +135,22 @@ export function spawnServiceChildRelay(params: {
   const executable = resolveLaunchableNodePath();
   const child = withChildProcessOperation(
     "service.relay",
-    () =>
-      spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+    () => {
+      const env = resolveRuntimeWorkerEnv(params.workerUrl, params.env);
+      if (env.NODE_OPTIONS !== undefined) {
+        env.NODE_OPTIONS = stripNodeStartupHooks(env.NODE_OPTIONS);
+      }
+      // The admitted owner can select a native entry without the caller's image inventory.
+      if (params.nativeProcessOwner === params.workerUrl.href) {
+        delete env.BUN_BE_BUN;
+      }
+      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,
-        env: resolveRuntimeWorkerEnv(params.workerUrl, params.env),
-      }),
+        env,
+      });
+    },
     "default",
   );
   const cleanup = createServiceChildCleanup();

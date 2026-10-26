@@ -8,6 +8,8 @@
 // Trace allocations in a separate pass with matching fixture treatment on both sides:
 // either fresh fixtures or consistently warmed post-timing state.
 // wholeSoakCpu includes idle gaps; listFilterCounts proves measured search coverage.
+// Team fanout checks use continuous foreground receipts and committed injection IDs;
+// timed event counts can split unrelated background broadcasts at window boundaries.
 // --stress-worktree-fanout instead uses prepared fixture worktrees and retains reconnect/filter churn.
 // Worker-churn load (isolated built Gateway; run baseline/candidate on fresh identical fixtures):
 // node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir .local/worker-base \
@@ -59,7 +61,7 @@
 // before post-window collection or teardown; give each arm fresh, distinct paths.
 // --node-policy-churn adds a paired synthetic node and node list/describe/invoke traffic;
 // use memory-soak --mixed-rpc --plugins 40 --list-interval-ms 500 for policy load.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
@@ -126,6 +128,7 @@ import {
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
+import { createTeamStressFanoutReceipts } from "./team-shape-stress-receipts.ts";
 
 const { values } = parseArgs({
   options: {
@@ -166,6 +169,10 @@ const { values } = parseArgs({
     "stress-tool-search": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
+    "turn-start-phases": { type: "boolean", default: false },
+    "turn-start-advance-origin": { type: "boolean", default: false },
+    "git-trace": { type: "boolean", default: false },
+    "provider-delay-ms": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
@@ -181,6 +188,7 @@ const { values } = parseArgs({
     "usage-rpc": { type: "boolean", default: false },
     "node-policy-churn": { type: "boolean", default: false },
     "team-stress": { type: "boolean", default: false },
+    "operator-model-policy": { type: "boolean", default: false },
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
@@ -303,7 +311,8 @@ if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGI
     `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
   );
 }
-const syntheticPluginCount = values["team-stress"] ? 0 : pluginCount;
+const teamPluginCatalog = values["team-stress"] || values["turn-start-phases"];
+const syntheticPluginCount = teamPluginCatalog ? 0 : pluginCount;
 const teamStressPlugins = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
 if (values["plugin-update"] && scenario !== "plugins.reload") {
   throw new Error("--plugin-update requires --scenario plugins.reload");
@@ -363,7 +372,12 @@ const gatewayPreload = values["gateway-preload"]
     }
   : undefined;
 const retentionScenario = scenario === "attempt-retention";
-if (values["list-filter-churn"] && scenario !== "sessions.list" && scenario !== "memory-soak") {
+if (
+  values["list-filter-churn"] &&
+  scenario !== "sessions.list" &&
+  scenario !== "memory-soak" &&
+  !values["turn-start-phases"]
+) {
   throw new Error("--list-filter-churn requires --scenario sessions.list or memory-soak");
 }
 const idleScenario = scenario === "session-idle-retention";
@@ -483,7 +497,9 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount =
-  scenario === "chat.send" || idleScenario ? 1 : integer(values.clients, "--clients");
+  (scenario === "chat.send" && !values["turn-start-phases"]) || idleScenario
+    ? 1
+    : integer(values.clients, "--clients");
 const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
 if (values["plugin-update"] && rpcConcurrency !== 1) {
   throw new Error("--plugin-update requires --rpc-concurrency 1");
@@ -592,7 +608,7 @@ const coldSessionRounds = integer(values["cold-session-rounds"], "--cold-session
 if (
   (coldSessionRounds || values["attempt-setup-image"]) &&
   (scenario !== "chat.send" ||
-    values["stress-tools"] ||
+    (values["stress-tools"] && !values["turn-start-phases"]) ||
     values["session-event-wake"] ||
     historyTurns)
 ) {
@@ -633,6 +649,12 @@ if (
 }
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
+const providerDelayMs = integer(values["provider-delay-ms"], "--provider-delay-ms", 0);
+if (values["turn-start-phases"] && scenario !== "chat.send") {
+  throw new Error("--turn-start-phases requires --scenario chat.send");
+}
+let measuredPhaseRound: number | undefined;
+const turnStartPhases: Array<Record<string, unknown>> = [];
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
 if (soakScenario && values["list-filter-churn"] && !listIntervalMs) {
   throw new Error("memory-soak --list-filter-churn requires --list-interval-ms");
@@ -770,7 +792,10 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
     "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
   );
 }
-if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
+if (
+  values["poll-between-rounds"] &&
+  ((!soakScenario && !values["turn-start-phases"]) || !listIntervalMs)
+) {
   throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
 }
 const teamStressChurnMs = integer(values["team-stress-churn-ms"], "--team-stress-churn-ms");
@@ -1035,7 +1060,7 @@ if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * r
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
 const teamStressTargets =
-  values["team-stress"] && Array.isArray(fixture.stressTargets)
+  teamPluginCatalog && Array.isArray(fixture.stressTargets)
     ? fixture.stressTargets.map((target: unknown) => {
         if (
           !isRecord(target) ||
@@ -1050,6 +1075,12 @@ const teamStressTargets =
 if (values["team-stress"] && teamStressTargets.length === 0) {
   throw new Error("--team-stress requires unarchived fixture targets");
 }
+const teamStressFanout = values["team-stress"]
+  ? createTeamStressFanoutReceipts(
+      clientCount,
+      teamStressTargets.map((target) => target.sessionKey),
+    )
+  : undefined;
 type StartupTarget = {
   sessionKey: string;
   shortId?: string;
@@ -1152,7 +1183,12 @@ let stressWorktree: string | undefined;
 const worktreeToolRoots = new Map<number, string>();
 const worktreeToolSearches = new Map<string, number>();
 let diffControlOriginal: string | undefined;
-if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
+if (
+  values["stress-tools"] ||
+  values["mixed-rpc"] ||
+  values["attempt-setup-image"] ||
+  values["turn-start-phases"]
+) {
   if (!isRecord(project) || typeof project.path !== "string") {
     throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
   }
@@ -1289,7 +1325,7 @@ if (soakScenario) {
     cfg.cron = { ...cfg.cron, enabled: true };
   }
 }
-if (values["team-stress"]) {
+if (teamPluginCatalog) {
   const bundled = teamStressPlugins;
   cfg.plugins.enabled = true;
   cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), ...bundled])];
@@ -1331,6 +1367,22 @@ const githubOptionsObservations: Array<{
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
 const startupObserverPreload = path.join(output, "startup-observer-preload.mjs");
 const teamStressPreload = path.join(output, "team-stress-preload.mjs");
+const turnStartPreload = path.join(output, "turn-start-preload.mjs");
+if (values["turn-start-phases"]) {
+  writeFileSync(
+    turnStartPreload,
+    `import { isMainThread } from "node:worker_threads";
+import { onTrustedInternalDiagnosticEvent } from ${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)};
+if (isMainThread) onTrustedInternalDiagnosticEvent(event => {
+  if (event.type === "diagnostic.phase.completed" &&
+      (event.name.startsWith("chat.send.") || event.name === "worktree.preparation")) {
+    process.send?.({ turnStartPhase: { name: event.name, durationMs: event.durationMs,
+      startedAt: event.startedAt, endedAt: event.endedAt, details: event.details } });
+  }
+}, { include: ["diagnostic.phase.completed"] });
+`,
+  );
+}
 if (values["team-stress"]) {
   writeFileSync(
     teamStressPreload,
@@ -1624,6 +1676,7 @@ const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
 const fixtureDirectPassword = "synthetic-connected-github-local-caller";
 const trustedProxyScenario =
+  values["operator-model-policy"] ||
   values["operator-access-policy"] ||
   values["github-options-connected"] ||
   values["presence-deltas"];
@@ -1739,6 +1792,15 @@ if (trustedProxyScenario) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
+          ...(values["operator-model-policy"]
+            ? {
+                modelPolicy: {
+                  sourceAgent: "main",
+                  allow: ["openai/*"],
+                  deny: ["openai/blocked-*"],
+                },
+              }
+            : {}),
           ...(values["operator-access-policy"]
             ? { accessPolicyPlugin: "synthetic-operator-access" }
             : {}),
@@ -1941,6 +2003,7 @@ async function stressSubagentEvents(body: unknown, input: unknown, purpose: stri
       throw new Error("stress subagent spawn did not return an accepted native child");
     }
     state.accepted = { runId: accepted.runId, childSessionKey: accepted.childSessionKey };
+    teamStressFanout?.trackForeground([accepted.childSessionKey], false);
     state.phase = "yield-issued";
     return functionCallEvents(
       "sessions_yield",
@@ -2478,6 +2541,9 @@ const mock = createServer((req, res) => {
           recoveredResponses++;
         }
       }
+      if (providerDelayMs > 0) {
+        await delay(providerDelayMs);
+      }
       for (const event of answer) {
         if (res.destroyed) {
           break;
@@ -2743,6 +2809,9 @@ const env = {
     : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["operator-model-policy"] && values["team-stress-allocation-sampling"]
+    ? { OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" }
+    : {}),
   ...(values["github-options-connected"]
     ? {
         GH_TOKEN: "synthetic-github-options",
@@ -2929,7 +2998,8 @@ async function assertPortAvailable(targetPort: number) {
   });
 }
 async function ready(targetPort: number, endpoint: string, owned?: ChildProcess) {
-  for (let attempt = 0; attempt < 300; attempt++) {
+  // Loaded hosts can need several minutes for plugin startup; measurement starts after readiness.
+  for (let attempt = 0; attempt < 1200; attempt++) {
     if (owned) {
       assertGatewayAlive();
       // Preflight is best effort; the owned bind-success log handles another process taking the port.
@@ -3033,7 +3103,9 @@ const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from({ length: sessionCount }, (_, index) =>
   verifyHistoryReplay
     ? `agent:main:memory-soak-history-child-${index}`
-    : `agent:main:transcript-broadcast-measure-child-${index}`,
+    : values["turn-start-phases"]
+      ? `agent:main:transcript-broadcast-measure-${port}-child-${index}`
+      : `agent:main:transcript-broadcast-measure-child-${index}`,
 );
 const historyNamespace = verifyHistoryReplay ? "memory-soak-history" : "reopen-history";
 const historySeedPath = path.join(root, `${historyNamespace}.json`);
@@ -3749,6 +3821,7 @@ async function startStressSubagent(
   client: ReturnType<typeof createGatewayWsClient>,
   current: NonNullable<typeof cohort>,
 ) {
+  teamStressFanout?.trackForeground([stressParentKey], false);
   await rpc(client, "sessions.reset", { key: stressParentKey });
   let releaseChild!: () => void;
   const childReady = new Promise<void>((resolve) => {
@@ -3860,6 +3933,7 @@ async function runRound(
   measuredRound?: number,
   roundKeys = keys,
 ) {
+  teamStressFanout?.trackForeground(roundKeys);
   const cronOperatorJob = values["cron-operator-turn"] ? cronOperatorJobs[0] : undefined;
   if (values["cron-operator-turn"] && !cronOperatorJob?.id) {
     throw new Error("Cron operator fixture is not ready");
@@ -4135,6 +4209,26 @@ async function runRound(
             clearTimeout(timer);
             sessionEventRuns.delete(sessionKey);
           }
+        } else if (
+          values["turn-start-phases"] &&
+          measuredRound !== undefined &&
+          measuredRound < coldSessionRounds
+        ) {
+          const created = await rpc(client, "sessions.create", {
+            key: sessionKey,
+            cwd: stressWorktree,
+            worktree: true,
+            message,
+            fork: false,
+            visibility: "shared",
+            displayName: "Synthetic cold turn",
+            ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+          });
+          if (!isRecord(created) || typeof created.runId !== "string" || created.runError) {
+            throw new Error(`Fresh turn admission failed: ${JSON.stringify(created)}`);
+          }
+          runId = created.runId;
+          current.turns.get(index + 1)!.runId = runId;
         } else {
           await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
             sessionKey,
@@ -4305,14 +4399,16 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
+      (!requireSubscriberQuiet ||
+        (performance.now() - lastSubscriberEventAt >= 1000 &&
+          !teamStressFanout?.pendingInjections().length))
     ) {
       return;
     }
     await delay(50);
   }
   throw new Error(
-    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}`,
+    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}, pendingInjectionReceipts=${JSON.stringify(teamStressFanout?.pendingInjections() ?? [])}`,
   );
 }
 async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
@@ -4537,6 +4633,7 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      teamStressFanout?.observe(index, event.event, payload);
       if (
         index === 0 &&
         event.event === "chat" &&
@@ -4756,7 +4853,7 @@ try {
         ? ["--trace-gc-nvp"]
         : []),
       "--import",
-      values["team-stress"]
+      teamPluginCatalog
         ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
         : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
@@ -4775,6 +4872,7 @@ try {
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["team-stress"] ? ["--import", teamStressPreload] : []),
+      ...(values["turn-start-phases"] ? ["--import", turnStartPreload] : []),
       ...(values["transport-counts"]
         ? ["--import", "./scripts/lib/gateway-bench-transport-preload.ts"]
         : []),
@@ -4794,11 +4892,17 @@ try {
     ],
     proxyViewers || trustedProxyScenario ? "trusted-proxy" : "none",
   );
+  const gitTraceDirectory = path.join(output, "git-trace");
+  if (values["git-trace"]) {
+    mkdirSync(gitTraceDirectory);
+  }
   const gatewayStartedAt = performance.now();
   gateway = launch(
     gatewayArgs,
     "gateway",
     {
+      ...(values["git-trace"] ? { GIT_TRACE2_EVENT: gitTraceDirectory } : {}),
+      ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}),
       ...(values["transport-counts"]
         ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
         : {}),
@@ -4808,6 +4912,17 @@ try {
     },
     true,
   );
+  if (values["turn-start-phases"]) {
+    gateway.on("message", (message: unknown) => {
+      if (
+        isRecord(message) &&
+        isRecord(message.turnStartPhase) &&
+        measuredPhaseRound !== undefined
+      ) {
+        turnStartPhases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
+      }
+    });
+  }
   await ready(port, "/readyz", gateway);
   const gatewayReadyMs = performance.now() - gatewayStartedAt;
   await readGatewayCpuUsage(gateway);
@@ -4829,7 +4944,10 @@ try {
           ...(sessionEventAncestors === 2 ? { parentSessionKey: "agent:main:main" } : {}),
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["github-options-connected"]
-            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            ? {
+                worktree: true,
+                ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+              }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast parent",
@@ -4868,8 +4986,13 @@ try {
             ? {}
             : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
-          ...(values["attempt-setup-image"] || values["worktree-tool-churn"]
-            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          ...(values["attempt-setup-image"] ||
+          values["worktree-tool-churn"] ||
+          values["turn-start-phases"]
+            ? {
+                worktree: true,
+                ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+              }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
@@ -5026,7 +5149,10 @@ try {
         key: target.sessionKey,
         cwd: target.worktree,
         ...(values["github-options-connected"]
-          ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          ? {
+              worktree: true,
+              ...(values["turn-start-phases"] ? {} : { worktreeBaseRef: "refs/heads/main" }),
+            }
           : {}),
         visibility: "shared",
         displayName: "Synthetic dashboard diff",
@@ -5122,10 +5248,22 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
-  if (reloadPluginId || scopePluginId || values["team-stress"]) {
+  if (values["operator-model-policy"]) {
+    const catalog = await rpc(sender, "models.list", { agentId: "main" });
+    if (
+      !isRecord(catalog) ||
+      !isRecord(catalog.modelSelectionPolicy) ||
+      catalog.modelSelectionPolicy.restricted !== true ||
+      catalog.modelSelectionPolicy.defaultModel !== "openai/gpt-4.1"
+    ) {
+      throw new Error("Synthetic operator did not acquire its model policy");
+    }
+    writeFileSync(path.join(output, "operator-model-policy.json"), JSON.stringify(catalog));
+  }
+  if (reloadPluginId || scopePluginId || teamPluginCatalog) {
     const inventory = await rpc(sender, "plugins.list", {});
     writeFileSync(path.join(output, "plugin-inventory.json"), JSON.stringify(inventory, null, 2));
-    if (values["team-stress"]) {
+    if (teamPluginCatalog) {
       const plugins =
         isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : [];
       // Provider catalog entries deliberately stay lazy; workload capabilities must be live.
@@ -5220,7 +5358,7 @@ try {
     {},
     { archived: false },
     { archived: true },
-    { search: values["team-stress"] ? "Synthetic" : "team-shape" },
+    { search: teamPluginCatalog ? "Synthetic" : "team-shape" },
     { agentId: "main" },
     { excludeSubagents: true },
     { excludeSystem: true, excludeCron: true },
@@ -5812,22 +5950,73 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (values["turn-start-phases"] && round < coldSessionRounds) {
+      await delay(roundIntervalMs);
+    }
+    if (values["turn-start-advance-origin"] && round < coldSessionRounds) {
+      if (
+        !values["turn-start-phases"] ||
+        !isRecord(project) ||
+        typeof project.repoRoot !== "string"
+      ) {
+        throw new Error("Advancing an origin requires the turn-start fixture");
+      }
+      const git = (args: string[], input?: string) => {
+        const result = spawnSync("git", args, {
+          input,
+          encoding: "utf8",
+          env: {
+            ...env,
+            DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_AUTHOR_NAME: "Synthetic fixture",
+            GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+            GIT_COMMITTER_NAME: "Synthetic fixture",
+            GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+          },
+        });
+        if (result.status !== 0) {
+          throw new Error(`Synthetic origin update failed: ${result.stderr}`);
+        }
+        return result.stdout.trim();
+      };
+      const origin = realpathSync(git(["-C", project.repoRoot, "remote", "get-url", "origin"]));
+      if (!origin.startsWith(`${realpathSync(root)}${path.sep}`)) {
+        throw new Error("Origin must remain inside the synthetic fixture");
+      }
+      const atOrigin = (...args: string[]) => ["--git-dir", origin, ...args];
+      git(atOrigin("read-tree", "HEAD"));
+      const blob = git(
+        atOrigin("hash-object", "-w", "--stdin"),
+        `# Synthetic base revision ${port}-${round}\n`,
+      );
+      git(atOrigin("update-index", "--add", "--cacheinfo", `100644,${blob},README.md`));
+      const tree = git(atOrigin("write-tree"));
+      const commit = git(
+        atOrigin("commit-tree", tree, "-p", "HEAD", "-m", `Synthetic base revision ${round}`),
+      );
+      git(atOrigin("update-ref", "refs/heads/main", commit));
+    }
+    measuredPhaseRound = round;
     if (scenario === "chat.send" && round < coldSessionRounds) {
       for (const [index, previous] of keys.entries()) {
         const key = `agent:main:transcript-broadcast-cold-${port}-${round}-${index}`;
-        await rpc(sender, "sessions.create", {
-          key,
-          ...(stressWorktree ? { cwd: stressWorktree } : {}),
-          ...(values["attempt-setup-image"]
-            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
-            : {}),
-          ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
-          fork: false,
-          visibility: "shared",
-          displayName: "Synthetic cold setup",
-        });
-        if (sessionEventAncestors !== undefined) {
-          await verifySessionEventLineage(key);
+        if (!values["turn-start-phases"]) {
+          await rpc(sender, "sessions.create", {
+            key,
+            ...(stressWorktree ? { cwd: stressWorktree } : {}),
+            ...(values["attempt-setup-image"]
+              ? { worktree: true, worktreeBaseRef: coldBaseRefs[round * runCount + index] }
+              : {}),
+            ...(sessionEventAncestors === 0 ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
+            fork: false,
+            visibility: "shared",
+            displayName: "Synthetic cold setup",
+          });
+          if (sessionEventAncestors !== undefined) {
+            await verifySessionEventLineage(key);
+          }
         }
         for (const client of clients.slice(0, exactClients)) {
           await rpc(client, "sessions.messages.unsubscribe", {
@@ -5938,6 +6127,7 @@ try {
                 throw new Error("Team stress timestamp write did not commit");
               }
               teamStressWrites++;
+              teamStressFanout?.expectInjection(target.sessionKey, injected.messageId);
               await Promise.race([
                 delay(Math.max(0, teamStressChurnMs - (performance.now() - started)), undefined, {
                   ref: false,
@@ -5959,6 +6149,9 @@ try {
               }
               const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
                 signal: AbortSignal.timeout(10_000),
+                ...(trustedProxyScenario
+                  ? { headers: { ...clientConnection.headers, origin: authorityOrigin } }
+                  : {}),
               });
               if (!response.ok) {
                 throw new Error(`Team stress Prometheus scrape failed: HTTP ${response.status}`);
@@ -6122,7 +6315,7 @@ try {
                       throw new Error("node.invoke did not return the synthetic node's echo");
                     }
                   } else if (method === "chat.history" || method === "chat.startup") {
-                    const stressTarget = values["team-stress"]
+                    const stressTarget = teamPluginCatalog
                       ? teamStressTargets[(clientIndex + round) % teamStressTargets.length]
                       : undefined;
                     const history = await rpc(
@@ -6267,7 +6460,7 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        if (values["dashboard-rpc"] || pollBetweenRounds) {
+        if ((values["dashboard-rpc"] || pollBetweenRounds) && !values["turn-start-phases"]) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
             roundStartedAt + roundIntervalMs,
@@ -6440,7 +6633,10 @@ try {
         `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
       );
     }
-    for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
+    teamStressFanout?.assertComplete();
+    for (const event of turnScenario && !teamStressFanout
+      ? ["session.message", "sessions.changed"]
+      : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
         throw new Error(
@@ -7490,6 +7686,12 @@ try {
       }),
     ),
   };
+  if (values["turn-start-phases"]) {
+    writeFileSync(
+      path.join(output, "turn-start-phases.json"),
+      JSON.stringify({ providerDelayMs, coldSessionRounds, phases: turnStartPhases }, null, 2),
+    );
+  }
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
 } catch (error) {

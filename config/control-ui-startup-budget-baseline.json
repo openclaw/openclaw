@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273686,
-  "reason": "Route readiness: 20 interleaved pairs against the original base showed 15.8% faster Settings readiness and 8.3% less task CPU. After merging main 2f95e977, same-host builds compare 272893 to 273686 B startup gzip (+793 B); seven JS requests, one CSS request, and total CSS are unchanged. Set the baseline to the measured head.",
-  "updatedAt": "2026-10-25"
+  "startupJsGzipBytes": 271650,
+  "reason": "Same-host route grouping measures 271528 to 271650 B gzip (+122 B), with five startup JS requests and one CSS request unchanged. In 20 base/A-A/head triplets, 100 ms Cron readiness improves 912.5 to 816.2 ms (paired A/A -10.745%); total CPU is flat. Retain the measured head value under the approved small-byte measured-win policy.",
+  "updatedAt": "2026-10-26"
 }

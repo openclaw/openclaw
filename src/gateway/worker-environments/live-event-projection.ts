@@ -14,18 +14,15 @@ export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRun
 export function prepareWorkerLiveEventData(
   event: WorkerLiveEventParams["event"],
 ): Record<string, unknown> {
-  const payload = structuredClone(event.payload) as Record<string, unknown>;
   if (event.kind !== "tool") {
-    return payload;
+    return structuredClone(event.payload);
   }
   const toolName = normalizeToolPolicyName(event.payload.name);
-  payload.name = toolName;
-  if (event.payload.phase === "start") {
-    payload.args = event.payload.args;
-  } else if (event.payload.phase === "update") {
+  const payload: Record<string, unknown> = { ...event.payload, name: toolName };
+  if (event.payload.phase === "update") {
     const partialResult = sanitizeToolResult(event.payload.partialResult);
     payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
-  } else {
+  } else if (event.payload.phase === "result") {
     const result = sanitizeToolResult(event.payload.result);
     payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
   }

@@ -1,6 +1,9 @@
 import { createMemo, For } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS } from "../../../src/gateway/control-ui-contract.js";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
+} from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -8,10 +11,7 @@ import {
   createGatewayHarness as createPullRequestGateway,
   createHello,
 } from "../lib/session-pull-requests.test-support.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";

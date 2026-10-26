@@ -17,7 +17,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
-import { callGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
+import { connectChatGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
 import {
   createWaitClockInstance,
   startWaitClockProvider,
@@ -32,6 +32,7 @@ import {
 // The exact same assertions run against baseline and candidate asset roots.
 const uiRoot = path.resolve(process.env.OPENCLAW_UI_E2E_WAIT_CLOCK_UI_ROOT || "dist/control-ui");
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let provider: Awaited<ReturnType<typeof startWaitClockProvider>>;
 let artifactDir: string;
 const screenshots: string[] = [];
@@ -48,6 +49,14 @@ const saveProof = () =>
 const suite = createControlUiE2eSuite({
   name: "Wait clocks through a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     artifactDir = createControlUiE2eArtifactDir("wait-clock-" + path.basename(uiRoot));
     // No implicit runtime build, Vite server or Gateway substitution.
@@ -84,11 +93,10 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function call(method: string, params: Record<string, unknown>) {
-  return JSON.parse(await callGateway(instance, method, params));
-}
+const call = <T = Record<string, unknown>>(method: string, params: Record<string, unknown>) =>
+  client.request<T>(method, params);
 async function rows() {
-  const result: SessionsListResult = await call("sessions.list", { agentId: "main", limit: 50 });
+  const result = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
   const parent = result.sessions.find((row) => row.key === fixture.key);
   const childKey = provider.receipts.find((receipt) => receipt.tool === "sessions_spawn")?.result
     .childSessionKey;
@@ -239,7 +247,7 @@ suite.define(() => {
           expect(await parent.locator(".agent-chat__composer-run-status").count()).toBe(0);
           const initial = await rows();
           assertWaitLifecycle(initial.parent, initial.child);
-          const initialHistory: ChatHistoryResult = await call("chat.history", {
+          const initialHistory = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
           });
@@ -288,7 +296,7 @@ suite.define(() => {
           await waiting.waitFor();
           // Reload can hydrate with chat.history.delta; use a fresh public history RPC
           // to independently bind the displayed clock to the persisted session row.
-          const history: ChatHistoryResult = await call("chat.history", {
+          const history = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
           });

@@ -147,7 +147,10 @@ function workboardCard(page: Page, columnTitle: string, title: string) {
 async function openCardEditor(card: Locator): Promise<void> {
   await card.hover();
   await button(card, "Card actions").click();
-  await button(card, "Edit card").click();
+  await button(
+    card.page().getByRole("dialog", { name: "Card actions", exact: true }),
+    "Edit card",
+  ).click();
 }
 
 async function dispatchHtml5Drag(source: Locator, target: Locator): Promise<void> {

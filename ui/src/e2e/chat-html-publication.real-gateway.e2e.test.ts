@@ -17,6 +17,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -255,9 +256,7 @@ suite.define(() => {
         expect(await panel.locator("pre:visible").textContent()).toBe(finalHtml);
         const downloadLink = panel.getByRole("link", { name: `Download ${filename}`, exact: true });
         const [download] = await Promise.all([page.waitForEvent("download"), downloadLink.click()]);
-        const saved = await download.path();
-        expect(saved).not.toBeNull();
-        expect(await readFile(saved!)).toEqual(Buffer.from(finalHtml));
+        expect(await readControlUiE2eDownload(download)).toEqual(Buffer.from(finalHtml));
         expect(download.suggestedFilename()).toBe(filename);
         expect(provider.failures).toEqual([]);
       },

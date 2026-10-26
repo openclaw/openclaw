@@ -5,6 +5,7 @@ import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -22,16 +23,13 @@ suite.define(() => {
     const workKey = "agent:main:workspace";
     const report = createControlUiSessionRow(reportKey, "Weekly report", 1);
     const workspace = createControlUiSessionRow(workKey, "Workspace", 2);
-    const reportMessages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: [
-        {
-          type: "text",
-          text: `Report item ${index + 1}\n\n${"Synthetic weekly report detail. ".repeat(65)}`,
-        },
-      ],
-      __openclaw: { id: `report-${index + 1}`, seq: index + 1 },
-    }));
+    const reportMessages = Array.from({ length: 80 }, (_, index) =>
+      chatMessage(
+        index % 2 === 0 ? "user" : "assistant",
+        `Report item ${index + 1}\n\n${"Synthetic weekly report detail. ".repeat(65)}`,
+        { __openclaw: { id: `report-${index + 1}`, seq: index + 1 } },
+      ),
+    );
     const reportHistory = {
       completeSnapshot: true,
       hasMore: false,
@@ -40,6 +38,7 @@ suite.define(() => {
     };
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: workKey,
         deferredMethods: ["chat.history"],
         methodResponses: { "sessions.list": sessionsListResponse([workspace, report]) },

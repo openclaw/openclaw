@@ -79,36 +79,75 @@ async function runConfigMutation(
       opts.localStateOwner !== undefined &&
       prepared.operations.length > 0 &&
       prepared.operations.every(({ setPath }) => setPath[0] === "database");
-    // Previews inspect installed plugin state without acquiring write custody.
-    if (
-      opts.localStateOwner &&
-      opts.cliOptions.dryRun &&
-      !databaseOnly &&
-      !getDatabaseEngineSelection()
-    ) {
-      const { readConfigSnapshotForEngineSelection } =
-        await import("../commands/config-preflight-snapshot.js");
-      await readConfigSnapshotForEngineSelection();
-    }
-    const runLocal = () =>
+    // Previews and owner-routed writes inspect installed plugin state without write custody.
+    const prepareReadOnly = async () => {
+      if (!databaseOnly && !getDatabaseEngineSelection()) {
+        const { readConfigSnapshotForEngineSelection } =
+          await import("../commands/config-preflight-snapshot.js");
+        await readConfigSnapshotForEngineSelection();
+      }
+    };
+    const run = (commit?: ConfigOperationParams["commit"]) =>
       runConfigOperations({
         runtime,
         options: opts.cliOptions,
         ...prepared,
         ...(databaseOnly ? { databaseOnly: true } : {}),
+        ...(commit ? { commit } : {}),
       });
-    if (!opts.localStateOwner || opts.cliOptions.dryRun) {
-      await runLocal();
+    if (!opts.localStateOwner) {
+      await run();
+    } else if (opts.cliOptions.dryRun) {
+      await prepareReadOnly();
+      await run();
     } else {
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      const { target } = opts.localStateOwner;
       await runWithLocalStateOwner({
         ...opts.localStateOwner,
         params: {},
-        onForeignOwner: "refuse",
-        onlineAlternative:
-          "For online config changes, use openclaw gateway call config.patch with a raw patch and baseHash from openclaw gateway call config.get.",
+        ...(target === "config"
+          ? {}
+          : { recoveryCommand: `openclaw config get ${quoteCliArg(target)}` }),
+        ...(prepared.operations.some(({ setPath }) => setPath[0] === "database")
+          ? {
+              onForeignOwner: "refuse" as const,
+              onlineAlternative:
+                "Database settings select the state database the running Gateway holds open, so they change only offline.",
+            }
+          : {
+              // The Gateway stays the single config writer: this process prepares the same
+              // change it would write offline and the owner commits it against baseHash.
+              onForeignOwner: async ({ env, requestOwner }) => {
+                const current = await requestOwner<{ hash?: unknown; path?: unknown }>(
+                  "config.get",
+                  {},
+                );
+                // The diff is prepared from this command's file; bind it to the file the owner writes.
+                const { resolveIdentityPathViaExistingAncestorSync: identity } =
+                  await import("../infra/boundary-path.js");
+                const selected = resolveConfigPath(env);
+                if (
+                  typeof current.path !== "string" ||
+                  identity(current.path) !== identity(selected)
+                ) {
+                  throw new Error(
+                    `The running Gateway owns this state directory but uses config file ${typeof current.path === "string" ? shortenHomePath(current.path) : "<unknown>"}, not ${shortenHomePath(selected)}. Nothing was sent and no settings were saved. Rerun with the Gateway's config path, or stop the Gateway through its service owner and rerun this exact command.`,
+                  );
+                }
+                await prepareReadOnly();
+                await run(async (change) => {
+                  const { buildConfigOwnerPatch } = await import("./config-cli-owner-patch.js");
+                  const result = await requestOwner<{ restart?: unknown }>(
+                    "config.patch",
+                    buildConfigOwnerPatch(change, current.hash),
+                  );
+                  return result.restart ? "The Gateway is restarting to apply it." : undefined;
+                });
+              },
+            }),
         ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
-        runLocal,
+        runLocal: () => run(),
       });
     }
   } catch (err) {

@@ -113,7 +113,15 @@ it.each([
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
     const runtimeArgs = runtime === "bun" ? ["--no-install"] : [];
     const prefix = [cli.executable, ...runtimeArgs, launcherPath, "node", "run"];
-    expect(installed?.programArguments.slice(0, prefix.length)).toEqual(prefix);
+    expect(installed?.programArguments).toEqual([
+      ...prefix,
+      "--host",
+      "gateway.example",
+      "--port",
+      "18789",
+      "--no-tls",
+      "--auth-from-env",
+    ]);
     expect(installed?.runtimePinUpdate).toEqual({
       expected: observed,
       pin: pinned ? { runtime, path: cli.executable } : undefined,

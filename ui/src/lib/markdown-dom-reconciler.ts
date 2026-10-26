@@ -174,6 +174,7 @@ function parseCanonical(
         ((!incremental && !hasMedia) ||
           (sessionTitles && element.matches(SESSION_TITLE_TARGET_SELECTOR)) ||
           element.classList.contains("markdown-mermaid") ||
+          element.hasAttribute("data-code-highlight") ||
           element.localName.includes("-")),
       );
       return {
@@ -387,8 +388,33 @@ export class MarkdownDomReconciler {
       const completed = this.stableHtml ? stableHtml.slice(this.stableHtml.length) : stableContent;
       if (this.tail) {
         // Promotion retains the same DOM owner and its reader state.
-        this.tail.html = completed;
+        const previous = this.tail;
+        previous.html = completed;
         this.tail = undefined;
+        if (tailHtml) {
+          // A cold live runtime first renders the whole reply in one island.
+          // Split its completed prefix without retiring the still-growing nodes.
+          const completedNodes = parseCanonical(
+            completed,
+            media?.prefix ?? "",
+            previous.incremental,
+            Boolean(this.registerSessionTitle),
+          );
+          const remaining = previous.children.splice(completedNodes.length);
+          if (remaining.length) {
+            this.tail = this.createFragment(tailContent, true);
+            this.tail.children = remaining;
+            const parent = previous.end.parentNode!;
+            parent.insertBefore(this.tail.start, remaining[0]!.start);
+            parent.insertBefore(previous.end, this.tail.start);
+            for (const [index, node] of remaining.entries()) {
+              if (typeof node.key === "number") {
+                node.key = index;
+              }
+            }
+            this.fragments.push(this.tail);
+          }
+        }
       } else {
         this.fragments.push(this.createFragment(completed, false));
       }

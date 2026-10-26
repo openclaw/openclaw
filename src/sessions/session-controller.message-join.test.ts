@@ -38,8 +38,43 @@ import {
 } from "./session-controller.message-injection.js";
 import { prepareReplyMessageJoin } from "./session-controller.message-join.js";
 import { testing } from "./session-controller.test-support.js";
+import { createReplyTurnParticipants } from "./session-controller.tool-authority.js";
 
 afterEach(() => testing.resetSessionControllerForTest());
+
+it("copies private turn participants and freezes only their shared command target", () => {
+  let current = true;
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "participant",
+    scopes: ["operator.read"],
+    assertCurrent() {
+      if (!current) {
+        throw new Error("revoked");
+      }
+    },
+  });
+  const freeze = vi.spyOn(Object, "freeze");
+  const participants = createReplyTurnParticipants({
+    operatorAuthority: authority,
+    senderId: "original",
+    gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
+  });
+  try {
+    expect(freeze).toHaveBeenCalledTimes(1);
+    const exposed = participants.resolve()!;
+    Object.assign(exposed, { senderId: "changed", name: "changed" });
+    expect(Reflect.set(exposed.gatewayUiCommandTarget!, "connId", "changed")).toBe(false);
+    expect(participants.resolve()).toMatchObject({
+      senderId: "original",
+      gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
+    });
+    current = false;
+    expect(() => exposed.assertCurrent()).toThrow("access changed");
+  } finally {
+    freeze.mockRestore();
+    participants.close();
+  }
+});
 
 type JoinCase = {
   predecessor?: boolean | "pending";

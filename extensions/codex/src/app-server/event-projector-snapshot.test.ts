@@ -1,16 +1,11 @@
-import type {
-  AgentMessage,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
-import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { finalMessage as finalItem } from "./event-projector.compact.test-support.js";
 import * as fixture from "./event-projector.compact.test-support.js";
 import {
   buildEmptyToolTelemetry,
-  createCodexTestModel,
+  createParams,
   createProjector,
   registerCodexEventProjectorTestLifecycle,
 } from "./event-projector.test-harness.js";
@@ -30,45 +25,22 @@ function commitSteeringPrefix(
   }
 }
 
-function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessage[] {
-  const model = createCodexTestModel();
-  return buildCodexMessagesSnapshot({
-    runParams: {
-      prompt: "Pre-compaction memory flush",
-      sessionId: "session-1",
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      trigger,
-    } as EmbeddedRunAttemptParams,
-    turnId: "turn-1",
-    upstreamUserText: undefined,
-    reasoningText: "checking memory",
-    asyncMessages: [],
-    commentaryMessages: [],
-    toolMessages: [
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "write",
-        content: fixture.text("saved"),
-        isError: false,
-        timestamp: Date.now(),
-      } as AgentMessage,
-    ],
-    lastAssistant: {
-      role: "assistant",
-      content: fixture.text("NO_REPLY"),
-      timestamp: Date.now() + 1,
-    } as AssistantMessage,
-  });
-}
-
 describe("buildCodexMessagesSnapshot", () => {
-  it("marks every current memory-maintenance message as hidden for durable replay", () => {
-    const messages = buildSnapshot("memory");
-
-    expect(messages.length).toBeGreaterThan(1);
+  it("marks every current memory-maintenance message as hidden for durable replay", async () => {
+    const projector = await createProjector({ ...(await createParams()), trigger: "memory" });
+    await fixture.notify(projector, "item/reasoning/textDelta", {
+      itemId: "reasoning",
+      delta: "checking memory",
+    });
+    const tool = createNativeCommandItem({ id: "write", aggregatedOutput: "saved" });
+    await fixture.start(projector, tool);
+    await fixture.complete(projector, tool);
+    await fixture.complete(projector, finalItem("answer", "NO_REPLY"));
+    await fixture.finish(projector, [finalItem("answer", "NO_REPLY")]);
+    const messages = fixture.result(projector).messagesSnapshot;
+    expect(messages.map(({ role }) => role)).toEqual(
+      expect.arrayContaining(["user", "assistant", "toolResult"]),
+    );
     expect(messages.every((message) => (message as { display?: boolean }).display === false)).toBe(
       true,
     );
@@ -153,27 +125,10 @@ describe("buildCodexMessagesSnapshot", () => {
       expect(result.assistantTexts).toEqual([]);
       expect(result.lastAssistant).toBeUndefined();
       expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
-      expect(prefix).toMatchObject([
-        { role: "assistant", content: fixture.text("Earlier answer.") },
-      ]);
       expect(prefix[0]).not.toHaveProperty("turnId");
       expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
     },
   );
-
-  it("adopts the saved prefix for a raw completion with a replacement identity", async () => {
-    const completionId = "raw-completed";
-    const projector = await createProjector();
-    await fixture.start(projector, finalItem("streamed", ""));
-    await fixture.delta(projector, "Before steer.", "streamed");
-    commitSteeringPrefix(projector, projector.buildSteeringTranscriptPrefix());
-    await fixture.rawAssistant(projector, "Before steer. After steer.", {
-      id: completionId,
-      phase: "final_answer",
-    });
-    await fixture.finish(projector, [finalItem(completionId, "Before steer. After steer.")]);
-    expect(fixture.result(projector).assistantTexts).toEqual([" After steer."]);
-  });
 
   it.each([true, false])(
     "respects the first completion boundary across a native tool (completed before tool: %s)",
@@ -218,11 +173,6 @@ describe("buildCodexMessagesSnapshot", () => {
       "turn-1:assistant:answer-b",
       "turn-1:assistant:pending:segment:0",
     ]);
-    expect(prefix).toMatchObject([
-      { role: "assistant", content: fixture.text("Same answer.") },
-      { role: "assistant", content: fixture.text("Same answer.") },
-      { role: "assistant", content: fixture.text("Still writing.") },
-    ]);
     commitSteeringPrefix(projector, prefix);
     expect(projector.buildSteeringTranscriptPrefix()).toEqual(prefix.slice(0, 2));
 
@@ -241,24 +191,29 @@ describe("buildCodexMessagesSnapshot", () => {
     expect(fixture.result(projector).assistantTexts).toEqual([]);
   });
 
-  it.each(["same", "replacement", "independent", "handoff", "async"] as const)(
-    "retains the captured raw cutoff when %s completion arrives before the mirror settles",
+  it.each(["same", "replacement", "independent", "handoff", "async", "raw"] as const)(
+    "retains the captured cutoff across %s completion",
     async (identity) => {
       const projector = await createProjector();
       const started = finalItem("streamed", "");
-      const beforeSteer = " \t🦞 prefix\n";
+      const beforeSteer = identity === "raw" ? "Before steer." : " \t🦞 prefix\n";
+      const tail = identity === "raw" ? " After steer." : "continued and done";
       await fixture.start(projector, started);
       await fixture.delta(projector, beforeSteer, started.id);
       const prefix = projector.buildSteeringTranscriptPrefix();
       expect(prefix).toMatchObject([{ role: "assistant", content: fixture.text(beforeSteer) }]);
-      await fixture.delta(projector, "continued", started.id);
+      if (identity === "raw") {
+        commitSteeringPrefix(projector, prefix);
+      } else {
+        await fixture.delta(projector, "continued", started.id);
+      }
       const completed = {
         ...started,
         id:
           identity === "same" || identity === "handoff" || identity === "async"
             ? started.id
             : identity,
-        text: `${beforeSteer}continued and done`,
+        text: `${beforeSteer}${tail}`,
       };
       if (identity === "handoff") {
         const item = { type: "sleep", id: "handoff", durationMs: 1 };
@@ -275,11 +230,18 @@ describe("buildCodexMessagesSnapshot", () => {
           delivery: "async",
         });
       }
-      await fixture.complete(projector, completed);
-      commitSteeringPrefix(projector, prefix);
+      if (identity === "raw") {
+        await fixture.rawAssistant(projector, completed.text, {
+          id: completed.id,
+          phase: "final_answer",
+        });
+      } else {
+        await fixture.complete(projector, completed);
+        commitSteeringPrefix(projector, prefix);
+      }
       await fixture.finish(projector, [completed]);
       expect(fixture.result(projector).assistantTexts).toEqual([
-        identity === "independent" ? `${beforeSteer}continued and done` : "continued and done",
+        identity === "independent" ? `${beforeSteer}${tail}` : tail,
       ]);
     },
   );

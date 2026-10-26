@@ -271,7 +271,7 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
   const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
-  expect(avatar.classList).toContain("is-pending");
+  expect(avatar.classList).not.toContain("is-pending");
 
   image?.dispatchEvent(new Event("error"));
   await waitForFast(() => expect(avatar.classList).toContain("is-fallback"));

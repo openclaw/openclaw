@@ -22,6 +22,12 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Chat portraits keep a fixed frame while images load. Previously verified
+same-origin portrait URLs reuse the browser image cache within the admitted
+operator's connection scope when using ambient authentication. Unknown URLs and
+missing images share the avatar loader's requests and retry handling. Initials
+remain beneath the image and are visible if it fails.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
@@ -99,6 +105,8 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+
+Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
 

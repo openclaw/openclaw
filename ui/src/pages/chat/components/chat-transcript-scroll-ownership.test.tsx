@@ -14,6 +14,7 @@ import {
   mountTestTranscript,
   numberedContentRows,
   render,
+  renderReadyRows,
 } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript as createTranscript } from "./chat-transcript-controller.ts";
 import {
@@ -166,15 +167,9 @@ it.each(["resize clamp", "native return"] as const)(
       if (updateRequested) {
         updateRequested = false;
         render(
-          transcript.renderSession(`agent:main:composer-reader-${movement}`, (session) => {
-            session.setContentReady(true);
-            return session.render(
-              rows,
-              (row) => (row.kind === "content" ? row.content : null),
-              null,
-              false,
-            );
-          }),
+          transcript.renderSession(`agent:main:composer-reader-${movement}`, (session) =>
+            renderReadyRows(session, rows),
+          ),
           container,
         );
         transcript.update();
@@ -287,6 +282,43 @@ it.each([
   },
 );
 
+it("grows the native range before compensating fractional row growth above a reader", async () => {
+  transcriptDomState.measuredRowHeight = 120;
+  const { policy, transcript, mount } = createPolicyTranscript("measurement-extent");
+  const rows = numberedContentRows(12);
+  const { container, renderRows } = await mount(rows);
+  viewport(container, 600, () => transcriptSize(container) + 84);
+  container.scrollTo = (options?: ScrollToOptions | number) => {
+    if (typeof options === "object") {
+      container.scrollTop = Math.min(
+        options.top ?? container.scrollTop,
+        container.scrollHeight - container.clientHeight,
+      );
+    }
+  };
+  connectPolicy(policy, transcript, container);
+  resize(container, 600);
+  nativeScroll(container, container.scrollHeight - container.clientHeight);
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
+  nativeScroll(container, container.scrollTop - 24);
+  expectReader(policy, true);
+  vi.useFakeTimers();
+  vi.advanceTimersByTime(150);
+  renderRows(rows);
+  await vi.advanceTimersByTimeAsync(0);
+  const row = expectDefined(
+    container.querySelector<HTMLElement>('[data-index="6"]'),
+    "row above the viewport",
+  );
+  const before = container.scrollTop;
+  Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160.375 });
+  resize(row, 160.375);
+  // Observe the first compensation, before a render or retry can conceal native clamping.
+  expect(container.scrollTop).toBe(before + 40.375);
+  container.dispatchEvent(new Event("scroll"));
+  expectReader(policy, true);
+});
+
 it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
   transcriptDomState.measuredRowHeight = 120;
   const { policy, transcript, mount } = createPolicyTranscript("measurement-reader");
@@ -305,6 +337,7 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
   resize(container, 600);
   nativeScroll(container, total + 84 - 600);
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
   container.scrollTop -= 24;
   container.dispatchEvent(new Event("scroll"));
   expect(policy.chatReadingHistory).toBe(true);

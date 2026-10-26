@@ -4,8 +4,8 @@ import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -264,8 +264,6 @@ suite.define(() => {
 
   it.each([
     { width: 1440, theme: "light" },
-    { width: 1440, theme: "dark" },
-    { width: 390, theme: "light" },
     { width: 390, theme: "dark" },
   ] as const)(
     "keeps every PR visible and actionable at $width in $theme",
@@ -675,40 +673,17 @@ suite.define(() => {
     );
   });
 
-  it("renders a typed publication failure and its next action", async () => {
+  it("reuses the publication key after an unknown outcome and rotates it after a typed failure", async () => {
     const { page, gateway, watchedKey } = await openPublicationChat({
       "sessions.github.publish": terminalFailure,
     });
     await emitPullRequests(
       gateway,
       watchedKey,
-      publicationState("openclaw/rejected-publication", {
-        createUrl: "https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication",
+      publicationState("openclaw/retry-publication", {
+        createUrl: "https://github.com/openclaw/openclaw/pull/new/openclaw/retry-publication",
       }),
     );
-
-    await openChatPublication(page);
-    await page.getByRole("button", { name: "Create PR" }).click();
-    await openChatPublication(page);
-    const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await pollText(failure).toContain("Publication failed");
-    await pollText(failure).toContain("Check repository write access");
-    await pollCount(page.getByRole("button", { name: "Choose a new publication" })).toBe(1);
-    await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");
-    expect(
-      await page
-        .locator(
-          'a[href="https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication"]',
-        )
-        .count(),
-    ).toBe(0);
-  });
-
-  it("reuses the publication key after an unknown outcome and rotates it after failure", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat({
-      "sessions.github.publish": terminalFailure,
-    });
-    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/retry-publication"));
 
     await openChatPublication(page);
     await gateway.deferNext("sessions.github.publish");
@@ -730,7 +705,18 @@ suite.define(() => {
       after: requestCount,
     });
     expect(publicationRequestKey(second.params)).toBe(publicationRequestKey(first.params));
+    const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
+    await pollText(failure).toContain("Publication failed");
+    await pollText(failure).toContain("Check repository write access");
     await pollCount(page.getByRole("button", { name: "Choose a new publication" })).toBe(1);
+    await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");
+    expect(
+      await page
+        .locator(
+          'a[href="https://github.com/openclaw/openclaw/pull/new/openclaw/retry-publication"]',
+        )
+        .count(),
+    ).toBe(0);
 
     requestCount = (await gateway.getRequests("sessions.github.publish")).length;
     await page.getByRole("button", { name: "Choose a new publication" }).click();

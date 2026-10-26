@@ -11,7 +11,7 @@ const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executab
 it.skipIf(!canRunPlaywrightChromium(executablePath))(
   "publishes the reviewed selection after closing a pending publish and retrying its failure",
   async () => {
-    const server = await startControlUiE2eServer(undefined, { source: true });
+    const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
     try {
       browser = await chromium.launch({ executablePath });

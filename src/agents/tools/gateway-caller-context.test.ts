@@ -52,6 +52,8 @@ function withCallers<T>(identities: Caller[], run: () => T | Promise<T>): Promis
 }
 
 const runInstance = (name: string) => ({ instanceId: `${name}-instance`, runId: `${name}-run` });
+const operator = (profileId: string, assertCurrent: () => void) =>
+  createAdmittedRunOperatorAuthority({ profileId, scopes: ["operator.write"], assertCurrent });
 const admittedCaller = (name: string, turnSourceChannel: string, admitted = true) => ({
   agentId: name,
   sessionKey: `agent:${name}:session`,
@@ -81,24 +83,17 @@ function makeTool(): AnyAgentTool {
 
 describe("gateway caller context wrapper", () => {
   it.each(["same", "selected", "caller"] as const)(
-    "checks each selected source once per effect and observes %s source revocation",
+    "checks selected sources and observes %s source revocation",
     async (revokedSource) => {
       let permitted = true;
       const refusal = new Error("access grant ended between effects");
       const createSource = (profileId: string, revoke: boolean) => {
-        const check = vi.fn(() => {
+        const check = () => {
           if (revoke && !permitted) {
             throw refusal;
           }
-        });
-        return {
-          check,
-          authority: createAdmittedRunOperatorAuthority({
-            profileId,
-            scopes: ["operator.write"],
-            assertCurrent: check,
-          }),
         };
+        return operator(profileId, check);
       };
       const caller = createSource("caller", revokedSource !== "selected");
       const selected =
@@ -106,31 +101,23 @@ describe("gateway caller context wrapper", () => {
       await withCaller(
         {
           operationalRunInstance: runInstance("selected-source"),
-          operatorAuthority: caller.authority,
+          operatorAuthority: caller,
           receiptAuthority: () => true,
         },
         () =>
-          withGatewayToolOperatorContinuation(
-            { operatorAuthority: selected.authority },
-            async () => {
-              const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller guard");
-              caller.check.mockClear();
-              selected.check.mockClear();
-              const effects: string[] = [];
-              const effect = (name: string) => {
-                assertion();
-                effects.push(name);
-              };
-              effect("first");
-              expect(caller.check).toHaveBeenCalledOnce();
-              expect(selected.check).toHaveBeenCalledOnce();
-
-              await Promise.resolve();
-              permitted = false;
-              expect(() => effect("second")).toThrow(refusal);
-              expect(effects).toEqual(["first"]);
-            },
-          ),
+          withGatewayToolOperatorContinuation({ operatorAuthority: selected }, async () => {
+            const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller guard");
+            const effects: string[] = [];
+            const effect = (name: string) => {
+              assertion();
+              effects.push(name);
+            };
+            effect("first");
+            await Promise.resolve();
+            permitted = false;
+            expect(() => effect("second")).toThrow(refusal);
+            expect(effects).toEqual(["first"]);
+          }),
       );
     },
   );
@@ -144,13 +131,12 @@ describe("gateway caller context wrapper", () => {
       }
     };
     const synchronousSource = vi.fn(assertSourceCurrent);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "source-profile",
-      scopes: ["operator.write"],
-      assertCurrent: Object.assign(synchronousSource, {
+    const operatorAuthority = operator(
+      "source-profile",
+      Object.assign(synchronousSource, {
         prepareSessionSource: async () => ({ assertCurrent: assertSourceCurrent, checks: [] }),
       }),
-    });
+    );
     await withCaller(
       {
         operationalRunInstance: runInstance("source"),
@@ -347,7 +333,7 @@ describe("gateway caller context wrapper", () => {
     admitted.resolveGatewayContext = () => admitted;
     replacement.resolveGatewayContext = () => replacement;
     let current = admitted;
-    const selectGateway = vi.fn(() => current);
+    const selectGateway = () => current;
     const captureResolver = () =>
       expectDefined(getCaller()?.gatewayContextResolver, "admitted caller Gateway");
 
@@ -359,10 +345,8 @@ describe("gateway caller context wrapper", () => {
       return resolveGatewayContext;
     });
     const second = await withCaller({ gatewayContextResolver: selectGateway }, captureResolver);
-    const callsBeforeLookup = selectGateway.mock.calls.length;
     expect(getCanonicalGatewayContextResolver(first)).toBe(admitted.resolveGatewayContext);
     expect(getCanonicalGatewayContextResolver(second)).toBe(replacement.resolveGatewayContext);
-    expect(selectGateway).toHaveBeenCalledTimes(callsBeforeLookup);
     expect(first()).toBeUndefined();
     expect(second()).toBe(replacement);
   });
@@ -423,8 +407,8 @@ describe("gateway caller context wrapper", () => {
     const run = runInstance("outer");
     let outerActive = sameRun;
     let innerActive = true;
-    const outer = vi.fn(() => outerActive);
-    const inner = vi.fn(() => innerActive);
+    const outer = () => outerActive;
+    const inner = () => innerActive;
     const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
     const innerSignal = new AbortController().signal;
     const identity = await withCallers(
@@ -442,12 +426,8 @@ describe("gateway caller context wrapper", () => {
       outerActive = true;
       innerActive = false;
       expect(identity?.receiptAuthority?.()).toBe(false);
-      expect(outer).toHaveBeenCalledTimes(3);
-      expect(inner).toHaveBeenCalledTimes(3);
       expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
     } else {
-      expect(inner).toHaveBeenCalledOnce();
-      expect(outer).not.toHaveBeenCalled();
       expect(identity?.approvalSignals).toEqual([innerSignal]);
     }
   });

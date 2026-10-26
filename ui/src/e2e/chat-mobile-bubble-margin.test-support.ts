@@ -73,6 +73,22 @@ const activity = (id: string, key: string, content: unknown = longText) =>
   surface(id, forwarded(key, content), "left", ".chat-session-activity");
 const cardSelector = ".chat-assistant-attachment-card";
 const remoteImage = (width = 960) => `https://media.example/preview-${width}.png`;
+function remoteImageCase(width: number, attachment: boolean) {
+  const imageSize = { width, height: (width * 9) / 16 };
+  const media = { url: remoteImage(width), ...imageSize };
+  const content = attachment
+    ? mediaAttachment("image", "sample.png", "image/png", media.url, imageSize)
+    : { type: "image", ...media };
+  return {
+    ...caseFor(
+      `assistant-${attachment ? "attachment-image" : "image"}-${width}`,
+      "assistant",
+      [content],
+      ".chat-message-image",
+    ),
+    imageSize,
+  };
+}
 
 export const marginCases = [
   caseFor("user-long", "user", longText),
@@ -92,28 +108,9 @@ export const marginCases = [
     caseFor(`${role}-video`, role, [video], role === "user" ? ".chat-video-preview" : cardSelector),
     caseFor(`${role}-audio`, role, [audio], cardSelector),
   ]),
-  ...[
-    { width: 320, height: 180, attachment: false },
-    { width: 320, height: 180, attachment: true },
-    { width: 960, height: 540, attachment: true },
-  ].map(({ width, height, attachment }) =>
-    Object.assign(
-      caseFor(
-        `assistant-${attachment ? "attachment-image" : "image"}-${width}`,
-        "assistant",
-        [
-          attachment
-            ? mediaAttachment("image", "sample.png", "image/png", remoteImage(width), {
-                width,
-                height,
-              })
-            : { type: "image", url: remoteImage(width), width, height },
-        ],
-        ".chat-message-image",
-      ),
-      { imageSize: { width, height } },
-    ),
-  ),
+  remoteImageCase(320, false),
+  remoteImageCase(320, true),
+  remoteImageCase(960, true),
   ...[2, 3, 5].map((count) =>
     caseFor(
       `user-gallery-${count}`,
@@ -214,13 +211,13 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
   const scope = page.locator(".chat-pane-cache__pane--active");
   const target = scope.locator(`.chat-thread ${testCase.selector}`).first();
   await target.waitFor();
-  await scope
-    .locator(".chat-thread img.chat-message-image")
-    .evaluateAll((images: HTMLImageElement[]) =>
-      Promise.all(images.map((element) => element.decode())),
-    );
-  await page.evaluate(() => document.fonts.ready);
   return target.evaluate(async (element, side) => {
+    const activePane = element.closest(".chat-pane-cache__pane--active")!;
+    const images = activePane.querySelectorAll<HTMLImageElement>(
+      ".chat-thread img.chat-message-image",
+    );
+    await Promise.all(Array.from(images, (imageElement) => imageElement.decode()));
+    await document.fonts.ready;
     const finiteAnimations = element
       .getAnimations()
       .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));

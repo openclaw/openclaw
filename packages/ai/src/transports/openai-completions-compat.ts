@@ -12,7 +12,11 @@ import {
   supportsOpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
-import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
+import {
+  resolveProviderEndpoint,
+  resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities,
+} from "./host-policy.js";
+import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
@@ -54,7 +58,6 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     requiresNonEmptyUserOrAssistantMessage: boolean;
     requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
-    reasoningEffortForOff: "none" | null;
     thinkingOffControlUndeclared: boolean;
   };
 
@@ -73,6 +76,19 @@ export function isNativeOpenAIEndpoint(model: { provider?: string; baseUrl?: str
     endpoint?.protocol === "https:" &&
     (endpoint.hostname === "api.openai.com" || endpoint.hostname.endsWith(".api.openai.com"))
   );
+}
+
+/** Model-name defaults apply only on a known OpenAI endpoint. */
+export function isKnownOpenAIEndpoint(model: { provider?: string; baseUrl?: string }): boolean {
+  if (!model.baseUrl?.trim() || isNativeOpenAIEndpoint(model)) {
+    return true;
+  }
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
+  if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
+    return true;
+  }
+  const endpoint = URL.parse(model.baseUrl);
+  return endpoint !== null && isAzureOpenAICompatibleHost(endpoint.hostname.toLowerCase());
 }
 
 export function isOpenAICodexResponsesModel(model: {
@@ -301,7 +317,10 @@ function resolveSessionAffinity(
 
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat" | "reasoning">,
+  model: Pick<
+    Model<"openai-completions">,
+    "id" | "provider" | "baseUrl" | "compat" | "reasoning" | "thinkingLevelMap"
+  >,
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults, capabilities } = detectOpenAICompletionsCompat(model, resolveCapabilities);
@@ -313,7 +332,8 @@ export function resolveOpenAICompletionsCompat(
     configured?.thinkingFormat === undefined &&
     !supportsOpenAIReasoningEffort({ compat: configured }, "none") &&
     !supportsOpenAIReasoningEffort({ compat: configured }, "off") &&
-    resolveOpenAIReasoningEffortMapping("off", configured?.reasoningEffortMap) === undefined;
+    resolveOpenAIReasoningEffortMapping("off", configured?.reasoningEffortMap) === undefined &&
+    typeof model.thinkingLevelMap?.off !== "string";
   return {
     supportsStore: configured?.supportsStore ?? defaults.supportsStore,
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
@@ -321,14 +341,6 @@ export function resolveOpenAICompletionsCompat(
       configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
     supportedReasoningEfforts: configured?.supportedReasoningEfforts,
     reasoningEffortMap: configured?.reasoningEffortMap,
-    // Custom OpenAI routes need a declared off effort; inferred Z.AI may be always-thinking.
-    // Explicit Z.AI formats and effort mappings still own their off contract.
-    reasoningEffortForOff:
-      capabilities.usesExplicitProxyLikeEndpoint &&
-      (thinkingFormat === "openai" || thinkingOffControlUndeclared) &&
-      !configured?.supportedReasoningEfforts?.includes("none")
-        ? null
-        : "none",
     thinkingOffControlUndeclared,
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,

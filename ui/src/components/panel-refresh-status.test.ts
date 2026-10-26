@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { createComponent } from "solid-js";
 import { expect, it } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import { PRESENTATION_CHANGED_EVENT } from "../lib/presentation.ts";
-import { createInitializationContext } from "../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
 import { threadFixture } from "../pages/chat/components/chat-transcript-fixture.test-support.tsx";
 import {
   installTranscriptDomMocks,

@@ -55,6 +55,7 @@ import {
 import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
+  shouldUseRuntimeOnlyVitestWorkers,
 } from "./lib/vitest-runtime-selection.mts";
 import {
   resolveNativeBunTestCommand,
@@ -885,6 +886,7 @@ export function spawnWatchedVitestProcess({
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
       workerRun.descriptor.directory,
+      ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
     );
   }
   const childSpawnParams: PnpmRunnerParams = workerRun
@@ -1099,14 +1101,14 @@ export async function runVitest(
     : config === null && !sourceMode && process.cwd() === repoRoot
       ? "vitest.config.ts"
       : "";
-  // Canonical configs have known project scopes. Custom roots/projects keep
-  // their own setup; never infer their runtime selection from a config name.
-  const canonicalSelection =
+  // Custom roots/projects keep their own runtime preparation. Prebuilt UI
+  // projects below only partition the known real-Gateway fixture scope.
+  const canonicalRootRun =
     execution &&
     !hasAlternateVitestRootArg(vitestArgs) &&
-    !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
+  const canonicalSelection = canonicalRootRun && !hasExplicitVitestProjectArg(vitestArgs);
   // E2E global setup must precede shared asset preparation, including a single
   // invocation; otherwise it can replace dist after UI readiness was checked.
   const invocationEnv =
@@ -1127,7 +1129,17 @@ export async function runVitest(
   }
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv), getVitestWorkerDescriptor());
+    : createVitestWorkerRun(
+        resolveVitestProcessEnv(invocationEnv),
+        getVitestWorkerDescriptor(),
+        (canonicalSelection &&
+          (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
+            relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
+            shouldUseRuntimeOnlyVitestWorkers(relativeConfig, vitestArgs, invocationEnv))) ||
+          (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts")
+          ? "runtime"
+          : "full",
+      );
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
   let preparingWorkers = false;

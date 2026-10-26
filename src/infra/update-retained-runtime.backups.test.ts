@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { writeFixtureTree as writeTree } from "./fixture-tree.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
@@ -37,13 +38,6 @@ it.each(
     );
     const base = await fs.realpath(dirs.make("retained-package-backup-"));
     const { params, globalRoot, packageRoot: installed } = await createPackageSwapFixture(base);
-    async function writeTree(root: string, files: Record<string, string>) {
-      for (const [file, content] of Object.entries(files)) {
-        const destination = path.join(root, file);
-        await fs.mkdir(path.dirname(destination), { recursive: true });
-        await fs.writeFile(destination, content);
-      }
-    }
     const read = (file: string) => fs.readFile(file, "utf8");
     const dependency = path.join(globalRoot, "fixture");
     const backupName = ".openclaw.package-backup-123-1700000000000";

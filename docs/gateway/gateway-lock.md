@@ -85,11 +85,20 @@ First confirm that the recorded holder has stopped through its container or
 service manager. Run the exact `openclaw gateway recover-lock --confirm
 <fingerprint>` command printed by inspection, using the same state directory and
 profile. It recovers the inspected sidecars through fs-safe's
-remove-if-unchanged protocol, clears the matching SQLite Gateway owner lease
+remove-if-unchanged protocol, clears the matching SQLite or PostgreSQL Gateway owner lease
 under exclusive state custody, and releases its temporary custody. A renewed
 heartbeat, changed payload, replaced file, or changed lease invalidates the
 confirmation; inspect again instead of removing lock files by hand. A locally
 verified live holder is always refused.
+
+PostgreSQL inspection uses the selected state family and verifies the original
+anchor, store identity and stable lease-table contract without initializing or
+migrating application schemas. Confirmation serializes with the store's native
+advisory lock, locks and compares the complete lease row, and removes only that
+unchanged owner. Inspection can read a stable lease contract from another application
+schema version, but confirmation requires this binary's current GLOBAL schema version
+before recovering any sidecars or lease. Store unavailability, lock contention and changed records fail
+visibly; they do not authorize automatic foreign-owner reclamation.
 
 Automatic recovery remains available for a verified exited PID or changed process
 start identity within the same PID namespace, and for a verified host reboot.

@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import JSZip from "jszip";
+import {
+  readRequestText as readRequestBody,
+  respondJson,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import type { ClawHubPackageSecurityResponse } from "../infra/clawhub-packages.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { readRequestBody } from "./clawhub-install.test-support.js";
 
 export type ClawHubFixtureOptions = {
   name: string;
@@ -35,15 +38,11 @@ export async function startClawHubPackageFixture(options: ClawHubFixtureOptions)
       createServer((request, response) => {
         const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
         requests.push(`${request.method} ${pathname}`);
-        const json = (body: unknown, status = 200) => {
-          response.writeHead(status, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        };
         const handle = async () => {
           if (request.method === "POST" && pathname === "/api/cli/telemetry/install") {
             telemetry.push(JSON.parse(await readRequestBody(request)));
             const status = options.telemetryStatus ?? 200;
-            json(status === 200 ? { ok: true } : { error: "down" }, status);
+            respondJson(response, status === 200 ? { ok: true } : { error: "down" }, status);
             return;
           }
           if (request.method === "GET" && pathname === `${packagePath}/download`) {
@@ -80,7 +79,7 @@ export async function startClawHubPackageFixture(options: ClawHubFixtureOptions)
             } satisfies ClawHubPackageSecurityResponse,
           };
           if (request.method === "GET" && Object.hasOwn(routes, pathname)) {
-            json(routes[pathname]);
+            respondJson(response, routes[pathname]);
           } else {
             response.writeHead(404);
             response.end("unknown fixture route");

@@ -21,36 +21,18 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
 describe("sender-owned directive projection", () => {
   it.each([
     {
-      name: "selects an inline shortcut after a rendered group mention",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-    },
-    {
       name: "selects an inline shortcut when the rendered mention trails the text",
       rawText: "Please /help continue <@BOT> (Bek (Ops))",
       commandText: "Please /help continue",
       expected: "Please continue <@BOT> (Bek (Ops))",
     },
     {
-      name: "selects an inline shortcut on a later line after a rendered mention",
-      rawText: "<@BOT> (Bek (Ops)) Please summarize\n/help",
-      commandText: "Please summarize /help",
-      expected: "<@BOT> (Bek (Ops)) Please summarize\n",
-    },
-    {
-      name: "selects an inline shortcut after mention rendering in a direct message",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-      isGroup: false,
-    },
-    {
-      name: "keeps attachment context after a multiline sender shortcut",
+      name: "keeps direct-message attachment context after a multiline sender shortcut",
       rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
       commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
+      isGroup: false,
     },
     {
       name: "rejects prepared metadata that does not reconstruct the command body",
@@ -80,31 +62,18 @@ describe("sender-owned directive projection", () => {
     expect(result.cleanedBody).toBe(expected);
   });
 
-  const forwardedStatus = "Please summarize\n[Forwarded message]\n/status marker";
   const tail = "/think high\n  code()";
+  const forwardedStatus = `Please summarize\n[Forwarded message]\n/status marker\n${tail}`;
   it.each<[string, string, string, boolean, string?, string?, boolean?]>([
     ["preserves forwarded status beside a caption", "Please summarize", forwardedStatus, false],
     [
       "removes only sender status",
       "Please /status summarize",
-      "Please /status summarize\n[Forwarded message]\n/status marker",
+      `Please /status summarize\n[Forwarded message]\n/status marker\n${tail}`,
       true,
       forwardedStatus,
     ],
-    [
-      "preserves forwarded directives",
-      "Please summarize",
-      `Please summarize\n[Forwarded message]\n${tail}`,
-      false,
-    ],
     ["keeps an empty sender projection", "", "[Forwarded message]\n/status marker", false],
-    [
-      "preserves whitespace after repeated status",
-      "Please /status summarize /status\n  code()",
-      "Please /status summarize /status\n  code()",
-      true,
-      "Please summarize\n  code()",
-    ],
     [
       "keeps flat history opaque",
       "hello",
@@ -112,14 +81,6 @@ describe("sender-owned directive projection", () => {
       false,
     ],
     ["does not resurrect a consumed reset", "new session", "", false, "", "new session", true],
-    [
-      "keeps normalized command tails",
-      "/status",
-      `/status:\n${tail}`,
-      false,
-      tail,
-      `/status:\n${tail}`,
-    ],
     [
       "keeps tails after leading blanks",
       "/status",

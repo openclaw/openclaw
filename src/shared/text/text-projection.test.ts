@@ -157,6 +157,10 @@ it.each([
   ["A\n\nA\n\n \n\nB", "A\n\n\n\nB"],
   ["\0\0\0\n\nA\n\nA\n\n`x`\0`y` `x`", "\0\0\0\n\nA\n\n`x`\0`y` `x`"],
   ["A\n\nA `x`", "A\n\nA `x`"],
+  ["A\r\n\r\nA\r\n\r\nB", "A\r\n\r\nB"],
+  ["A\r\nB\r\n\r\nA\r\nB", "A\r\nB"],
+  ["A\r\n\r\nB", "A\r\n\r\nB"],
+  ["```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB\r\n\r\nB", "```text\r\nA\r\n\r\nA\r\n```\r\n\r\nB"],
   ["A\n\nA\n\n```\n", "A\n\n```\n"],
 ])("preserves canonical separators and whitespace %#", (source, expected) => {
   expect(text.duplicateParagraphTextFilter.transform(source)).toBe(expected);
