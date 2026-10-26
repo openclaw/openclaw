@@ -82,6 +82,7 @@ vi.mock("../operator-role-policy.js", () => {
     return mocks.roleScopes ? { scopes: mocks.roleScopes } : null;
   };
   return {
+    operatorSessionCap: () => undefined,
     resolveOperatorRolePolicy: resolve,
     resolveOperatorRolePolicyForProfile: resolve,
     resolveOperatorRolePolicyForAssignment: resolve,
