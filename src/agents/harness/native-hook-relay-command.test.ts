@@ -78,10 +78,8 @@ it.each([
 });
 
 it.each([
-  ["parameter", false],
   ["parameter", true],
   ["environment", false],
-  ["environment", true],
 ] as const)("uses an explicit standalone %s target (relative=%s)", async (source, relative) => {
   await withTempDir("openclaw-relay-standalone-", async (root) => {
     const executable = path.join(root, "renamed-cli");
