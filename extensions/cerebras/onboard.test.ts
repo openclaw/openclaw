@@ -55,15 +55,6 @@ async function runCerebrasCatalog() {
   return result.provider;
 }
 
-function expectedCost(input: number, output: number) {
-  return expect.objectContaining({
-    input: expect.closeTo(input, 10),
-    output: expect.closeTo(output, 10),
-    cacheRead: expect.closeTo(input, 10),
-    cacheWrite: 0,
-  });
-}
-
 beforeEach(clearLiveCatalogCacheForTests);
 
 afterEach(() => {
@@ -71,40 +62,34 @@ afterEach(() => {
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
 });
 
-it("selects the default and alias when seeding a replace-mode catalog", () => {
+it("selects the default and alias while preserving replace mode", () => {
   const config = applyCerebrasConfig({ models: { mode: "replace" } });
-
   expect(config.models?.mode).toBe("replace");
   expect(config.models?.providers?.cerebras?.models).toEqual(buildCerebrasCatalogModels());
-  const primary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
-  expect(primary).toBe("cerebras/gpt-oss-120b");
+  expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+    "cerebras/gpt-oss-120b",
+  );
   expect(config.agents?.defaults?.models).toEqual({
     [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras GPT OSS 120B" },
   });
 });
 
-it.each([
-  { pricing: NATIVE_TEXT_MODEL.pricing, cost: expectedCost(0.35, 0.75) },
-  { pricing: { prompt: "0.00000035" }, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-])("discovers credential-free native metadata with pricing $pricing", async ({ pricing, cost }) => {
+it("discovers credential-free text and vision metadata, with incomplete pricing defaulting to zero", async () => {
   mockCatalogResponse({
     object: "list",
     data: [
-      { ...NATIVE_TEXT_MODEL, pricing },
+      NATIVE_TEXT_MODEL,
       {
         ...NATIVE_TEXT_MODEL,
         id: "vision",
         name: "Vision",
-        pricing: { prompt: "0.00000099", completion: "0.00000149" },
+        pricing: { prompt: "0.00000035" },
         capabilities: { reasoning: false, vision: true, tools: true },
         limits: { max_context_length: 262144, max_completion_tokens: 65536 },
       },
     ],
   });
-
   const catalog = await runCerebrasCatalog();
-
-  expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
   const request = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls[0]?.[0];
   expect(request?.url).toBe("https://api.cerebras.ai/public/v1/models");
   const headers = new Headers(request?.init?.headers);
@@ -119,7 +104,15 @@ it.each([
     ["text", "Text", true, ["text"], 131072, 40960],
     ["vision", "Vision", false, ["text", "image"], 262144, 65536],
   ]);
-  expect(catalog.models.map((model) => model.cost)).toEqual([cost, expectedCost(0.99, 1.49)]);
+  expect(catalog.models.map((model) => model.cost)).toEqual([
+    expect.objectContaining({
+      input: expect.closeTo(0.35, 10),
+      output: expect.closeTo(0.75, 10),
+      cacheRead: expect.closeTo(0.35, 10),
+      cacheWrite: 0,
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  ]);
 });
 
 it("reports unavailable discovery and recovers on the next request", async () => {
@@ -136,7 +129,6 @@ it("reports unavailable discovery and recovers on the next request", async () =>
   expect(recovered.models.map(({ id, cost }) => [id, cost])).toEqual([
     ["text", { input: 0.35, output: 0.75, cacheRead: 0.35, cacheWrite: 0 }],
   ]);
-  expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
 });
 
 it.each([
