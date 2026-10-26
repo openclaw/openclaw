@@ -1,4 +1,4 @@
-// node --expose-gc scripts/perf/provider-prompt-worker-bytes-measure.mjs OWNER.ts timing|allocation|counts
+// node --expose-gc scripts/perf/provider-prompt-worker-bytes-measure.mjs OWNER.ts timing|allocation
 // Save both revisions' owners and run five alternating AB/BA pairs per mode.
 // Each arm warms 300 calls, then measures 3,000 on 512 messages + 40 tool schemas.
 // Accept identical byte estimates/eligibility and lower CPU or allocation without
@@ -15,7 +15,7 @@ import { isProxy } from "node:util/types";
 import { compileFunction } from "node:vm";
 
 const [file, mode] = process.argv.slice(2);
-assert(file && ["timing", "allocation", "counts"].includes(mode));
+assert(file && ["timing", "allocation"].includes(mode));
 assert(global.gc, "Use --expose-gc");
 const source = readFileSync(file, "utf8");
 const start = source.indexOf("function providerPromptWorkerBytes(");
@@ -43,26 +43,6 @@ const payload = {
 };
 const inputBytes = scan(payload);
 assert.equal(typeof inputBytes, "number");
-// Counting intrinsics changes V8 optimization; keep it in a separate process.
-if (mode === "counts") {
-  let keyEntryIterators = 0;
-  let keyEntryTuples = 0;
-  const entries = Array.prototype.entries;
-  // oxlint-disable-next-line no-extend-native -- Count work only in this isolated diagnostic process.
-  Array.prototype.entries = function () {
-    keyEntryIterators++;
-    keyEntryTuples += this.length;
-    return entries.call(this);
-  };
-  try {
-    assert.equal(scan(payload), inputBytes);
-  } finally {
-    // oxlint-disable-next-line no-extend-native -- Restore the diagnostic instrumentation.
-    Array.prototype.entries = entries;
-  }
-  console.log(JSON.stringify({ inputBytes, keyEntryIterators, keyEntryTuples }));
-  process.exit(0);
-}
 for (let i = 0; i < 300; i++) {
   assert.equal(scan(payload), inputBytes);
 }
