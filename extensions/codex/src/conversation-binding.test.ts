@@ -819,12 +819,10 @@ it("does not recreate a detached conversation queued behind retirement", async (
   await ownerCaptured.promise;
   retirementReady.resolve();
   await retirement;
-  await expect(queued).resolves.toEqual({
-    handled: true,
-    reply: {
-      text: "This Codex conversation was detached or changed before its message could run.",
-    },
-  });
+  await expectReply(
+    queued,
+    "This Codex conversation was detached or changed before its message could run.",
+  );
   expect(acquireClient).not.toHaveBeenCalled();
   expect(bindings.read(identity)).toBeUndefined();
 });
@@ -1508,14 +1506,12 @@ it("blocks bound Codex CLI node turns when the current OpenClaw session is sandb
     { config, resumeCodexCliSessionOnNode },
   );
 
-  expect(result).toEqual({
-    handled: true,
-    reply: {
-      text: expect.stringContaining(
-        "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
-      ),
-    },
-  });
+  await expectReply(
+    result,
+    expect.stringContaining(
+      "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+    ),
+  );
   expect(resumeCodexCliSessionOnNode).not.toHaveBeenCalled();
 });
 
@@ -1659,16 +1655,16 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   await seedSession(source, storePath, { permissionMode: "workspace" });
   await seedSession(sourceSession("destination-session"), storePath);
   codexRequirementsTomlMock.mockReturnValue(WORKSPACE_REQUIREMENTS);
-  await appendSessionTranscriptMessageByIdentity({
-    ...source,
-    storePath,
-    message: { role: "user", content: "Earlier question", timestamp: 1 },
-  });
-  await appendSessionTranscriptMessageByIdentity({
-    ...source,
-    storePath,
-    message: { role: "assistant", content: "Earlier answer", timestamp: 2 },
-  });
+  for (const [role, content, timestamp] of [
+    ["user", "Earlier question", 1],
+    ["assistant", "Earlier answer", 2],
+  ] as const) {
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      storePath,
+      message: { role, content, timestamp },
+    });
+  }
   const identity = sourceIdentity(source);
   await bindings.mutate(identity, {
     kind: "set",
@@ -2004,19 +2000,13 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
     clientId: harness.client.getInstanceId(),
   });
   acquireClient.mockResolvedValue(harness.client);
-  const waitForRequest = async (method: string) =>
-    await vi.waitFor(
-      () => {
-        const request = harness.writes
-          .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
-          .find((message) => message.method === method);
-        if (!request) {
-          throw new Error(`Codex conversation harness did not write ${method}`);
-        }
-        return request;
-      },
-      { interval: 1, timeout: 5_000 },
-    );
+  const readRequest = async (
+    index: number,
+  ): Promise<{
+    id: number;
+    method: string;
+    params: unknown;
+  }> => JSON.parse(await harness.waitForWrite(index));
   const result = runBoundClaim(
     sessionFile,
     {
@@ -2025,12 +2015,12 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
     sessionKey,
   );
   try {
-    const turnStart = await waitForRequest("turn/start");
-    const interrupt = await waitForRequest("turn/interrupt");
+    const turnStart = await readRequest(0);
+    const interrupt = await readRequest(1);
     expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
     harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
     harness.send({ id: interrupt.id, result: {} });
-    const unsubscribe = await waitForRequest("thread/unsubscribe");
+    const unsubscribe = await readRequest(2);
     harness.send({ id: unsubscribe.id, result: {} });
 
     await expectReply(result, "Codex app-server turn failed: turn/start timed out");
