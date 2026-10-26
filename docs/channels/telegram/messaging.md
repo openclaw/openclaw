@@ -260,6 +260,34 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
   </Accordion>
 
+  <Accordion title="DM topic auto-naming">
+    For private chats with bot topics enabled, OpenClaw can generate a topic name from the first message of a session. `channels.telegram.autoTopicLabel` is enabled by default; it does not rename group forum topics.
+
+    - `false` disables automatic naming.
+    - `true` uses the built-in naming prompt.
+    - `{ enabled: false }` also disables naming; `{ prompt: "..." }` enables it with a custom prompt.
+
+    Account settings use `channels.telegram.accounts.<accountId>.autoTopicLabel`. A per-chat `direct.<chatId>.autoTopicLabel` setting overrides the account setting. For example, disable naming by default and enable it for one DM:
+
+```json5
+{
+  channels: {
+    telegram: {
+      autoTopicLabel: false,
+      direct: {
+        "123456789": {
+          autoTopicLabel: { prompt: "Name this topic in 2-4 words, without emoji." },
+        },
+      },
+    },
+  },
+}
+```
+
+    Naming runs in the background without delaying reply delivery. An empty result or a naming failure leaves the topic name unchanged.
+
+  </Accordion>
+
   <Accordion title="Limits and CLI targets">
     - `channels.telegram.textChunkLimit` default 4000; `streaming.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound media size.
