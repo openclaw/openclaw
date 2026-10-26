@@ -11,6 +11,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { log as embeddedAgentLog } from "../embedded-agent-runner/logger.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   PreparedQuestionAnswerRefusedError,
   QuestionDispatchRefusedError,
@@ -54,6 +55,7 @@ const questions = [
     options: [],
   },
 ] as const;
+const secretQuestions = [{ id: "answer", header: "Answer", question: "Input", isSecret: true }];
 
 function startQuestion(
   sessionKey: string,
@@ -152,7 +154,7 @@ describe("gateway harness questions", () => {
           await prompt.promise;
         },
         {
-          questions: [{ id: "answer", header: "Answer", question: "Input", isSecret: true }],
+          questions: secretQuestions,
           signal: controller.signal,
         },
       );
@@ -227,7 +229,7 @@ describe("gateway harness questions", () => {
           undefined,
           () =>
             startQuestion(sessionKey, gatewayCall, async () => promptDelivered.resolve(), {
-              questions: [{ id: "answer", header: "Answer", question: "Input", isSecret: true }],
+              questions: secretQuestions,
               signal,
               delivery: { hostCapabilities: host.hostCapabilities },
             }),
@@ -321,21 +323,15 @@ describe("gateway harness questions", () => {
     async (outcome) => {
       const sessionKey = "agent:main:prepared-question-input";
       const registration = createDeferred();
-      const persistenceStarted = createDeferred();
-      const persistence = createDeferred();
-      const preparationStarted = createDeferred();
-      const preparation = createDeferred();
+      const persistence = createEnteredGate();
+      const preparation = createEnteredGate();
       const source = new AbortController();
       const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>(async () => ({}));
       const question = reserveQuestion(sessionKey, gatewayCall);
       question.attachRegistration(registration.promise);
-      const persist = vi.fn(async () => {
-        persistenceStarted.resolve();
-        await persistence.promise;
-      });
+      const persist = vi.fn(persistence.wait);
       const prepare = vi.fn(async () => {
-        preparationStarted.resolve();
-        await preparation.promise;
+        await preparation.wait();
         if (outcome === "route-refused") {
           throw new QuestionDispatchRefusedError("prepared route changed");
         }
@@ -354,15 +350,15 @@ describe("gateway harness questions", () => {
       try {
         expectUncalled(persist, prepare);
         registration.resolve();
-        await persistenceStarted.promise;
+        await persistence.entered;
         expect(prepare).not.toHaveBeenCalled();
-        persistence.resolve();
-        await preparationStarted.promise;
+        persistence.release();
+        await preparation.entered;
         expect(gatewayCall).not.toHaveBeenCalled();
         if (outcome === "source-revoked") {
           source.abort();
         }
-        preparation.resolve();
+        preparation.release();
         expect(await attempt).toMatchObject({
           error: expect.any(PreparedQuestionAnswerRefusedError),
         });
@@ -375,8 +371,8 @@ describe("gateway harness questions", () => {
         expect(prepare).toHaveBeenCalledOnce();
       } finally {
         registration.resolve();
-        persistence.resolve();
-        preparation.resolve();
+        persistence.release();
+        preparation.release();
         await attempt;
         question.dispose();
       }
