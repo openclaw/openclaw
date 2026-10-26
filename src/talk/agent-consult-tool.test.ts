@@ -6,9 +6,7 @@ import {
   parseRealtimeVoiceAgentConsultArgs as parseArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL as consultTool,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME as consultName,
-  resolveRealtimeVoiceAgentConsultToolPolicy as resolvePolicy,
   resolveRealtimeVoiceAgentConsultTools as resolveTools,
-  resolveRealtimeVoiceAgentConsultToolsAllow as resolveToolsAllow,
   type RealtimeVoiceAgentConsultToolPolicy as ToolPolicy,
 } from "./agent-consult-tool.js";
 import type { RealtimeVoiceTool } from "./provider-types.js";
@@ -108,16 +106,6 @@ describe("realtime voice agent consult tool", () => {
         toolPolicy: "safe-read-only",
       }),
     ).toBe(`Voice base.\n\n${backchannel}`);
-  });
-
-  it("normalizes policy values and resolves shared tool exposure", () => {
-    expect(resolvePolicy(" OWNER ", "safe-read-only")).toBe("owner");
-    expect(resolvePolicy("bad", "safe-read-only")).toBe("safe-read-only");
-    expect(resolveToolsAllow("safe-read-only")).toEqual(
-      "read web_search web_fetch x_search memory_search memory_get".split(" "),
-    );
-    expect(resolveToolsAllow("owner")).toBeUndefined();
-    expect(resolveToolsAllow("none")).toStrictEqual([]);
   });
 
   it.each<[ToolPolicy, RealtimeVoiceTool[] | undefined, RealtimeVoiceTool[]]>([

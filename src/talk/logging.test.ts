@@ -44,25 +44,28 @@ afterEach(async () => {
 });
 
 // diagnostics.test.ts owns the complete diagnostic envelope; this suite owns log egress.
-it("emits bounded lifecycle log records without transcript text or scoped ids", async () => {
+it.each([
+  ["output.text.done", "INFO"],
+  ["session.error", "WARN"],
+] as const)("emits bounded %s logs without private content", async (type, level) => {
   record({
-    type: "output.text.done",
+    type,
     turnId: "turn-1",
     callId: "call-1",
     itemId: "item-1",
     final: true,
-    payload: { text: "private transcript should not be logged", durationMs: 42 },
+    payload: { text: "private transcript", message: "private transcript", durationMs: 42 },
   });
   await setImmediate();
   const logs = diagnostics.mock.calls.filter(([event]) => event.type === "log.record");
   expect(logs).toHaveLength(1);
   expect(logs[0]?.[0]).toMatchObject({
-    level: "INFO",
-    message: "talk event output.text.done",
+    level,
+    message: `talk event ${type}`,
     attributes: {
       subsystem: "talk",
       sessionId: "talk-session",
-      talkEventType: "output.text.done",
+      talkEventType: type,
       talkMode: "realtime",
       talkTransport: "gateway-relay",
       talkBrain: "agent-consult",
@@ -71,7 +74,7 @@ it("emits bounded lifecycle log records without transcript text or scoped ids", 
       talkDurationMs: 42,
     },
   });
-  expectPrivateFieldsAbsent(JSON.stringify(logs));
+  expectPrivateFieldsAbsent(JSON.stringify(diagnostics.mock.calls));
   await flushLogger();
   const fileLog = fs.readFileSync(logFile, "utf8");
   const records = fileLog
@@ -79,7 +82,7 @@ it("emits bounded lifecycle log records without transcript text or scoped ids", 
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   expect(records.filter((entry) => entry["0"] === '{"subsystem":"talk"}')).toEqual([
-    expect.objectContaining({ message: "talk event output.text.done", session_id: "talk-session" }),
+    expect.objectContaining({ message: `talk event ${type}`, session_id: "talk-session" }),
   ]);
   expectPrivateFieldsAbsent(fileLog);
 });
@@ -93,29 +96,4 @@ it("drops high-volume delta records from file and OTLP logs", async () => {
   record({ type: "output.audio.delta", turnId: "turn-1", payload: { byteLength: 320 } });
   await setImmediate();
   expect(diagnostics.mock.calls.filter(([event]) => event.type === "log.record")).toEqual([]);
-});
-
-it("records diagnostics and warning logs with separate trust classifications", async () => {
-  record({ type: "session.error", payload: { message: "private detail" }, final: true });
-  await setImmediate();
-  expect(diagnostics).toHaveBeenCalledTimes(2);
-  expect(diagnostics).toHaveBeenCalledWith(
-    expect.objectContaining({
-      type: "talk.event",
-      ...context,
-      talkEventType: "session.error",
-      final: true,
-    }),
-    expect.objectContaining({ trusted: true }),
-  );
-  expect(diagnostics).toHaveBeenCalledWith(
-    expect.objectContaining({
-      type: "log.record",
-      level: "WARN",
-      message: "talk event session.error",
-      attributes: expect.objectContaining({ talkFinal: true, talkEventType: "session.error" }),
-    }),
-    expect.objectContaining({ trusted: false }),
-  );
-  expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private detail");
 });
