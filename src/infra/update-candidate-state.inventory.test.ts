@@ -345,7 +345,9 @@ describe("snapshot legacy cron identity", () => {
         ),
       );
       expect(selection).toMatchObject(
-        selector === "moved" ? { status: "unresolved" } : { status: "ready", storeKey },
+        selector === "moved" || selector === "released envelope"
+          ? { status: "unresolved" }
+          : { status: "ready", storeKey },
       );
       expect(await fs.readFile(source)).toEqual(original);
     },

@@ -7,30 +7,26 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
-import { UPDATE_REHEARSAL_CRON_IDENTITY_ENV } from "./update-rehearsal-paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-async function prepareSource(root: string, storeKeys: readonly string[]) {
-  const stateDir = path.join(root, "source-state");
+async function runCronIdentitySupport(args: string[] = [], baseEnv?: NodeJS.ProcessEnv) {
   const worker = new URL(
     "./update-candidate-rehearsal.cron-identity.test-support.ts",
     import.meta.url,
   );
-  const result = await runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(worker),
-      "seed",
-      JSON.stringify({ stateDir, storeKeys }),
-    ],
-    {
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 20_000, stderr: 20_000 },
-    },
-  );
+  return runCommandBuffered([process.execPath, ...resolveRuntimeWorkerArgv(worker), ...args], {
+    ...(baseEnv ? { baseEnv } : {}),
+    timeoutMs: 30_000,
+    killGraceMs: 500,
+    maxOutputBytes: { stdout: 20_000, stderr: 20_000 },
+  });
+}
+
+async function prepareSource(root: string, storeKeys: readonly string[]) {
+  const stateDir = path.join(root, "source-state");
+  const result = await runCronIdentitySupport(["seed", JSON.stringify({ stateDir, storeKeys })]);
   expect(result.code, result.stderr.toString("utf8")).toBe(0);
   const line = result.stdout
     .toString("utf8")
@@ -44,15 +40,9 @@ async function prepareSource(root: string, storeKeys: readonly string[]) {
 }
 
 async function runFirstPrivateAdmission(env: NodeJS.ProcessEnv) {
-  const worker = new URL(
-    "./update-candidate-rehearsal.cron-identity.test-support.ts",
-    import.meta.url,
-  );
-  const result = await runCommandBuffered([process.execPath, ...resolveRuntimeWorkerArgv(worker)], {
-    baseEnv: { ...env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
-    timeoutMs: 30_000,
-    killGraceMs: 500,
-    maxOutputBytes: { stdout: 20_000, stderr: 20_000 },
+  const result = await runCronIdentitySupport([], {
+    ...env,
+    OPENCLAW_UPDATE_IN_PROGRESS: "0",
   });
   expect(result.code, result.stderr.toString("utf8")).toBe(0);
   const line = result.stdout
@@ -126,21 +116,6 @@ it("does not bind an unmatched original identity to a retained sibling", async (
   try {
     await expect(runFirstPrivateAdmission(fixture.rehearsal.env)).resolves.toEqual({
       initializationCronDefaultStoreKey: fixture.expected,
-    });
-  } finally {
-    await cleanupFixture(fixture);
-  }
-});
-
-it("keeps missing older-parent provenance unresolved instead of guessing", async () => {
-  const fixture = await prepareFixture("custom-config", ({ expected, sibling }) => [
-    expected,
-    sibling,
-  ]);
-  delete fixture.rehearsal.env[UPDATE_REHEARSAL_CRON_IDENTITY_ENV];
-  try {
-    await expect(runFirstPrivateAdmission(fixture.rehearsal.env)).resolves.toEqual({
-      initializationCronDefaultStoreKey: path.join(fixture.rehearsal.stateDir, "cron", "jobs.json"),
     });
   } finally {
     await cleanupFixture(fixture);
