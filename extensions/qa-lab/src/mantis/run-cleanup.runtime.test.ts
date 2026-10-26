@@ -25,15 +25,13 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Mantis worktree cleanup", () => {
   let repoRoot: string;
-  let worktreeRoot: string;
   let worktreeDir: string;
   let ownership: MantisDirectoryOwnership;
   let sentinelPath: string;
 
   beforeEach(async () => {
     repoRoot = tempDirs.make("mantis-cleanup-");
-    worktreeRoot = path.join(repoRoot, ".artifacts", "run.worktrees");
-    worktreeDir = path.join(worktreeRoot, "baseline-generation-test");
+    worktreeDir = path.join(repoRoot, ".artifacts", "run.worktrees", "baseline-generation-test");
     await fs.mkdir(worktreeDir, { recursive: true });
     ownership = await captureMantisDirectoryOwnership({ directoryPath: worktreeDir, repoRoot });
     sentinelPath = path.join(worktreeDir, "preserve-me.txt");
@@ -71,32 +69,22 @@ describe("Mantis worktree cleanup", () => {
     await expect(fs.stat(displacedPath)).resolves.toBeDefined();
   });
 
-  it("preserves a worktree when its Windows ownership receipt has unknown targetInode", async () => {
+  it("preserves a worktree with an unknown targetInode before invoking Git", async () => {
     await fs.writeFile(sentinelPath, "preserve", "utf8");
     const runner = vi.fn(async () => successfulCommandResult());
-    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-    try {
-      await expect(removeWorktree(runner, { ...ownership, targetInode: 0n })).rejects.toThrow(
-        "replaced before cleanup",
-      );
-      expect(runner).not.toHaveBeenCalled();
-      await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
-    } finally {
-      Object.defineProperty(process, "platform", platform);
-    }
+    await expect(removeWorktree(runner, { ...ownership, targetInode: 0n })).rejects.toThrow(
+      "replaced before cleanup",
+    );
+    expect(runner).not.toHaveBeenCalled();
+    await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
   });
 
   it("attributes a shared legacy deadline expiry to the active candidate lane", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "legacy-candidate-deadline");
-    const legacyRoot = path.join(outputDir, "worktrees");
-    const baselineDir = path.join(legacyRoot, "baseline");
-    const candidateDir = path.join(legacyRoot, "candidate");
-    await Promise.all([
-      fs.mkdir(baselineDir, { recursive: true }),
-      fs.mkdir(candidateDir, { recursive: true }),
-    ]);
-    const registeredPaths = new Set([baselineDir, candidateDir]);
+    const registeredPaths = new Set(
+      ["baseline", "candidate"].map((lane) => path.join(outputDir, "worktrees", lane)),
+    );
+    await Promise.all([...registeredPaths].map((dir) => fs.mkdir(dir, { recursive: true })));
     let nowMs = 0;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const runner = vi.fn(async (_command: string, args: readonly string[], execution) => {

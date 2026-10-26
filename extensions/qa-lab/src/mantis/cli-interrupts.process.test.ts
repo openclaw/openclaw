@@ -9,8 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let interruptsModuleUrl: string;
 
 beforeAll(async () => {
-  const bundleRoot = tempDirs.make("mantis-cli-interrupts-");
-  const bundlePath = path.join(bundleRoot, "cli-interrupts.mjs");
+  const bundlePath = path.join(tempDirs.make("mantis-cli-interrupts-"), "cli-interrupts.mjs");
   // Bundle once so cold tsx loading cannot consume the child's readiness budget.
   await esbuild({
     bundle: true,
@@ -53,12 +52,13 @@ it.skipIf(process.platform === "win32").concurrent.for([
     const child = spawn(process.execPath, ["--input-type=module", "--eval", script], {
       cwd: path.resolve("."),
       env: { ...process.env, VITEST: undefined },
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "inherit", "ipc"],
     });
+    const grace = Promise.withResolvers<unknown>();
+    child.once("message", grace.resolve);
     const ready = Promise.withResolvers<void>();
     const cleanupStarted = Promise.withResolvers<void>();
     let stdout = "";
-    let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
       stdout += chunk;
       if (stdout.includes("ready\n")) {
@@ -68,9 +68,6 @@ it.skipIf(process.platform === "win32").concurrent.for([
         cleanupStarted.resolve();
       }
     });
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-      stderr += chunk;
-    });
     const exit = Promise.withResolvers<{ code: number | null; signal: NodeJS.Signals | null }>();
     const closed = exit.promise;
     child.once("error", exit.reject);
@@ -78,22 +75,24 @@ it.skipIf(process.platform === "win32").concurrent.for([
       exit.resolve({ code: exitCode, signal: exitSignal }),
     );
     void closed.catch(() => undefined);
-    const waitFor = (marker: Promise<void>, name: string) =>
+    const waitFor = <T>(marker: Promise<T>, name: string) =>
       withinTest(
         awaitGateBeforeSettlement(marker, closed, `timeout waiting for child marker: ${name}`),
         testSignal,
       );
     try {
       await waitFor(ready.promise, "ready");
+      expect(await waitFor(grace.promise, "shutdown grace")).toEqual({
+        graceMs: 125_000,
+        type: "openclaw:shutdown-grace",
+      });
       expect(child.kill(signal)).toBe(true);
       await waitFor(cleanupStarted.promise, "cleanup-started");
       expect(child.kill(signal)).toBe(true);
       child.stdin.end("release cleanup\n");
       const outcome = await withinTest(closed, testSignal);
-      const diagnostics = JSON.stringify({ outcome, stderr, stdout }, null, 2);
-
-      expect(stdout, diagnostics).toContain("cleanup-complete\n");
-      expect(outcome, diagnostics).toEqual({ code, signal: null });
+      expect(stdout).toContain("cleanup-complete\n");
+      expect(outcome).toEqual({ code, signal: null });
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

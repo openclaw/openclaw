@@ -86,12 +86,8 @@ export async function writeLegacyLaneSummary(params: {
   const repoRootArg = requireArgAfter(params.args, "--repo-root");
   const outputDirArg = requireArgAfter(params.args, "--output-dir");
   const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
-  const outputDir = path.join(repoRootArg, outputDirArg);
-  await writeMantisArtifacts(outputDir, {
-    "discord-qa-summary.json": `${JSON.stringify(
-      { scenarios: [{ id: params.scenario, status: lane === "baseline" ? "fail" : "pass" }] },
-      null,
-      2,
-    )}\n`,
+  const scenario = { id: params.scenario, status: lane === "baseline" ? "fail" : "pass" };
+  await writeMantisArtifacts(path.join(repoRootArg, outputDirArg), {
+    "discord-qa-summary.json": `${JSON.stringify({ scenarios: [scenario] }, null, 2)}\n`,
   });
 }
