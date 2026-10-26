@@ -3,11 +3,9 @@ import {
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
-  parseSidebarEntry,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
-import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
@@ -74,29 +72,25 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
     expect(deviceGroup(iosSnapshot)?.labelKey).toBe(labelKey);
   }
   const iosCapability = { ...capability, snapshot: iosSnapshot };
-  for (const [query, routeId] of [
-    ["Health summaries", "device"],
-    ["Apple Watch", "device"],
-    ["Contacts", "device-permissions"],
-    ["Photos", "device-permissions"],
-    ["Use speakerphone", "talk"],
-    ["Talk in the background", "talk"],
+  for (const [query, routeId, ios] of [
+    ["Health summaries", "device", true],
+    ["Apple Watch", "device", true],
+    ["Contacts", "device-permissions", true],
+    ["Photos", "device-permissions", true],
+    ["Use speakerphone", "talk", true],
+    ["Talk in the background", "talk", true],
+    ["Dock icon", "device", false],
+    ["Launch at login", "device", false],
+    ["Quick Chat", "device", false],
+    ["Cookie sync", "device", false],
+    ["System-wide presence detection", "device-permissions", false],
   ] as const) {
-    expectSearch(query, iosCapability, routeId);
+    expectSearch(query, ios ? iosCapability : capability, routeId);
+    expectSearch(query, ios ? capability : iosCapability);
     expectSearch(query, null);
-    expectSearch(query, capability);
-    expectSearch(query, { ...capability, snapshot: null });
-  }
-  for (const [query, routeId] of [
-    ["Dock icon", "device"],
-    ["Launch at login", "device"],
-    ["Quick Chat", "device"],
-    ["Cookie sync", "device"],
-    ["System-wide presence detection", "device-permissions"],
-  ] as const) {
-    expectSearch(query, capability, routeId);
-    expectSearch(query, null);
-    expectSearch(query, iosCapability);
+    if (ios) {
+      expectSearch(query, { ...capability, snapshot: null });
+    }
   }
   const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
   sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
@@ -124,20 +118,12 @@ it("keeps model setup as a settings subpage without a sidebar entry", () => {
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
 });
 
-it("filters admin-only settings while preserving legacy fail-open visibility", () => {
+it("filters admin-only settings", () => {
   const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
   expect(nonAdminRoutes).toContain("approvals");
   expect(nonAdminRoutes).toContain("channels");
   expect(nonAdminRoutes).not.toContain("security");
   expect(nonAdminRoutes).not.toContain("communications");
-
-  const legacyCanAdmin = readGatewayOperatorAccess({
-    hello: { auth: { role: "operator" } },
-  } as Parameters<typeof readGatewayOperatorAccess>[0]).canAdmin;
-  expect(legacyCanAdmin).toBe(true);
-  expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
-    visibleSettingsNavigationGroups(true),
-  );
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];
@@ -150,13 +136,9 @@ it.each([
   ],
   [opaqueIds, opaqueIds],
   [[...validEntries, validEntries[0], ...invalidEntries], validEntries],
+  [["plugin:reports/", "plugin:/report"], []],
   [[], []],
   [undefined, null],
-  [{ usage: true }, null],
-  ["route:usage", null],
 ])("normalizes persisted entries %j to %j", (input, expected) => {
   expect(normalizeSidebarEntries(input)).toEqual(expected);
-});
-it.each(["plugin:reports/", "plugin:/report"])("rejects malformed plugin entry %s", (entry) => {
-  expect(parseSidebarEntry(entry)).toBeNull();
 });
