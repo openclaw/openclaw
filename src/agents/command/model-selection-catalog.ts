@@ -20,14 +20,7 @@ import {
 } from "../model-visibility-policy.js";
 import { hasResolvedThinkingCatalogEntry } from "../thinking-runtime.js";
 
-function resolveDeferredSelection(params: {
-  defaultProvider: string;
-  defaultModel: string;
-  sessionEntry: SessionEntry | undefined;
-  hasExplicitRunOverride: boolean;
-  pluginsEnabled: boolean;
-  metadataSnapshot: PluginMetadataSnapshot | undefined;
-}) {
+function resolveDeferredSelection(params: Parameters<typeof prepareCommandModelCatalog>[0]) {
   const entry = params.sessionEntry;
   if (
     !params.pluginsEnabled ||

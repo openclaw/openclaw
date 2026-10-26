@@ -24,7 +24,6 @@ import {
 } from "./sqlite-schema-catalog.js";
 import {
   createSqliteIndexContract,
-  type SqliteIndexContract,
   type SqliteTableContract,
   type SqliteTableDefinition,
 } from "./sqlite-schema-contract-assembly.js";
@@ -57,7 +56,7 @@ export {
 
 export type CanonicalSqliteNamedIndexContract = {
   definition: string;
-  fingerprint: SqliteIndexContract;
+  fingerprint: ReturnType<typeof createSqliteIndexContract>;
   name: string;
   tableName: string;
   unique: boolean;
@@ -428,7 +427,7 @@ export function hasCanonicalSqliteSchemaFingerprint(
 export function collectSqliteNamedIndexContract(
   database: DatabaseSync,
   indexName: string,
-): SqliteIndexContract | undefined {
+): ReturnType<typeof createSqliteIndexContract> | undefined {
   // Authorize the original catalog columns even when the index is absent.
   const row = database
     .prepare(`
@@ -508,7 +507,7 @@ function getSqliteSchemaContract(schemaSql: SqliteSchemaSource): ExpectedSchemaC
   return expected;
 }
 
-function readCanonicalIndexDefinition(index: SqliteIndexContract): string {
+function readCanonicalIndexDefinition(index: ReturnType<typeof createSqliteIndexContract>): string {
   if (index.name === null || index.sql === null) {
     throw new Error("Canonical SQLite named index is missing its schema definition.");
   }
@@ -690,7 +689,7 @@ function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
 function collectSqliteIndexContract(
   database: DatabaseSync,
   index: SqliteIndexListRow,
-): SqliteIndexContract {
+): ReturnType<typeof createSqliteIndexContract> {
   const row = executeWithCachedStatement(
     database,
     "SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND name = ?",

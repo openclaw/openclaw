@@ -33,7 +33,6 @@ import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
 import {
   buildPluginTypeScriptSource,
   PLUGIN_SOURCE_RESOLVE_PREFIX,
-  type PluginSourceBuild,
   type PluginSourceFile,
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
@@ -45,7 +44,7 @@ import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.j
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
-type SourceBuilds = Map<string, PluginSourceBuild>;
+type SourceBuilds = Map<string, ReturnType<typeof buildPluginTypeScriptSource>>;
 type RetainedNativeEsm = {
   artifact?: PluginGenerationArtifact;
   builds: SourceBuilds;

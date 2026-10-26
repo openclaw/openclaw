@@ -23,7 +23,7 @@ import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import type { executeFollowupTurn } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
@@ -495,7 +495,7 @@ export type AccountedAgentTurn = Awaited<ReturnType<typeof accountAgentTurn>>;
 export async function accountFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  execution: FollowupExecutionResult;
+  execution: Awaited<ReturnType<typeof executeFollowupTurn>>;
   completion?: AgentTurnCompletion;
 }) {
   const { turn, defaults, execution, completion } = params;

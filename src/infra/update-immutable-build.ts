@@ -7,7 +7,7 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
-import type { ImmutableOperatorBuildAccount } from "./update-immutable-build-account.js";
+import type { resolveImmutableOperatorBuildAccount } from "./update-immutable-build-account.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 import { directoryIdentity } from "./update-immutable-layout.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
@@ -46,7 +46,7 @@ try {
 
 export async function runImmutableBuild(params: {
   descriptor: ImmutableInstallDescriptor;
-  operator?: ImmutableOperatorBuildAccount;
+  operator?: Awaited<ReturnType<typeof resolveImmutableOperatorBuildAccount>>;
   stage: string;
   sha: string;
   timeoutMs: number;

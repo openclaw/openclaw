@@ -205,18 +205,10 @@ export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   getPendingReplyCount: () => number;
 };
 
-export type GatewayClosePreparation = {
-  start: number;
-  notice: ReturnType<typeof resolveGatewayShutdownNotice>;
-  restart: boolean;
-  warnings: string[];
-  cleanupWork: AsyncWorkScope;
-};
-
 export async function prepareGatewayClose(
   params: GatewayClosePrepareParams,
   opts?: GatewayCloseOptions,
-): Promise<GatewayClosePreparation> {
+) {
   const start = Date.now();
   const warnings: string[] = [];
   const notice = resolveGatewayShutdownNotice(opts);
@@ -309,7 +301,7 @@ export async function prepareGatewayClose(
 
 export function completeGatewayClose(
   params: GatewayCloseParams,
-  preparation: GatewayClosePreparation,
+  preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
 ): Promise<ShutdownResult> {
   // Cleanup belongs to shutdown, not the initiating RPC's drained connection scope.
   return preparation.cleanupWork.run(async () => {
@@ -323,7 +315,7 @@ export function completeGatewayClose(
 
 async function closeGatewayResources(
   params: GatewayCloseParams,
-  preparation: GatewayClosePreparation,
+  preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
 ): Promise<ShutdownResult> {
   await measureGatewayCloseStep("restart.close.metadata-begin", () =>
     params.pluginMetadata.beginClose(),

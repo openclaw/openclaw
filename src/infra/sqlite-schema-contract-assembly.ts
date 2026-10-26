@@ -21,15 +21,6 @@ type SqliteIndexTermContract = Omit<SqliteIndexTermRow, "cid"> & {
   kind: "column" | "expression" | "rowid";
 };
 
-export type SqliteIndexContract = {
-  name: string | null;
-  origin: string;
-  partial: number;
-  sql: string | null;
-  terms: SqliteIndexTermContract[];
-  unique: number;
-};
-
 export type SqliteTableDefinition = {
   columns: Map<string, string>;
   constraints: string[];
@@ -39,7 +30,7 @@ export type SqliteTableContract = {
   definition: SqliteTableDefinition | null;
   columns: readonly SqliteColumnCatalog[];
   foreignKeys: readonly SqliteForeignKeyCatalog[];
-  indexes: SqliteIndexContract[];
+  indexes: ReturnType<typeof createSqliteIndexContract>[];
   strict: number;
   triggers: Array<{ name: string; sql: string | null }>;
   virtualTableSql: string | null;
@@ -50,7 +41,7 @@ export function createSqliteTableContract(
   tableName: string,
   table: SqliteSchemaRow,
   tableList: SqliteTableListRow,
-  indexes: SqliteIndexContract[],
+  indexes: ReturnType<typeof createSqliteIndexContract>[],
   triggers: readonly SqliteSchemaRow[],
   columns: readonly SqliteColumnCatalog[],
   foreignKeys: readonly SqliteForeignKeyCatalog[],
@@ -82,7 +73,7 @@ export function createSqliteIndexContract(
   index: SqliteIndexListRow,
   schemaSql: string | null,
   rows: readonly SqliteIndexTermRow[],
-): SqliteIndexContract {
+) {
   const terms = rows.map<SqliteIndexTermContract>(({ cid, coll, desc, key, name, seqno }) => ({
     coll,
     desc,
