@@ -6,58 +6,35 @@ import * as providerRuntime from "../../plugins/providers.runtime.js";
 import type { ProviderAuthMethod } from "../plugin-entry.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 
-function createAuthMethod(
-  id: string,
-  label: string,
-  wizard?: ProviderAuthMethod["wizard"],
-): ProviderAuthMethod {
+function createAuthMethod(id: string, wizard?: ProviderAuthMethod["wizard"]): ProviderAuthMethod {
   return {
     id,
-    label,
+    label: id,
     ...(wizard ? { wizard } : {}),
     kind: "api_key",
     run: async () => ({ profiles: [] }),
   };
 }
 
+const createProvider = (
+  id: string,
+  auth: ProviderAuthMethod[],
+  wizard: ProviderPlugin["wizard"],
+): ProviderPlugin => ({ id, label: id, auth, wizard });
+
 const TEST_PROVIDERS: ProviderPlugin[] = [
-  {
-    id: "alpha",
-    label: "Alpha",
-    auth: [
-      createAuthMethod("api-key", "API key", {}),
-      createAuthMethod("oauth", "OAuth", { choiceId: "alpha-oauth" }),
-    ],
-    wizard: {
-      modelPicker: {
-        label: "Alpha custom",
-        hint: "Pick Alpha models",
-        methodId: "oauth",
-      },
-    },
-  },
-  {
-    id: "beta",
-    label: "Beta",
-    auth: [createAuthMethod("token", "Token")],
-    wizard: {
-      setup: {},
-      modelPicker: {
-        label: "Beta custom",
-      },
-    },
-  },
-  {
-    id: "gamma",
-    label: "Gamma",
-    auth: [createAuthMethod("default", "Default auth"), createAuthMethod("alt", "Alt auth")],
-    wizard: {
-      setup: {
-        methodId: "alt",
-        choiceId: "gamma-alt",
-      },
-    },
-  },
+  createProvider(
+    "alpha",
+    [createAuthMethod("api-key", {}), createAuthMethod("oauth", { choiceId: "alpha-oauth" })],
+    { modelPicker: { label: "Alpha custom", hint: "Pick Alpha models", methodId: "oauth" } },
+  ),
+  createProvider("beta", [createAuthMethod("token")], {
+    setup: {},
+    modelPicker: { label: "Beta custom" },
+  }),
+  createProvider("gamma", [createAuthMethod("default"), createAuthMethod("alt")], {
+    setup: { methodId: "alt", choiceId: "gamma-alt" },
+  }),
 ];
 
 export function describeProviderWizardChoiceResolutionContract() {
@@ -80,10 +57,7 @@ export function describeProviderWizardChoiceResolutionContract() {
           "fixture auth method",
         );
         const wizard = source === "method" ? method.wizard : provider.wizard?.setup;
-        const resolved = resolveProviderPluginChoice({
-          providers: TEST_PROVIDERS,
-          choice,
-        });
+        const resolved = resolveProviderPluginChoice({ providers: TEST_PROVIDERS, choice });
 
         expect(resolved?.provider).toBe(provider);
         expect(resolved?.method).toBe(method);
