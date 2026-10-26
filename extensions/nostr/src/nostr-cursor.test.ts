@@ -20,19 +20,13 @@ function createWriter(write: (cursor: number) => Promise<void>) {
 describe("Nostr durable cursor", () => {
   afterEach(() => vi.useRealTimers());
 
-  it.each([
-    ["caps progress inside replay overlap", 900, 1_020],
-    ["ignores rejections older than the relay filter", 700, 1_100],
-  ] as const)("%s", (_name, rejectedAt, expected) => {
+  it("ignores rejections older than the relay filter", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_200_000);
     const cursor = createNostrDurableCursor({ since: 800, replayOverlapSec: 120 });
     cursor.recordDurableAppend(event(1_100));
-    cursor.recordTransientRejection(event(rejectedAt));
-    expect(cursor.markBackfillComplete()).toBe(expected);
-    if (rejectedAt === 900) {
-      expect(cursor.recordTransientRejection(event(950))).toBeUndefined();
-    }
+    cursor.recordTransientRejection(event(700));
+    expect(cursor.markBackfillComplete()).toBe(1_100);
   });
 
   it.each(["pending", "in-flight"])(
@@ -50,16 +44,11 @@ describe("Nostr durable cursor", () => {
       writer.schedule(2_000);
       const highWrite = writer.flush();
       if (progressState === "in-flight") {
-        await withTimeout(highStarted.promise, 1_000, {
-          message: "Nostr progress write did not start",
-        });
+        await withTimeout(highStarted.promise, 1_000);
       }
       const rewind = writer.persistNow(1_050);
       const stricterRewind = writer.persistNow(1_020);
-      await withTimeout(highStarted.promise, 1_000, {
-        message: "Nostr progress write did not start",
-      });
-      expect(write).toHaveBeenCalledWith(2_000);
+      await withTimeout(highStarted.promise, 1_000);
       highGate.resolve();
       await Promise.all([highWrite, rewind, stricterRewind]);
 

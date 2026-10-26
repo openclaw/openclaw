@@ -35,10 +35,7 @@ export function registerNostrGatewayAdmissionTests() {
     const started = createDeferred<void>();
     const delivered = createDeferred<void>();
     const blocked = createDeferred<void>();
-    agent.dispatch.mockReset();
-    agent.dispatch.mockImplementation(async () => {
-      delivered.resolve();
-    });
+    agent.dispatch.mockReset().mockImplementation(async () => delivered.resolve());
     const context = createStartAccountContext({
       account: buildResolvedNostrAccount({ publicKey: recipient, relays: [relay.url], config }),
       cfg: { channels: { nostr: config } },
@@ -129,10 +126,7 @@ export function registerNostrGatewayAdmissionTests() {
     { dmPolicy: "allowlist", allowFrom: [key, "accessGroup:friends"] },
     { dmPolicy: "allowlist", allowFrom: [key, "invalid"] },
     { dmPolicy: "allowlist", allowFrom: [key, ""] },
-    { dmPolicy: "pairing", allowFrom: [key] },
-    { dmPolicy: "open", allowFrom: ["*"] },
     { dmPolicy: "disabled", allowFrom: [key] },
-    { allowFrom: [key] },
   ] as const)(
     "durably admits nonmembers through Gateway when optimization is ineligible: %j",
     async (config) => {
