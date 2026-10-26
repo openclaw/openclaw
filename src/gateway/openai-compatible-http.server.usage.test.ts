@@ -223,10 +223,7 @@ describe("OpenAI-compatible recovered incomplete turns", () => {
         });
         return recordAgentRunTerminalOutcome(
           {
-            payloads: [
-              { text: summary, mediaUrl: null },
-              { text: notice, mediaUrl: null },
-            ],
+            payloads: [summary, notice].map((text) => ({ text, mediaUrl: null })),
             meta: {
               durationMs: 0,
               stopReason: "length",
@@ -237,51 +234,44 @@ describe("OpenAI-compatible recovered incomplete turns", () => {
         );
       });
       const tool = { name: "required_tool", description: "Complete the requested action" };
-      const res = await post(
-        endpoint,
-        {
-          stream,
-          ...(requiredTool
-            ? {
-                tools: [
-                  endpoint === "responses"
-                    ? { type: "function", ...tool }
-                    : { type: "function", function: tool },
-                ],
-                tool_choice: "required",
-              }
-            : {}),
-        },
-        stream ? 200 : 500,
-      );
+      const body = requiredTool
+        ? {
+            stream,
+            tools: [
+              endpoint === "responses"
+                ? { type: "function", ...tool }
+                : { type: "function", function: tool },
+            ],
+            tool_choice: "required",
+          }
+        : { stream };
+      const res = await post(endpoint, body, stream ? 200 : 500);
       const text = await res.text();
       if (endpoint === "chat/completions") {
-        if (!stream) {
-          expect(JSON.parse(text)).toEqual({
-            error: { message: finalText, type: "api_error", code: "incomplete_turn" },
-          });
-        } else {
-          const chunks = chunksFrom(parseSseDataLines(text));
+        const chunks = stream ? chunksFrom(parseSseDataLines(text)) : [];
+        expect(stream ? chunks.at(-1) : JSON.parse(text)).toEqual({
+          error: { message: finalText, type: "api_error", code: "incomplete_turn" },
+        });
+        if (stream) {
           const choices = chunks.flatMap((chunk) => chunk.choices ?? []);
           expect(chatText(choices)).toBe(expectedStreamText);
-          expect(chunks.at(-1)).toEqual({
-            error: { message: finalText, type: "api_error", code: "incomplete_turn" },
-          });
           expect(choices.every((choice) => choice.finish_reason === null)).toBe(true);
         }
         return;
       }
       const events = stream ? parseSseEvents(text) : [];
       const response = responseFrom(text, stream, "failed");
-      expect(response.status).toBe("failed");
-      expect(response.error?.code).toBe("incomplete_turn");
-      expect(response.output).toMatchObject([
-        {
-          type: "message",
-          status: "incomplete",
-          content: [{ type: "output_text", text: finalText }],
-        },
-      ]);
+      expect(response).toMatchObject({
+        status: "failed",
+        error: { code: "incomplete_turn" },
+        output: [
+          {
+            type: "message",
+            status: "incomplete",
+            content: [{ type: "output_text", text: finalText }],
+          },
+        ],
+      });
       if (stream) {
         expect(
           events

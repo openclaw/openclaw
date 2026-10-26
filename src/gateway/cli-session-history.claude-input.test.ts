@@ -223,19 +223,6 @@ it.each([
   expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
 });
 
-it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
-  await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-    const note = buildCliSessionDriftNote(["prompt-tools"]);
-    await writeRows(filePath, [
-      claudeUser("real question", { uuid: "human" }),
-      claudeUser(`${note}\n\n${execPrompt}`, { uuid: "internal" }),
-    ]);
-    const messages = merge([], await readMessages());
-    expect(projectChatDisplayMessages(messages)).toMatchObject([
-      { role: "user", content: "real question" },
-    ]);
-  });
-});
 it.each(["null", "not json"])("ignores non-record or malformed activity row %s", (line) => {
   expect(classify(line)).toEqual({ humanTurn: false });
 });

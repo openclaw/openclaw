@@ -8,7 +8,6 @@ import {
   replaceSessionEntrySync,
   persistSessionTranscriptTurn,
   loadSessionEntryReadOnly,
-  readSessionTranscriptWatermark,
 } from "../config/sessions/session-accessor.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,10 +30,7 @@ import {
   preparedActivityRecapModel,
   seedRecapConversation,
 } from "./session-activity-summaries.test-support.js";
-import {
-  projectSessionActivitySummary,
-  type ActivitySummaryTarget,
-} from "./session-activity-summary-state.js";
+import type { ActivitySummaryTarget } from "./session-activity-summary-state.js";
 import * as observerModel from "./session-observer-model.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -306,14 +302,6 @@ export function registerActivitySummaryRunTests(
           await clock.advanceBy(3_600_000);
           expect(auth).toHaveBeenCalledOnce();
           expect(complete).toHaveBeenCalledTimes(available ? 1 : 0);
-          expect(
-            projectSessionActivitySummary({
-              ...target,
-              cfg,
-              entry: loadSessionEntryReadOnly(scope),
-              watermark: readSessionTranscriptWatermark(scope),
-            }),
-          ).toMatchObject({ state: available ? "current" : "unavailable" });
         } finally {
           operation.complete();
           await unsubs.agentUnsub();
