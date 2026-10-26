@@ -16,7 +16,7 @@ type HeavyModule = {
 
 const tempDirs: string[] = [];
 
-function writeRuntimeFixture(prefix: string, files: Record<string, string>) {
+function writeRuntimeFixture(prefix: string, files: Record<string, string | object>) {
   const rootDir = makeTrackedTempDir(prefix, tempDirs);
   writeArtifacts(rootDir, files);
   return rootDir;
@@ -24,12 +24,12 @@ function writeRuntimeFixture(prefix: string, files: Record<string, string>) {
 
 function createBundledWhatsAppRuntimeFixture() {
   const rootDir = writeRuntimeFixture("openclaw-whatsapp-boundary", {
-    "package.json": JSON.stringify({
+    "package.json": {
       name: "openclaw",
       type: "module",
       bin: { openclaw: "openclaw.mjs" },
       exports: { "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" } },
-    }),
+    },
     "openclaw.mjs": "export {};\n",
     "dist/plugin-sdk/core.js": "export {};\n",
     [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
@@ -37,47 +37,25 @@ function createBundledWhatsAppRuntimeFixture() {
       'export { getActiveWebListener } from "../../active-listener.js";\n',
     [bundledDistPluginFile("whatsapp", "runtime-api.js")]:
       'export { registerControllerForTest } from "../../connection-controller-registry.js";\n',
-    "dist/connection-controller-registry.js": [
-      'const key = Symbol.for("openclaw.whatsapp.connectionControllerRegistry");',
-      "const state = globalThis[key] ??= { controllers: new Map() };",
-      "export function getRegisteredWhatsAppConnectionController(accountId) {",
-      "  return state.controllers.get(accountId) ?? null;",
-      "}",
-      "export function registerControllerForTest(accountId, listener) {",
-      '  const id = accountId ?? "default";',
-      "  if (!listener) {",
-      "    state.controllers.delete(id);",
-      "    return;",
-      "  }",
-      "  state.controllers.set(id, { getActiveListener: () => listener });",
-      "}",
-      "",
-    ].join("\n"),
-    "dist/active-listener.js": [
-      'import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";',
-      "export function getActiveWebListener(accountId) {",
-      '  return getRegisteredWhatsAppConnectionController(accountId ?? "default")?.getActiveListener() ?? null;',
-      "}",
-      "",
-    ].join("\n"),
+    "dist/connection-controller-registry.js": `
+      const key = Symbol.for("openclaw.whatsapp.connectionControllerRegistry");
+      const { controllers } = globalThis[key] ??= { controllers: new Map() };
+      export const getRegisteredWhatsAppConnectionController = (id) => controllers.get(id) ?? null;
+      export function registerControllerForTest(id, listener) {
+        id ??= "default";
+        if (listener) controllers.set(id, { getActiveListener: () => listener });
+        else controllers.delete(id);
+      }
+    `,
+    "dist/active-listener.js": `
+      import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+      export const getActiveWebListener = (id) =>
+        getRegisteredWhatsAppConnectionController(id ?? "default")?.getActiveListener() ?? null;
+    `,
   });
   stageBundledPluginRuntime({ repoRoot: rootDir });
 
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
-}
-
-function createExternalTypeScriptRuntimePackageFixture() {
-  const rootDir = writeRuntimeFixture("openclaw-external-boundary-ts", {
-    "package.json": JSON.stringify({ name: "openclaw-external-ts-runtime", type: "module" }),
-    "runtime-api.ts": [
-      'import { marker } from "./runtime-helper.js";',
-      "export const ok = true;",
-      "export const loadedVia = marker;",
-      "",
-    ].join("\n"),
-    "runtime-helper.ts": 'export const marker = "jiti-source-package";\n',
-  });
-  return path.join(rootDir, "runtime-api.ts");
 }
 
 afterEach(() => {
@@ -112,10 +90,17 @@ describe("runtime plugin boundary whatsapp seam", () => {
   });
 
   it("keeps the TypeScript source package fallback available for non-bundled plugins", () => {
-    const modulePath = createExternalTypeScriptRuntimePackageFixture();
+    const root = writeRuntimeFixture("openclaw-external-boundary-ts", {
+      "package.json": { name: "openclaw-external-ts-runtime", type: "module" },
+      "runtime-api.ts": `import { marker } from "./runtime-helper.js";
+export const ok = true;
+export const loadedVia = marker;
+`,
+      "runtime-helper.ts": 'export const marker = "jiti-source-package";\n',
+    });
     expect(
       loadFacadeModuleAtLocationSync<{ ok: boolean; loadedVia: string }>({
-        location: { modulePath, boundaryRoot: path.dirname(modulePath) },
+        location: { modulePath: path.join(root, "runtime-api.ts"), boundaryRoot: root },
       }),
     ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
   });

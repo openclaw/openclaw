@@ -48,6 +48,14 @@ function resolve(config: OpenClawConfig): string[] {
   return resolveEffectivePluginIds({ config, env: {}, workspaceDir: "/workspace" });
 }
 
+function manifest(
+  plugins: NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>["plugins"],
+) {
+  mocks.loadManifestMetadataSnapshot.mockReturnValue(
+    createPluginMetadataSnapshotFixture({ plugins }),
+  );
+}
+
 describe("resolveEffectivePluginIds", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
@@ -65,14 +73,10 @@ describe("resolveEffectivePluginIds", () => {
 
   it("keeps the selected slot but rechecks bundled owner policy after channel callbacks", () => {
     mocks.listPotentialConfiguredChannelIds.mockReturnValue(["test-channel"]);
-    mocks.loadManifestMetadataSnapshot.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          { id: "early-context" },
-          { id: "bundled-channel-owner", channels: ["test-channel"] },
-        ],
-      }),
-    );
+    manifest([
+      { id: "early-context" },
+      { id: "bundled-channel-owner", channels: ["test-channel"] },
+    ]);
     mocks.resolveConfiguredChannelPluginIds.mockImplementation(({ config }) => {
       config.plugins = {
         deny: ["bundled-channel-owner"],
@@ -87,11 +91,7 @@ describe("resolveEffectivePluginIds", () => {
   });
 
   it("preloads the declared owner, not the engine identifier", () => {
-    mocks.loadManifestMetadataSnapshot.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "vendor-plugin", contextEngineIds: ["Canonical-Engine"] }],
-      }),
-    );
+    manifest([{ id: "vendor-plugin", contextEngineIds: ["Canonical-Engine"] }]);
     expect(resolve({ plugins: { slots: { contextEngine: "Canonical-Engine" } } })).toEqual([]);
     expect(
       resolve({
@@ -109,9 +109,7 @@ describe("resolveEffectivePluginIds", () => {
   ] satisfies Array<[string, NonNullable<OpenClawConfig["plugins"]>, string[]]>)(
     "preloads the expected context-engine slot: %s",
     (_name, policy, expected) => {
-      mocks.loadManifestMetadataSnapshot.mockReturnValue(
-        createPluginMetadataSnapshotFixture({ plugins: [{ id: "lossless-claw" }] }),
-      );
+      manifest([{ id: "lossless-claw" }]);
       expect(
         resolve({ plugins: { slots: { contextEngine: "lossless-claw" }, ...policy } }),
       ).toStrictEqual(expected);

@@ -28,12 +28,8 @@ function channelHint(channelId: string, effective: boolean, blockedReasons: stri
       blockedReasons,
     },
   ]);
-  return missingChannelHint({
-    config: {
-      channels: { [channelId]: channelId === "feishu" ? { appId: "cli_xxx" } : { enabled: true } },
-    },
-    channelId,
-  });
+  const settings = channelId === "feishu" ? { appId: "cli_xxx" } : { enabled: true };
+  return missingChannelHint({ config: { channels: { [channelId]: settings } }, channelId });
 }
 
 describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
@@ -55,19 +51,16 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
   it.each([
     ["public-npm", "@acme/plugin@1.2.3", "npm:@acme/plugin@1.2.3"],
     ["public-clawhub", "clawhub:@acme/plugin@1.2.3", "clawhub:@acme/plugin@1.2.3"],
-  ])(
-    "preserves the %s registry in a pinned catalog repair command",
-    (sourceRef, installSpec, target) => {
-      vi.spyOn(catalog, "getOfficialExternalPluginCatalogEntry").mockReturnValue(
-        installableEntry("acme-plugin", { sourceRef, package: "@acme/plugin", version: "1.2.3" }),
-      );
+  ])("preserves %s in pinned repair commands", (sourceRef, installSpec, target) => {
+    vi.spyOn(catalog, "getOfficialExternalPluginCatalogEntry").mockReturnValue(
+      installableEntry("acme-plugin", { sourceRef, package: "@acme/plugin", version: "1.2.3" }),
+    );
 
-      expect(repairHint("acme-plugin")).toMatchObject({
-        installSpec,
-        installCommand: `openclaw plugins install ${target}`,
-      });
-    },
-  );
+    expect(repairHint("acme-plugin")).toMatchObject({
+      installSpec,
+      installCommand: `openclaw plugins install ${target}`,
+    });
+  });
 
   it("skips presence policy when no channel ids need repair hints", () => {
     expect(missingChannelHints({ config: {}, channelIds: [] })).toEqual([]);

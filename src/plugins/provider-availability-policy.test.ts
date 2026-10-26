@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,19 +17,19 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { resolveProviderManagesOwnAvailability as managesAvailability } from "./provider-availability-policy.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 const tempDirs = createTempDirTracker();
 
 function writeManifest(directory: string, managesOwnAvailability: unknown) {
-  fs.writeFileSync(
-    path.join(directory, "openclaw.plugin.json"),
-    JSON.stringify({
+  writeArtifacts(directory, {
+    "openclaw.plugin.json": {
       id: "installed",
       providers: ["local"],
       managesOwnAvailability,
       configSchema: { type: "object" },
-    }),
-  );
+    },
+  });
 }
 
 function within<T>(snapshot: Parameters<typeof withPluginMetadataSnapshotScope>[0], run: () => T) {
@@ -69,11 +68,9 @@ it.each([true, false, "true", 1, null])("accepts only the boolean declaration %s
 it("uses cold third-party metadata and the same pinned runtime generation without executing the plugin", async () => {
   const stateDir = tempDirs.make("openclaw-provider-availability-");
   const pluginDir = path.join(stateDir, "extensions", "installed");
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "index.js"),
-    "throw new Error('provider runtime must remain cold');\n",
-  );
+  writeArtifacts(pluginDir, {
+    "index.js": "throw new Error('provider runtime must remain cold');",
+  });
   writeManifest(pluginDir, true);
   await writePersistedInstalledPluginIndex(createIndex(pluginDir), { stateDir });
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -90,8 +87,7 @@ it("uses cold third-party metadata and the same pinned runtime generation withou
     },
   };
   setRuntimeConfigSnapshot(config, config);
-  expect(managesAvailability("LOCAL")).toBe(true);
-  expect(managesAvailability("unrelated")).toBe(false);
+  expect([managesAvailability("LOCAL"), managesAvailability("unrelated")]).toEqual([true, false]);
   const snapshot = loadPluginMetadataSnapshot({ config, env: process.env });
   expect(within(snapshot, () => managesAvailability("local"))).toBe(true);
   const empty = projectPluginMetadataSnapshot(snapshot, []);
@@ -111,8 +107,10 @@ it("preserves literal owner precedence and excludes disabled declarations", () =
   }
   const prepared = rebaseRegistry(snapshot, snapshot.manifestRegistry);
   within(prepared, () => {
-    expect(managesAvailability("shared")).toBe(false);
-    expect(managesAvailability("local")).toBe(true);
-    expect(managesAvailability("disabled-local")).toBe(false);
+    expect(["shared", "local", "disabled-local"].map(managesAvailability)).toEqual([
+      false,
+      true,
+      false,
+    ]);
   });
 });

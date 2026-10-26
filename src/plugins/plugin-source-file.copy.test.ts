@@ -17,10 +17,9 @@ afterEach(() => vi.restoreAllMocks());
 function fixture(bytes = Buffer.from("captured")) {
   const root = fs.realpathSync(dirs.make("plugin-small-copy-"));
   const source = path.join(root, "input.js");
-  const outputRoot = path.join(root, "capture");
-  fs.mkdirSync(outputRoot);
+  fs.mkdirSync(path.join(root, "capture"));
   fs.writeFileSync(source, bytes, { mode: 0o755 });
-  const target = path.join(outputRoot, "input.js");
+  const target = path.join(root, "capture", "input.js");
   const copy = () => copyPluginSourceFile(source, root, target, { hashCopiedContent: true });
   return { root, source, target, bytes, copy };
 }
@@ -60,30 +59,27 @@ it("refuses source growth during the bounded transfer", () => {
   expect(changed).toBe(true);
 });
 
-it.each(["leaf", "parent", "hardlink"])(
-  "refuses substituted destination %s before transfer",
-  (change) => {
-    const { target: destination, copy } = fixture();
-    const transfer = fsSafe.copyFileDescriptorSync;
-    vi.spyOn(fsSafe, "copyFileDescriptorSync").mockImplementation((source, target, options) => {
-      if (change === "hardlink") {
-        fs.linkSync(destination, `${destination}.alias`);
-      } else {
-        const replaced = change === "parent" ? path.dirname(destination) : destination;
-        fs.renameSync(replaced, `${replaced}.original`);
-        if (change === "parent") {
-          fs.mkdirSync(replaced);
-        }
-        fs.writeFileSync(destination, "foreign");
+it.each(["leaf", "parent", "hardlink"])("refuses substituted destination %s", (change) => {
+  const { target: destination, copy } = fixture();
+  const transfer = fsSafe.copyFileDescriptorSync;
+  vi.spyOn(fsSafe, "copyFileDescriptorSync").mockImplementation((source, target, options) => {
+    if (change === "hardlink") {
+      fs.linkSync(destination, `${destination}.alias`);
+    } else {
+      const replaced = change === "parent" ? path.dirname(destination) : destination;
+      fs.renameSync(replaced, `${replaced}.original`);
+      if (change === "parent") {
+        fs.mkdirSync(replaced);
       }
-      return transfer(source, target, options);
-    });
-    expect(copy).toThrow();
-    if (change !== "hardlink") {
-      expect(fs.readFileSync(destination, "utf8")).toBe("foreign");
+      fs.writeFileSync(destination, "foreign");
     }
-  },
-);
+    return transfer(source, target, options);
+  });
+  expect(copy).toThrow();
+  if (change !== "hardlink") {
+    expect(fs.readFileSync(destination, "utf8")).toBe("foreign");
+  }
+});
 
 it("preserves disk-full diagnostics and does not retry descriptor transfer", () => {
   const { copy } = fixture();
