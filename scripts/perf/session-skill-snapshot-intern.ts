@@ -29,7 +29,7 @@ const fixtures = Array.from({ length: 4 }, (_, version) =>
     updatedAt: 1,
     skillsSnapshot: {
       prompt: `Synthetic inventory ${version}\n${"Skill instructions. ".repeat(512)}`,
-      skills: Array.from({ length: 40 }, (_, index) => ({
+      skills: Array.from({ length: 40 }, (_skill, index) => ({
         name: `synthetic-${index}`,
         requiredEnv: [`SYNTHETIC_${index}`],
         source: { filePath: `/synthetic/skills/${index}/SKILL.md` },
@@ -76,8 +76,12 @@ for (let index = 0; index < 10_000; index++) {
 const finished = performance.now();
 const elapsedMs = finished - started;
 const cpu = process.cpuUsage(cpuBefore);
-await new Promise<void>((resolve) => setImmediate(resolve));
-await new Promise<void>((resolve) => setImmediate(resolve));
+await new Promise<void>((resolve) => {
+  setImmediate(resolve);
+});
+await new Promise<void>((resolve) => {
+  setImmediate(resolve);
+});
 observer.disconnect();
 const profile = inspector && (await inspector.post("HeapProfiler.stopSampling")).profile;
 inspector?.disconnect();
