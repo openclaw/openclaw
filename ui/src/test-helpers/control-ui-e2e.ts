@@ -36,6 +36,7 @@ import {
 } from "./control-ui-e2e-build-publication.ts";
 import type {
   ControlUiMockGateway,
+  ControlUiMockGatewayInstallOptions,
   ControlUiMockPresenceUser,
   ControlUiMockRequestHandler,
   MockGatewayControls,
@@ -2638,9 +2639,7 @@ export async function prepareControlUiMockGatewayScenario(
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
-  options: {
-    requestHandlers?: Record<string, (params: unknown) => unknown>;
-  } = {},
+  options: ControlUiMockGatewayInstallOptions = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   if (prepared.assets.size) {
@@ -2662,7 +2661,7 @@ export async function installMockGateway(
   await installMockGatewayScript(
     page,
     createControlUiMockGatewayInitScript(normalizedScenario),
-    options.requestHandlers,
+    options,
   );
   const rosterGates = new Set([
     "connect",

@@ -81,6 +81,27 @@ database state after collecting results.
 
 ## Control UI warm interactions
 
+The headless Chromium/WebKit companion reuses the 26 interaction scenarios and
+adds cold boot, persisted-state warm reload, 2,000-message open and 645-delta
+streaming. It alternates engines and bundles within each pair:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --pairs 10 --viewport both
+```
+
+Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
+for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
+`--control-bundle-dir` add candidate and A/A control builds. Reports retain the
+metric time domain: WebKit Inspector durations are wall time, while Chromium
+CDP uses thread CPU. Untraced WebKit runs leave those counters null; Inspector
+collection is enabled only by `--trace`. Compare automation wall time across engines; do not divide
+their script measurements as though they were the same CPU metric. Mock routing
+disables HTTP caching; warm reload measures persisted state in the same context.
+Mobile transcript-top uses a native scrollport jump because Playwright's mobile
+WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
+omits DOM snapshots so snapshot traversal does not dominate attribution.
+
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:
 

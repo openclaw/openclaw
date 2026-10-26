@@ -76,6 +76,8 @@ export type MenuNavigationOptions = {
   surface?: "menu" | "listbox";
   /** Searchable lists keep focus in their input while Zag moves the highlight. */
   focus?: "item" | "retain";
+  /** Nested scroll regions can reveal the retained highlight after their own render. */
+  reveal?: "surface" | "caller";
   pointerFocus?: () => "menu" | "trigger";
   items?: () => readonly { value: string; disabled?: boolean }[];
   value?: () => string | null;
@@ -102,7 +104,7 @@ export function createMenuRuntime(
       ? overlay.surface.contains(target)
       : target.closest('[role="menu"]') === overlay.surface);
   const focusItem = (service: MenuService) => {
-    if (!overlay.open) {
+    if (!overlay.open || (options.focus === "retain" && options.reveal === "caller")) {
       return;
     }
     const id = service.computed("highlightedId");

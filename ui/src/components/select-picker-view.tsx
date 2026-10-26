@@ -192,6 +192,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     ids: { content: contentId, trigger: triggerId },
     surface: "listbox",
     focus: "retain",
+    reveal: "caller",
     items: () => {
       opened();
       // Native opening asks for its initial highlight before Solid publishes open.
