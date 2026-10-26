@@ -4,6 +4,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
@@ -554,10 +555,7 @@ describe("config cli integration", () => {
     const migratedRaw = JSON.stringify(migrated) + "\n";
     await withConfig(migratedRaw, async ({ configPath, tempDir }) => {
       const patchPath = path.join(tempDir, "patch.json5");
-      fs.writeFileSync(
-        patchPath,
-        JSON.stringify(configForExec({ security: "allowlist", ask: "on-miss" })),
-      );
+      writeFixtureJsonSync(patchPath, configForExec({ security: "allowlist", ask: "on-miss" }));
       const output = createTestRuntime();
 
       await expect(
@@ -570,7 +568,7 @@ describe("config cli integration", () => {
       expect(diagnostic).toContain('Replace security/ask with mode="ask"');
       expect(diagnostic).toContain("at this scope");
 
-      fs.writeFileSync(patchPath, JSON.stringify({ ...migrated, messages: { ackReaction: "✅" } }));
+      writeFixtureJsonSync(patchPath, { ...migrated, messages: { ackReaction: "✅" } });
       await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
       expect(load(configPath)).toMatchObject({
         ...migrated,

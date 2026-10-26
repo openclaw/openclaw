@@ -13,6 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -560,13 +561,10 @@ it.each([
     const pluginDir = path.join(root, "worker-plugin");
     if (scenario.plugin) {
       await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "worker-exit-fixture",
-          configSchema: { type: "object", properties: {} },
-        }),
-      );
+      await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "worker-exit-fixture",
+        configSchema: { type: "object", properties: {} },
+      });
       await fs.writeFile(
         path.join(pluginDir, "index.cjs"),
         [
@@ -585,21 +583,18 @@ it.each([
         ].join("\n"),
       );
     }
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        nodeHost: { skills: { enabled: false } },
-        ...(scenario.plugin
-          ? {
-              plugins: {
-                allow: ["worker-exit-fixture"],
-                load: { paths: [path.join(pluginDir, "index.cjs")] },
-                slots: { memory: "none" },
-              },
-            }
-          : {}),
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      nodeHost: { skills: { enabled: false } },
+      ...(scenario.plugin
+        ? {
+            plugins: {
+              allow: ["worker-exit-fixture"],
+              load: { paths: [path.join(pluginDir, "index.cjs")] },
+              slots: { memory: "none" },
+            },
+          }
+        : {}),
+    });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: root,

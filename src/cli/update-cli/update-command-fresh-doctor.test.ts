@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -113,7 +112,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
 }));
 
-import { writeFixtureJson } from "../cli-fixtures.test-support.js";
+import { writeFixtureJson, writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -814,7 +813,7 @@ describe("post-plugin update readiness", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    writeFixtureJsonSync(configPath, { gateway: { mode: "local" } });
     const filename = openOpenClawStateDatabase({ env: process.env }).path;
     closeOpenClawStateDatabaseForTest();
     const db = new DatabaseSync(filename);

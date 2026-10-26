@@ -36,6 +36,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { updateRepairCommand } from "./update-repair-command.js";
@@ -127,11 +128,8 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-update-repair-"));
   const root = tempDirs.make("openclaw-update-repair-install-");
   fs.mkdirSync(path.join(root, "dist"));
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.3" }));
-  fs.writeFileSync(
-    path.join(root, "dist", "build-info.json"),
-    JSON.stringify({ buildId: "installed-build" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { version: "2026.9.3" });
+  writeFixtureJsonSync(path.join(root, "dist", "build-info.json"), { buildId: "installed-build" });
   mocks.resolveRoot.mockResolvedValue(root);
   mocks.readConfig.mockResolvedValue({ valid: true, config: {} });
   mocks.resolveChannel.mockReset().mockResolvedValue({ tag: "latest", version: "2026.9.3" });

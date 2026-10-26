@@ -12,6 +12,7 @@ import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
 } from "../plugins/install-config.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),
@@ -120,20 +121,14 @@ describe("loadConfigForInstall", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-context-"));
     const localPath = path.join(root, "fixture-package");
     fs.mkdirSync(localPath);
-    fs.writeFileSync(
-      path.join(localPath, "package.json"),
-      JSON.stringify({
-        name: "fixture-package",
-        openclaw: { install: { allowInvalidConfigRecovery: true } },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(localPath, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "fixture-local",
-        configSchema: { type: "object", properties: {} },
-      }),
-    );
+    writeFixtureJsonSync(path.join(localPath, "package.json"), {
+      name: "fixture-package",
+      openclaw: { install: { allowInvalidConfigRecovery: true } },
+    });
+    writeFixtureJsonSync(path.join(localPath, "openclaw.plugin.json"), {
+      id: "fixture-local",
+      configSchema: { type: "object", properties: {} },
+    });
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
     try {
       const registry = resolvePluginInstallRequestContext({
