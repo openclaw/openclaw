@@ -704,6 +704,24 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       return { fixtureSkills: inventorySize, matchingSkills: 1 };
     },
   },
+  {
+    ...fixture,
+    id: "data-agent-skills-clear",
+    route: pathForAgentPanel("main", "skills"),
+    expected: "Clearing the Skills filter restores all 1,000 skills.",
+    rowSelector: ".agent-skill-row",
+    prepare: async (page) => {
+      await countRows(page, ".agent-skill-row", inventorySize);
+      await page.locator('input[name="agent-skills-filter"]').fill(skillQuery);
+      await countRows(page, ".agent-skill-row:not([hidden])", 1);
+    },
+    run: async (page) => {
+      await page.locator('input[name="agent-skills-filter"]').fill("");
+      await countRows(page, ".agent-skill-row:not([hidden])", inventorySize);
+      await frames(page);
+      return { fixtureSkills: inventorySize, matchingSkills: inventorySize };
+    },
+  },
   skillsRefreshScenario(0),
   skillsRefreshScenario(100),
   {
