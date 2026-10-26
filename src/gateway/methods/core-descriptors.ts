@@ -100,6 +100,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.client.transcript", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.close", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.toolCall", "talk", "operator.talk", "<=2026.7"],
+  ["talk.client.say", "talk", "operator.talk", "2026.10"],
   ["talk.client.steer", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.create", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.appendAudio", "talk", "operator.talk", "<=2026.7"],
