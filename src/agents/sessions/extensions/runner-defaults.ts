@@ -16,6 +16,7 @@ export const noOpUIContext: ExtensionUIContext = {
   setFooter: () => {},
   setHeader: () => {},
   setTitle: () => {},
+  // SAFETY: This headless adapter returns no result and never invokes the generic UI renderer.
   custom: async () => undefined as never,
   pasteToEditor: () => {},
   setEditorText: () => {},
