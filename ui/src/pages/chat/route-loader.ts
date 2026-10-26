@@ -659,16 +659,18 @@ export async function verifyChatSessionRoute(
 ): Promise<void> {
   // SAFETY: Only chat/dashboard matches loaded here reach this owner.
   const data = target.data as ChatRouteData | undefined;
-  if (
-    !current() ||
-    data?.kind !== "session" ||
-    (!verifySession && !data.sessionResolutionFromCache)
-  ) {
+  if (!current() || data?.kind !== "session") {
     return;
   }
   const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
-  // Home and explicit literal creation routes need not exist in storage.
+  // Warm Home can render before hello reveals that its access needs confirmation.
+  if (reference?.kind === "main" && context.gateway.snapshot.hello?.auth?.sessionCap === "none") {
+    await revalidate();
+    return;
+  }
+  // Other Home and explicit literal creation routes need not exist in storage.
   if (
+    (!verifySession && !data.sessionResolutionFromCache) ||
     !reference ||
     !(reference.kind === "short" || (reference.kind === "literal" && reference.slugCandidate))
   ) {
