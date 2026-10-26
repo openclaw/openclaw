@@ -229,6 +229,17 @@ function builtChatModel(modelId: string, modelNameHint = modelId) {
   return builtModel({ modelId, modelNameHint, api: "openai-completions", authMethod: "api-key" });
 }
 
+function wrapStream(streamFn: StreamFn, model = makeModel()) {
+  return registerProvider().wrapStreamFn?.({
+    streamFn,
+    modelId: model.id,
+    model,
+    extraParams: {},
+    config: {},
+    agentDir,
+  } as never);
+}
+
 function normalizeAlias(overrides: Partial<ReturnType<typeof makeModel>> = {}) {
   return registerProvider().normalizeResolvedModel?.({
     provider: providerId,
@@ -816,7 +827,6 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("keeps replay item ids for Foundry encrypted reasoning continuations", async () => {
-    const provider = registerProvider();
     const model = makeModel({ reasoning: true, compat: { supportsStore: false } });
     let capturedReplayIds: boolean | undefined;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -824,34 +834,22 @@ describe("microsoft-foundry plugin", () => {
         ?.replayResponsesItemIds;
       return {} as never;
     };
-    const wrappedStreamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn,
-      modelId: "gpt-5.4",
-      model,
-      extraParams: {},
-      config: {},
-      agentDir,
-    } as never);
+    const wrappedStreamFn = wrapStream(baseStreamFn, model);
     await wrappedStreamFn?.(model as never, { systemPrompt: "system", messages: [] } as never, {});
     expect(capturedReplayIds).toBe(true);
   });
 
   it("leaves Foundry chat completions streams unwrapped by Responses defaults", () => {
-    const provider = registerProvider();
     const baseStreamFn: StreamFn = () => ({}) as never;
     expect(
-      provider.wrapStreamFn?.({
-        streamFn: baseStreamFn,
-        modelId: "gpt-4o-mini",
-        model: makeModel({
+      wrapStream(
+        baseStreamFn,
+        makeModel({
           id: "gpt-4o-mini",
           name: "gpt-4o-mini",
           api: "openai-completions",
         }),
-        extraParams: {},
-        config: {},
-        agentDir,
-      } as never),
+      ),
     ).toBe(baseStreamFn);
   });
 
@@ -974,29 +972,11 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
-  it("deletes legacy provider-level secret refs", () => {
+  it("persists discovered deployments, orders profiles and clears provider-level secrets", () => {
     const result = buildAuthResult({
       apiKey: { source: "env", provider: "default", id: "AZURE_OPENAI_API_KEY" },
-      modelId: "gpt-4o",
       authMethod: "api-key",
-    });
-    const provider = providerPatch(result);
-    for (const key of ["apiKey", "authHeader", "headers"] as const) {
-      expect(provider[key]).toBeUndefined();
-      expect(Object.hasOwn(provider, key)).toBe(true);
-    }
-  });
-
-  it("moves the selected Foundry auth profile to the front of auth.order", () => {
-    const result = buildAuthResult({
-      modelId: "gpt-5.4",
-      currentProviderProfileIds: [apiKeyProfileId, profileId],
-    });
-    expect(result.configPatch?.auth?.order?.[providerId]).toEqual([profileId, apiKeyProfileId]);
-  });
-
-  it("persists discovered deployments alongside the selected default model", () => {
-    const result = buildAuthResult({
+      currentProviderProfileIds: [profileId, apiKeyProfileId],
       modelId: "deployment-gpt5",
       modelNameHint: "gpt-5.4",
       deployments: [
@@ -1006,6 +986,11 @@ describe("microsoft-foundry plugin", () => {
       ],
     });
     const provider = providerPatch(result);
+    expect(result.configPatch?.auth?.order?.[providerId]).toEqual([apiKeyProfileId, profileId]);
+    for (const key of ["apiKey", "authHeader", "headers"] as const) {
+      expect(provider[key]).toBeUndefined();
+      expect(Object.hasOwn(provider, key)).toBe(true);
+    }
     expect(provider?.models.map((model) => [model.id, model.baseUrl])).toEqual([
       ["deployment-gpt5", baseUrl],
       ["deployment-gpt4o", baseUrl],
