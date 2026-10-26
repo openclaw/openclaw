@@ -208,6 +208,9 @@ session must still identify the exact run from the retired Gateway, with no newe
 run or admitted work owning that session. Live executions and queued collectors
 keep their existing owners. Orphaned runs settle their native execution state
 before cleanup, so retained child sessions do not leave phantom running activity.
+If a later turn has already reused the child session, registry recovery settles
+the old Gateway's unfinished run as interrupted without changing the newer session
+or crediting its result to the old run. The original parent receives that interruption.
 If settlement fails, completion remains available for retry.
 
 Recovery remembers live session ownership without retaining saved prompt snapshots.
