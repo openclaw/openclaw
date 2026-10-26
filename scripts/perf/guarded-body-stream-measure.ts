@@ -68,7 +68,6 @@ async function run(count: number) {
 await run(100);
 const inspector = new Session();
 let promises = 0;
-let stopCounting: (() => void) | undefined;
 if (mode === "allocation") {
   inspector.connect();
   await inspector.post("HeapProfiler.startSampling", {
@@ -76,9 +75,9 @@ if (mode === "allocation") {
     includeObjectsCollectedByMajorGC: true,
     includeObjectsCollectedByMinorGC: true,
   });
-} else if (mode === "promises") {
-  stopCounting = promiseHooks.createHook({ init: () => promises++ });
 }
+const stopCounting =
+  mode === "promises" ? promiseHooks.createHook({ init: () => promises++ }) : undefined;
 let gcMs = 0;
 const observer = new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
