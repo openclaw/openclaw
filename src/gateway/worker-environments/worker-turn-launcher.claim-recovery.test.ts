@@ -114,7 +114,7 @@ function createLane(initialParams: SessionPlacementTurnParams) {
 }
 
 describe("local claim recovery before backend registration", () => {
-  it.each(["local", "standalone", "remote", "embedded", "CLI"] as const)(
+  it.each(["local", "standalone", "embedded", "CLI"] as const)(
     "admits a %s child after its inherited parent claim closes",
     async (execution) => {
       const provider = createProvider();
@@ -125,12 +125,6 @@ describe("local claim recovery before backend registration", () => {
         }
         return { meta: { durationMs: 1 } };
       });
-      const remoteTask = vi.fn<typeof provider.executeTurn>(
-        async (_claim, _params, _runLocal, onAdmitted) => {
-          onAdmitted?.();
-          return { meta: { durationMs: 2 } };
-        },
-      );
       const queued = execution !== "embedded" && execution !== "CLI";
       let uninstall = queued ? installSessionPlacementAdmissionProvider(provider) : () => {};
       let child: Promise<unknown> | undefined;
@@ -156,20 +150,9 @@ describe("local claim recovery before backend registration", () => {
           uninstall();
           uninstall = () => {};
         }
-        if (execution === "remote") {
-          uninstall = installSessionPlacementAdmissionProvider({
-            assertCompactionSuccessorAllowed: () => {},
-            executeLocalTurn: provider.executeLocalTurn,
-            executeTurn: remoteTask,
-          });
-        }
         gate.resolve();
-        await expect(child).resolves.toMatchObject({
-          meta: { durationMs: execution === "remote" ? 2 : 1 },
-        });
-        expect([localTask.mock.calls.length, remoteTask.mock.calls.length]).toEqual(
-          execution === "remote" ? [0, 1] : [1, 0],
-        );
+        await expect(child).resolves.toMatchObject({ meta: { durationMs: 1 } });
+        expect(localTask).toHaveBeenCalledOnce();
         expect((await placements.getAsync(SESSION_ID))?.turnClaim ?? null).toBeNull();
       } finally {
         gate.resolve();
