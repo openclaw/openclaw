@@ -19,11 +19,12 @@ if (isMainThread) {
   const { parse } = require("acorn");
   const NativeALS = hooks.AsyncLocalStorage;
   const NativeResource = hooks.AsyncResource;
-  const nativeEnter = NativeALS.prototype.enterWith.call.bind(NativeALS.prototype.enterWith);
-  const nativeRun = NativeALS.prototype.run.call.bind(NativeALS.prototype.run);
-  const nativeScope = NativeResource.prototype.runInAsyncScope.call.bind(
-    NativeResource.prototype.runInAsyncScope,
-  );
+  // oxlint-disable-next-line typescript/unbound-method -- Instrumentation retains the original method; every call supplies its receiver with .call.
+  const nativeEnter = NativeALS.prototype.enterWith;
+  // oxlint-disable-next-line typescript/unbound-method -- Instrumentation retains the original method; every call supplies its receiver with .call.
+  const nativeRun = NativeALS.prototype.run;
+  // oxlint-disable-next-line typescript/unbound-method -- Instrumentation retains the original method; every call supplies its receiver with .call.
+  const nativeScope = NativeResource.prototype.runInAsyncScope;
   const resourceTypes = new WeakMap();
   const stores = new WeakMap();
   const storeRecords = [];
@@ -66,9 +67,9 @@ if (isMainThread) {
   // exact original frame, so the probe itself adds no key to Gateway frames.
   let Frame;
   const probe = new NativeResource("census-probe");
-  nativeScope(probe, () => {
+  nativeScope.call(probe, () => {
     const storage = new NativeALS();
-    nativeEnter(storage, true);
+    nativeEnter.call(storage, true);
     const resource = new NativeResource("census-frame");
     const key = Object.getOwnPropertySymbols(resource).find(
       (symbol) => symbol.description === "context_frame",
@@ -149,17 +150,17 @@ if (isMainThread) {
     transition.count++;
     // Sample attribution below this distinct function isolates real frame
     // allocation from census bookkeeping and non-event Gateway traffic.
-    return nativeEnter(this, value);
+    return nativeEnter.call(this, value);
   }
   NativeALS.prototype.enterWith = function (value) {
-    return active ? eventEnterWith.call(this, value) : nativeEnter(this, value);
+    return active ? eventEnterWith.call(this, value) : nativeEnter.call(this, value);
   };
   NativeALS.prototype.run = function (value, callback, ...args) {
     if (active) {
       active.group.runCalls++;
       active.group.sameValueRuns += Object.is(this.getStore(), value) ? 1 : 0;
     }
-    return nativeRun(this, value, callback, ...args);
+    return nativeRun.call(this, value, callback, ...args);
   };
   NativeResource.prototype.runInAsyncScope = function (callback, receiver, ...args) {
     if (active) {
@@ -167,7 +168,7 @@ if (isMainThread) {
       const type = resourceTypes.get(this) ?? "native-or-preload-resource";
       active.group.resourceTypes[type] = (active.group.resourceTypes[type] ?? 0) + 1;
     }
-    return nativeScope(this, callback, receiver, ...args);
+    return nativeScope.call(this, callback, receiver, ...args);
   };
   registerHooks({
     load(url, context, nextLoad) {
