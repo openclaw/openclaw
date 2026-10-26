@@ -78,7 +78,6 @@ describe("completed subagent payload residency", () => {
       delivery: { status: "pending" },
     });
     expect(restored.completion).toEqual(original.completion);
-    expect(restored.completion?.terminalReply).toBe(original.completion?.terminalReply);
     expect(restored.task).toBe(original.task);
     expect(restored.cleanupCompletedAt).toBe(3);
     expect(restored.delivery?.status).toBe("delivered");
