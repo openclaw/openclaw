@@ -220,8 +220,7 @@ export function createCodexAttemptServerRequestController(
       const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
       const shouldEmitDynamicToolProgress =
-        shouldEmitTranscriptToolProgress(call.tool) &&
-        hideFromChannelProgress !== true;
+        shouldEmitTranscriptToolProgress(call.tool) && hideFromChannelProgress !== true;
       if (shouldEmitDynamicToolProgress) {
         const activity = projectAgentToolActivity({
           toolCallId: call.callId,

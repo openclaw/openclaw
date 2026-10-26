@@ -536,7 +536,12 @@ export function createCodexDynamicToolBridge(params: {
             confirmedMessagingTarget,
             deliveredSourceReply,
           } = messagingFacts;
-          notifyAgentToolResult(options?.onAgentToolResult, toolName, observerResult, resultIsError);
+          notifyAgentToolResult(
+            options?.onAgentToolResult,
+            toolName,
+            observerResult,
+            resultIsError,
+          );
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
