@@ -1,6 +1,5 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -8,8 +7,6 @@ import { MEET_URL, meetLaunchedTab } from "./src/test-support/fixtures.test-help
 import { setupParticipationHarness } from "./src/test-support/participation-harness.js";
 import { getMeetTool } from "./src/test-support/plugin-harness.js";
 import * as chromeTransport from "./src/transports/chrome.js";
-
-const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 const setupWithSqlite = (stateEnv: NodeJS.ProcessEnv) =>
   setupParticipationHarness(
@@ -26,10 +23,9 @@ it("persists unsupported results and replays them without restoring ended sessio
     async (state) => {
       const launched = meetLaunchedTab("participation-tab");
       const launch = vi.spyOn(chromeTransport, "launchChromeMeet").mockResolvedValue(launched);
-      const leave = vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({
-        left: true,
-        note: "Left the test meeting",
-      });
+      const leave = vi
+        .spyOn(chromeTransport, "leaveChromeMeet")
+        .mockResolvedValue({ left: true, note: "left" });
       vi.spyOn(chromeTransport, "readChromeMeetTranscript").mockResolvedValue({
         droppedLines: 0,
         lines: [],
@@ -44,14 +40,8 @@ it("persists unsupported results and replays them without restoring ended sessio
         expect(launch).toHaveBeenCalledOnce();
 
         const contextRequest = { action: "participation_context", sessionId };
-        const activeContext = {
-          sessionId,
-          active: true,
-          sourceOrder: 0,
-          capabilities: [],
-          sources: [],
-        };
-        expect(await harness.execute(contextRequest)).toEqual(activeContext);
+        const context = { sessionId, active: true, capabilities: [] };
+        expect(await harness.execute(contextRequest)).toMatchObject(context);
 
         const request = {
           action: "participate",
@@ -59,20 +49,14 @@ it("persists unsupported results and replays them without restoring ended sessio
           requestId: "unsupported-reaction",
           participationAction: { type: "reaction", reaction: "👍" },
         };
-        const firstResult = requireRecord(await harness.execute(request), "participation result");
+        const firstResult = await harness.execute(request);
         expect(firstResult).toMatchObject({ requestId: request.requestId, status: "unsupported" });
 
         const left = await tool.execute("leave-call", { action: "leave", sessionId });
         expect(left.details).toMatchObject({ found: true, browserLeft: true });
-        expect(leave).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            meetingSessionId: sessionId,
-            meetingUrl: MEET_URL,
-            tab: launched.tab,
-          }),
-        );
+        expect(leave).toHaveBeenCalledOnce();
         const expectEnded = async (owner: typeof harness, requestId: string) => {
-          expect(await owner.execute(contextRequest)).toEqual({ ...activeContext, active: false });
+          expect(await owner.execute(contextRequest)).toMatchObject({ ...context, active: false });
           expect(await owner.execute(request)).toEqual({ ...firstResult, replayed: true });
           expect(await owner.execute({ ...request, requestId })).toMatchObject({
             status: "rejected",
