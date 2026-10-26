@@ -38,7 +38,7 @@ export type PreparedPluginGenerationArtifact = {
 };
 type PreparationParameters = {
   rootDir: string;
-  source: string;
+  source: string | readonly string[];
   standalone?: boolean;
 };
 type PreparationPool = ReturnType<typeof createPreparationPool>;

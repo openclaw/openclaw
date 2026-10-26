@@ -76,6 +76,17 @@ describe("computer tool guidance", () => {
     expect(imageOnly).not.toMatch(/window subtree|`query`|`depth`|`maxElements`/);
   });
 
+  it("does not present a Gateway desktop when the Gateway computer is not configured", () => {
+    const pairedOnly = buildComputerToolDescription(descriptor(["screenshot"]), "node");
+    expect(pairedOnly).toContain("The Gateway has no computer provider configured");
+    expect(pairedOnly).toContain("omit target or use target: node");
+    expect(pairedOnly).not.toContain("the Gateway desktop");
+
+    const configured = buildComputerToolDescription(descriptor(["screenshot"]));
+    expect(configured).toContain("the Gateway desktop");
+    expect(configured).toContain("Omit target to use");
+  });
+
   it("distinguishes key taps from advertised held-key support", () => {
     const taps = buildComputerToolDescription(descriptor(["screenshot", "key"]));
     expect(taps).toContain("key taps only");

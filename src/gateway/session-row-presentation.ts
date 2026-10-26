@@ -35,11 +35,7 @@ import {
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
-import {
-  registerSessionRowEncoding,
-  serializeSessionRow,
-  sessionRowEncodingBytes,
-} from "./session-row-serialization.js";
+import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -96,7 +92,7 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
-  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number }>();
+  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number; rawBytes: number }>();
   const share = (sessions: T[]) => {
     // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
     if (sessions.length < 2) {
@@ -107,7 +103,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
-      rows.push({ key, kind, updatedAt, sessionId, rowMode });
+      const required = { key, kind, updatedAt, sessionId, rowMode };
+      rows.push(required);
       let facts = prepared.get(row)?.facts;
       if (!facts) {
         facts = [];
@@ -127,7 +124,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           facts.push({ encoded, fact, rows: 0 });
           bytes += encoded.length * 2;
         }
-        prepared.set(row, { facts, bytes });
+        // Reserve a possible singleton delta without retaining its unused raw JSON.
+        // Each optional one-field object contributes its property and one comma.
+        const rawBytes = JSON.stringify(required).length * 2 + bytes - facts.length * 2;
+        prepared.set(row, { facts, bytes, rawBytes });
       }
       for (const fact of facts) {
         const candidate = candidates.get(fact.encoded);
@@ -172,7 +172,12 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   };
   return {
     share,
-    encodingBytes: (row: T) => prepared.get(row)?.bytes ?? 0,
+    encodingBytes: (row: T) => {
+      const retained = prepared.get(row);
+      return retained
+        ? retained.bytes + Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row))
+        : 0;
+    },
   };
 }
 
@@ -597,10 +602,8 @@ export function prepareProjectedSessionPresentation(
       }
     }
     if (signature !== undefined) {
-      // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
-      const encoded = JSON.stringify(row);
+      // Shared-fact replies never send this raw row; encode only at the wire boundary.
       const snapshot = freezeTrustedJsonSnapshot(row);
-      registerSessionRowEncoding(snapshot, encoded);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);

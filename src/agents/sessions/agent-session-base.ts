@@ -179,10 +179,6 @@ export abstract class AgentSessionBase {
       : await run();
   }
 
-  private eventMayWriteSession(event: AgentEvent): boolean {
-    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
-  }
-
   /**
    * Hooks resolve the current extension runner at execution time so reloads
    * need no reinstall. Wrappers only adapt registered tools to extension context.
@@ -300,7 +296,7 @@ export abstract class AgentSessionBase {
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
-  protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+  protected handleAgentEvent = (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
     const prepareToolResult = createSessionToolResultPreparer(this.sessionManager, event);
     if (event.type === "agent_end") {
       const reason: unknown = signal?.reason;
@@ -310,15 +306,15 @@ export abstract class AgentSessionBase {
         reason !== null &&
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
-    if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteSettlement(
-        async () => await this.handleAgentEventUnlocked(event, prepareToolResult),
-      );
-      // Supported callbacks can replace the current result.
-      prepareToolResult();
-      return;
+    if (event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      return this.runWithSessionWriteSettlement(() =>
+        this.handleAgentEventUnlocked(event, prepareToolResult),
+      ).then(() => {
+        // Supported callbacks can replace the current result.
+        prepareToolResult();
+      });
     }
-    await this.handleAgentEventUnlocked(event, prepareToolResult);
+    return this.handleAgentEventUnlocked(event, prepareToolResult);
   };
 
   private async handleAgentEventUnlocked(

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -78,12 +79,7 @@ it.each([
   const { pane, state } = createTestChatPane({ client, sessions });
   state.sessionKey = "agent:work:main";
   state.assistantAgentId = "work";
-  state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "global",
-    agents: [{ id: "main" }, { id: "work" }],
-  };
+  state.agentsList = makeBootRoster({ scope: "global", agents: [{ id: "main" }, { id: "work" }] });
   pane.presented = false;
   const release = sessions.subscribe(pane.applySessionsState.bind(pane));
   try {

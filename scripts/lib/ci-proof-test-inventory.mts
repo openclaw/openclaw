@@ -677,7 +677,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/nostr/doctor-contract-api.test.ts",
   "extensions/nostr/src/channel.outbound.test.ts",
   "extensions/nostr/src/nostr-state-store.test.ts",
-  "extensions/nvidia/index.test.ts",
   "extensions/nvidia/provider-catalog.test.ts",
   "extensions/ollama/src/embedding-provider.fetchok.transport.test.ts",
   "extensions/ollama/src/stream-plain-text-tool-call.transport.test.ts",

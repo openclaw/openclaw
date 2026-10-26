@@ -118,10 +118,16 @@ function dayMatches(cron: Cron, w: Wall) {
   return cron.dom.any || cron.dow.any ? dom && dow : dom || dow;
 }
 
+// Civil date part of a wall key ("YYYY-M-D").
+function civilDay(w: Wall) {
+  return w.key.slice(0, w.key.indexOf(" "));
+}
+
 /**
  * First matching minute strictly after `afterMs`, as UTC ms. A wall-clock
  * minute repeated by a daylight-saving fall-back fires once (its first
- * occurrence); a skipped one does not fire.
+ * occurrence); a skipped one does not fire. A day skip that lands after
+ * local midnight steps back to that midnight.
  */
 export function nextRun(cron: Cron, afterMs: number): number {
   let t = Math.floor(afterMs / MINUTE) * MINUTE + MINUTE;
@@ -131,6 +137,18 @@ export function nextRun(cron: Cron, afterMs: number): number {
     // Skip whole wall days or hours that cannot match.
     if (!dayMatches(cron, w)) {
       t += ((23 - w.hour) * 60 + (60 - w.minute)) * MINUTE;
+      const landed = wall(t, cron.timeZone);
+      // A spring-forward civil day is shorter than 24h, so this span lands
+      // after local midnight and would never test that day. Step back when
+      // the date advanced and that midnight exists. A fall-back day stays on
+      // the same date.
+      if ((landed.hour !== 0 || landed.minute !== 0) && civilDay(landed) !== civilDay(w)) {
+        const midnight = t - (landed.hour * 60 + landed.minute) * MINUTE;
+        const mid = wall(midnight, cron.timeZone);
+        if (mid.hour === 0 && mid.minute === 0 && civilDay(mid) === civilDay(landed)) {
+          t = midnight;
+        }
+      }
       continue;
     }
     if (!cron.hour.values.has(w.hour)) {

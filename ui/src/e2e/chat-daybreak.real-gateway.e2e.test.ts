@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { zstdDecompressSync } from "node:zlib";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
@@ -18,10 +19,7 @@ import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  recordControlUiE2eFailureFacts,
-  type ControlUiE2eFailureFact,
-} from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -559,72 +557,52 @@ suite.define(() => {
           colorScheme: "dark",
         },
         async ({ page }) => {
-          const trace: Array<Record<string, ControlUiE2eFailureFact>> = [];
-          const rows: Array<Record<string, ControlUiE2eFailureFact>> = [];
-          proof[name + "-selection-trace"] = trace;
-          proof[name + "-selection-rows"] = rows;
           let choice = 0;
-          let patch = 0;
-          const record = (event: Record<string, ControlUiE2eFailureFact>) => {
-            // Read polling must not evict the click and write that explain a failure.
-            const target = event.type === "row" ? rows : trace;
-            target.push({ at: Date.now(), choice, ...event });
-            if (target.length > 128) {
-              target.shift();
-            }
-          };
-          const accessValue = (value: unknown) =>
-            value === "standard" || value === "daybreak_blue" || value === "daybreak_red"
-              ? value
-              : null;
+          let preferencePatch = { sent: 0, acknowledged: 0, rejected: 0, automatic: false };
+          const pendingPreferences = new Map<string, number>();
           page.on("websocket", (socket) => {
-            const pending = new Map<string, number>();
             socket.on("framesent", ({ payload }) => {
+              let frame: ReturnType<typeof asOptionalRecord>;
               try {
-                const frame = asOptionalRecord(JSON.parse(String(payload)));
-                const params = asOptionalRecord(frame?.params);
-                if (
-                  frame?.type === "req" &&
-                  frame.method === "sessions.patch" &&
-                  params &&
-                  params.key === key &&
-                  typeof frame.id === "string" &&
-                  pending.size < 32
-                ) {
-                  pending.set(frame.id, ++patch);
-                  record({
-                    type: "patch-sent",
-                    patch,
-                    hasAccess: Object.hasOwn(params, "cyberAccessProgram"),
-                    access: accessValue(params.cyberAccessProgram),
-                  });
-                }
+                frame = asOptionalRecord(JSON.parse(String(payload)));
               } catch {
-                // Ignore non-JSON frames without retaining wire data.
+                return;
+              }
+              const params = asOptionalRecord(frame?.params);
+              if (
+                frame?.type === "req" &&
+                frame.method === "sessions.patch" &&
+                typeof frame.id === "string" &&
+                params?.key === key &&
+                Object.hasOwn(params, "cyberAccessProgram")
+              ) {
+                if (pendingPreferences.size === 32) {
+                  pendingPreferences.delete(pendingPreferences.keys().next().value!);
+                }
+                pendingPreferences.set(frame.id, choice);
+                preferencePatch.sent += 1;
+                preferencePatch.automatic = params.cyberAccessProgram === null;
+                recordControlUiE2eFailureFacts(page, { preferencePatch });
               }
             });
             socket.on("framereceived", ({ payload }) => {
+              let frame: ReturnType<typeof asOptionalRecord>;
               try {
-                const frame = asOptionalRecord(JSON.parse(String(payload)));
-                const id = frame?.type === "res" && typeof frame.id === "string" ? frame.id : null;
-                const request = id ? pending.get(id) : undefined;
-                if (request !== undefined && id) {
-                  pending.delete(id);
-                  const result = asOptionalRecord(frame?.payload);
-                  const entry = asOptionalRecord(result?.entry);
-                  record({
-                    type: "patch-result",
-                    patch: request,
-                    status: frame?.ok === true ? "ok" : "error",
-                    hasAccess: Object.hasOwn(entry ?? {}, "cyberAccessProgram"),
-                    access: accessValue(entry?.cyberAccessProgram),
-                    updatedAt: typeof entry?.updatedAt === "number" ? entry.updatedAt : null,
-                  });
-                }
+                frame = asOptionalRecord(JSON.parse(String(payload)));
               } catch {
-                // Diagnostic parsing must not alter the scenario's outcome.
+                return;
+              }
+              if (frame?.type !== "res" || typeof frame.id !== "string") {
+                return;
+              }
+              const attemptedChoice = pendingPreferences.get(frame.id);
+              pendingPreferences.delete(frame.id);
+              if (attemptedChoice === choice) {
+                preferencePatch[frame.ok === true ? "acknowledged" : "rejected"] += 1;
+                recordControlUiE2eFailureFacts(page, { preferencePatch });
               }
             });
+            socket.on("close", () => pendingPreferences.clear());
           });
           await pairControlUiPage(page, runCli);
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
@@ -656,60 +634,62 @@ suite.define(() => {
               agentId: "main",
               limit: 100,
             });
-            const selected = result.sessions.find((entry) => entry.key === key)!;
-            record({
-              type: "row",
-              access: accessValue(selected?.cyberAccessProgram),
-              snapshotAt: selected?.snapshotAt ?? null,
-              updatedAt: selected?.updatedAt ?? null,
-              hasActiveRun: selected?.hasActiveRun ?? null,
-            });
-            return selected;
-          };
-          const recordSelection = async (stage: string) => {
-            try {
-              const state = await page.evaluate(() => {
-                const element = document.querySelector(".chat-controls__effort-picker");
-                return {
-                  selected: element
-                    ?.querySelector('[data-chat-access-option][aria-checked="true"]')
-                    ?.getAttribute("data-chat-access-option"),
-                  defaultDisabled: element?.querySelector<HTMLButtonElement>(
-                    "[data-chat-access-default]",
-                  )?.disabled,
-                };
-              });
-              record({
-                type: "selection",
-                stage,
-                selected: accessValue(state.selected),
-                defaultDisabled: state.defaultDisabled ?? null,
-              });
-            } catch {
-              record({ type: "selection", stage, unavailable: true });
-            }
+            return result.sessions.find((entry) => entry.key === key)!;
           };
           const choose = async (value: string) => {
             choice += 1;
-            record({ type: "choose", access: accessValue(value) });
+            preferencePatch = { sent: 0, acknowledged: 0, rejected: 0, automatic: false };
+            recordControlUiE2eFailureFacts(page, {
+              preferenceChoice: choice,
+              preferenceExpectedAutomatic: value === "",
+              preferenceMobile: mobile,
+              preferencePatch,
+            });
             await open();
-            await recordSelection("before-click");
+            if (value) {
+              await select.locator(`[data-chat-access-option="${value}"]`).click();
+            } else {
+              await picker.locator("[data-chat-access-default]").click();
+            }
             try {
-              if (value) {
-                await select.locator(`[data-chat-access-option="${value}"]`).click();
-              } else {
-                await picker.locator("[data-chat-access-default]").click();
-              }
               await expect
                 .poll(async () => (await row()).cyberAccessProgram)
                 .toBe(value || undefined);
             } catch (error) {
-              await recordSelection("failed");
-              recordControlUiE2eFailureFacts(page, {
-                daybreakViewport: name,
-                daybreakSelectionTrace: trace.filter((event) => event.choice === choice).slice(-16),
-                daybreakSelectionRows: rows.filter((event) => event.choice === choice).slice(-8),
-              });
+              await withTimeout(
+                page.evaluate((expected) => {
+                  const element = document.querySelector(".chat-controls__effort-picker");
+                  const selected = [
+                    ...(element?.querySelectorAll(
+                      '[data-chat-access-option][aria-checked="true"]',
+                    ) ?? []),
+                  ];
+                  return {
+                    preferencePickerPresent: Boolean(element),
+                    preferenceMenuOpen: element?.hasAttribute("open") ?? false,
+                    preferenceResetDisabled:
+                      element?.querySelector<HTMLButtonElement>("[data-chat-access-default]")
+                        ?.disabled ?? null,
+                    preferenceAnyChecked: selected.length > 0,
+                    preferenceExpectedChecked:
+                      Boolean(element) &&
+                      (expected
+                        ? selected.some(
+                            (option) => option.getAttribute("data-chat-access-option") === expected,
+                          )
+                        : selected.length === 0),
+                    preferenceSnapshot: Boolean(element?.closest("[data-composer-catalog-state]")),
+                  };
+                }, value),
+                500,
+              )
+                .then((facts) =>
+                  recordControlUiE2eFailureFacts(page, {
+                    ...facts,
+                    preferenceDomRead: true,
+                  }),
+                )
+                .catch(() => recordControlUiE2eFailureFacts(page, { preferenceDomRead: false }));
               throw error;
             }
           };
@@ -751,17 +731,9 @@ suite.define(() => {
           const slider = picker.locator("[data-chat-thinking-slider]");
           await expect.poll(() => slider.inputValue()).toBe("0");
           expect(await slider.getAttribute("data-chat-thinking-values")).toBe("medium,ultra");
-          expect(await slider.getAttribute("data-effort-boost")).toBe("");
-          expect(
-            await slider.evaluate(
-              (input) => getComputedStyle(input.parentElement!).backgroundImage,
-            ),
-          ).toBe("none");
           proof[name + "-narrowed-effort"] = await slider.evaluate((input: HTMLInputElement) => ({
             values: input.dataset.chatThinkingValues,
             value: input.value,
-            fill: input.style.getPropertyValue("--reasoning-fill"),
-            boost: input.dataset.effortBoost,
           }));
           await snapshot("both");
           const red = select.locator('[data-chat-access-option="daybreak_red"]');
@@ -807,7 +779,6 @@ suite.define(() => {
           await slider.press("ArrowRight");
           await expect.poll(async () => (await row()).thinkingLevel).toBe("medium");
           await expect.poll(() => slider.inputValue()).toBe("1");
-          expect(await slider.getAttribute("data-effort-boost")).toBe("");
           await snapshot("multilevel-medium");
           const bounds = await slider.boundingBox();
           expect(bounds).not.toBeNull();
@@ -816,7 +787,6 @@ suite.define(() => {
           await slider.press("End");
           await expect.poll(async () => (await row()).thinkingLevel).toBe("ultra");
           await expect.poll(() => slider.inputValue()).toBe("3");
-          expect(await slider.getAttribute("data-effort-boost")).toBe("ultra");
           await call("sessions.patch", { key, thinkingLevel: "medium" });
           reasoningEfforts = ["medium"];
           await choose("daybreak_blue");

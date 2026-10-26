@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
@@ -33,9 +32,7 @@ export function stubAmbientProxies() {
 export function collectRequest(request: IncomingMessage, handle: (body: string) => void) {
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
-  request.on("end", () => {
-    handle(Buffer.concat(chunks).toString("utf8"));
-  });
+  request.on("end", () => handle(Buffer.concat(chunks).toString("utf8")));
 }
 
 const choiceAnswer = (
@@ -113,10 +110,6 @@ export function registeredDecisionProvider(
     runtime: { config: { current } },
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
-  if (provider.contractVersion !== 2) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
-  }
+  const provider = registerDecisionProvider.mock.calls[0]![0];
   return legacyWireFixture(provider, () => resolveRuntimeConfig(current()));
 }

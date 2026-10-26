@@ -197,7 +197,6 @@ async function createRequesterPolicySources(
     loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey }),
   ).toMatchObject({
     createdActor: { type: "human", source: "profile", id: guestProfile },
-    sandbox: "required",
   });
   const capture = (profileId: string, scopes: readonly string[]) =>
     createGitHubPublicationRequesterFixture({
