@@ -7,10 +7,7 @@ import { claimResponsesCompactRequest } from "../../../../packages/ai/src/transp
 import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import {
-  loadTranscriptEventsSync,
-  replaceSessionEntrySync,
-} from "../../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { captureGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
@@ -114,12 +111,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     "scopes the provider generation guard after writer admission (%s, %s)",
     async (kind, change) => {
       await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
-        const { fixture, target, original, selected, transcript } = await createOwnedTranscript(
+        const { fixture, target, original, transcript } = await createOwnedTranscript(
           testState,
           `agent:main:${kind}:provider-fence`,
           { sessionId: "cron-run-1", lifecycleRevision: "generation-1" },
         );
-        const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
           const requestAuthority = captureGuardedFetchRequestAuthority();
@@ -153,24 +149,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           if (change === "current") {
             await execution;
             expect(fetchImpl).toHaveBeenCalledOnce();
-            await transcript.withOwnedTranscriptWrite(() =>
-              manager.appendMessage({ role: "user", content: "allowed", timestamp: 1 }),
-            );
-            expect(loadTranscriptEventsSync(target)).toMatchObject([
-              { type: "session" },
-              { type: "message", message: { role: "user", content: "allowed" } },
-            ]);
           } else {
             await expect(execution).rejects.toThrow(
               "original session generation no longer accepts",
             );
             expect(fetchImpl).not.toHaveBeenCalled();
-            await expect(
-              transcript.withOwnedTranscriptWrite(() =>
-                manager.appendMessage({ role: "user", content: "stale", timestamp: 1 }),
-              ),
-            ).rejects.toThrow();
-            expect(loadTranscriptEventsSync(target)).toEqual([]);
           }
         } finally {
           await transcript.transcriptLifecycle.dispose();

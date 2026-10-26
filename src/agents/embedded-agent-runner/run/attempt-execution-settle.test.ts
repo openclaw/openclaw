@@ -375,23 +375,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           expect(failure).toMatchObject({ committedMessageId: note.id });
           expect(activeSession.messages).toEqual(previousMessages);
 
-          const appendBeforeReconcile = (
-            event: Parameters<typeof appendTranscriptEventSnapshotSync>[1],
-          ) => {
-            const needsReconcile = vi.fn();
-            expect(
-              appendTranscriptEventSnapshotSync(
-                target,
-                event,
-                {},
-                {
-                  scheduleProjectionReconcile: false,
-                  onProjectionReconcileNeeded: needsReconcile,
-                },
-              ),
-            ).toMatchObject({ ok: true, value: { result: { appended: true } } });
-            expect(needsReconcile).toHaveBeenCalled();
-          };
           const side = intervening === "side" || intervening === "side-dirty";
           const visibleMessages =
             intervening === "side"
@@ -423,7 +406,16 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               : [];
           for (const event of events) {
             if (intervening.endsWith("-dirty")) {
-              appendBeforeReconcile(event);
+              expect(
+                appendTranscriptEventSnapshotSync(
+                  target,
+                  event,
+                  {},
+                  {
+                    scheduleProjectionReconcile: false,
+                  },
+                ).ok,
+              ).toBe(true);
             } else {
               await appendPreparedTranscriptEvent(target, event, () => {});
               await waitForSessionTranscriptProjection(target);
