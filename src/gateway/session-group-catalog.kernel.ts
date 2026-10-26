@@ -14,7 +14,10 @@ import type {
   SessionGroupCatalogSnapshot,
   SessionGroupDefaultsRecord,
 } from "./session-group-catalog.types.js";
-import { readSessionGroupMembership } from "./session-group-membership.read.js";
+import {
+  readSessionGroupMembership,
+  resolveSessionGroupStores,
+} from "./session-group-membership.read.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
 const SIDEBAR_ORDER = "sidebar.sectionOrder";
@@ -151,11 +154,11 @@ export function mutateSessionGroupCatalogInDatabase(
       },
       { database, path: database.path, env },
     );
-    return { changed, snapshot: readSessionGroupCatalogSnapshot(database.db) };
+    return { changed, snapshot: readSessionGroupCatalogSnapshot(database.db), stores: [] };
   }
   let ensuredDefaults = false;
   const result = runOpenClawStateWriteTransaction(
-    ({ db }) => {
+    ({ db }): Omit<SessionGroupCatalogMutationResult, "stores"> => {
       const kysely = kyselyFor(db);
       const names = executeSqliteQuerySync(
         db,
@@ -274,7 +277,13 @@ export function mutateSessionGroupCatalogInDatabase(
   if (ensuredDefaults) {
     defaultsDatabases.add(database.db);
   }
-  return result;
+  return {
+    ...result,
+    stores:
+      input.kind === "prepare" && !result.missingName
+        ? resolveSessionGroupStores(input.cfg, env)
+        : [],
+  };
 }
 
 export const sessionGroupOperations = {

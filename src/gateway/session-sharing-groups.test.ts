@@ -22,7 +22,12 @@ import { initializeSessionReadContext } from "./server-methods/sessions-read-cac
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { readSessionGroupMembership } from "./session-group-membership.read.js";
-import { putSessionGroups, updateSessionGroupDefaults } from "./session-groups.js";
+import {
+  deleteSessionGroup,
+  putSessionGroups,
+  renameSessionGroup,
+  updateSessionGroupDefaults,
+} from "./session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
@@ -170,6 +175,53 @@ describe("session sharing group mutations", () => {
           await readDefaults();
           removeSessionMember(scope, "viewer");
           await readDefaults(false);
+          addSessionMember(scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
+          const physicalScope = { agentId: "main", storePath, sessionKey };
+          const expectedEntry = {
+            ...expectDefined(loadSessionEntry(physicalScope), "physical shared-store member"),
+          };
+          for (const action of ["rename", "delete"] as const) {
+            await prepareMembership(context);
+            const name = action === "rename" ? "Research" : "Renamed";
+            const resolved = resolveSessionMutationAuthorization({
+              client: viewer,
+              context,
+              method: `sessions.groups.${action}`,
+              requestParams: { name, ...(action === "rename" ? { to: "Renamed" } : {}) },
+            });
+            expect(resolved.error).toBeNull();
+            const authorization = expectDefined(resolved.authorization, "group mutation authority");
+            const checkedTargets: Array<{ agentId: string; sessionKey: string }> = [];
+            const mutation = {
+              cfg,
+              name,
+              assertCurrent: authorization.assertCurrent,
+              assertTargetCurrent(target: { agentId: string; sessionKey: string }) {
+                checkedTargets.push(target);
+                authorization.assertTargetCurrent(target);
+              },
+            };
+            const result =
+              action === "rename"
+                ? await renameSessionGroup({ ...mutation, to: "Renamed" })
+                : await deleteSessionGroup(mutation);
+            expect(result.updatedSessions).toBe(1);
+            expect(checkedTargets.length).toBeGreaterThan(0);
+            expect(checkedTargets).toEqual(
+              checkedTargets.map(() => ({ agentId: discoveryAgent, sessionKey })),
+            );
+            if (action === "rename") {
+              expectedEntry.category = "Renamed";
+            } else {
+              delete expectedEntry.category;
+            }
+            expect(loadSessionEntry(physicalScope)).toEqual(expectedEntry);
+            expect(loadSessionEntry(scope)).toEqual(expectedEntry);
+            expect(openOpenClawAgentDatabase({ agentId: "main", path: storePath })).toMatchObject({
+              agentId: "main",
+              path: storePath,
+            });
+          }
         }
       });
     },

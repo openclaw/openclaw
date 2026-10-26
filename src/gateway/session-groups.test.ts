@@ -6,6 +6,11 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sessionGroupCategories from "../config/sessions/session-group-categories.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import type { DiagnosticWorkerRequestFields } from "../infra/diagnostic-process-types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -495,10 +500,32 @@ describe("session groups catalog", () => {
       groups: [],
       updatedSessions: 0,
     });
-    expect(await remove("Missing")).toMatchObject({
-      groups: [],
-      updatedSessions: 1,
-    });
+    await waitForDiagnosticEventsDrained();
+    const requests: DiagnosticWorkerRequestFields[] = [];
+    const stopObserving = onInternalDiagnosticEvent(
+      (event) => {
+        if (
+          event.type === "worker.request" &&
+          event.phase === "completed" &&
+          (event.kind === "stateRead" ||
+            (event.kind === "sqlite_writer" && event.requestClass === "sessionGroups"))
+        ) {
+          requests.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    );
+    try {
+      expect(await remove("Missing")).toMatchObject({
+        groups: [],
+        updatedSessions: 1,
+      });
+      await waitForDiagnosticEventsDrained();
+      expect(requests.filter((request) => request.kind === "stateRead")).toHaveLength(0);
+      expect(requests.filter((request) => request.kind === "sqlite_writer")).toHaveLength(2);
+    } finally {
+      stopObserving();
+    }
     expect(session.category()).toBeUndefined();
     expect(await remove("Missing")).toMatchObject({
       groups: [],

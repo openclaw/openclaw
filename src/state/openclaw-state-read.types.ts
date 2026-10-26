@@ -7,7 +7,6 @@ import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagen
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
 import type { ChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScratchReadCommand } from "../cron/scratch-contract.js";
 import type { CronRunReceiptCurrentReadCommand } from "../cron/store/run-receipt.types.js";
 import type { PlacementGrantReadInput } from "../gateway/operator-approval-placement-grants.read.worker.js";
@@ -138,7 +137,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDeletionJournal.retainedIds" }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "sessionGroups.snapshot" }
-  | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
   | UserBackgroundReadCommand

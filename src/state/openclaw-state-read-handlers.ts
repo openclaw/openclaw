@@ -40,7 +40,6 @@ import {
   listTerminalOperatorApprovalsInDatabase,
 } from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
-import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
   readWorkerPlacementEnvironmentOwnerInDatabase,
   readWorkerPlacementRecoveryCandidatesInDatabase,
@@ -183,12 +182,6 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       snapshot: readSessionGroupCatalogSnapshot(db),
-    };
-  }
-  if (command.type === "sessionGroups.members") {
-    return {
-      type: command.type,
-      snapshot: readSessionGroupMembership(command.cfg, input.context.environment),
     };
   }
   if (command.type === "conversationBindings.inspect") {

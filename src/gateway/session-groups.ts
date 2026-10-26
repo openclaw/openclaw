@@ -9,7 +9,6 @@ import {
   ensureSessionGroupCatalog,
   mutateSessionGroupCatalog,
   readSessionGroupCatalog,
-  readSessionGroupMembershipInWorker,
 } from "./session-group-catalog.js";
 import type {
   SessionGroupDefaultsRecord,
@@ -158,6 +157,14 @@ type SessionGroupMutationParams = {
   assertTargetCurrent?: (target: { agentId: string; sessionKey: string }) => void;
 };
 
+function rethrowPartialGroupMutation(error: unknown): never {
+  const message = `${formatErrorMessage(error)}. Group changes may be partial; reload groups and retry the same operation.`;
+  if (error instanceof SessionMutationAuthorizationChangedError) {
+    throw new SessionMutationAuthorizationChangedError({ ...error.error, message });
+  }
+  throw new Error(message, { cause: error });
+}
+
 async function mutateSessionGroup(
   params: SessionGroupMutationParams & { to?: string },
   action: "rename" | "delete",
@@ -177,18 +184,22 @@ async function mutateSessionGroup(
   if (from !== to) {
     params.assertCurrent?.();
     const prepared = await mutateSessionGroupCatalog(
-      { kind: "prepare", name: from, to },
+      {
+        kind: "prepare",
+        name: from,
+        to,
+        cfg: { agents: params.cfg.agents, session: params.cfg.session },
+      },
       env,
       params.assertCurrent,
-    );
+    ).catch(rethrowPartialGroupMutation);
     if (prepared.missingName) {
       throw new SessionGroupNotFoundError(prepared.missingName);
     }
     const source = prepared.source;
     try {
-      const { stores } = await readSessionGroupMembershipInWorker(params.cfg, env);
       // Category updates preserve updatedAt so group maintenance cannot reorder sessions.
-      for (const target of stores) {
+      for (const target of prepared.stores) {
         updatedSessions += await updateSessionGroupCategoriesInWorker({
           scope: { ...target, sessionKey: "", env },
           from,
@@ -213,11 +224,7 @@ async function mutateSessionGroup(
         throw new SessionGroupNotFoundError(retired.missingName);
       }
     } catch (error) {
-      const message = `${formatErrorMessage(error)}. Group changes may be partial; reload groups and retry the same operation.`;
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        throw new SessionMutationAuthorizationChangedError({ ...error.error, message });
-      }
-      throw new Error(message, { cause: error });
+      rethrowPartialGroupMutation(error);
     }
   }
   const { groups, sectionOrder } = readSessionGroupCatalog(env);

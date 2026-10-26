@@ -1,6 +1,5 @@
 import path from "node:path";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -17,7 +16,6 @@ import type {
   SessionGroupCatalogMutationResult,
   SessionGroupCatalogAdmission,
   SessionGroupCatalogSnapshot,
-  SessionGroupMembershipSnapshot,
 } from "./session-group-catalog.types.js";
 
 function isCatalogAdmission(value: unknown): value is SessionGroupCatalogAdmission {
@@ -40,20 +38,6 @@ function isCatalogAdmission(value: unknown): value is SessionGroupCatalogAdmissi
             ),
         )))
   );
-}
-
-export async function readSessionGroupMembershipInWorker(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Promise<SessionGroupMembershipSnapshot> {
-  const result = await executeExistingOpenClawStateRead(
-    { env },
-    { type: "sessionGroups.members", cfg: { agents: cfg.agents, session: cfg.session } },
-  );
-  if (!result) {
-    return { stores: [], groups: [] };
-  }
-  return result.snapshot;
 }
 
 type Catalog = {
@@ -208,7 +192,7 @@ export function mutateSessionGroupCatalog(
       mutation.kind === "register" &&
       catalog.snapshot?.groups.some(({ name }) => name === mutation.name)
     ) {
-      return { changed: false, snapshot: catalog.snapshot };
+      return { changed: false, snapshot: catalog.snapshot, stores: [] };
     }
     // A concurrent initial read must not reinstall facts from before this commit.
     catalog.revision += 1;

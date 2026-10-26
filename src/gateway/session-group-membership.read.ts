@@ -10,16 +10,23 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import type { SessionGroupMembershipSnapshot } from "./session-group-catalog.types.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
-/** Discovery runs on a read worker; mutation guards call it inside their owning transaction. */
-export function readSessionGroupMembership(
+export function resolveSessionGroupStores(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-): SessionGroupMembershipSnapshot {
-  const stores = resolveAllAgentSessionStoreTargetsSync(cfg, { env }).map((target) => {
+): SessionGroupMembershipSnapshot["stores"] {
+  return resolveAllAgentSessionStoreTargetsSync(cfg, { env }).map((target) => {
     const resolved = resolveSqliteReadScope({ ...target, env });
     const options = toDatabaseOptions(resolved);
     return { agentId: target.agentId, storePath: resolveOpenClawAgentSqlitePath(options) };
   });
+}
+
+/** Mutation guards read membership inside their owning transaction. */
+export function readSessionGroupMembership(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): SessionGroupMembershipSnapshot {
+  const stores = resolveSessionGroupStores(cfg, env);
   const groups = new Map<string, SessionMutationTarget[]>();
   for (const store of stores) {
     for (const { sessionKey, entry } of listSessionEntriesReadOnly({
