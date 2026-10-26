@@ -84,6 +84,7 @@ export type ChatSessionSnapshot = {
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;
   write: (key: string, size: number | null, row?: string, settled?: boolean) => number | undefined;
+  writeRows: (heights: Record<string, number>) => void;
   invalidateRow: (rowKey: string | undefined) => void;
 };
 
@@ -101,6 +102,22 @@ export function createChatWidgetLayout(
       resolveChatSnapshotKey(host, target) === cacheKey ? cache.get(cacheKey)?.snapshot : undefined;
     admitted ??= snapshot;
     return snapshot?.sessionId === admitted?.sessionId ? snapshot : undefined;
+  };
+  const writeHeights = (heights: Record<string, number>) => {
+    const snapshot = current();
+    if (
+      !snapshot ||
+      Object.entries(heights).every(([key, size]) => snapshot.widgetHeights?.[key] === size)
+    ) {
+      return;
+    }
+    const widgetHeights = Object.fromEntries(
+      [
+        ...Object.entries(snapshot.widgetHeights ?? {}).filter(([key]) => !(key in heights)),
+        ...Object.entries(heights),
+      ].slice(-100),
+    );
+    cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
   };
   const invalidateRow = (rowKey: string | undefined, widgetKey?: string) => {
     const snapshot = current();
@@ -139,15 +156,7 @@ export function createChatWidgetLayout(
       if (!snapshot || !Number.isFinite(height) || height < (row ? 1 : 48) || height > 8000) {
         return undefined;
       }
-      if (snapshot.widgetHeights?.[key] !== height) {
-        const widgetHeights = Object.fromEntries(
-          [
-            ...Object.entries(snapshot.widgetHeights ?? {}).filter(([cached]) => cached !== key),
-            [key, height],
-          ].slice(-100),
-        );
-        cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
-      }
+      writeHeights({ [key]: height });
       if (settled) {
         invalidateRow(rowKey);
         if (admitted?.widgetHeights?.[key] !== undefined) {
@@ -156,6 +165,7 @@ export function createChatWidgetLayout(
       }
       return height;
     },
+    writeRows: writeHeights,
     invalidateRow,
   };
 }

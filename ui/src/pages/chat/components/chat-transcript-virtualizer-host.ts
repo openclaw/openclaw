@@ -370,6 +370,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       }
     }
     this.queueLayout();
+    if (!this.initialRange.pending && this.layout.ready) {
+      this.layout.persistRows(this.virtualizer);
+    }
     // Disclosure measurement owns this commit; its sizer lands on the next update.
     if (interactionResizePending) {
       this.endAnchor.cancelReconcile();

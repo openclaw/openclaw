@@ -1,11 +1,12 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
   createChatWidgetLayout,
+  observeChatCache,
   readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -73,6 +74,29 @@ describe("session message cache", () => {
     expect(read()?.composer).toBeUndefined();
   });
 
+  it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:batch" };
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one"));
+    const layout = createChatWidgetLayout(cache, host, target);
+    const write = vi.fn();
+    observeChatCache(cache, { write, delete: vi.fn() });
+    const heights = {
+      'row:v1:768:appearance:first:"one"': 100,
+      'row:v1:768:appearance:second:"two"': 200,
+    };
+    layout.writeRows(heights);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toEqual(heights);
+    layout.writeRows(heights);
+    expect(write).toHaveBeenCalledTimes(1);
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "two"));
+    write.mockClear();
+    layout.writeRows(heights);
+    expect(write).not.toHaveBeenCalled();
+    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toBeUndefined();
+  });
   it("keeps the settled row reservation through an initial short widget report", () => {
     const context = createCacheContext();
     const row = 'row:v1:768:gutter:revision-1:"widget-row"';

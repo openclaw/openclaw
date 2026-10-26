@@ -41,6 +41,7 @@ export class TranscriptLayoutOwner {
   rowLayout?: ChatWidgetLayout;
   private rowPresentation = "";
   rowWidth = 0;
+  private recordingRows = false;
 
   configureRows(props: ChatThreadProps, avatarPlacement: string, recoveryRevision: number): void {
     this.ready = !props.loading;
@@ -95,16 +96,37 @@ export class TranscriptLayoutOwner {
 
   readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
     const size = measureTranscriptRow(element, entry, instance);
-    const index = instance.indexFromElement(element);
-    const width = entry?.borderBoxSize[0]?.inlineSize;
-    if (width && this.ready && element.checkVisibility({ contentVisibilityAuto: true })) {
-      const key = this.rowLayoutKey(index, Math.round(width));
-      if (key) {
-        this.rowLayout?.write(key, size);
-      }
-    }
-    return Math.max(size, this.rowMinimum(index));
+    return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
   };
+
+  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>): void {
+    if (this.recordingRows || !this.rowLayout) {
+      return;
+    }
+    this.recordingRows = true;
+    // The reveal owner admits this work; reuse measured sizes after paint.
+    requestAnimationFrame(() => {
+      (globalThis.requestIdleCallback ?? requestAnimationFrame).call(globalThis, () => {
+        this.recordingRows = false;
+        if (
+          !this.viewport?.isConnected ||
+          !this.ready ||
+          instance.scrollElement !== this.viewport
+        ) {
+          return;
+        }
+        this.rowLayout?.writeRows(
+          Object.fromEntries(
+            [...instance.elementsCache].flatMap(([id, element]) => {
+              const key = this.rowLayoutKey(instance.indexFromElement(element));
+              const size = instance.itemSizeCache.get(id) ?? 0;
+              return element.isConnected && key && size > 0 && size <= 8000 ? [[key, size]] : [];
+            }),
+          ),
+        );
+      });
+    });
+  }
 
   private viewport: HTMLDivElement | null = null;
   private observers: ResizeObserver[] = [];

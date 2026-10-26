@@ -43,7 +43,6 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import "./browser-tab-card.css";
 import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
