@@ -517,6 +517,11 @@ export function isMentionsChangedEvent(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").MentionsChangedEventSchema
 >;
+export function isMentionsFailedEvent(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").MentionsFailedEventSchema
+>;
 export function isUsersBackgroundGetParams(
   value: unknown,
 ): value is import("typebox").Static<
