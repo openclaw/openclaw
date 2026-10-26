@@ -392,34 +392,29 @@ describe("device bootstrap tokens", () => {
     );
   });
 
-  it("rejects an uncertain cloud-worker setup replay after its environment reaches destroyed", async () => {
-    const issued = await consumeCloudWorkerSetupToken(baseDir);
-    setWorkerState(baseDir, issued.setupId, "destroyed");
+  it.each(["destroyed", "destruction requested"])(
+    "rejects uncertain setup retries when %s",
+    async (state) => {
+      const issued = await consumeCloudWorkerSetupToken(baseDir);
+      if (state === "destroyed") {
+        setWorkerState(baseDir, issued.setupId, state);
+      } else {
+        openDatabase(baseDir)
+          .db.prepare(
+            "UPDATE worker_environments SET destroy_requested_at_ms = ? WHERE node_setup_id = ?",
+          )
+          .run(2_000, issued.setupId);
+      }
 
-    await expect(
-      consumeBootstrapToken(baseDir, issued.token, { completedAtMs: 2_000 }),
-    ).rejects.toThrow("Cloud worker setup completion owner is no longer pending");
-    await expect(readCompletion(baseDir, issued.setupId)).resolves.toMatchObject({
-      deliveryState: "uncertain",
-      completedAtMs: 1_000,
-    });
-  });
-
-  it("rejects cloud-worker setup retries after their owner requests destruction", async () => {
-    const issued = await consumeCloudWorkerSetupToken(baseDir);
-    const { db } = openDatabase(baseDir);
-    db.prepare(
-      "UPDATE worker_environments SET destroy_requested_at_ms = ? WHERE node_setup_id = ?",
-    ).run(2_000, issued.setupId);
-
-    await expect(
-      consumeBootstrapToken(baseDir, issued.token, { completedAtMs: 2_000 }),
-    ).rejects.toThrow("Cloud worker setup completion owner is no longer pending");
-    await expect(readCompletion(baseDir, issued.setupId)).resolves.toMatchObject({
-      deliveryState: "uncertain",
-      completedAtMs: 1_000,
-    });
-  });
+      await expect(
+        consumeBootstrapToken(baseDir, issued.token, { completedAtMs: 2_000 }),
+      ).rejects.toThrow("Cloud worker setup completion owner is no longer pending");
+      await expect(readCompletion(baseDir, issued.setupId)).resolves.toMatchObject({
+        deliveryState: "uncertain",
+        completedAtMs: 1_000,
+      });
+    },
+  );
 
   // Databases written before this table shipped stay at the same schema
   // version, so the feature owner has to create it on first use rather than
@@ -614,24 +609,13 @@ describe("device bootstrap tokens", () => {
     await expectVerification(baseDir, second.token, true);
   });
 
-  it("keeps the token when required verification fields are blank", async () => {
+  it.each([
+    ["blank role", "   ", []],
+    ["scopes exceeding the issued profile", "operator", ["operator.admin"]],
+    ["cross-role scope escalation", "node", ["operator.read"]],
+  ] as const)("rejects %s without consuming the token", async (_label, role, scopes) => {
     const issued = await issueDeviceBootstrapToken({ baseDir });
-
-    await expectVerification(baseDir, issued.token, false, {
-      role: "   ",
-    });
-
-    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toBeDefined();
-  });
-
-  it("rejects bootstrap verification when scopes exceed the issued profile", async () => {
-    const issued = await issueDeviceBootstrapToken({ baseDir });
-
-    await expectVerification(baseDir, issued.token, false, {
-      role: "operator",
-      scopes: ["operator.admin"],
-    });
-
+    await expectVerification(baseDir, issued.token, false, { role, scopes });
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toBeDefined();
   });
 
@@ -646,17 +630,6 @@ describe("device bootstrap tokens", () => {
       role: "operator",
       scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
     });
-  });
-
-  it("rejects cross-role scope escalation (node role requesting operator scopes)", async () => {
-    const issued = await issueDeviceBootstrapToken({ baseDir });
-
-    await expectVerification(baseDir, issued.token, false, {
-      role: "node",
-      scopes: ["operator.read"],
-    });
-
-    expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toBeDefined();
   });
 
   it("supports explicitly bound bootstrap profiles", async () => {
