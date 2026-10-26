@@ -1330,15 +1330,45 @@ async function settleSidebarCapture(page: Page) {
   );
 }
 
-export async function settleSidebarBackgroundWork(page: Page) {
-  // The prefetch owner automatically warms New Session; other groups require navigation intent.
-  const prefetchAssets = await page.evaluate(async () => {
+type InteractionPreloadWindow = Window & {
+  openclawInteractionPreloadState?: WeakMap<HTMLLinkElement, "load" | "error">;
+};
+
+export type InteractionNavigationPreloads = {
+  group: string | undefined;
+  assets: Array<{
+    href: string;
+    linkStates: Array<"load" | "error" | "pending">;
+    resourceComplete: boolean;
+  }>;
+};
+
+export function installInteractionNavigationPreloadObserver() {
+  const settled = new WeakMap<HTMLLinkElement, "load" | "error">();
+  Object.assign(window, { openclawInteractionPreloadState: settled });
+  for (const type of ["load", "error"] as const) {
+    document.addEventListener(
+      type,
+      (event) => {
+        if (event.target instanceof HTMLLinkElement) {
+          settled.set(event.target, type);
+        }
+      },
+      true,
+    );
+  }
+}
+
+export async function settleInteractionNavigationPreloads(
+  page: Page,
+): Promise<InteractionNavigationPreloads> {
+  const expected = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")
       ?.getAttribute("content");
     const route = window.openclawControlUi?.snapshot().route?.matches[0]?.routeId;
     if (!descriptor || !route) {
-      throw new Error("Warm sidebar measurement requires the built navigation prefetch manifest");
+      throw new Error("Warm interaction requires the built navigation prefetch manifest");
     }
     // The fixture server mounts resources at /; deep-link entry-script aliases differ.
     const base = new URL("/", location.origin);
@@ -1347,30 +1377,67 @@ export async function settleSidebarBackgroundWork(page: Page) {
       throw new Error("Could not read the built navigation prefetch manifest");
     }
     const manifest: Record<string, string[]> = await response.json();
-    return [...new Set(route === "new-session" ? [] : (manifest["new-session"] ?? []))].map(
-      (file) => new URL(file, base).href,
-    );
+    // Match the idle owner's automatic group; explicit navigation intent remains native.
+    const next = `${route}-next`;
+    const group = manifest[next] ? next : route === "new-session" ? undefined : "new-session";
+    if (group && !manifest[group]?.length) {
+      throw new Error(`Navigation prefetch manifest has no ${group} assets`);
+    }
+    return {
+      group,
+      assets: [...new Set(group ? manifest[group] : [])].map((file) => new URL(file, base).href),
+    };
   });
+  const ready = await page.waitForFunction(
+    ({ group, assets }) => {
+      // SAFETY: the page's initialization script installs this diagnostic map before navigation.
+      const settled = (window as InteractionPreloadWindow).openclawInteractionPreloadState;
+      if (!settled) {
+        throw new Error("Navigation prefetch observer must be installed before navigation");
+      }
+      const links = [
+        ...document.querySelectorAll<HTMLLinkElement>(
+          'link[rel="preload"], link[rel="modulepreload"]',
+        ),
+      ];
+      const observations = assets.map((href) => {
+        const matching = links.filter((link) => link.href === href);
+        const linkStates = matching.map((link) => settled.get(link) ?? ("pending" as const));
+        if (linkStates.includes("error")) {
+          throw new Error(`Navigation prefetch failed: ${href}`);
+        }
+        return {
+          href,
+          linkStates,
+          resourceComplete: performance
+            .getEntriesByName(href, "resource")
+            .some((entry) => entry instanceof PerformanceResourceTiming && entry.responseEnd > 0),
+        };
+      });
+      return observations.every((asset) =>
+        asset.linkStates.length
+          ? asset.linkStates.every((state) => state === "load")
+          : asset.resourceComplete,
+      )
+        ? { group, assets: observations }
+        : false;
+    },
+    expected,
+    { timeout: 60_000, polling: 100 },
+  );
   try {
-    await page.waitForFunction(
-      (assets) => {
-        const fetched = new Set(
-          performance.getEntriesByType("resource").map((entry) => entry.name),
-        );
-        return assets.every((asset) => fetched.has(asset));
-      },
-      prefetchAssets,
-      { timeout: 60_000, polling: 100 },
-    );
-  } catch (error) {
-    const missing = await page.evaluate((assets) => {
-      const fetched = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
-      return assets.filter((asset) => !fetched.has(asset));
-    }, prefetchAssets);
-    throw new Error(`Warm navigation prefetch did not finish: ${missing.join(", ")}`, {
-      cause: error,
-    });
+    const evidence = await ready.jsonValue();
+    if (!evidence) {
+      throw new Error("Navigation prefetch did not complete");
+    }
+    return evidence;
+  } finally {
+    await ready.dispose();
   }
+}
+
+export async function settleSidebarBackgroundWork(page: Page) {
+  await settleInteractionNavigationPreloads(page);
   await settleSidebarCapture(page);
   await page.waitForLoadState("networkidle");
   await frames(page);
