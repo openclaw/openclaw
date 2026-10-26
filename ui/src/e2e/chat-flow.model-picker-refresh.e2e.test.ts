@@ -11,6 +11,7 @@ import {
   chatSessionListResponse,
   expectRequestCountStable,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const attr = (root: Page | Locator, name: string, value = "true") =>
@@ -53,10 +54,8 @@ function roster<Row extends object, Defaults extends object>(
 suite.define(() => {
   it("confirms remote model changes and preserves the recorded notice on reload", async () => {
     const page = await newChatPage(suite, {
+      ...createControlUiE2eContextOptions(),
       hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
     });
     const session = sessionInfo("model-target-proof", "demo-a");
     const history = [

@@ -12,6 +12,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mockDocumentVisibility as trackVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
@@ -159,15 +160,6 @@ function presentationPane() {
   });
   fixture.pane.render = emptyPresentation;
   return fixture;
-}
-
-function trackVisibility(initial: DocumentVisibilityState) {
-  let current = initial;
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => current);
-  return (next: DocumentVisibilityState) => {
-    current = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
 }
 
 function disconnect(pane: TestChatPane) {

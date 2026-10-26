@@ -11,6 +11,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { chatEvent } from "./chat-flow-fixtures.test-support.ts";
 import { textContent } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
@@ -453,12 +454,10 @@ suite.define(() => {
         });
         const historyReads = (await gateway.getRequests("chat.history")).length;
         await page.clock.setFixedTime(now + 63_000);
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey: parent.key,
-          runId,
-          state: "final",
-          yielded: true,
-        });
+        await gateway.emitGatewayEvent(
+          "chat",
+          chatEvent(runId, parent.key, "final", { yielded: true }),
+        );
         await gateway.waitForRequest("chat.history", { after: historyReads });
         // Both before and after captures follow the same committed transcript boundary.
         await page
