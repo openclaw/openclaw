@@ -41,10 +41,10 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
       expect(params.sessionEntry).toEqual(before);
       expectNoSelectionEffects();
     },
-    run(
+    run: (
       kind: "caller" | "profiled" | "unprofiled" | "unbound" | "request" = "caller",
       assertCurrent?: () => void,
-    ) {
+    ) => {
       const run = () => applySessionModelSelection(params);
       if (kind === "caller") {
         return withGatewayToolCallerIdentity(
