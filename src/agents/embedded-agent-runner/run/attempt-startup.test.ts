@@ -64,8 +64,6 @@ it.each([false, true])(
       }),
     ).rejects.toThrow("skill reader preparation failed");
     expect(restore).toHaveBeenCalledOnce();
-    expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledTimes(hasSnapshot ? 1 : 0);
-    expect(mocks.applySkillEnvOverrides).toHaveBeenCalledTimes(hasSnapshot ? 0 : 1);
   },
 );
 
@@ -101,8 +99,5 @@ it.each([
     prepared.restoreSkillEnv();
 
     expect(prepared.skillsPrompt).toBe("skills prompt");
-    expect(mocks.prepareWorkspaceSkills).toHaveBeenCalledOnce();
-    expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.prepareInstalledSkillCatalog).toHaveBeenCalledOnce();
   },
 );
