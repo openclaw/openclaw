@@ -169,6 +169,74 @@ describe("host stats checkpoints", () => {
     expect(persistHostStats).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    { label: "when the node goes quiet", laterReport: false },
+    { label: "when the node keeps reporting", laterReport: true },
+  ])(
+    "persists checkpoints on the monotonic clock across a backward wall-clock jump ($label)",
+    async ({ laterReport }) => {
+      const { registry, persistHostStats, closeHostStats } = fixture();
+      const firstWrite = createDeferred<boolean>();
+      persistHostStats.mockImplementationOnce(() => firstWrite.promise);
+
+      report(registry);
+      await vi.advanceTimersByTimeAsync(60_000);
+      report(registry, 400);
+      firstWrite.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(5_000);
+      if (laterReport) {
+        report(registry, 300);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await vi.advanceTimersByTimeAsync(239_999);
+      expect(persistHostStats).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(persistHostStats).toHaveBeenNthCalledWith(2, {
+        nodeId: "node-1",
+        hostStats: {
+          ...stats,
+          memoryFreeBytes: laterReport ? 300 : 400,
+          updatedAtMs: laterReport ? 5_000 : 61_000,
+        },
+        expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
+      });
+      await closeHostStats();
+      expect(persistHostStats).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("anchors a buffered sample's next checkpoint to its receipt, not the write", async () => {
+    const { registry, persistHostStats, closeHostStats } = fixture();
+    const firstWrite = createDeferred<boolean>();
+    persistHostStats.mockImplementationOnce(() => firstWrite.promise);
+
+    report(registry);
+    await vi.advanceTimersByTimeAsync(240_000);
+    report(registry, 400);
+    firstWrite.resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    vi.setSystemTime(151_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(persistHostStats).toHaveBeenNthCalledWith(2, {
+      nodeId: "node-1",
+      hostStats: { ...stats, memoryFreeBytes: 400, updatedAtMs: 241_000 },
+      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
+    });
+    report(registry, 300);
+    await vi.advanceTimersByTimeAsync(239_999);
+    expect(persistHostStats).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(persistHostStats).toHaveBeenNthCalledWith(3, {
+      nodeId: "node-1",
+      hostStats: { ...stats, memoryFreeBytes: 300, updatedAtMs: 181_000 },
+      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
+    });
+    await closeHostStats();
+    expect(persistHostStats).toHaveBeenCalledTimes(3);
+  });
+
   it("logs a failed checkpoint without retrying it on another node's timer", async () => {
     const { registry, persistHostStats, closeHostStats } = fixture();
     const capture = createDiagnosticLogRecordCapture();
