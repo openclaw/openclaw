@@ -76,10 +76,9 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       entry: { sessionId: "previous-session", lifecycleRevision: "previous-revision" },
     });
     params.describe.mockReturnValue({ entry: currentEntry });
-    expect(await loadHistory({ sessionKey: "agent:main:main" })).toMatchObject({
-      sessionId: "previous-session",
-      sessionInfo: undefined,
-    });
+    const result = await loadHistory({ sessionKey: "agent:main:main" });
+    expect(result.sessionId).toBe("previous-session");
+    expect(result.sessionInfo).toBeUndefined();
     expect(params.present).not.toHaveBeenCalled();
   });
 }

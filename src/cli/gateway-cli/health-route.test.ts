@@ -52,6 +52,13 @@ it("projects a local port into the routed config", async () => {
   );
   expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true }, 2);
   expect(mocks.emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
+});
+
+it("keeps the default route free of health config and error presentation", async () => {
+  mocks.callGateway.mockResolvedValue({ ok: true });
+  await run();
+  expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true }, 2);
+  expect(mocks.readNonObservingHealthConfig).not.toHaveBeenCalled();
   expect(mocks.loadCall).not.toHaveBeenCalled();
 });
 
