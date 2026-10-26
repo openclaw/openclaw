@@ -22,6 +22,7 @@ import {
   browserResourceMethodResponses,
   createBrowserResourceScenarios,
 } from "./control-ui-browser-resource-scenarios.ts";
+import { dataActivityLiveScenarios } from "./control-ui-data-activity-live-scenarios.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
 import { dataBoardScenarios } from "./control-ui-data-board-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
@@ -1557,6 +1558,7 @@ async function prepareProviderUsage(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,

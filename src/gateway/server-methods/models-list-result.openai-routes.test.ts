@@ -9,13 +9,13 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import {
   catalogEntry,
   listModels,
   providerCatalogEntry,
   createModelsListTestContext,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
 const IMPLICIT_CODEX_RUNTIME = {

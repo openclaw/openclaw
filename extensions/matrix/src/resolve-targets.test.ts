@@ -9,11 +9,9 @@ vi.mock("./directory-live.js", () => ({
   listMatrixDirectoryGroupsLive: vi.fn(),
 }));
 
+const resolveTargets = expectDefined(matrixPlugin.resolver?.resolveTargets, "Matrix resolver");
 function resolve(kind: "user" | "group", inputs: string[], accountId?: string) {
-  return expectDefined(
-    matrixPlugin.resolver?.resolveTargets,
-    "registered Matrix resolver",
-  )({
+  return resolveTargets({
     cfg: {},
     inputs,
     kind,
@@ -21,6 +19,14 @@ function resolve(kind: "user" | "group", inputs: string[], accountId?: string) {
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   });
 }
+const user: ChannelDirectoryEntry = { kind: "user", id: "@alice:example.org", name: "Alice" };
+const group: ChannelDirectoryEntry = {
+  kind: "group",
+  id: "!team:example.org",
+  name: "Team",
+  handle: "#team",
+};
+const partial: ChannelDirectoryEntry = { kind: "group", id: "!one:example.org", name: "General" };
 
 describe("resolveMatrixTargets (users)", () => {
   beforeEach(() => {
@@ -29,11 +35,10 @@ describe("resolveMatrixTargets (users)", () => {
   });
 
   it("does not resolve ambiguous or non-exact matches", async () => {
-    const matches: ChannelDirectoryEntry[] = [
-      { kind: "user", id: "@alice:example.org", name: "Alice" },
-      { kind: "user", id: "@alice:evil.example", name: "Alice" },
-    ];
-    vi.mocked(listMatrixDirectoryPeersLive).mockResolvedValue(matches);
+    vi.mocked(listMatrixDirectoryPeersLive).mockResolvedValue([
+      user,
+      { ...user, id: "@alice:evil.example" },
+    ]);
 
     const [result] = await resolve("user", ["Alice"]);
 
@@ -43,52 +48,22 @@ describe("resolveMatrixTargets (users)", () => {
     });
   });
 
-  it("prefers exact group matches over first partial result", async () => {
-    const matches: ChannelDirectoryEntry[] = [
-      { kind: "group", id: "!one:example.org", name: "General", handle: "#general" },
-      { kind: "group", id: "!two:example.org", name: "Team", handle: "#team" },
-    ];
-    vi.mocked(listMatrixDirectoryGroupsLive).mockResolvedValue(matches);
-
-    const [result] = await resolve("group", ["#team"]);
-
-    expect(result).toMatchObject({ resolved: true, id: "!two:example.org", note: undefined });
-    expect(listMatrixDirectoryGroupsLive).toHaveBeenCalledWith({
-      cfg: {},
-      accountId: undefined,
-      query: "#team",
-      limit: 5,
-    });
-  });
-
-  it("reuses directory lookups for normalized duplicate inputs", async () => {
-    vi.mocked(listMatrixDirectoryPeersLive).mockResolvedValue([
-      { kind: "user", id: "@alice:example.org", name: "Alice" },
-    ]);
-    vi.mocked(listMatrixDirectoryGroupsLive).mockResolvedValue([
-      { kind: "group", id: "!team:example.org", name: "Team", handle: "#team" },
-    ]);
-
-    const userResults = await resolve("user", ["Alice", " alice "], "ops");
-    const groupResults = await resolve("group", ["#team", "#team"], "ops");
-
-    expect(userResults).toEqual(
-      ["Alice", " alice "].map((input) => ({
+  it.each([
+    ["user", listMatrixDirectoryPeersLive, user, ["Alice", " alice "]],
+    ["group", listMatrixDirectoryGroupsLive, group, ["#team", "#team"]],
+  ] as const)("caches exact %s matches", async (kind, lookup, match, inputs) => {
+    vi.mocked(lookup).mockResolvedValue(kind === "group" ? [partial, match] : [match]);
+    expect(await resolve(kind, [...inputs], "ops")).toEqual(
+      inputs.map((input) => ({
         input,
         resolved: true,
-        id: "@alice:example.org",
-        name: "Alice",
+        id: match.id,
+        name: match.name,
         note: undefined,
       })),
     );
-    for (const [lookup, query] of [
-      [listMatrixDirectoryPeersLive, "Alice"],
-      [listMatrixDirectoryGroupsLive, "#team"],
-    ] as const) {
-      expect(lookup).toHaveBeenCalledWith({ cfg: {}, accountId: "ops", query, limit: 5 });
-      expect(lookup).toHaveBeenCalledTimes(1);
-    }
-    expect(groupResults.every((entry) => entry.resolved)).toBe(true);
+    expect(lookup).toHaveBeenCalledWith(expect.objectContaining({ accountId: "ops" }));
+    expect(lookup).toHaveBeenCalledTimes(1);
   });
 
   it("accepts prefixed fully qualified ids without directory lookups", async () => {

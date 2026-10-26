@@ -21,7 +21,7 @@ export type TalkAgentConsultRequest = Parameters<RealtimeVoiceAgentConsultRunner
 
 export type TalkAgentConsultSource = "tool-call" | "native-delegation";
 
-export type TalkAgentConsultLifecycleMethods = {
+type TalkAgentConsultLifecycleMethods = {
   adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;
   claimFailureAppend?: () => boolean;
@@ -29,7 +29,7 @@ export type TalkAgentConsultLifecycleMethods = {
   steer?: RealtimeVoiceAgentConsultRunner;
 };
 
-export type LifecycleBoundTalkAgentConsult = ((
+type LifecycleBoundTalkAgentConsult = ((
   args: unknown,
   signal: AbortSignal,
   ready?: () => Promise<void>,
@@ -48,7 +48,7 @@ export type ReusableTalkAgentConsult = (
   sourceInput?: SessionControllerInput,
 ) => Promise<{ text: string }>;
 
-export type GatewayTalkAgentConsultRunner = (
+type GatewayTalkAgentConsultRunner = (
   request: TalkAgentConsultRequest,
 ) => ReturnType<RealtimeVoiceAgentConsultRunner>;
 

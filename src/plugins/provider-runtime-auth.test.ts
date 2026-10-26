@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 
 const mocks = vi.hoisted(() => ({ resolveProviderRuntimePlugin: vi.fn() }));
@@ -30,13 +31,9 @@ it("skips plugin credential exchange for explicit no-auth", async () => {
   await expect(
     lazyRuntime.prepareProviderRuntimeAuth({
       provider: "demo",
-      config: {
-        models: {
-          providers: {
-            demo: { auth: "none", api: "openai-completions", baseUrl: MODEL.baseUrl, models: [] },
-          },
-        },
-      },
+      config: configForProviders({
+        demo: { auth: "none", api: "openai-completions", baseUrl: MODEL.baseUrl, models: [] },
+      }),
       context: {
         env: process.env,
         provider: "demo",

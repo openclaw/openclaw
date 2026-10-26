@@ -40,6 +40,18 @@ export const KERNEL_TEST_ENV = {
   VITEST: "1",
 };
 
+export function kernelGatewayTestStateOptions(label: string) {
+  return {
+    label,
+    env: {
+      ...KERNEL_TEST_ENV,
+      VITEST: process.env.VITEST,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+  };
+}
+
 export function createGatewayBackgroundTestEnv(token: string) {
   return {
     OPENCLAW_GATEWAY_TOKEN: token,
@@ -98,3 +110,32 @@ export function createGatewayArtifactTestEnv(root: string, state: string, config
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
   };
 }
+
+export const PROVIDER_AUTH_INTEGRATION_ENV = {
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+  OPENCLAW_OAUTH_DIR: undefined,
+  OPENCLAW_GATEWAY_URL: undefined,
+  OPENCLAW_GATEWAY_PORT: undefined,
+  OPENCLAW_GATEWAY_TOKEN: undefined,
+  OPENCLAW_GATEWAY_PASSWORD: undefined,
+};
+
+export const MODELS_AUTH_INTEGRATION_ENV = {
+  OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+};
+
+export const WITHOUT_OPENAI_ENV_AUTH = {
+  CODEX_API_KEY: undefined,
+  CODEX_HOME: "/__openclaw_models_list_test__/codex",
+  OPENAI_API_KEY: undefined,
+  OPENAI_BASE_URL: undefined,
+  OPENAI_OAUTH_TOKEN: undefined,
+  CHATGPT_OAUTH_TOKEN: undefined,
+} as const;
