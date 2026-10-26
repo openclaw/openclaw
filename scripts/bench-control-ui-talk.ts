@@ -788,6 +788,7 @@ try {
                       throw new Error("Candidate rendered transcript chunks while hidden");
                     }
                     if (windowId !== undefined) {
+                      const beforeReveal = await metrics(cdp);
                       const revealStartedAt = performance.now();
                       await cdp.send("Browser.setWindowBounds", {
                         windowId,
@@ -805,13 +806,37 @@ try {
                         undefined,
                         { polling: 50 },
                       );
+                      const observedAfterMs = performance.now() - revealStartedAt;
+                      await page.evaluate(
+                        () =>
+                          new Promise<void>((resolve) => {
+                            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                          }),
+                      );
+                      const afterReveal = await metrics(cdp);
+                      const revealDelta = (name: string) =>
+                        (afterReveal[name]! - beforeReveal[name]!) * 1000;
+                      const revealCpu = {
+                        taskMs: revealDelta("TaskDuration"),
+                        scriptMs: revealDelta("ScriptDuration"),
+                        layoutMs: revealDelta("LayoutDuration"),
+                        styleMs: revealDelta("RecalcStyleDuration"),
+                      };
                       row.reveal = {
-                        observedAfterMs: performance.now() - revealStartedAt,
+                        observedAfterMs,
+                        frameAfterMs: performance.now() - revealStartedAt,
+                        ...revealCpu,
                         observedChunks: await page.evaluate(
                           () =>
                             window.openclawTalkBench.transcriptChunks -
                             window.openclawTalkBench.transcriptPendingChunks,
                         ),
+                      };
+                      row.hiddenAndReveal = {
+                        taskMs: delta("TaskDuration") + revealCpu.taskMs,
+                        scriptMs: delta("ScriptDuration") + revealCpu.scriptMs,
+                        layoutMs: delta("LayoutDuration") + revealCpu.layoutMs,
+                        styleMs: delta("RecalcStyleDuration") + revealCpu.styleMs,
                       };
                       if (values["first-pair-screenshots"] && pair === 0) {
                         await page.screenshot({ path: `${prefix}.revealed.png` });
