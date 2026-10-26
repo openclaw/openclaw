@@ -346,7 +346,7 @@ export const QA_NATIVE_STOP_DELAY_MS = 180_000;
 export const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 export const QA_REASONING_ONLY_RETRY_NEEDLE =
-  "recorded reasoning but did not produce a user-visible answer";
+  "Continue from the current conversation and answer the user's request now";
 export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
   "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";

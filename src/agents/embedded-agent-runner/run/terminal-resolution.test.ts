@@ -41,7 +41,7 @@ vi.mock("./auth-profile-success.js", () => ({
 }));
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 
 function reasoningAssistant(id: string, thinking: string) {
   const thinkingSignature = JSON.stringify({ id, type: "reasoning" });

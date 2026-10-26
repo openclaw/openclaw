@@ -29,7 +29,7 @@ scenario:
       promptSnippet: Reasoning-only continuation QA check
       prompt: "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK."
       expectedReply: REASONING-RECOVERED-OK
-      retryNeedle: recorded reasoning but did not produce a user-visible answer
+      retryNeedle: Continue from the current conversation and answer the user's request now
 
 flow:
   steps:

@@ -439,7 +439,7 @@ describe("embedded run session prompt state", () => {
 
     const prompt = state.activePrompt.override ?? "";
     expect(prompt).toContain("Your turn ended without a final reply.");
-    expect(prompt).not.toContain("recorded reasoning");
+    expect(prompt).not.toContain("answer the user's request now");
     expect(prompt.match(/Continue from the compacted transcript/gu)).toHaveLength(1);
   });
 
