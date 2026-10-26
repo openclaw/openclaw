@@ -1,39 +1,20 @@
-import fs from "node:fs";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, vi } from "vitest";
 import { setIMessageRuntime } from "../runtime.js";
 
-// Vitest runs afterAll hooks in reverse order, so databases close before directory removal.
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-imessage-state-");
+const createIMessageTestEnv = () => ({ ...process.env, OPENCLAW_STATE_DIR: tempDirs.make() });
 
-afterAll(async () => {
-  const { closeOpenClawAgentDatabasesAsync, closeOpenClawStateDatabaseAsync } =
-    await import("openclaw/plugin-sdk/sqlite-runtime-testing");
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-});
-
-function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: string } {
-  const stateDir = fs.realpathSync(
-    tempDirs.make("openclaw-imessage-state-", resolvePreferredOpenClawTmpDir()),
-  );
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-}
-
-let imessageTestEnv = createIMessageTestEnv();
+let env = createIMessageTestEnv();
 let stateRuntime = initialStateRuntime;
 const reusedStoreCleanups = new Map<string, () => Promise<void>>();
 
 export function createIMessagePluginStateSyncStoreForTest<T>(options: OpenKeyedStoreOptions) {
-  return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", {
-    ...options,
-    env: imessageTestEnv,
-  });
+  return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", { ...options, env });
 }
 
 function installRuntime(
@@ -45,12 +26,12 @@ function installRuntime(
   };
   setRuntime({
     state: {
-      resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
+      resolveStateDir: () => env.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (options) =>
         stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
-          stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
+          stateDir: options?.stateDir ?? env.OPENCLAW_STATE_DIR,
         }),
       openKeyedStoreV2: <T>(options) => {
         if (failStores) {
@@ -58,7 +39,7 @@ function installRuntime(
         }
         const store = stateRuntime.createPluginStateKeyedStoreV2ForTests<T>(
           "imessage",
-          { ...options, env: imessageTestEnv },
+          { ...options, env },
           { assertCurrent: () => {} },
         );
         if (reuseDatabase) {
@@ -82,7 +63,7 @@ function installRuntime(
 }
 
 export function installIMessageStateRuntimeForTest(): void {
-  imessageTestEnv = createIMessageTestEnv();
+  env = createIMessageTestEnv();
   stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   installRuntime(setIMessageRuntime);
 }
@@ -102,7 +83,7 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
     // Drain worker-only stores before rotating the fixture state directory.
     await closeOpenClawStateDatabaseAsync();
     stateRuntime.closeOpenClawStateDatabaseForTest();
-    imessageTestEnv = createIMessageTestEnv();
+    env = createIMessageTestEnv();
   }
   if (!options?.preservePersistentState) {
     reusedStoreCleanups.clear();
@@ -118,6 +99,6 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
 
 export function installIMessageFailingStateRuntimeForTest(): void {
   stateRuntime.closeOpenClawStateDatabaseForTest();
-  imessageTestEnv = createIMessageTestEnv();
+  env = createIMessageTestEnv();
   installRuntime(setIMessageRuntime, { failStores: true });
 }

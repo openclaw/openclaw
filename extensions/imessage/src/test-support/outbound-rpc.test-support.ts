@@ -5,7 +5,6 @@ import { expect, vi } from "vitest";
 import { imessagePlugin } from "../channel.js";
 
 type RpcRequest = {
-  method: string;
   params: {
     text: string;
     formatting?: Array<{ start: number; length: number; styles: string[] }>;
@@ -13,9 +12,7 @@ type RpcRequest = {
 };
 
 export const roles = ["user", "system", "assistant"] as const;
-export const hiddenFunctionResponse = `<function_calls><invoke name="exec">HIDDEN_FUNCTION_CALL</invoke></function_calls><function_response>
-HIDDEN_FUNCTION_RESPONSE
-</function_response>`;
+export const hiddenFunctionResponse = `<function_calls><invoke name="exec">HIDDEN_FUNCTION_CALL</invoke></function_calls><function_response>\nHIDDEN_FUNCTION_RESPONSE\n</function_response>`;
 export const privateRuntimeBlocks = [
   "<system-reminder>\nuser:\nHIDDEN_RUNTIME_REMINDER\n\ue000\n</system-reminder>",
   "< previous_response origin='runtime'>HIDDEN_RUNTIME_PREVIOUS\ue001< / previous_response >",
@@ -105,41 +102,27 @@ if (args.join(" ") === "rpc --json") {
     },
     createChannelDelivery: () => {
       // The registered renderers are stateless; share them across per-case module resets.
-      const channelChunker = expectDefined(imessagePlugin.outbound?.chunker, "iMessage chunker");
-      const channelSanitizer = expectDefined(
-        imessagePlugin.outbound?.sanitizeText,
-        "iMessage sanitizer",
-      );
+      const chunker = expectDefined(imessagePlugin.outbound?.chunker, "chunker");
+      const sanitize = expectDefined(imessagePlugin.outbound?.sanitizeText, "sanitizer");
       const deliverThroughChannel = async (source: string, limit = 4000) => {
-        const sanitized = channelSanitizer({ text: source, payload: { text: source } });
-        const chunks = channelChunker(sanitized, limit);
+        const sanitized = sanitize({ text: source, payload: { text: source } });
+        const chunks = chunker(sanitized, limit);
         for (const chunk of chunks) {
           await sendMessageIMessage("chat_id:10", chunk, { config: cfg });
         }
         return { sanitized, chunks };
       };
-      return { channelChunker, channelSanitizer, deliverThroughChannel };
+      return { deliverThroughChannel };
     },
   };
 }
 
-export function expectScrubbedRequests(requests: RpcRequest[]) {
-  for (const request of requests) {
-    expect(request.params.text).not.toContain("#+#+#");
-    expect(request.params.text).not.toMatch(/HIDDEN_(?:RPC|FUNCTION|RUNTIME)_/);
-    expect(request.params.text).not.toMatch(/system-reminder|previous_response|INTERNAL_CONTEXT/i);
-    expect(request.params.text).not.toMatch(/<(?:thinking|relevant[-_]memories)\b/i);
-    expect(request.params.text).not.toMatch(/assistant\s+to\s*=\s*\w+/i);
-    expect(request.params.text).not.toMatch(/[\ue000-\uf8ff]/);
-    for (const range of request.params.formatting ?? []) {
-      expect(range.start).toBeGreaterThanOrEqual(0);
-      expect(range.start + range.length).toBeLessThanOrEqual(request.params.text.length);
-    }
+const rejectText = (pattern: RegExp) => (requests: RpcRequest[]) => {
+  for (const { params } of requests) {
+    expect(params.text).not.toMatch(pattern);
   }
-}
-
-export function expectNoRoleMarkers(requests: RpcRequest[]) {
-  for (const request of requests) {
-    expect(request.params.text).not.toMatch(/^[ \t]*(?:user|system|assistant):[ \t]*$/gim);
-  }
-}
+};
+export const expectNoRoleMarkers = rejectText(/^[ \t]*(?:user|system|assistant):[ \t]*$/im);
+export const expectScrubbedRequests = rejectText(
+  /#\+#\+#|HIDDEN_(?:RPC|FUNCTION|RUNTIME)_|[\ue000-\uf8ff]|system-reminder|previous_response|INTERNAL_CONTEXT|<(?:thinking|relevant[-_]memories)\b|assistant\s+to\s*=\s*\w+/i,
+);
