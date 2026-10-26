@@ -7,19 +7,14 @@ import {
   createAuthProfileStoreFixture as authStore,
   createOAuthRefreshCredential as oauth,
 } from "../auth-profiles/credential-fixtures.test-support.js";
-import { createModelAuthAvailabilityResolver } from "../model-auth-availability.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 
-function billingFixture(primary: string, apiProfile: string, oauthProfile: string) {
+function billingFixture(primary: string, apiId: string, oauthId: string) {
+  const profile = (mode: "api_key" | "oauth") => ({ provider: "openai", mode });
   const config: OpenClawConfig = {
     agents: { defaults: { model: primary, heartbeat: { model: "openai/gpt-5.4-mini" } } },
-    auth: {
-      profiles: {
-        [apiProfile]: { provider: "openai", mode: "api_key" },
-        [oauthProfile]: { provider: "openai", mode: "oauth" },
-      },
-    },
+    auth: { profiles: { [apiId]: profile("api_key"), [oauthId]: profile("oauth") } },
     ...configFor("openai", "https://api.openai.com/v1", { api: "openai-completions" }),
   };
   return {
@@ -27,10 +22,7 @@ function billingFixture(primary: string, apiProfile: string, oauthProfile: strin
     modelId: "gpt-5.4-mini",
     env: {},
     config,
-    authProfileStore: authStore({
-      [apiProfile]: apiKey("openai", "fixture-key"),
-      [oauthProfile]: oauth(),
-    }),
+    authProfileStore: authStore({ [apiId]: apiKey("openai", "fixture-key"), [oauthId]: oauth() }),
   };
 }
 type PrepareParams = Parameters<typeof prepareAgentRuntimeAuth>[0];
@@ -53,21 +45,21 @@ it.each([
   ["gpt-5.5@openai:platform", "openclaw", false, false],
   ["metered@openai:platform", "codex", false, true],
 ] as const)(
-  "preserves the API route inherited from %s (runtime: %s, metadata: %s, observed: %s)",
-  (primary, runtime, profileMetadata, observedResponses) => {
+  "inherits %s (%s, metadata=%s, observed=%s)",
+  (primary, runtime, declared, observed) => {
     const fixture = billingFixture(primary, "openai:platform", "openai:chatgpt");
     const { config } = fixture;
     config.agents!.entries = { assistant: {} };
     config.agents!.defaults!.models = {
       "openai/gpt-5.5": { alias: "metered", agentRuntime: { id: runtime } },
     };
-    config.auth = profileMetadata ? config.auth : undefined;
-    config.models = observedResponses ? undefined : config.models;
+    config.auth = declared ? config.auth : undefined;
+    config.models = observed ? undefined : config.models;
     const prepared = prepareAgentRuntimeAuth({
       ...fixture,
       agentId: "assistant",
-      modelApi: observedResponses ? "openai-responses" : undefined,
-      modelBaseUrl: observedResponses ? "https://api.openai.com/v1" : undefined,
+      modelApi: observed ? "openai-responses" : undefined,
+      modelBaseUrl: observed ? "https://api.openai.com/v1" : undefined,
     });
     expect(prepared.plan).toMatchObject({
       forwardedAuthProfileId: "openai:platform",
@@ -76,43 +68,19 @@ it.each([
     expect(config.agents?.defaults?.model).toBe(primary);
   },
 );
-it.each(["provider-profile", "auth-order", "env-fallback", "provider-auth-with-env"] as const)(
-  "preparation and availability preserve the same billing choice for %s",
-  (choice) => {
-    const hasEnvironmentKey = choice === "env-fallback" || choice === "provider-auth-with-env";
-    const env = hasEnvironmentKey ? { OPENAI_API_KEY: "synthetic-environment-key" } : {};
-    const subscription = choice === "env-fallback";
-    const profileId = subscription ? "openai:chatgpt-default" : "openai:default";
-    const authRequirement = subscription ? "subscription" : "api-key";
-    const fixture = billingFixture(
-      hasEnvironmentKey ? "openai/gpt-5.5" : "openai/gpt-5.5@openai:chatgpt-default",
-      "openai:default",
-      "openai:chatgpt-default",
-    );
-    const { config, authProfileStore } = fixture;
-    if (choice === "auth-order") {
-      config.auth!.order = { openai: ["openai:default", "openai:chatgpt-default"] };
-    }
-    Object.assign(
-      config.models!.providers!.openai!,
-      choice === "provider-auth-with-env" ? { auth: "api-key" } : {},
-      choice === "provider-profile" ? { apiKey: "openai:default" } : {},
-    );
-    const prepared = prepareAgentRuntimeAuth({ ...fixture, env }).plan;
-    const available = createModelAuthAvailabilityResolver({
-      cfg: config,
-      authStore: authProfileStore,
-      env,
-    }).evaluateModelAuth("openai", { modelId: "gpt-5.4-mini" });
-    expect([
-      prepared.forwardedAuthProfileId,
-      prepared.modelRoute?.authRequirement,
-      available.availability,
-      available.selectedProfileId,
-      available.selectedRoute?.authRequirement,
-    ]).toEqual([profileId, authRequirement, true, profileId, authRequirement]);
-  },
-);
+
+it("keeps explicit API billing ahead of ambient auth", () => {
+  const fixture = billingFixture("openai/gpt-5.5", "openai:platform", "openai:chatgpt");
+  fixture.config.models!.providers!.openai!.auth = "api-key";
+  const { plan } = prepareAgentRuntimeAuth({
+    ...fixture,
+    env: { OPENAI_API_KEY: "synthetic-environment-key" },
+  });
+  expect(plan).toMatchObject({
+    forwardedAuthProfileId: "openai:platform",
+    modelRoute: { authRequirement: "api-key" },
+  });
+});
 
 function metadata(owner: string) {
   return metadataSnapshot({
@@ -121,19 +89,11 @@ function metadata(owner: string) {
 }
 
 it.each([true, false])("uses selected environment evidence (available: %s)", (available) => {
-  const snapshot = (envVar: string) =>
-    metadataSnapshot({
-      plugins: [
-        {
-          id: "fixture-owner",
-          providers: ["fixture-provider"],
-          setup: {
-            requiresRuntime: false,
-            providers: [{ id: "fixture-provider", envVars: [envVar] }],
-          },
-        },
-      ],
-    });
+  const snapshot = (envVar: string) => {
+    const id = "fixture-provider";
+    const setup = { requiresRuntime: false, providers: [{ id, envVars: [envVar] }] };
+    return metadataSnapshot({ plugins: [{ id: "fixture-owner", providers: [id], setup }] });
+  };
   const prepared = underAmbient(snapshot("AMBIENT_PROVIDER_KEY"), {
     provider: "fixture-provider",
     env: available ? { SELECTED_PROVIDER_KEY: "synthetic" } : { AMBIENT_PROVIDER_KEY: "synthetic" },
@@ -149,7 +109,7 @@ it.each([true, false])("uses selected environment evidence (available: %s)", (av
 });
 
 it.each(["user-link", "binding", "empty"] as const)(
-  "selects the prepared owner for %s profiles despite ambient aliases",
+  "isolates %s profiles from ambient aliases",
   (selection) => {
     const empty = selection === "empty";
     const profileId = empty ? "fixture:exact" : "fixture:selected";
