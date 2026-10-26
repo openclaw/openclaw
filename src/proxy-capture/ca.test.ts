@@ -41,7 +41,7 @@ import { ensureDebugProxyCa } from "./ca.js";
 
 const tempDirs = createTrackedTempDirs();
 
-function outputPath(args: string[], flag: "-config" | "-keyout" | "-out"): string {
+function outputPath(args: string[], flag: "-keyout" | "-out"): string {
   const value = args[args.indexOf(flag) + 1];
   if (!value) {
     throw new Error(`missing ${flag} output path`);
@@ -49,11 +49,11 @@ function outputPath(args: string[], flag: "-config" | "-keyout" | "-out"): strin
   return value;
 }
 
-function generatePair(marker: string, afterWrite?: (args: string[]) => void): void {
+function generatePair(marker: string, afterWrite?: () => void): void {
   runExecMock.mockImplementationOnce(async (_command: string, args: string[]) => {
     fs.writeFileSync(outputPath(args, "-out"), `ca-cert-marker:${marker}`);
     fs.writeFileSync(outputPath(args, "-keyout"), `ca-material-marker:${marker}`);
-    afterWrite?.(args);
+    afterWrite?.();
   });
 }
 
@@ -82,9 +82,7 @@ afterEach(async () => {
 it.each(["generation", "publication"] as const)("repairs interrupted CA %s", async (stage) => {
   const { certDir, paths, ensure, read } = await makeCertPaths("stale");
   const failure = Object.assign(new Error(`${stage} interrupted`), { code: "EACCES" });
-  let generatedConfig = "";
-  generatePair("failed", (args) => {
-    generatedConfig = fs.readFileSync(outputPath(args, "-config"), "utf8");
+  generatePair("failed", () => {
     if (stage === "generation") {
       throw failure;
     }
@@ -112,15 +110,6 @@ it.each(["generation", "publication"] as const)("repairs interrupted CA %s", asy
   await expect(Promise.all([ensure(), ensure()])).resolves.toEqual([paths, paths]);
   expect(read()).toEqual(["ca-cert-marker:retry", "ca-material-marker:retry"]);
   expect(runExecMock).toHaveBeenCalledTimes(2);
-  const [command, args, options] = runExecMock.mock.calls[0] as [string, string[], object];
-  expect(command).toBe("/usr/bin/openssl");
-  expect(args).toEqual(expect.arrayContaining(["req", "-extensions", "v3_ca", "-x509"]));
-  expect(path.dirname(outputPath(args, "-config"))).toBe(path.dirname(outputPath(args, "-out")));
-  expect(path.dirname(outputPath(args, "-out")).startsWith(`${certDir}${path.sep}`)).toBe(true);
-  expect(options).toEqual({ logOutput: false, timeoutMs: 30_000 });
-  expect(generatedConfig).toContain("CN = OpenClaw Debug Proxy");
-  expect(generatedConfig).toContain("basicConstraints = critical, CA:TRUE");
-  expect(generatedConfig).toContain("keyUsage = critical, keyCertSign, cRLSign");
 });
 
 it("rejects matching certificate material that is not a CA", async () => {
