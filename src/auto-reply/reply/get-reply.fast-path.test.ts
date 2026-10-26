@@ -392,4 +392,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     await expect(bootstrap()).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
     expect(readSession()).toMatchObject(entry);
   });
+
+  it("does not persist a retired top-level channel field on a native /status fast bootstrap", async () => {
+    const result = await bootstrap(nativeCtx("/status"));
+    // `channel` is a retired SessionEntry slot key; the canonical `delivery` block
+    // owns channel identity. Doctor flags any durable row that carries it.
+    expect(result.sessionEntry).not.toHaveProperty("channel");
+  });
 });
