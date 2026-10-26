@@ -189,6 +189,38 @@ describe("dns-cli probe bounds", () => {
     expect(fs.readFileSync(realFile, "utf-8")).toContain("import ");
   });
 
+  it("publishes through a dangling Corefile symlink and a symlinked conf.d directory (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const realDir = path.join(brewPrefix, "real-config");
+    const linkPath = path.join(etcDir, "Corefile");
+    const serverPath = path.join(etcDir, "conf.d", "openclaw.internal.server");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.symlinkSync(realDir, path.join(etcDir, "conf.d"));
+    fs.symlinkSync(path.join(realDir, "Corefile"), linkPath);
+
+    await runDnsSetupApply();
+
+    expect(fs.readFileSync(path.join(realDir, "Corefile"), "utf-8")).toContain("import ");
+    expect(fs.readFileSync(path.join(realDir, "openclaw.internal.server"), "utf-8")).toContain(
+      "openclaw.internal:53",
+    );
+  });
+
+  it("resolves a dangling link whose target sits in a symlinked directory (#184888)", async () => {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const realDir = path.join(brewPrefix, "real-config");
+    const linkPath = path.join(etcDir, "Corefile");
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.symlinkSync(realDir, path.join(etcDir, "conf.d"));
+    fs.symlinkSync(path.join(etcDir, "conf.d", "Corefile"), linkPath);
+
+    await runDnsSetupApply();
+
+    expect(fs.readFileSync(path.join(realDir, "Corefile"), "utf-8")).toContain("import ");
+  });
+
   it.each(["SIGKILL", "SIGTERM"])("reports %s subprocess failures", (signal) => {
     const timeout = signal === "SIGKILL";
     const error = timeout

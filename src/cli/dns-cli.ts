@@ -63,7 +63,29 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     // a crash or ENOSPC during the write must leave the previous contents
     // exactly as they were, published by temp-file + rename (#184888).
     // Preserve CoreDNS symlinks by publishing to the real target, not the link.
-    const targetPath = fs.existsSync(filePath) ? fs.realpathSync(filePath) : filePath;
+    // A dangling link still has no real file yet, so realpathSync would throw;
+    // resolve the parent directory's real path and append the link's filename.
+    const targetPath = (() => {
+      try {
+        return fs.realpathSync(filePath);
+      } catch (err) {
+        if ((err as { code?: string }).code !== "ENOENT") {
+          throw err;
+        }
+        // A dangling link names its target explicitly; resolve that target
+        // instead of the lexical parent (which is still the link itself).
+        const stat = fs.lstatSync(filePath, { throwIfNoEntry: false });
+        if (stat?.isSymbolicLink()) {
+          const candidate = path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
+          // The link's target may itself sit inside a symlinked directory, so
+          // normalize the real parent when the target file does not exist yet.
+          return fs.existsSync(candidate)
+            ? candidate
+            : path.join(fs.realpathSync(path.dirname(candidate)), path.basename(candidate));
+        }
+        return path.join(fs.realpathSync(path.dirname(filePath)), path.basename(filePath));
+      }
+    })();
     const existingDir = path.dirname(targetPath);
     // fs-safe applies dirMode to the immediate parent; match the current mode
     // instead of its 0700 default. New directories use 0755.
