@@ -23,7 +23,7 @@ function createHarness() {
     scheduleTabsSync: vi.fn(),
     focusWindowForTab: vi.fn(async () => undefined),
     captureAccess: vi.fn(() => epoch),
-    navigateTab: vi.fn(async () => ({ frameId: "root", loaderId: "blank-loader" })),
+    navigateTab: vi.fn(async () => navigationResult),
     requireAccessibleTab: vi.fn(async () => ({ id: 7, windowId: 3 })),
     requireNavigatedTab: vi.fn(async () => ({ id: 7, windowId: 3 })),
   };
@@ -45,20 +45,10 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("relay authority rechecks", () => {
   it.each([
-    { name: "evaluation", method: "Runtime.evaluate", params: undefined, sessionId: undefined },
-    {
-      name: "blank fragment navigation",
-      method: "Page.navigate",
-      params: { url: "about:blank#other" },
-      sessionId: undefined,
-    },
-    {
-      name: "child-session blank navigation",
-      method: "Page.navigate",
-      params: { url: "about:blank" },
-      sessionId: "child",
-    },
-  ])("checks ordinary access around native $name", async ({ method, params, sessionId }) => {
+    ["Runtime.evaluate", undefined, undefined],
+    ["Page.navigate", { url: "about:blank#other" }, undefined],
+    ["Page.navigate", { url: "about:blank" }, "child"],
+  ] as const)("checks access around native %s (%j, %s)", async (method, params, sessionId) => {
     await ctx.handler({ type: "cdp", seq: 1, tabId: 7, method, params, sessionId });
     expect(ctx.chromeMock.debugger.sendCommand).toHaveBeenCalledExactlyOnceWith(
       sessionId ? { tabId: 7, sessionId } : { tabId: 7 },
@@ -69,9 +59,8 @@ describe("relay authority rechecks", () => {
       [7, ctx.epoch],
       [7, ctx.epoch],
     ]);
-    const [beforeCommand, afterCommand] = ctx.requireAccessibleTab.mock.invocationCallOrder;
-    const [command] = ctx.chromeMock.debugger.sendCommand.mock.invocationCallOrder;
-    expectOrder(beforeCommand, command, afterCommand);
+    const [before, after] = ctx.requireAccessibleTab.mock.invocationCallOrder;
+    expectOrder(before, ctx.chromeMock.debugger.sendCommand.mock.invocationCallOrder[0], after);
     expect(ctx.navigateTab).not.toHaveBeenCalled();
     expect(ctx.requireNavigatedTab).not.toHaveBeenCalled();
     expect(ctx.send).toHaveBeenCalledWith({ type: "result", seq: 1, result: { value: 1 } });
