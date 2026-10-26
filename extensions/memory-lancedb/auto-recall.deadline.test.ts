@@ -30,7 +30,13 @@ test.each([10_000, 16_000])("bounds cold provider startup (%ims)", async (initia
       }
       requests.push(signal);
       return await new Promise<number[]>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => reject(new Error("memory-lancedb embedding timed out")),
+          {
+            once: true,
+          },
+        );
       });
     },
     embedBatch: async () => [],

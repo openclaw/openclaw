@@ -6,7 +6,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { unadmittedScheduledOccurrence } from "../scheduled-occurrence.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronEvent, CronJob } from "../types.js";
+import type { CronEvent, CronStoredJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
@@ -18,7 +18,7 @@ it.each([false, true])("handles a missing parent (command=%s)", async (command) 
   await withOpenClawTestState({ label: "cron-parent-pause" }, async (fixture) => {
     const now = Date.now();
     const storePath = fixture.statePath("cron", "jobs.json");
-    const job: CronJob = {
+    const job: CronStoredJob = {
       ...createDueIsolatedJob({ id: "parent-paused", nowMs: now - 2000, nextRunAtMs: now - 1000 }),
       // Recurring, so only the pause can disable it.
       schedule: { kind: "every" as const, everyMs: 60_000 },
