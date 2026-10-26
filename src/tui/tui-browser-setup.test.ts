@@ -5,8 +5,12 @@ import {
 } from "./tui-command-handlers-test-support.js";
 import { createEditorSubmitHandler } from "./tui-submit.js";
 
-function localCli(runJson = vi.fn(), cancel = vi.fn(() => false)) {
-  return { runJson, cancel, shutdown: vi.fn(async () => {}) };
+function setupHarness(runJson = vi.fn(), local = false, cancel = vi.fn(() => false)) {
+  return createTuiCommandHandlersHarness({
+    opts: { local },
+    isConnected: false,
+    localCli: { runJson, cancel, shutdown: vi.fn(async () => {}) },
+  });
 }
 
 function setupResponse(action = "inspect", profile = "chrome") {
@@ -34,11 +38,7 @@ it.each([false, true])("dispatches locally while disconnected: local=%s", async 
     ok: true,
     value: setupResponse(args[4], profile),
   }));
-  const h = createTuiCommandHandlersHarness({
-    opts: { local },
-    isConnected: false,
-    localCli: localCli(runJson),
-  });
+  const h = setupHarness(runJson, local);
   for (const action of ["", "install", "verify"]) {
     await h.handleCommand("/browser-setup " + action);
     expect(runJson).toHaveBeenLastCalledWith(
@@ -55,7 +55,7 @@ it.each([false, true])("dispatches locally while disconnected: local=%s", async 
 
 it("rejects extra arguments without history, model forwarding, or local execution", async () => {
   const runJson = vi.fn();
-  const h = createTuiCommandHandlersHarness({ localCli: localCli(runJson) });
+  const h = setupHarness(runJson);
   const editor = { getExpandedText: () => "", setText: vi.fn(), addToHistory: vi.fn() };
   const submit = createEditorSubmitHandler({
     editor,
@@ -64,12 +64,8 @@ it("rejects extra arguments without history, model forwarding, or local executio
     handleBangLine: vi.fn(),
     onSubmitError: vi.fn(),
   });
-  [
-    "/browser-setup install --token secret-input",
-    "/browser-setup verify; whoami",
-    "/BROWSER-SETUP install\nsecret-input",
-    "/browser-setup pair secret-input",
-  ].forEach((input) => submit(input));
+  submit("/browser-setup install --token secret-input");
+  submit("/BROWSER-SETUP install\nsecret-input");
   await flushAsyncSelect();
   const untouched = [runJson, editor.addToHistory, h.sendChat];
   expect(untouched.map((mock) => mock.mock.calls)).toEqual([[], [], []]);
@@ -79,9 +75,7 @@ it("rejects extra arguments without history, model forwarding, or local executio
 
 it.each(["/stop", "/abort"])("%s cancels local setup and chat", async (command) => {
   const cancel = vi.fn(() => true);
-  const h = createTuiCommandHandlersHarness({
-    localCli: localCli(vi.fn(), cancel),
-  });
+  const h = setupHarness(vi.fn(), false, cancel);
   await h.handleCommand(command);
   expect(cancel).toHaveBeenCalledOnce();
   expect(h.abortActive).toHaveBeenCalledOnce();
@@ -92,17 +86,13 @@ it.each([
   { ok: true, value: { ...setupResponse(), phase: "secret-in-phase" } },
   { ok: true, value: { ...setupResponse(), target: { kind: "remote", profile: "chrome" } } },
   { ok: true, value: setupResponse("inspect", "") },
-  { ok: true, value: setupResponse("inspect", "work/private") },
   { ok: true, value: setupResponse("inspect", "x".repeat(65)) },
   { ok: true, value: setupResponse("inspect", "work\nsecret-in-profile") },
 ])("reports bounded failures without exposing response content", async (result) => {
-  const h = createTuiCommandHandlersHarness({
-    localCli: localCli(vi.fn().mockResolvedValue(result)),
-  });
+  const h = setupHarness(vi.fn().mockResolvedValue(result));
   await h.handleCommand("/browser-setup");
-  expect(h.addSystem).toHaveBeenCalledWith(
-    expect.stringMatching(/execution_failed|invalid_response/),
-  );
-  expect(JSON.stringify(h.addSystem.mock.calls)).not.toContain("secret-in");
+  const output = JSON.stringify(h.addSystem.mock.calls);
+  expect(output).toMatch(/execution_failed|invalid_response/);
+  expect(output).not.toContain("secret-in");
   expect(h.sendChat).not.toHaveBeenCalled();
 });

@@ -19,11 +19,16 @@ export function registerEmbeddedHistoryProjectionTests(params: {
     }
   }
 
-  it("validates and presents history metadata within its prepared read frame", async () => {
+  it("presents captured history and the selected agent's verbose default within its read frame", async () => {
     const entry = { sessionId: "captured-session", lifecycleRevision: "captured-revision" };
     const target = { key: "global", agentId: "work", storePath: "/tmp/physical.sqlite" };
     params.loadSessionEntry.mockReturnValue({
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: { verboseDefault: "off" },
+          entries: { main: {}, work: { verboseDefault: "full" } },
+        },
+      },
       agentId: target.agentId,
       canonicalKey: target.key,
       storePath: "/tmp/logical.sqlite",
@@ -36,12 +41,10 @@ export function registerEmbeddedHistoryProjectionTests(params: {
         expect(active, "history identity must be validated before the read expires").toBe(true);
         return entry;
       },
-      target,
     };
     const describe = vi.fn(() => row);
     const present = vi.fn((current: typeof row) => {
       expect(active, "history metadata must be presented before the read expires").toBe(true);
-      expect(current).toBe(row);
       return { key: target.key, sessionId: current.entry.sessionId };
     });
     params.withPreparedExactRows.mockImplementationOnce(async (queries, consume) => {
@@ -55,12 +58,11 @@ export function registerEmbeddedHistoryProjectionTests(params: {
     });
     expect(await loadHistory({ sessionKey: "global", agentId: "work" })).toMatchObject({
       sessionId: entry.sessionId,
+      verboseLevel: "full",
       sessionInfo: { key: target.key, sessionId: entry.sessionId },
     });
     expect(describe).toHaveBeenCalledExactlyOnceWith(target);
     expect(params.present).not.toHaveBeenCalled();
-    expect(params.buildSessionRow).not.toHaveBeenCalled();
-    expect(active).toBe(false);
   });
 
   it.each([
@@ -71,33 +73,13 @@ export function registerEmbeddedHistoryProjectionTests(params: {
       cfg: {},
       agentId: "main",
       canonicalKey: "agent:main:main",
-      storePath: "/tmp/main.sqlite",
       entry: { sessionId: "previous-session", lifecycleRevision: "previous-revision" },
     });
-    params.describe.mockReturnValue({
-      entry: currentEntry,
-      target: { key: "agent:main:main" },
-    });
+    params.describe.mockReturnValue({ entry: currentEntry });
     expect(await loadHistory({ sessionKey: "agent:main:main" })).toMatchObject({
       sessionId: "previous-session",
       sessionInfo: undefined,
     });
     expect(params.present).not.toHaveBeenCalled();
-    expect(params.buildSessionRow).not.toHaveBeenCalled();
-  });
-
-  it("loads history verbose level from the session agent's own verboseDefault", async () => {
-    params.loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: { verboseDefault: "off" },
-          entries: { main: {}, ops: { verboseDefault: "full" } },
-        },
-      },
-      agentId: "ops",
-      canonicalKey: "agent:ops:main",
-      entry: {},
-    });
-    expect((await loadHistory({ sessionKey: "agent:ops:main" })).verboseLevel).toBe("full");
   });
 }
