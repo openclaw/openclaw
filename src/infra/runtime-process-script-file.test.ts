@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +11,13 @@ import { prepareRuntimeProcessScriptInvocation } from "./runtime-process-url.js"
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 const node = resolveTestNodeExecPath();
+const runScript = (url: URL, flag = "", input?: string) =>
+  execFileSync(node, [fileURLToPath(url), flag], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: {},
+    input,
+  });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -42,18 +49,11 @@ it("runs and removes retained programs without source neighbors", async () => {
     }
     {
       using _ = { [Symbol.dispose]: script.dispose };
-      const result = spawnSync(
-        node,
-        [fileURLToPath(script.url), name === "daemonRuntimeProbe" ? "node" : ""],
-        {
-          encoding: "utf8",
-          timeout: 5000,
-          env: {},
-          input: JSON.stringify({ files: [database] }),
-        },
+      output[name] = runScript(
+        script.url,
+        name === "daemonRuntimeProbe" ? "node" : "",
+        JSON.stringify({ files: [database] }),
       );
-      expect(result.status, result.stderr).toBe(0);
-      output[name] = result.stdout;
     }
     expect(fs.readdirSync(scriptParent)).toEqual([]);
   }
@@ -69,18 +69,8 @@ it("passes required flags as data to the tested runtime", () => {
   const root = directories.make("runtime-script-required-flag-");
   const script = createRuntimeProcessScriptFile("nodeRuntimeProbe", { parentDirectory: root });
   using _ = { [Symbol.dispose]: script.dispose };
-  const probe = (flag: string) =>
-    spawnSync(node, [fileURLToPath(script.url), flag], {
-      encoding: "utf8",
-      timeout: 5000,
-      env: {},
-    });
-  const supported = probe("--max-old-space-size");
-  expect(supported.status, supported.stderr).toBe(0);
-  expect(supported.stdout).toBe(node);
-  const unsupported = probe("--openclaw-unsupported-'\";process.exit(42)");
-  expect(unsupported.status, unsupported.stderr).toBe(0);
-  expect(unsupported.stdout).toBe("");
+  expect(runScript(script.url, "--max-old-space-size")).toBe(node);
+  expect(runScript(script.url, "--openclaw-unsupported-'\";process.exit(42)")).toBe("");
 });
 
 it("uses embedded self dispatch while keeping external runtime scripts physical", () => {
