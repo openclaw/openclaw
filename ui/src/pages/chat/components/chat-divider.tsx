@@ -5,7 +5,16 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import type { ChatNoticeProps } from "./chat-notice-view.tsx";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+export type ChatNoticeProps = {
+  item: Extract<ChatItem, { kind: "notice" }>;
+  onPermissionRetry?: (message: string) => void;
+  recovery?: Pick<
+    ChatThreadProps,
+    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
+  >;
+};
 
 // Text-only notices paint with their transcript row; only interactive cards load later.
 const ChatPermissionCard = lazy(() => import("./chat-permission-card.tsx"), {

@@ -484,6 +484,7 @@ describe("ordinary chat input admission", () => {
               modelOverrideFallbackOriginProvider: "openai",
               modelOverrideFallbackOriginModel: "selected-model",
               fallbackNotice: {
+                kind: "active" as const,
                 selectedModel: "openai/selected-model",
                 activeModel: "openai/fallback-model",
                 reason: "timeout",
