@@ -60,9 +60,7 @@ function mountChannels(reads: { promise: Promise<unknown> }[], pairing = false) 
     : mounted.container;
   const query = <T extends Element = HTMLElement>(selector: string) =>
     container.querySelector<T>(selector);
-  const queryAll = <T extends Element = HTMLElement>(selector: string) =>
-    container.querySelectorAll<T>(selector);
-  return { ...fixture, channels, approve, container, query, queryAll };
+  return { ...fixture, channels, approve, container, query };
 }
 
 function snapshot(label: string, partial = false): ChannelsStatusSnapshot {
@@ -92,9 +90,9 @@ it.each([false, true])(
       await waitForSolid(() =>
         expect(f.container.textContent).toContain("Slack probe unavailable"),
       );
-      card = Array.from(f.queryAll<HTMLButtonElement>("button.channels-item")).find((button) =>
-        button.textContent?.includes("Slack"),
-      )!;
+      card = Array.from(
+        f.container.querySelectorAll<HTMLButtonElement>("button.channels-item"),
+      ).find((button) => button.textContent?.includes("Slack"))!;
       expect(card).toBeDefined();
       card.focus();
     }
@@ -123,11 +121,12 @@ it.each([false, true])(
     await waitForSolid(() => {
       expect(f.query(".callout.danger")?.textContent).toBe("Status unavailable");
       if (cached) {
-        expect(Array.from(f.queryAll(".callout"), (node) => node.className).slice(0, 3)).toEqual([
-          "callout info",
-          "callout warn",
-          "callout danger",
-        ]);
+        expect(
+          Array.from(f.container.querySelectorAll(".callout"), (node) => node.className).slice(
+            0,
+            3,
+          ),
+        ).toEqual(["callout info", "callout warn", "callout danger"]);
         expect(f.query(".callout.warn")?.textContent).toContain("Slack probe unavailable");
         expect(f.query("openclaw-modal-dialog")).toBe(dialog);
       } else {
