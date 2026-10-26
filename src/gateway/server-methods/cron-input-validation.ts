@@ -10,6 +10,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -64,10 +65,10 @@ type InferenceCaller = Pick<GatewayRequestHandlerOptions, "client" | "context" |
 async function loadCronRuntimeSessionEntry(params: {
   cfg: OpenClawConfig;
   job: Pick<CronJob, "sessionTarget" | "sessionKey">;
-  agentId: string;
+  agentId?: string;
   executionEntry?: SessionEntry;
   loaded?: { key: string; entry?: SessionEntry };
-}): Promise<Pick<SessionEntry, "agentRuntimeOverride"> | undefined> {
+}): Promise<Partial<SessionEntry> | undefined> {
   if (params.executionEntry) {
     return params.executionEntry;
   }
