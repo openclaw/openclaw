@@ -13,7 +13,6 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -124,21 +123,6 @@ async function createSqliteParams(
   return params;
 }
 
-function requireRequestParams(
-  harness: ReturnType<typeof createStartedThreadHarness>,
-  method: string,
-): Record<string, unknown> {
-  const request = harness.requests.find((entry) => entry.method === method);
-  return requireRecord(request?.params, `${method} params`);
-}
-
-function expectRequestInputTextContains(
-  harness: ReturnType<typeof createStartedThreadHarness>,
-  expected: string,
-): void {
-  expect(getRequestInputText(harness)).toContain(expected);
-}
-
 setupRunAttemptTestHooks();
 beforeEach(() => {
   sessionFile = path.join(tempDir, "session.jsonl");
@@ -212,8 +196,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           messages: [{ role: "compactionSummary" }, { role: "assistant" }],
         });
         expect(
-          readStringValue(requireRequestParams(harness, "thread/start").developerInstructions),
-        ).toContain("context-engine system");
+          harness.requests.find(({ method }) => method === "thread/start")?.params,
+        ).toMatchObject({
+          developerInstructions: expect.stringContaining("context-engine system"),
+        });
         expect(input).toContain(
           "[compactionSummary]\nThe durable code is summary-only-engine-code-8516.",
         );
@@ -270,8 +256,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     const finish = await startAttempt(params, harness);
 
-    expectRequestInputTextContains(
-      harness,
+    expect(getRequestInputText(harness)).toContain(
       `Current user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
     );
     expect(getRequestInputText(harness)).not.toContain("$deploy");
@@ -681,6 +666,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
     expect(promptHookMessages).toEqual(preassemblyMessages);
     expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
-    expectRequestInputTextContains(harness, params.prompt);
+    expect(getRequestInputText(harness)).toContain(params.prompt);
   });
 });
