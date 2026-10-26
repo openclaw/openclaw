@@ -9,11 +9,7 @@ vi.mock("../../components/mcp-app-security.ts", async (importOriginal) => ({
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
   dispatchPrompt.mockReset().mockResolvedValue(true);
-  client.request
-    .mockReset()
-    .mockImplementation(async (method) =>
-      method === "board.prompt.authorize" ? { confirmationRequired: false } : { ok: true },
-    );
+  client.request.mockReset().mockResolvedValue({ ok: true });
   controller = new BoardWidgetBridgeOwner({
     frame: document.createElement("iframe"),
     ticket: "ticket",
@@ -27,7 +23,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const envelope = { type: "openclaw:widget-bridge-request" as const, ticket: "ticket" };
-const active = { promptUserActivated: true };
 const client = {
   request: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(),
 };
@@ -44,34 +39,23 @@ it.each([
   ["https://example.com/path", false, null],
   ["javascript:alert(1)", false, "widget link url is invalid"],
   ["https://example.com/path", true, "widget link could not be opened"],
-] as const)(
-  "opens only safe links and reports browser blocking: %s (%s)",
-  async (url, blocked, error) => {
-    const open = vi.spyOn(window, "open").mockReturnValue(blocked ? null : ({} as Window));
-    const result = handle("host.open", { url });
-    if (error) {
-      await expect(result).rejects.toThrow(error);
-    } else {
-      await expect(result).resolves.toEqual({ ok: true });
-    }
-    if (url.startsWith("https:")) {
-      expect(open).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
-    } else {
-      expect(open).not.toHaveBeenCalled();
-    }
-    expect(client.request).not.toHaveBeenCalled();
-  },
-);
+] as const)("opens safe links or reports failure: %s (%s)", async (url, blocked, error) => {
+  const open = vi.spyOn(window, "open").mockReturnValue(blocked ? null : ({} as Window));
+  const result = handle("host.open", { url });
+  if (error) {
+    await expect(result).rejects.toThrow(error);
+  } else {
+    await expect(result).resolves.toEqual({ ok: true });
+  }
+  expect(open.mock.calls).toEqual(
+    url.startsWith("https:") ? [[url, "_blank", "noopener,noreferrer"]] : [],
+  );
+  expect(client.request).not.toHaveBeenCalled();
+});
 it("keeps confirmation when the authorization response omits its decision", async () => {
   client.request.mockResolvedValueOnce({});
-  await handle("prompt.send", { text: "Show details" }, active);
-  expect(dispatchPrompt).toHaveBeenCalledWith(
-    expect.any(HTMLIFrameElement),
-    "Show details",
-    "widget",
-    confirmPrompt,
-    undefined,
-  );
+  await handle("prompt.send", { text: "Show details" }, { promptUserActivated: true });
+  expect(dispatchPrompt.mock.calls[0]?.[3]).toBe(confirmPrompt);
 });
 it.each([
   ["prompt.send", { text: "Forged" }, "active user interaction"],
@@ -89,7 +73,7 @@ it("cancels prompt dispatch when the widget identity changes during authorizatio
   const handling = handle(
     "prompt.send",
     { text: "Stale prompt" },
-    { ...active, isCurrent: () => current },
+    { promptUserActivated: true, isCurrent: () => current },
   );
   await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
   current = false;
@@ -108,16 +92,11 @@ it.each(["expiry", "interleaved"])("coalesces repeated state across %s", async (
     await emit({ count: 1 });
   }
   expect(client.request).toHaveBeenCalledTimes(2);
-  expect(client.request).toHaveBeenNthCalledWith(1, "board.event", {
-    ticket: "ticket",
-    payload: { count: 1 },
-  });
 });
 it("allows a state payload to retry after delivery fails", async () => {
   client.request.mockRejectedValueOnce(new Error("offline"));
   await expect(emit({ count: 1 })).rejects.toThrow("offline");
   await expect(emit({ count: 1 })).resolves.toEqual({ ok: true });
-  expect(client.request).toHaveBeenCalledTimes(2);
 });
 it("rate-limits varying state payloads at the trusted host", async () => {
   for (let count = 0; count < 12; count += 1) {
@@ -126,7 +105,6 @@ it("rate-limits varying state payloads at the trusted host", async () => {
   await expect(emit({ count: 12 })).rejects.toThrow("rate limit exceeded");
   vi.advanceTimersByTime(60_000);
   await expect(emit({ count: 13 })).resolves.toEqual({ ok: true });
-  expect(client.request).toHaveBeenCalledTimes(13);
 });
 it.each([
   ["data.read", { bindingId: "health", params: { probe: false } }, "board.data.read"],

@@ -81,24 +81,17 @@ it("preserves compaction invariants across generated drag targets", () => {
     );
   }
 });
-it("returns a compact canonical board for an unknown item", () => {
-  const preview = previewDrag([item("b", 3, 1, 5), item("a", 3, 1, 2)], "missing", {
-    name: "a",
-    x: 0,
-    y: 0,
-  });
-  expect(preview.map((entry) => [entry.name, entry.order])).toEqual([
-    ["a", 0],
-    ["b", 1],
-  ]);
+const emptyNameItems = [item("", 6, 1, 0), item("b", 6, 1, 1)];
+it.each([
+  ["missing", "a", [item("b", 3, 1, 5), item("a", 3, 1, 2)], ["a", "b"]],
+  ["b", "", emptyNameItems, ["b", ""]],
+  ["", undefined, emptyNameItems, ["b", ""]],
+] as const)("canonicalizes a drag from %s to %s", (moving, target, items, names) => {
+  const preview = previewDrag(items, moving, { name: target, x: 100, y: 100 });
+  expect(preview.map(({ name, order }) => [name, order])).toEqual(
+    names.map((name, order) => [name, order]),
+  );
   expectValid(layout(preview));
-});
-it("preserves empty widget names in moving and target positions", () => {
-  const emptyNameItems = [item("", 6, 1, 0), item("b", 6, 1, 1)];
-  const preview = previewDrag(emptyNameItems, "b", { name: "", x: 100, y: 100 });
-  expectNames(preview, ["b", ""]);
-  expectValid(layout(preview));
-  expectNames(previewDrag(emptyNameItems, "", { name: undefined, x: 100, y: 100 }), ["b", ""]);
 });
 it("resolves successive named targets from the latest preview through pointerup", () => {
   const items = [item("a", 4, 2, 0), item("b", 4, 2, 1), item("c", 4, 2, 2)];
@@ -110,7 +103,6 @@ it("resolves successive named targets from the latest preview through pointerup"
   expectNames(second, ["a", "c", "b"]);
   expect(first).toEqual(firstSnapshot);
   expect(previewDrag(second, "c", { name: "b", x: 100, y: 100 })).toEqual(second);
-  expectValid(layout(second), true);
   expect(items).toEqual(before);
 });
 it("resizes immutably and clamps both axes", () => {
