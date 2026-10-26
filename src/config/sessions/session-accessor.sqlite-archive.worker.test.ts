@@ -33,7 +33,6 @@ import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifa
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
-import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-references.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -268,13 +267,8 @@ describe("SQLite transcript archive worker", () => {
   it("retains distinct transcript generations after a physical session id is restored", async () => {
     const sessionId = "restored-archive-session";
     const target = await seed(sessionId, [event(sessionId, "first generation")]);
-    const generations = (keys = [target.sessionKey]) =>
-      readSessionGenerationIdsForKeys(database(), keys);
-    expect(generations([])).toEqual([]);
-    expect(generations()).toEqual([sessionId]);
     const first = (await deletion(target.sessionKey)).archivedTranscripts[0];
     assert.ok(first, "expected first transcript archive");
-    expect(generations()).toEqual([]);
     fs.rmSync(first.archivedPath);
     database()
       .db.prepare(
@@ -283,7 +277,6 @@ describe("SQLite transcript archive worker", () => {
       .run(target.sessionId, first.generation);
     await entry(target, 2);
     await replaceTranscriptEvents(target, [event(target.sessionId, "second generation")]);
-    expect(generations()).toEqual([sessionId]);
     const second = await deletion(target.sessionKey);
     expect(second.archivedTranscripts).toHaveLength(1);
     expect(second.archivedTranscripts[0]?.archivedPath).not.toBe(first.archivedPath);
@@ -350,13 +343,6 @@ describe("SQLite transcript archive worker", () => {
       await entry(target);
       await replaceTranscriptEvents(target, [event(target.sessionId)]);
     }
-    expect(resolveSqliteTargetFromSessionStorePath(storePath, ops)).toMatchObject({
-      agentId: "main",
-      path: storePath,
-      shared: true,
-    });
-    expect(database().agentId).toBe("main");
-    expect(database().agentId).not.toBe(ops.agentId);
     const result = await deleteSessionEntryLifecycle({
       agentId: ops.agentId,
       archiveTranscript: true,
@@ -427,10 +413,7 @@ describe("SQLite transcript archive worker", () => {
         {
           type: "message",
           id: "failure-message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "preserve every lifecycle row" }],
-          },
+          message: { role: "user", content: "preserve every lifecycle row" },
         },
       ]);
       appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);

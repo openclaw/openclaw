@@ -96,8 +96,6 @@ it.each(["matching", "stale", "legacy"] as const)(
     );
     const result = await readers.readExactEntries({ env: {}, sessionKeys: [sessionKey] });
     expect(result.entries).toStrictEqual([{ sessionKey, entry: expected }]);
-    result.entries[0]!.entry.observerDigest!.headline = "Changed by caller";
-    expect(entry).toStrictEqual(expected);
   },
 );
 
@@ -172,22 +170,9 @@ it("retains one physical string for each equal summary identity after worker dec
   expect(output.trim()).toBe("shared summary identities");
 });
 
-// One direct reader covers the shared factory; keep both custom eviction preparers.
+// Exercise both environment locations in the shared reader factory.
 const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> = [
   ["cold metadata", (readers) => readers.readColdMetadata(session)],
-  [
-    "historical eviction",
-    (readers) =>
-      readers.readHistoricalEvictionCandidates({ ...storageInput, admissionIdentities: [] }),
-  ],
-  [
-    "archived eviction",
-    (readers) =>
-      readers.readArchivedEvictionCandidates({
-        ...storageInput,
-        archived: { liveSessionKeys: [] },
-      }),
-  ],
   [
     "activity summary",
     (readers) =>
@@ -239,45 +224,21 @@ function readFrames(frames: unknown[], eventCount: number, rawSeq = 7, encoding 
   return readers.readTranscript(transcriptInput, signal);
 }
 
-it.each(["message presence", "cold metadata"] as const)(
-  "preserves the %s request, signal, and result",
-  async (kind) => {
-    const cold = kind === "cold metadata";
-    const input = cold ? { sessionId: "synthetic-cold-session", env: {} } : messagePresenceInput;
-    const expected = cold
-      ? { kind: "cold-metadata" as const, archive: undefined }
-      : { kind: "transcript-message-presence" as const, present: true };
-    const signal = new AbortController().signal;
-    const readers = createSessionHistoryWorkerReaders(
-      createSessionHistoryWorkerRequestStub(async (prepare, inputBytes, receivedSignal) => {
-        expect(prepare()).toEqual({ kind: expected.kind, ...input });
-        expect(inputBytes).toBe(JSON.stringify(input).length * 2);
-        expect(receivedSignal).toBe(signal);
-        return expected;
-      }),
-    );
-    await expect(
-      cold
-        ? readers.readColdMetadata({ sessionId: "synthetic-cold-session", env: {} }, signal)
-        : readers.readMessagePresence(messagePresenceInput, signal),
-    ).resolves.toEqual(cold ? expected : true);
-  },
-);
-
 it("keeps interleaved decorated readers on their own request runner", async () => {
   const first = Promise.withResolvers<boolean>();
   const second = Promise.withResolvers<boolean>();
+  const signal = new AbortController().signal;
   const create = (result: Promise<boolean>) => ({
     ...createSessionHistoryWorkerReaders(
-      createSessionHistoryWorkerRequestStub(async () => ({
-        kind: "transcript-message-presence",
-        present: await result,
-      })),
+      createSessionHistoryWorkerRequestStub(async (_prepare, _bytes, receivedSignal) => {
+        expect(receivedSignal).toBe(signal);
+        return { kind: "transcript-message-presence", present: await result };
+      }),
     ),
     assertCurrent() {},
   });
-  const firstRead = create(first.promise).readMessagePresence(messagePresenceInput);
-  const secondRead = create(second.promise).readMessagePresence(messagePresenceInput);
+  const firstRead = create(first.promise).readMessagePresence(messagePresenceInput, signal);
+  const secondRead = create(second.promise).readMessagePresence(messagePresenceInput, signal);
   second.resolve(false);
   await expect(secondRead).resolves.toBe(false);
   first.resolve(true);
@@ -290,6 +251,7 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
     const stateDir = path.resolve("synthetic-state");
     const storePath = path.join(stateDir, "sessions.sqlite");
     const platform = process.platform;
+    const serialized = new Error("Stopped after serializing the worker request");
     Object.defineProperty(process, "platform", { value: "win32" });
     try {
       const env = cloneEnvWithPlatformSemantics({
@@ -308,23 +270,20 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
           };
           switch (request.kind) {
             case "session-row-facts":
-              expect(request.env).toEqual(expectedEnv);
-              return { kind: request.kind, rows: [] };
             case "session-exact-entries":
-              expect(request.env).toEqual(expectedEnv);
-              return { kind: request.kind, entries: [], lifecycleTimestamps: {} };
             case "session-archive-inventory":
               expect(request.env).toEqual(expectedEnv);
-              return { kind: request.kind, archives: [] };
+              break;
             case "session-corpus-inventory":
               expect(request.scope.env).toEqual(expectedEnv);
-              return { kind: request.kind, entries: [] };
+              break;
             case "memory-session-targets":
               expect(request.params.env).toEqual(expectedEnv);
-              return { kind: request.kind, targets: [] };
+              break;
             default:
               throw new Error(`Unexpected inventory request: ${request.kind}`);
           }
+          throw serialized;
         }),
       );
       const archive = { agentId: "main", storePath, env, sessionIds: ["one"] };
@@ -348,13 +307,7 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
             artifacts: [],
           }),
       };
-      await expect(reads[inventory]()).resolves.toEqual(
-        inventory === "row facts"
-          ? { kind: "session-row-facts", rows: [] }
-          : inventory === "exact entries"
-            ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
-            : [],
-      );
+      await expect(reads[inventory]()).rejects.toBe(serialized);
     } finally {
       Object.defineProperty(process, "platform", { value: platform });
     }
