@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, rename, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
@@ -530,6 +531,9 @@ it("the cutover fences old-assignment access before applying and after", async (
 // Plugin reload starts the next generation as soon as stop/dispose resolve, so
 // both must wait for the old generation's workers to exit. Worker handles are
 // private; threadId becomes -1 once a worker has exited.
+// Worker handles are private to their clients; tests read them only to observe exit.
+const workerOf = (client: object) => Reflect.get(client, "worker") as Worker | undefined;
+
 async function runningStores() {
   const f = await fixture();
   await f.save("main", "Seed");
@@ -546,8 +550,8 @@ async function runningStores() {
     opened.runtime.client.call("catalog", opened.access),
   );
   const workers = {
-    storage: (opened.runtime.client as any).worker,
-    registry: (stores.registry as any).worker,
+    storage: workerOf(opened.runtime.client)!,
+    registry: workerOf(stores.registry)!,
   };
   expect(workers.storage.threadId).toBeGreaterThan(0);
   expect(workers.registry.threadId).toBeGreaterThan(0);
@@ -567,7 +571,7 @@ it("disposal waits for workers and is final: later calls never start a worker", 
   expect(workers.storage.threadId).toBe(-1);
   expect(workers.registry.threadId).toBe(-1);
   await expect(stores.registry.call("snapshot")).rejects.toThrow(/registry stopped/);
-  expect((stores.registry as any).worker, "no registry worker restarted").toBeUndefined();
+  expect(workerOf(stores.registry), "no registry worker restarted").toBeUndefined();
 });
 
 it("the plugin instance disposes Knowledge through api.lifecycle.onDispose", async () => {
