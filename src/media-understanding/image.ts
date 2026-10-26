@@ -5,7 +5,7 @@ import {
   clampPositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { extractEmbeddedAssistantText } from "../agents/embedded-agent-utils.js";
@@ -72,10 +72,10 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
       return false;
     }
   }
-  if (typeof value !== "object") {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
     return false;
   }
-  const record = value as { id?: unknown; type?: unknown };
   const id = typeof record.id === "string" ? record.id : "";
   const type = typeof record.type === "string" ? record.type : "";
   return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
@@ -86,10 +86,10 @@ function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
     return false;
   }
   return message.content.slice(0, MAX_IMAGE_REASONING_FALLBACK_BLOCKS).some((block) => {
-    if (!block || typeof block !== "object") {
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
       return false;
     }
-    const record = block as { type?: unknown; thinking?: unknown; thinkingSignature?: unknown };
     return (
       record.type === "thinking" &&
       typeof record.thinking === "string" &&
