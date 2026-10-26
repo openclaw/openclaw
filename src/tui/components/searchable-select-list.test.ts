@@ -1,22 +1,12 @@
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import { expectText, selectByEnter, selectTheme, typeInput } from "./render.test-support.js";
 import {
   SearchableSelectList,
   type SearchableSelectItem,
   type SearchableSelectListTheme,
 } from "./searchable-select-list.js";
-
-const mockTheme: SearchableSelectListTheme = {
-  selectedPrefix: (t) => `[${t}]`,
-  selectedText: (t) => `**${t}**`,
-  description: (t) => `(${t})`,
-  scrollInfo: (t) => `~${t}~`,
-  noMatch: (t) => `!${t}!`,
-  searchPrompt: (t) => `>${t}<`,
-  searchInput: (t) => `|${t}|`,
-  matchHighlight: (t) => `*${t}*`,
-};
 
 const ansiHighlightTheme: SearchableSelectListTheme = {
   selectedPrefix: (t) => t,
@@ -39,8 +29,11 @@ const testItems = [
   item("openai/gpt-4-turbo", "GPT-4 Turbo"),
   item("google/gemini-pro", "Gemini Pro"),
 ];
-const makeList = (items: SearchableSelectItem[] = testItems, theme = mockTheme, maxVisible = 5) =>
-  new SearchableSelectList(items, maxVisible, theme);
+const makeList = (
+  items: SearchableSelectItem[] = testItems,
+  theme: SearchableSelectListTheme = selectTheme,
+  maxVisible = 5,
+) => new SearchableSelectList(items, maxVisible, theme);
 const makeAnsiList = (items: SearchableSelectItem[], maxVisible = 5) =>
   makeList(items, ansiHighlightTheme, maxVisible);
 const render = (list: SearchableSelectList, width = 80) => list.render(width).join("\n");
@@ -52,30 +45,13 @@ describe("SearchableSelectList", () => {
     expect(list.render(80).at(-1)).toBe("  network unavailable");
   });
 
-  function selectByEnter(list: SearchableSelectList) {
-    const onSelect = vi.fn<(item: SearchableSelectItem) => void>();
-    list.onSelect = onSelect;
-    list.handleInput("\r");
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    return onSelect.mock.calls[0]?.[0];
-  }
-
-  function typeInput(list: SearchableSelectList, text: string) {
-    Array.from(text).forEach((ch) => list.handleInput(ch));
-  }
-
-  function expectCursor(list: SearchableSelectList, focused: boolean) {
-    expect(list.focused).toBe(focused);
-    expect(list.render(80)[0]?.includes(CURSOR_MARKER)).toBe(focused);
-  }
-
   it("emits the hardware cursor marker only while the search input is focused", () => {
     const list = makeList();
-    expectCursor(list, false);
-    list.focused = true;
-    expectCursor(list, true);
-    list.focused = false;
-    expectCursor(list, false);
+    expect(list.focused).toBe(false);
+    for (const focused of [false, true, false]) {
+      list.focused = focused;
+      expect(list.render(80)[0]?.includes(CURSOR_MARKER)).toBe(focused);
+    }
   });
 
   it("keeps ANSI, CJK, scroll, and no-match rows within seven terminal columns", () => {
@@ -146,14 +122,13 @@ describe("SearchableSelectList", () => {
     const rendered = render(list, 160);
     const plainRendered = stripAnsi(rendered);
     expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
-    expect(plainRendered).toContain("selector-description-startselector-description-end 東京");
-    expect(plainRendered).toContain("مرحبا שלום");
-    expect(plainRendered).toContain("\u2067");
-    expect(plainRendered).toContain("\u2069");
-    for (const attack of attacks) {
-      expect(rendered).not.toContain(attack);
-    }
-    expect(rendered).not.toContain("selector-value-end\r\nمرحبا\tשלום");
+    expectText(plainRendered, [
+      "selector-description-startselector-description-end 東京",
+      "مرحبا שלום",
+      "\u2067",
+      "\u2069",
+    ]);
+    expectText(rendered, [], [...attacks, "selector-value-end\r\nمرحبا\tשלום"]);
     expect(selectByEnter(list)?.value).toBe(rawValue);
   });
 

@@ -7,6 +7,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
+import { expectText } from "./render.test-support.js";
 
 function expectUrlLink(lines: string[], url: string) {
   const line = lines.find((entry) => normalizeTestText(entry).includes(url));
@@ -47,12 +48,8 @@ describe("btw inline message", () => {
         function check(visible: string[]) {
           const lines = message.render(140);
           const raw = lines.join("\n");
-          for (const text of visible) {
-            expect(normalizeTestText(raw)).toContain(text);
-          }
-          for (const attack of ["\x1b[3J", "\x1b]52;", "\u009b3J", "\u009d0;"]) {
-            expect(raw).not.toContain(attack);
-          }
+          expectText(normalizeTestText(raw), visible);
+          expectText(raw, [], ["\x1b[3J", "\x1b]52;", "\u009b3J", "\u009d0;"]);
           expect(lines[1]).not.toMatch(/[\r\n\t]/u);
           expectUrlLink(lines, url);
           return normalizeTestText(raw);
@@ -80,10 +77,7 @@ describe("btw inline message", () => {
 
     const lines = message.render(100);
     const normalized = normalizeTestText(lines.join("\n")).replace(/[\u2067\u2069]/gu, "");
-    expect(normalized).toContain("مرحبا");
-    expect(normalized).not.toContain("# مرحبا");
-    expect(normalized).toContain("│ שלום");
-    expect(normalized).toContain("- عنصر");
+    expectText(normalized, ["مرحبا", "│ שלום", "- عنصر"], ["# مرحبا"]);
     for (const line of lines.filter((entry) => /[\u0590-\u08ff]/u.test(entry))) {
       expect(line.match(/[\u2067\u2069]/gu)).toEqual(["\u2067", "\u2069"]);
     }
@@ -95,9 +89,10 @@ describe("btw inline message", () => {
     const question = `why ${questionAttack}failed?\r\nمرحبا\tשלום`;
     const raw = new BtwInlineMessage({ question, text, isError: true }).render(100).join("\n");
     const rendered = normalizeTestText(raw);
-    expect(rendered).toContain("BTW: \u2067why failed? مرحبا שלום\u2069");
-    expect(rendered).toContain(empty ? "(no output)" : "retry **plain** safely café");
-    expect(raw).not.toContain(questionAttack);
-    expect(raw).not.toContain(empty ? "\x1b]0;hidden title\x07" : "\u009b3Jretry");
+    expectText(rendered, [
+      "BTW: \u2067why failed? مرحبا שלום\u2069",
+      empty ? "(no output)" : "retry **plain** safely café",
+    ]);
+    expectText(raw, [], [questionAttack, empty ? "\x1b]0;hidden title\x07" : "\u009b3Jretry"]);
   });
 });
