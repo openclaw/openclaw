@@ -1748,7 +1748,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-attachment-thumb--file,
 .chat-attachment-thumb--browser-annotation {
-  border-color: color-mix(in srgb, var(--text) 24%, var(--border));
+  border-color: color-mix(in srgb, var(--text) 8%, var(--border));
 }
 
 .chat-attachment-thumb--file {
