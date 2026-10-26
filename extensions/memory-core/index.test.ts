@@ -467,6 +467,8 @@ describe("memory-core plugin runtime registration", () => {
     expect(llmGetter).not.toHaveBeenCalled();
     expect(stateGetter).not.toHaveBeenCalled();
     await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
+    expect(llmGetter).not.toHaveBeenCalled();
+    expect(stateGetter).not.toHaveBeenCalled();
     const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
     if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
       throw new Error("expected memory-core host operations");
