@@ -90,9 +90,8 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    // Bun omits Error.cause, so scan unowned source edges too; owned transcript JSON is frozen.
-    // Accessors run only in the native clone; its unowned result is fully scanned below.
-    if (containsSharedMemory(value, new Set<object>(), true)) {
+    // Bun omits Error.cause, so only it needs a source scan in addition to the snapshot.
+    if (process.versions.bun && containsSharedMemory(value, new Set<object>(), true)) {
       throw new TypeError("shared memory cannot be isolated");
     }
     const cloned = structuredClone(value);

@@ -563,6 +563,8 @@ describe("before_prompt_build dispatch", () => {
     const leaf = { text: "caller" };
     const map = new Map([["leaf", leaf]]);
     const event = { prompt: "test", messages: [{ date, leaf, map }, { leaf }] };
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    onTestFinished(() => ownKeys.mockRestore());
     const runner = promptRunner([
       {
         handler: (input) => {
@@ -579,6 +581,10 @@ describe("before_prompt_build dispatch", () => {
     await runner.runBeforePromptBuild(event, {});
     expect(leaf.text).toBe("caller");
     expect(map.get("leaf")).toBe(leaf);
+    // Node preserves Error.cause, so only the detached graph needs a safety scan.
+    expect(ownKeys.mock.calls.some(([value]) => value === leaf)).toBe(
+      Boolean(process.versions.bun),
+    );
   });
 
   it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
