@@ -85,7 +85,7 @@ it.each([
     expect(countPendingQueueItems(items, inFlight)).toBe(items.length - Number(active));
     const queue = createQueue(items, cap);
     const onDrop = vi.fn();
-    const result = applyQueueDropPolicy({
+    const result = applyQueueDropPolicy<Item>({
       queue,
       inFlight,
       summarize: (item) => item.id,

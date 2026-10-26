@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createApiRegistry, createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
-import type { StreamFn } from "@openclaw/llm-core";
+import type { StreamFunction } from "@openclaw/llm-core";
 import { expect, it, vi } from "vitest";
 import { formatUserFacingAssistantErrorText } from "../agents/embedded-agent-helpers/error-text.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -26,7 +26,7 @@ it("defers provider streams until runtime transport ports are installed", async 
     provider: model.provider,
     model: model.id,
   });
-  const providerStream = vi.fn<StreamFn>(() => {
+  const providerStream = vi.fn<StreamFunction>(() => {
     expect(getAiTransportHost().plugin.wrapSimpleCompletionStream).not.toBe(inertWrapper);
     const output = createAssistantMessageEventStream();
     output.push({ type: "done", reason: "stop", message });

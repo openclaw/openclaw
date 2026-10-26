@@ -45,6 +45,7 @@ beforeEach(() => {
       provider: {
         id: "customacct",
         model: "test-model",
+        embed: async () => [0.5],
         embedBatch: async (texts: string[]) => texts.map(() => [0.5]),
       },
     }),

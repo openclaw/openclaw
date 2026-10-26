@@ -6,7 +6,6 @@ import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 const fixture = vi.hoisted(() => ({
   bootstrap: vi.fn<() => Promise<void>>(),
   worker: vi.fn<() => Promise<void>>(),
-  exit: vi.fn<() => void>(),
 }));
 vi.mock("../cli/command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: fixture.bootstrap,
@@ -24,13 +23,14 @@ vi.mock("../cli/json-output-mode.js", () => ({
   withConsoleLogsRoutedToStderrForJson: (_argv: string[], run: () => Promise<void>) => run(),
 }));
 
-const originalProcess = { argv: process.argv, title: process.title, exitCode: process.exitCode };
+const originalArgv = process.argv;
+const originalTitle = process.title;
+const originalExitCode = process.exitCode;
 
-beforeEach(async () => {
+beforeEach(() => {
   vi.resetModules();
   fixture.bootstrap.mockReset().mockResolvedValue();
   fixture.worker.mockReset().mockResolvedValue();
-  fixture.exit.mockReset();
   for (const key of ["VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID"]) {
     vi.stubEnv(key, undefined);
   }
@@ -41,47 +41,62 @@ beforeEach(async () => {
     "worker",
   ];
   process.exitCode = undefined;
-  const { defaultRuntime } = await import("../runtime.js");
-  vi.spyOn(defaultRuntime, "exit").mockImplementation(fixture.exit);
 });
 
 afterEach(() => {
-  Object.assign(process, originalProcess);
+  process.argv = originalArgv;
+  process.title = originalTitle;
+  process.exitCode = originalExitCode;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  expect(fixture.exit).not.toHaveBeenCalled();
 });
 
-it("passes the desktop preference and drains resources before finalizing exit", async () => {
-  const { requestExitAfterOneShotOutput } = await import("../cli/one-shot-exit.js");
-  const { getCliPluginInvocationResources } = await import("../cli/runtime-cleanup-scope.js");
-  const cleanupGate = createEnteredGate();
-  process.argv.push("--desktop-sharing");
-  fixture.worker.mockImplementation(async () => {
-    const resources = getCliPluginInvocationResources();
-    if (!resources) {
-      throw new Error("worker entry did not establish its cleanup owner");
+it.each([
+  { args: [], enabled: undefined, code: 0 },
+  { args: ["--desktop-sharing"], enabled: true, code: 143 },
+])(
+  "starts with desktop preference $enabled and finalizes exit $code",
+  async ({ args, enabled, code }) => {
+    const { defaultRuntime } = await import("../runtime.js");
+    const { requestExitAfterOneShotOutput } = await import("../cli/one-shot-exit.js");
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+    const { getCliPluginInvocationResources } = await import("../cli/runtime-cleanup-scope.js");
+    const cleanupGate = createEnteredGate();
+    const cleanup = vi.fn(cleanupGate.wait);
+    process.argv.push(...args);
+    fixture.worker.mockImplementation(async () => {
+      const resources = getCliPluginInvocationResources();
+      if (!resources) {
+        throw new Error("worker entry did not establish its cleanup owner");
+      }
+      resources.adopt({ release: cleanup });
+      process.exitCode = code;
+      requestExitAfterOneShotOutput();
+    });
+
+    const entry = import("./mac-worker-entry.js");
+    try {
+      await awaitGateBeforeSettlement(
+        cleanupGate.entered,
+        entry,
+        "worker entry completed before releasing its resources",
+      );
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      cleanupGate.release();
+      await entry;
     }
-    resources.adopt({ release: cleanupGate.wait });
-    process.exitCode = 143;
-    requestExitAfterOneShotOutput();
-  });
 
-  const entry = import("./mac-worker-entry.js");
-  await awaitGateBeforeSettlement(
-    cleanupGate.entered,
-    entry,
-    "worker entry completed before releasing its resources",
-  ).finally(async () => {
-    cleanupGate.release();
-    await entry;
-  });
-
-  expect(fixture.worker).toHaveBeenCalledWith({ desktopSharingEnabled: true });
-  expect(process.exitCode).toBe(143);
-});
+    expect(fixture.worker).toHaveBeenCalledExactlyOnceWith({ desktopSharingEnabled: enabled });
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(code);
+    expect(exit).not.toHaveBeenCalled();
+  },
+);
 
 it("reports bootstrap failure and finalizes an unsuccessful exit", async () => {
+  const { defaultRuntime } = await import("../runtime.js");
+  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   fixture.bootstrap.mockRejectedValue(new Error("worker bootstrap failed"));
 
@@ -90,4 +105,5 @@ it("reports bootstrap failure and finalizes an unsuccessful exit", async () => {
   expect(fixture.worker).not.toHaveBeenCalled();
   expect(stderr).toHaveBeenCalledWith("worker bootstrap failed\n");
   expect(process.exitCode).toBe(1);
+  expect(exit).not.toHaveBeenCalled();
 });

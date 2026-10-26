@@ -19,8 +19,8 @@ const SHARE_ROUTE = {
 } as const;
 
 type ChatParams = Omit<Parameters<typeof buildControlUiSessionPath>[0], "namespace">;
-type ChatCase = readonly [string, string, Omit<ChatParams, "sessionKey">?];
-type ParseCase = readonly [string, ControlUiSessionPathTarget, string?, string?];
+type ChatCase = [string, string, Omit<ChatParams, "sessionKey">?];
+type ParseCase = [string, ControlUiSessionPathTarget, string?, string?];
 
 const UUID = "12345678-90ab-cdef-1234-567890abcdef";
 const UUID_KEY = `agent:main:dashboard:${UUID}`;
@@ -76,7 +76,7 @@ describe("Control UI session URLs", () => {
       buildControlUiCatalogSharePath({ shareRoute: { ...SHARE_ROUTE, routeSegment }, threadId }),
     ).toBeNull();
   });
-  it.each([
+  it.each<ChatCase>([
     [
       "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event",
       "/chat/ops/Matrix/Channel/!Room/Org/Thread/%24Event",
@@ -115,7 +115,7 @@ describe("Control UI session URLs", () => {
       "/chat/main/deadbeef0",
       { mainKey: "deadbeef" },
     ],
-  ] satisfies readonly ChatCase[])("builds %s", (sessionKey, expected, options) => {
+  ])("builds %s", (sessionKey, expected, options) => {
     expect(buildChatPath({ sessionKey, ...options })).toBe(expected);
   });
 
@@ -147,7 +147,7 @@ describe("Control UI session URLs", () => {
     );
   });
 
-  it.each([
+  it.each<ParseCase>([
     ["/chat/main", { namespace: "chat", kind: "main", agentId: "main" }, "", "workspace"],
     ["/chat/main/main", literal("agent:main:main"), "", "workspace"],
     ["/chat/main/workspace", literal("agent:main:workspace"), "", "workspace"],
@@ -169,7 +169,7 @@ describe("Control UI session URLs", () => {
       literal(`agent:roboclaw:dashboard:${UUID}`, "roboclaw"),
       "/control",
     ],
-  ] satisfies readonly ParseCase[])("parses %s", (pathname, expected, basePath, mainKey) => {
+  ])("parses %s", (pathname, expected, basePath, mainKey) => {
     expect(parseControlUiSessionPath(pathname, basePath, mainKey)).toEqual(expected);
   });
 
@@ -208,7 +208,7 @@ describe("Control UI session URLs", () => {
     });
   });
 
-  it.each([
+  it.each<[string, string?]>([
     ["/chat/0123456789ab"],
     ["/ui/chat"],
     ["/beam/0123456789a"],

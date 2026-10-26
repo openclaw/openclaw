@@ -58,12 +58,12 @@ describe("Control UI focus locations", () => {
       desktopTarget(true, { kind: "source", value: "n:a" }),
     ],
     [{ kind: "desktop", source: " ", session: "" }, "/ui/focus/desktop", desktopTarget(), "/ui"],
-  ])("round-trips %j", (target, path, parsed = target, basePath = "") => {
+  ])("round-trips %j", (target, path, parsed, basePath = "") => {
     expect(buildControlUiFocusPath(target, basePath)).toBe(path);
     expect(parseControlUiFocusLocation(new URL(path, "https://gateway.example.test"))).toEqual({
       status: "valid",
       basePath: basePath.replace(/\/$/u, ""),
-      target: parsed,
+      target: parsed ?? target,
     });
   });
 

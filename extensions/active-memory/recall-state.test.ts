@@ -94,11 +94,13 @@ it("keeps circuit-breaker decisions scoped to the agent, provider, and model", (
   const timedOutKey = buildCircuitBreakerKey("agent-a", "provider-a", "model-a");
   recordCircuitBreakerTimeout(timedOutKey);
   expect(isCircuitBreakerOpen(timedOutKey, 1, cooldownMs)).toBe(true);
-  for (const identity of [
+  for (const [agent, provider, model] of [
     ["agent-a", "provider-b", "model-a"],
     ["agent-a", "provider-a", "model-b"],
     ["agent-b", "provider-a", "model-a"],
   ] as const) {
-    expect(isCircuitBreakerOpen(buildCircuitBreakerKey(...identity), 1, cooldownMs)).toBe(false);
+    expect(
+      isCircuitBreakerOpen(buildCircuitBreakerKey(agent, provider, model), 1, cooldownMs),
+    ).toBe(false);
   }
 });
