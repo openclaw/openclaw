@@ -87,16 +87,12 @@ for (const [initial, desired] of [
   });
 }
 
-for (const [name, options, message] of [
-  [
-    "an unconfirmed switch",
-    { acceptsChange: false },
-    "BotFather Threaded Mode could not be confirmed.",
-  ],
-  ["a failed browser close", { closeFails: true }, "BotFather browser cleanup failed."],
-]) {
-  test(`${name} fails without leaking the signed URL`, async (context) => {
-    const f = fixture(context, options);
+for (const [flag, message] of Object.entries({
+  acceptsChange: "BotFather Threaded Mode could not be confirmed.",
+  closeFails: "BotFather browser cleanup failed.",
+})) {
+  test(`${flag} failure does not leak the signed URL`, async (context) => {
+    const f = fixture(context, { [flag]: flag === "closeFails" });
     await assert.rejects(setBotFatherThreadedMode({ ...f, enabled: true }), (error) => {
       assert.equal(error.message, message);
       assert.equal(error.stack.includes(f.url), false);

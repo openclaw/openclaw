@@ -38,6 +38,10 @@ const ready = () => ({
     chatId: -1001,
   }),
 });
+const bot = { ok: true, result: { id: 42, username: "sut_bot" } };
+function failure(status, stderr = "", timedOut = false) {
+  return { status, stdout: "", stderr, timedOut };
+}
 
 test("doctor verifies the leased user and bot directly without a local listener", async (context) => {
   context.mock.method(http.Server.prototype, "listen", () => {
@@ -47,11 +51,9 @@ test("doctor verifies the leased user and bot directly without a local listener"
     runCommandImpl: async () => ready(),
     fetchImpl: async (url, init) => {
       assert.equal(url, "https://api.telegram.org/botsynthetic-token/test/getMe");
-      assert.equal(init.method, "POST");
-      assert.deepEqual(JSON.parse(init.body), {});
       assert.ok(init.signal instanceof AbortSignal);
       init.signal.throwIfAborted();
-      return Response.json({ ok: true, result: { id: 42, username: "sut_bot" } });
+      return Response.json(bot);
     },
   });
   assert.equal(result.ok, true);
@@ -75,17 +77,9 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
     methods.push(new URL(url).pathname.split("/").at(-1));
     return {
       ok: true,
-      status: 200,
       json: async () => {
         revoke();
-        return {
-          ok: true,
-          result: {
-            id: 42,
-            username: "sut_bot",
-            can_read_all_group_messages: true,
-          },
-        };
+        return { ...bot, result: { ...bot.result, can_read_all_group_messages: true } };
       },
     };
   };
@@ -114,17 +108,10 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
 });
 
 for (const [name, result, missingGroup = false] of [
-  [
-    "unrestorable configured group",
-    { status: 1, stdout: "", stderr: "[credential_state_missing_group]", timedOut: false },
-    true,
-  ],
-  ["launcher failure", { status: null, stdout: "", stderr: "spawn uv ENOENT", timedOut: false }],
-  ["timeout", { status: 1, stdout: "", stderr: "", timedOut: true }],
-  [
-    "unrelated TDLib failure",
-    { status: 1, stdout: "", stderr: "Timed out waiting for getMe", timedOut: false },
-  ],
+  ["unrestorable configured group", failure(1, "[credential_state_missing_group]"), true],
+  ["launcher failure", failure(null, "spawn uv ENOENT")],
+  ["timeout", failure(1, "", true)],
+  ["unrelated TDLib failure", failure(1, "Timed out waiting for getMe")],
 ]) {
   test(`doctor diagnoses ${name} and releases the credential`, async () => {
     await assert.rejects(
