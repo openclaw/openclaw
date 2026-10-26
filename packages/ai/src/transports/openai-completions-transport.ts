@@ -119,16 +119,15 @@ function createSseDoneDetector() {
     lineOverflowed = false;
   };
   const observeText = (text: string) => {
-    for (const char of text) {
-      if (char === "\n" || char === "\r") {
+    const lines = text.split(/[\r\n]/);
+    for (let index = 0; index < lines.length; index++) {
+      if (index > 0) {
         finishLine();
-        continue;
       }
-      if (!lineOverflowed && line.length < SSE_DONE_MAX_LINE_CHARS) {
-        line += char;
+      const segment = lines[index];
+      if (!lineOverflowed && line.length + segment.length <= SSE_DONE_MAX_LINE_CHARS) {
+        line += segment;
       } else {
-        // Never let truncation turn a suffix of a large data line into a
-        // standalone terminal marker.
         lineOverflowed = true;
       }
     }
