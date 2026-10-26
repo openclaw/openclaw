@@ -26,12 +26,6 @@ function mockResponse(response: Response) {
 
 const endpoint = `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`;
 const mockCatalog = (data: unknown[], status = 200) => mockResponse(jsonResponse({ data }, status));
-const tokenRow = (id: string, context_window: number, max_tokens: number) => ({
-  id,
-  name: id,
-  context_window,
-  max_tokens,
-});
 const pricedModel = (id: string, input: number, output: number, cacheRead = 0, cacheWrite = 0) => ({
   id,
   cost: { input, output, cacheRead, cacheWrite },
@@ -81,26 +75,12 @@ it("propagates a malformed model list row", async () => {
   expect(release).toHaveBeenCalledOnce();
 });
 
-it("falls back from malformed live token metadata", async () => {
-  mockCatalog([
-    tokenRow("anthropic/claude-opus-4.6", -1, 128_000.5),
-    tokenRow("custom/provider-model", Number.POSITIVE_INFINITY, 0),
-  ]);
-
-  expect(
-    (await discoverVercelAiGatewayModels()).map((m) => [m.id, m.contextWindow, m.maxTokens]),
-  ).toEqual([
-    ["anthropic/claude-opus-4.6", 1_000_000, 128_000],
-    ["custom/provider-model", 200_000, 128_000],
-  ]);
-});
-
-it.each(["1e400", "1e308"])("handles price overflow (%s) and valid rates", async (price) => {
+it.each(["1e400", "1e308"])("normalizes limits and prices (%s)", async (price) => {
   // Keep the wire number: JSON.stringify would turn numeric Infinity into null.
   const release = mockResponse(
     new Response(`{"data":[
-            {"id":"anthropic/claude-opus-4.6","pricing":{"input":${price}}},
-            {"id":"custom/partly-priced","pricing":{"input":${price},"output":0.000001}},
+            {"id":"anthropic/claude-opus-4.6","name":"Opus","context_window":-1,"max_tokens":128000.5,"pricing":{"input":${price}}},
+            {"id":"custom/partly-priced","context_window":1e400,"max_tokens":0,"pricing":{"input":${price},"output":0.000001}},
             {"id":"custom/valid","pricing":{"input":0.000002,"output":"3.5e-6","input_cache_read":"0x10","input_cache_write":-0.000001}}
           ]}`),
   );
@@ -112,6 +92,10 @@ it.each(["1e400", "1e308"])("handles price overflow (%s) and valid rates", async
     pricedModel("custom/partly-priced", 0, 1),
     pricedModel("custom/valid", 2, 3.5),
   ]);
+  expect(models.slice(0, 2).map((m) => [m.contextWindow, m.maxTokens])).toEqual([
+    [1_000_000, 128_000],
+    [200_000, 128_000],
+  ]);
   expect(release).toHaveBeenCalledOnce();
 });
 
@@ -119,7 +103,7 @@ it("lists only scoped models using the configured key", async () => {
   const { registerSingleProviderPlugin } = await import("openclaw/plugin-sdk/plugin-test-runtime");
   const { default: plugin } = await import("./index.js");
   const provider = await registerSingleProviderPlugin(plugin);
-  mockCatalog([tokenRow("zai/glm-5.3", 1_000_000, 131_072)]);
+  mockCatalog([{ id: "zai/glm-5.3", context_window: 1_000_000, max_tokens: 131_072 }]);
 
   const result = await provider.catalog?.run({
     config: {},
