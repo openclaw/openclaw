@@ -96,24 +96,40 @@ vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => 
     },
   };
 });
-describe("cleanup races", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cleanup-race-");
-  type Events = Parameters<typeof replaceTranscript>[1];
-
-  let tempDir: string;
-  let storePath: string;
-  let now: number;
-  beforeEach(() => {
-    hooks.synchronous = false;
-    tempDir = sessionDirs.make();
-    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    now = Date.now();
-  });
+// Suites are sequential; each keeps its original directory lifetime and hook reset.
+let storePath: string;
+let tempDir: string;
+function setupCleanupSuite(
+  synchronous: boolean,
+  cleanup: Parameters<typeof useSessionStoreTempDirs>[0] = afterAll,
+  restoreMocks = false,
+) {
   afterEach(() => {
     hooks.before = undefined;
     hooks.after = undefined;
+    hooks.afterSync = undefined;
     hooks.observe = undefined;
     hooks.publicationFailure = undefined;
+    if (restoreMocks) {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
+  const dirs = useSessionStoreTempDirs(cleanup, "openclaw-cleanup-race-");
+  beforeEach(() => {
+    hooks.synchronous = synchronous;
+    tempDir = dirs.make();
+    storePath = path.join(tempDir, "agents/main/sessions/sessions.json");
+  });
+}
+
+describe("cleanup races", () => {
+  setupCleanupSuite(false);
+  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
+  type Events = Parameters<typeof replaceTranscript>[1];
+  let now: number;
+  beforeEach(() => {
+    now = Date.now();
   });
 
   async function seed(
@@ -154,7 +170,6 @@ describe("cleanup races", () => {
       nowMs: now,
       ...options,
     });
-  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
   const deletion = (sessionKey: string) =>
     deleteLifecycle({
       archiveTranscript: true,
@@ -405,22 +420,7 @@ describe("cleanup races", () => {
 });
 
 describe("generation cleanup races", () => {
-  const sessionDirs = useSessionStoreTempDirs(
-    afterAll,
-    "openclaw-session-generation-cleanup-race-",
-  );
-
-  let storePath: string;
-
-  beforeEach(() => {
-    hooks.synchronous = true;
-    storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
-  });
-
-  afterEach(() => {
-    hooks.afterSync = undefined;
-    hooks.observe = undefined;
-  });
+  setupCleanupSuite(true);
 
   async function fixture(
     sessionKey: string,
@@ -625,26 +625,16 @@ describe("generation cleanup races", () => {
 });
 
 describe("cleanup reclamation", () => {
+  setupCleanupSuite(true, afterEach, true);
+  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
   const staleEntry = { deleted: false, expectedEntryMismatch: true };
   function metadata(now: number, runId = "cleanup-reclamation-marker") {
     return { type: "metadata", runId, timestamp: new Date(now - 600_000).toISOString() };
   }
 
-  let storePath: string;
-  beforeEach(() => {
-    hooks.synchronous = true;
-    storePath = path.join(tempDirs.make(), "agents/main/sessions/sessions.json");
-  });
-  afterEach(() => {
-    hooks.afterSync = undefined;
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  });
-  const tempDirs = useSessionStoreTempDirs(afterEach, "openclaw-session-cleanup-reclamation-");
   function scope(sessionId: string) {
     return { sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
   }
-  const database = () => openOpenClawAgentDatabase(databaseOptionsFor(storePath));
   const cleanup = (nowMs: number, options: Partial<Parameters<typeof cleanupArtifacts>[0]> = {}) =>
     cleanupArtifacts({
       storePath,
