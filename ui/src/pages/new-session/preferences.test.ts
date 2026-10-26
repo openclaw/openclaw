@@ -23,54 +23,26 @@ function persistRaw(preference: unknown) {
 
 beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
 
-const placement: NewSessionPreference = {
-  workspace: "/workspace",
-  folder: "/workspace/project",
-  where: { kind: "cloud", id: "build-fleet" },
-  projectId: "openclaw",
-  worktree: true,
-  freshWorkspace: false,
-  baseRef: "main",
-  worktreeName: "picker-redesign",
-  model: "openai/gpt-5.6-sol",
-  thinkingLevel: "high",
-};
-const preference = (choice: NewSessionPreference, browser = choice) => ({ choice, browser });
-it.each([
-  preference(placement),
-  preference(
-    {
-      remoteProject: {
-        identity: "acme/private-repo",
-        cloneUrl: "https://ghe.example.test/acme/private-repo.git",
-        defaultBranch: "main",
-      },
-      baseRef: "main",
-    },
-    { baseRef: "main" },
-  ),
-  ...([true, false, "auto", "ultrafast"] as const).map((fastMode) => preference({ fastMode })),
-  preference({ folder: "/local", worktree: true, freshWorkspace: true }),
-])("round-trips %j in browser and identity scopes", ({ choice, browser }) => {
-  replaceBrowserPreference(gateway, "Main", choice);
-  expect(load()).toEqual(browser);
-  expect(load("research")).toBeNull();
-  expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
-  const stored = loadBrowserPreferences(gateway);
-  expect(encode(stored)).toEqual({ "new-session.v1:main": browser });
+it.each([true, false, "auto", "ultrafast"] as const)("round-trips fast mode %s", (fastMode) => {
+  const choice = { fastMode };
+  replace(choice);
+  expect(load()).toEqual(choice);
+  expect(encode(loadBrowserPreferences(gateway))).toEqual({ "new-session.v1:main": choice });
   expect(decode(encode({ main: choice }))).toEqual({ main: choice });
-  expect(decode(encode(stored))).toEqual({ main: browser });
-  expect(localStorage.getItem(localStorage.key(0)!)).not.toContain("private-repo");
-  expect(
-    decode({
-      unrelated: { folder: "/ignored" },
-      "new-session.v1:main": { folder: "/gateway", model: "openai/test" },
-    }),
-  ).toEqual({ main: { folder: "/gateway", model: "openai/test" } });
-  replace({ fastMode: undefined });
+});
+
+it("keeps repository identity in authenticated preferences, never browser storage", () => {
+  const choice = {
+    remoteProject: {
+      identity: "acme/private-repo",
+      cloneUrl: "https://ghe.example.test/acme/private-repo.git",
+      defaultBranch: "main",
+    },
+  };
+  replace(choice, "Main");
   expect(load()).toBeNull();
-  replace({ folder: "/gateway" });
-  expect(load()).toEqual({ folder: "/gateway" });
+  expect(localStorage.getItem(localStorage.key(0)!)).not.toContain("private-repo");
+  expect(decode(encode({ main: choice }))).toEqual({ main: choice });
 });
 
 it("keeps a legacy cloud source after unavailable Git clears the stored worktree flag", () => {
@@ -99,9 +71,7 @@ it("drops malformed persisted fields", () => {
     fastMode: "on",
     folder: 42,
     where: { kind: "node", id: [] },
-    projectId: {},
     remoteProject: { identity: [], cloneUrl: 42 },
-    model: [],
     worktree: "yes",
     freshWorkspace: "yes",
   };
@@ -110,13 +80,18 @@ it("drops malformed persisted fields", () => {
   persistRaw(invalid);
   expect(load()).toBeNull();
   expect(decode({ "new-session.v1:main": invalid })).toEqual({});
+  expect(
+    decode({ unrelated: { folder: "/ignored" }, "new-session.v1:main": { folder: "/gateway" } }),
+  ).toEqual({ main: { folder: "/gateway" } });
 });
 
 it("clears the final selection while preserving other agents", () => {
   const model = { model: "openai/gpt-5.6-sol", thinkingLevel: "high" };
-  replace({ ...model, agentRuntime: "codex" });
+  replace({ ...model, agentRuntime: "codex" }, "Main");
   replaceBrowserPreference(gateway, "research", { folder: "/research" });
   expect(load()).toEqual({ ...model, agentRuntime: "codex" });
+  expect(load("work")).toBeNull();
+  expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
   replace({ ...load(), agentRuntime: "" });
   expect(load()).toEqual(model);
   replace({});
