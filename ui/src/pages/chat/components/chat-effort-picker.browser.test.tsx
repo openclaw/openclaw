@@ -393,6 +393,7 @@ it("restores the remembered permitted Daybreak choice and recovers an unavailabl
   await userEvent.click(toggle());
   expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
   await draw({ requested: "daybreak_red", programs: undefined });
+  expect(host!.textContent).not.toContain("unavailable");
   expect(toggle().disabled).toBe(false);
   await userEvent.click(toggle());
   expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");

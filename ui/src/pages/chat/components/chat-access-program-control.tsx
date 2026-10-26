@@ -31,7 +31,12 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
   const enabled = () => selected() !== undefined && selected() !== "standard";
   const unavailable = () => {
     const current = selected();
-    return current && current !== "standard" && !programs().includes(current) ? current : undefined;
+    return props.programs !== undefined &&
+      current &&
+      current !== "standard" &&
+      !programs().includes(current)
+      ? current
+      : undefined;
   };
   return (
     <Show when={programs().length > 0 || enabled()}>

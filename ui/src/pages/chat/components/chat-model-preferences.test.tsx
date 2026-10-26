@@ -408,9 +408,11 @@ it("retains the Access selection without borrowing entitlement from another runt
   const options = () => [
     ...view.container.querySelectorAll<HTMLButtonElement>("[data-chat-access-option]"),
   ];
-  const unavailable = () => view.container.querySelector('[aria-disabled="true"]')?.textContent;
+  const unavailable = () =>
+    view.container.querySelector('.chat-controls__access-options [aria-disabled="true"]')
+      ?.textContent;
   expect(options()).toHaveLength(0);
-  expect(unavailable()).toContain("Red");
+  expect(unavailable()).toBeUndefined();
   view.update({ selectedAgentRuntime: "openclaw" });
   expect(options().map((option) => option.textContent)).toEqual(["Blue"]);
   expect(unavailable()).toContain("unavailable");
@@ -421,7 +423,7 @@ it("retains the Access selection without borrowing entitlement from another runt
   view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });
   expect(options()).toHaveLength(0);
   view.update({ requestedAccessProgram: "daybreak_red" });
-  expect(unavailable()).toContain("Red");
+  expect(unavailable()).toBeUndefined();
   expect(options()).toHaveLength(0);
   view.update({
     modelCatalogState: { hasSnapshot: true, status: "ready" },
