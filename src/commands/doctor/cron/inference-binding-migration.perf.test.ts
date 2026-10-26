@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-with-lock.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
@@ -70,39 +69,17 @@ it("shares runtime preparation across mixed-provider cron repairs without changi
       const load = vi.spyOn(PluginLoaderCacheState.prototype, "beginLoad");
       const clone = globalThis.structuredClone;
       let configClones = 0;
-      // Bench runs expose GC to separate retained migration state from cold test setup.
-      globalThis.gc?.();
-      const startHeap = process.memoryUsage().heapUsed;
-      let peakHeap = startHeap;
       vi.spyOn(globalThis, "structuredClone").mockImplementation((value, options) => {
         if (value && typeof value === "object" && "agents" in value && "plugins" in value) {
           configClones++;
         }
-        peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed);
         return clone(value, options);
       });
       try {
-        const start = performance.now();
         const result = await withDoctorConfigMaintenance(() =>
           maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
         );
-        const elapsedMs = performance.now() - start;
-        peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed);
-        globalThis.gc?.();
-        const retainedHeap = process.memoryUsage().heapUsed;
         const repaired = (await loadCronJobsStore(storePath)).jobs;
-        console.log(
-          JSON.stringify({
-            count,
-            configBytes: JSON.stringify(cfg).length,
-            configClones,
-            registryLoads: load.mock.calls.length,
-            startHeapMiB: Math.round(startHeap / 1048576),
-            peakHeapMiB: Math.round(peakHeap / 1048576),
-            retainedHeapMiB: Math.round(retainedHeap / 1048576),
-            elapsedMs,
-          }),
-        );
         expect(result.warnings).toEqual([]);
         expect(repaired).toEqual(
           jobs.map((job, i) =>

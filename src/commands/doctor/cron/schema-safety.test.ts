@@ -24,6 +24,7 @@ type FutureSchemaFixture = Awaited<ReturnType<typeof createFixture>>;
 
 let tempRoot: string | undefined;
 let fixtureDatabase: DatabaseSync | undefined;
+type Operation = (cfg: OpenClawConfig) => Promise<unknown>;
 const futureSchemaSql = `
   CREATE TABLE preserved_sentinel (value TEXT NOT NULL) STRICT;
   INSERT INTO preserved_sentinel (value) VALUES ('keep-me');
@@ -61,12 +62,7 @@ async function createFixture(futureSchema = true) {
     await writeFutureSchema(databasePath);
   }
 
-  return {
-    cfg: { cron: { store: storePath } } as OpenClawConfig,
-    databasePath,
-    storePath,
-    quarantinePath,
-  };
+  return { cfg: { cron: { store: storePath } }, databasePath, storePath, quarantinePath };
 }
 
 async function snapshotDirectory(directory: string) {
@@ -79,21 +75,18 @@ async function snapshotDirectory(directory: string) {
 }
 
 const snapshotFixture = ({ databasePath, storePath }: FutureSchemaFixture) =>
-  Promise.all([
-    snapshotDirectory(path.dirname(databasePath)),
-    snapshotDirectory(path.dirname(storePath)),
-  ]);
+  Promise.all([databasePath, storePath].map((file) => snapshotDirectory(path.dirname(file))));
 
 async function expectSchemaRefusalWithoutMutation(
   fixture: FutureSchemaFixture,
-  operation: () => Promise<unknown>,
+  operation: Operation = entrypoints.noninteractive,
 ): Promise<void> {
   const before = await snapshotFixture(fixture);
-  await expect(operation()).rejects.toSatisfy(isSqliteSchemaVersionError);
+  await expect(operation(fixture.cfg)).rejects.toSatisfy(isSqliteSchemaVersionError);
   await expect(snapshotFixture(fixture)).resolves.toEqual(before);
 }
 
-const entrypoints: Record<string, (cfg: OpenClawConfig) => Promise<unknown>> = {
+const entrypoints = {
   health: (cfg) => collectLegacyCronStoreHealthFindings({ cfg }),
   interactive: (cfg) =>
     maybeRepairLegacyCronStore({ cfg, options: {}, prompter: { confirm: vi.fn() } }),
@@ -101,13 +94,13 @@ const entrypoints: Record<string, (cfg: OpenClawConfig) => Promise<unknown>> = {
   policyPlanning: (cfg) => collectCronCodexRuntimePolicyTargetsReadOnly({ cfg }),
   policyCommit: (cfg) =>
     repairCronCodexModelRefsAfterConfigWrite({ migrateCodexModelRefs: true, cfg }),
-};
+} satisfies Record<string, Operation>;
 
 it.each(Object.entries(entrypoints))(
   "fails closed without mutation during %s",
   async (_name, operation) => {
     const fixture = await createFixture();
-    await expectSchemaRefusalWithoutMutation(fixture, () => operation(fixture.cfg));
+    await expectSchemaRefusalWithoutMutation(fixture, operation);
   },
 );
 
@@ -118,9 +111,7 @@ it.each(["absent", "retired"])("fails closed with %s legacy source files", async
   } else {
     await fs.writeFile(fixture.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf8");
   }
-  await expectSchemaRefusalWithoutMutation(fixture, () =>
-    repairLegacyCronStoreWithoutPrompt({ cfg: fixture.cfg }),
-  );
+  await expectSchemaRefusalWithoutMutation(fixture);
 });
 
 it("preserves active WAL artifacts while rejecting the future schema", async () => {
@@ -133,9 +124,7 @@ it("preserves active WAL artifacts while rejecting the future schema", async () 
       ${futureSchemaSql}
     `);
 
-  await expectSchemaRefusalWithoutMutation(fixture, () =>
-    maybeRepairLegacyCronStore({ cfg: fixture.cfg, options: {}, prompter: { confirm: vi.fn() } }),
-  );
+  await expectSchemaRefusalWithoutMutation(fixture, entrypoints.interactive);
 });
 
 it("fails closed if the schema advances between inspection and repair", async () => {
@@ -146,7 +135,7 @@ it("fails closed if the schema advances between inspection and repair", async ()
   closeOpenClawStateDatabaseForTest();
   await writeFutureSchema(fixture.databasePath);
 
-  await expectSchemaRefusalWithoutMutation(fixture, () =>
-    applyLegacyCronStoreRepair({ cfg: fixture.cfg, state: state! }),
+  await expectSchemaRefusalWithoutMutation(fixture, (cfg) =>
+    applyLegacyCronStoreRepair({ cfg, state: state! }),
   );
 });

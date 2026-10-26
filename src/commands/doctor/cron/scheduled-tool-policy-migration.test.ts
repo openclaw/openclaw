@@ -31,16 +31,10 @@ function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 it.each([
-  {
-    label: "agent mismatch",
-    owner: { ...creator, agentId: "other", sessionKey: directSessionKey },
-  },
-  {
-    label: "encoded account mismatch",
-    owner: { ...creator, sessionKey: directSessionKey, accountId: "personal" },
-  },
-])("does not guess authority for $label", ({ owner }) => {
-  const raw = job({ owner });
+  ["agent mismatch", { agentId: "other" }],
+  ["encoded account mismatch", { accountId: "personal" }],
+] as const)("does not guess authority for %s", (_label, overrides) => {
+  const raw = job({ owner: { ...creator, sessionKey: directSessionKey, ...overrides } });
   const result = normalizeStoredCronJobs([raw]);
   expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
   expect(raw.scheduledToolPolicy).toBeUndefined();
@@ -113,12 +107,10 @@ it("does not require tool authority for command payloads without a trigger", () 
 });
 
 it("reports auto-recoverable and ambiguous jobs through the doctor result", () => {
-  const ambiguous = job({
-    id: "ambiguous",
-    name: "Ambiguous",
-    owner: { agentId: "main", sessionKey },
-  });
-  const result = normalizeStoredCronJobs([job(), ambiguous]);
+  const result = normalizeStoredCronJobs([
+    job(),
+    job({ id: "ambiguous", name: "Ambiguous", owner: { agentId: "main", sessionKey } }),
+  ]);
 
   expect(result.issues.migratedScheduledToolPolicy).toBe(1);
   expect(result.legacyScheduledToolPolicyJobs).toEqual(["Ambiguous"]);
