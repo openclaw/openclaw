@@ -14,6 +14,14 @@ const config = (
 const modelThinking = (key: string, thinking?: string | boolean) => ({
   [key]: { params: { thinking } },
 });
+const resolveFor =
+  (
+    provider: string,
+    model: string,
+    options: Partial<Parameters<typeof resolveThinkingDefault>[0]> = {},
+  ) =>
+  (cfg: OpenClawConfig) =>
+    resolveThinkingDefault({ ...options, cfg, provider, model });
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
@@ -27,16 +35,12 @@ function policyResolver(provider: string, model: string, agentId?: string, agent
   if (!resolveThinkingProfile) {
     throw new Error(`Missing thinking policy for ${provider}`);
   }
-  return (cfg: OpenClawConfig) =>
-    resolveThinkingDefault({
-      cfg,
-      provider,
-      model,
-      agentId,
-      agentRuntime,
-      catalog: [{ provider, id: model, name: model, reasoning: true }],
-      providerPolicySource: { providers: [{ provider: { id: provider, resolveThinkingProfile } }] },
-    });
+  return resolveFor(provider, model, {
+    agentId,
+    agentRuntime,
+    catalog: [{ provider, id: model, name: model, reasoning: true }],
+    providerPolicySource: { providers: [{ provider: { id: provider, resolveThinkingProfile } }] },
+  });
 }
 
 describe("resolveThinkingDefault", () => {
@@ -49,25 +53,13 @@ describe("resolveThinkingDefault", () => {
       { thinkingDefault: "low", models: modelThinking(key, "high") },
       { thinkingDefault: agentDefault, models: modelThinking(key, thinking) },
     );
-    expect(
-      resolveThinkingDefault({
-        cfg,
-        provider: "fixture",
-        model: "reasoning-model",
-        agentId: "alpha",
-      }),
-    ).toBe(expected);
+    expect(resolveFor("fixture", "reasoning-model", { agentId: "alpha" })(cfg)).toBe(expected);
   });
 
   it("accepts legacy duplicated OpenRouter keys for per-model thinking", () => {
     const model = "openrouter/hunter-alpha";
-    expect(
-      resolveThinkingDefault({
-        cfg: config({ models: modelThinking(`openrouter/${model}`, "high") }),
-        provider: "openrouter",
-        model,
-      }),
-    ).toBe("high");
+    const cfg = config({ models: modelThinking(`openrouter/${model}`, "high") });
+    expect(resolveFor("openrouter", model)(cfg)).toBe("high");
   });
 
   it("honors configured anthropic/claude-opus-5 policy with reasoning=true", () => {
@@ -105,8 +97,6 @@ describe("resolveThinkingDefault", () => {
       api: "google-generative-ai",
       models: [modelDefinition("gemma-4-26b-a4b-it", { reasoning: false })],
     });
-    expect(resolveThinkingDefault({ cfg, provider: "google", model: "gemma-4-26b-a4b-it" })).toBe(
-      "off",
-    );
+    expect(resolveFor("google", "gemma-4-26b-a4b-it")(cfg)).toBe("off");
   });
 });

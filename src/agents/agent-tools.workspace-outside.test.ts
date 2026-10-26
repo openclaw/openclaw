@@ -28,9 +28,8 @@ const guardedRead = (workspaceDir: string) =>
 describe("memory filesystem policy", () => {
   let workspaceDir: string;
 
-  beforeEach(async () => {
-    workspaceDir = path.join(tempDirs.make("openclaw-workspace-outside-"), "workspace");
-    await fs.mkdir(workspaceDir);
+  beforeEach(() => {
+    workspaceDir = tempDirs.make("openclaw-workspace-outside-");
   });
 
   it("makes only missing canonical daily-memory reads implicitly optional", async () => {

@@ -24,8 +24,9 @@ const owners: PluginMetadataSnapshotOwnerMaps = {
   ],
   providerRequests: new Map([["openai", { family: "prepared-openai-family" }]]),
 };
-const preparedModel = () =>
-  attachModelProviderRequestRouteFacts(
+
+it("keeps prepared metadata for headers, SSRF posture, and projected routes", () => {
+  const model = attachModelProviderRequestRouteFacts(
     makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.6-luna",
       provider: "openai",
@@ -34,9 +35,6 @@ const preparedModel = () =>
     }),
     owners,
   );
-
-it("keeps prepared metadata for headers, SSRF posture, and projected routes", () => {
-  const model = preparedModel();
   const host = getAiTransportHost();
   const route = { model, provider: model.provider, api: model.api, baseUrl: model.baseUrl };
   const request = { ...route, capability: "llm" as const, transport: "stream" as const };
