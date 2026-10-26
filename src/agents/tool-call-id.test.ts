@@ -93,13 +93,24 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       result(native, "identity", true),
       result(foreign, "readme", true),
     ]);
-    const out = sanitize(input, "strict", { preserveNativeAnthropicToolUseIds: true });
+    let optionEnumerations = 0;
+    const options = new Proxy(
+      { preserveNativeAnthropicToolUseIds: true },
+      {
+        ownKeys(target) {
+          optionEnumerations++;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const out = sanitize(input, "strict", options);
     expect((out[0] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       toolUse(native, "IDENTITY.md"),
       toolUse("call123fc123", "README.md"),
     ]);
     expect(out[1]).toMatchObject({ toolCallId: native, toolUseId: native });
     expect(out[2]).toMatchObject({ toolCallId: "call123fc123", toolUseId: "call123fc123" });
+    expect(optionEnumerations).toBe(0);
   });
 
   const replayOptions = { preserveReplaySafeThinkingToolCallIds: true, allowedToolNames: ["read"] };

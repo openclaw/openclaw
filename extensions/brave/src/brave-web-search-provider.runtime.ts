@@ -191,14 +191,6 @@ function logBraveHttp(
   braveHttpLogger.info(`brave http ${event}`, meta);
 }
 
-function resolveBraveBaseUrl(braveConfig: { baseUrl?: unknown } | undefined): string {
-  const configured = readConfiguredSecretString(
-    braveConfig?.baseUrl,
-    "plugins.entries.brave.config.webSearch.baseUrl",
-  );
-  return configured?.replace(/\/+$/u, "") || DEFAULT_BRAVE_BASE_URL;
-}
-
 async function braveEndpointTargetsPrivateNetwork(
   url: URL,
   signal?: AbortSignal,
@@ -272,7 +264,11 @@ export async function executeBraveSearch(
 
   const braveConfig = asNonArrayRecord(searchConfig?.brave);
   const braveMode = resolveBraveMode(braveConfig);
-  const braveBaseUrl = resolveBraveBaseUrl(braveConfig);
+  const configuredBraveBaseUrl = readConfiguredSecretString(
+    braveConfig?.baseUrl,
+    "plugins.entries.brave.config.webSearch.baseUrl",
+  );
+  const braveBaseUrl = configuredBraveBaseUrl?.replace(/\/+$/u, "") || DEFAULT_BRAVE_BASE_URL;
   // One deadline owns classification, transport, response consumption, and cache publication.
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: resolveSearchTimeoutSeconds(searchConfig) * 1_000,

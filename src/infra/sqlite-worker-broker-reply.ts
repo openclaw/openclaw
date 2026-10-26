@@ -278,91 +278,6 @@ function prepareSqliteWorkerRequest(job: Job): SqliteWorkerRequest {
   return { ...request, type: "execute-start", transfer };
 }
 
-function decodeSqliteWorkerReplyValue(
-  job: Job,
-  reply: Extract<SqliteWorkerReply, { ok: true }>,
-):
-  | { type: "complete"; value: unknown }
-  | {
-      type: "continue";
-      request: Extract<SqliteWorkerRequest, { type: "result-next" | "execute-frame" }>;
-    } {
-  if (reply.input === "next") {
-    const transfer = job.inputTransfer;
-    if (!transfer || reply.transfer) {
-      throw new Error("SQLite worker requested unexpected command input");
-    }
-    const frame = transfer.producer.next(transfer.id);
-    const input = ownedWorkerBytes(serialize(frame));
-    if (input.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
-      throw new Error("SQLite worker input frame exceeds the transport byte limit");
-    }
-    if (frame.done) {
-      transfer.producer.end(transfer.id);
-      job.inputTransfer = undefined;
-    }
-    return {
-      type: "continue",
-      request: { type: "execute-frame", id: job.request.id, actor: job.request.actor, input },
-    };
-  }
-  if (job.inputTransfer) {
-    throw new Error("SQLite worker completed before receiving its command input");
-  }
-  let value: unknown;
-  if (reply.transfer === "start") {
-    // SAFETY: The matching worker emits this private handle; framing validates its records.
-    const handle = deserialize(reply.value) as SqliteWorkerTransferHandle;
-    if (
-      job.request.type !== "execute" ||
-      job.transfer ||
-      handle.kinds.length !== 1 ||
-      handle.kinds[0] !== "result"
-    ) {
-      throw new Error("SQLite worker returned an unexpected result transfer");
-    }
-    const transfer: NonNullable<Job["transfer"]> = {
-      id: handle.id,
-      value: undefined,
-      receiver: createSqliteWorkerTransferReceiver(handle, (record) => {
-        transfer.value = record.value;
-      }),
-    };
-    job.transfer = transfer;
-  } else if (reply.transfer === "frame") {
-    const transfer = job.transfer;
-    if (!transfer) {
-      throw new Error("SQLite worker returned an unexpected result frame");
-    }
-    // SAFETY: The matching worker emits frames; the shared receiver validates their sequence and bounds.
-    const frame = deserialize(reply.value) as SqliteWorkerTransferFrame;
-    const counts = transfer.receiver.accept(frame);
-    if (counts) {
-      if (counts.length !== 1 || counts[0]?.[1] !== 1) {
-        throw new Error("SQLite worker returned an incomplete result transfer");
-      }
-      value = transfer.value;
-      job.transfer = undefined;
-    }
-  } else {
-    if (job.transfer) {
-      throw new Error("SQLite worker ended its result transfer without completion");
-    }
-    value = deserialize(reply.value);
-  }
-  return job.transfer
-    ? {
-        type: "continue",
-        request: {
-          type: "result-next",
-          id: job.request.id,
-          actor: job.request.actor,
-          transferId: job.transfer.id,
-        },
-      }
-    : { type: "complete", value };
-}
-
 function decodeSqliteWorkerReplyError(
   error: Extract<SqliteWorkerReply, { ok: false }>["error"],
 ): Error {
@@ -484,18 +399,87 @@ export function receiveSqliteWorkerReply(
   }
   let value: unknown;
   try {
-    const result = runWithMainThreadTask("worker:sqlite:reply-decode", () =>
-      decodeSqliteWorkerReplyValue(job, reply),
+    const continuation = runWithMainThreadTask(
+      "worker:sqlite:reply-decode",
+      (): Extract<SqliteWorkerRequest, { type: "result-next" | "execute-frame" }> | undefined => {
+        if (reply.input === "next") {
+          const transfer = job.inputTransfer;
+          if (!transfer || reply.transfer) {
+            throw new Error("SQLite worker requested unexpected command input");
+          }
+          const frame = transfer.producer.next(transfer.id);
+          const input = ownedWorkerBytes(serialize(frame));
+          if (input.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+            throw new Error("SQLite worker input frame exceeds the transport byte limit");
+          }
+          if (frame.done) {
+            transfer.producer.end(transfer.id);
+            job.inputTransfer = undefined;
+          }
+          return { type: "execute-frame", id: job.request.id, actor: job.request.actor, input };
+        }
+        if (job.inputTransfer) {
+          throw new Error("SQLite worker completed before receiving its command input");
+        }
+        if (reply.transfer === "start") {
+          // SAFETY: The matching worker emits this private handle; framing validates its records.
+          const handle = deserialize(reply.value) as SqliteWorkerTransferHandle;
+          if (
+            job.request.type !== "execute" ||
+            job.transfer ||
+            handle.kinds.length !== 1 ||
+            handle.kinds[0] !== "result"
+          ) {
+            throw new Error("SQLite worker returned an unexpected result transfer");
+          }
+          const transfer: NonNullable<Job["transfer"]> = {
+            id: handle.id,
+            value: undefined,
+            receiver: createSqliteWorkerTransferReceiver(handle, (record) => {
+              transfer.value = record.value;
+            }),
+          };
+          job.transfer = transfer;
+        } else if (reply.transfer === "frame") {
+          const transfer = job.transfer;
+          if (!transfer) {
+            throw new Error("SQLite worker returned an unexpected result frame");
+          }
+          // SAFETY: The matching worker emits frames; the shared receiver validates their sequence and bounds.
+          const frame = deserialize(reply.value) as SqliteWorkerTransferFrame;
+          const counts = transfer.receiver.accept(frame);
+          if (counts) {
+            if (counts.length !== 1 || counts[0]?.[1] !== 1) {
+              throw new Error("SQLite worker returned an incomplete result transfer");
+            }
+            value = transfer.value;
+            job.transfer = undefined;
+          }
+        } else {
+          if (job.transfer) {
+            throw new Error("SQLite worker ended its result transfer without completion");
+          }
+          value = deserialize(reply.value);
+        }
+        if (job.transfer) {
+          return {
+            type: "result-next",
+            id: job.request.id,
+            actor: job.request.actor,
+            transferId: job.transfer.id,
+          };
+        }
+        return undefined;
+      },
     );
-    if (result.type === "continue") {
+    if (continuation) {
       // Continuations retain the current job and its reserved transport credits through drain.
       slot.worker.postMessage(
-        result.request,
-        result.request.type === "execute-frame" ? [result.request.input.buffer] : [],
+        continuation,
+        continuation.type === "execute-frame" ? [continuation.input.buffer] : [],
       );
       return;
     }
-    value = result.value;
   } catch (error) {
     owner.fail(error);
     return;

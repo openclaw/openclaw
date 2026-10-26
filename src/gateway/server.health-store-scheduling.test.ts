@@ -87,8 +87,10 @@ test.each(["separate", "shared"] as const)(
       const originalRead = projection.selectEntries;
       let updatedAt = 300;
       const changeResidentSession = async () => {
-        // These scenarios exercise fresh selection; unchanged health reads reuse preparation.
-        writeSession("fleet0", "session0", updatedAt++);
+        // Scheduling proof needs a changed row in every physical store.
+        for (const agentId of agentIds) {
+          writeSession(agentId, "session0", updatedAt++);
+        }
         await projection.prepareSelection();
       };
       let inserted = false;

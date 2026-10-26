@@ -75,6 +75,30 @@ describe("command explainer tree-sitter runtime", () => {
     }
   });
 
+  it("decodes ordinary argument text only once without preparing wrapper offsets", async () => {
+    await getBashParserForCommandExplanation();
+    const word = "buf149_decode_once";
+    // oxlint-disable-next-line typescript/unbound-method -- Called with its original receiver below.
+    const charAt = String.prototype.charAt;
+    let decodedCharacters = 0;
+    const spy = vi.spyOn(String.prototype, "charAt").mockImplementation(function (
+      this: string,
+      index: number,
+    ) {
+      if (this === word) {
+        decodedCharacters += 1;
+      }
+      return charAt.call(this, index);
+    });
+    try {
+      const explanation = await explainShellCommand(`printf ${word}`);
+      expectCommand(explanation.topLevelCommands, ["printf", word]);
+      expect(decodedCharacters).toBe(word.length);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("rejects oversized parser input before parsing", async () => {
     const parse = await getBashParserForCommandExplanation();
     expect(() => parse("x".repeat(128 * 1024 + 1))).toThrow(
@@ -155,6 +179,27 @@ describe("command explainer tree-sitter runtime", () => {
   ])("decodes ANSI-C numeric escape %s", async (escape, expected) => {
     const explanation = await explainShellCommand(`printf $'${escape}'`);
     expect(explanation.topLevelCommands[0]?.argv).toEqual(["printf", expected]);
+  });
+
+  it.each([
+    [String.raw`bash -c "printf \"a b\""`, ["printf", "a b"], String.raw`printf \"a b\"`],
+    [
+      String.raw`bash -c $'printf \u03bb\U0001F980'`,
+      ["printf", "λ🦀"],
+      String.raw`printf \u03bb\U0001F980`,
+    ],
+    ["bash -c 'printf λ🦀'", ["printf", "λ🦀"], "printf λ🦀"],
+    ['bash -c "printf a\\\nb"', ["printf", "ab"], "printf a\\\nb"],
+    ['bash -c "printf a\\\r\nb"', ["printf", "ab"], "printf a\\\r\nb"],
+    ["bash -c 'cat <<EOF\nλ🦀\nEOF'", ["cat"], "cat"],
+  ])("preserves decoded argv and wrapper source spans: %s", async (source, argv, rawCommand) => {
+    const explanation = await explainShellCommand(source);
+    expect(explanation.ok).toBe(true);
+    expectCommand(explanation.nestedCommands, argv);
+    const command = explanation.nestedCommands[0]!;
+    expect(source.slice(command.span.startIndex, command.span.endIndex)).toBe(rawCommand);
+    expect(command.span.startIndex).toBe(source.indexOf(rawCommand));
+    expect(command.span.startPosition).toEqual({ row: 0, column: source.indexOf(rawCommand) });
   });
 
   it("normalizes static shell words before classifying commands", async () => {

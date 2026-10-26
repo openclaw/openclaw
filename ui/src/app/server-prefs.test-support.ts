@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";

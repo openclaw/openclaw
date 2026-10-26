@@ -192,7 +192,8 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(orphanRepair ? { orphanRepair } : {}),
       sessionAgentId,
-      runtimeModel: runtimeInfo.model,
+      // A blind child's prompt never names its own model.
+      runtimeModel: attempt.blindPrompt ? undefined : runtimeInfo.model,
       systemPromptText,
       runAbortSignal: input.runAbortController.signal,
       hasBaselineTools: promptToolPolicy.hasBaselineTools,

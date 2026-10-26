@@ -84,25 +84,16 @@ function wrapBodyStream(
   const cancel = async (reason: unknown) => await finalize(async () => await reader.cancel(reason));
   const wrappedBody = new ReadableStream<Uint8Array>(
     {
-      async pull(controller) {
+      pull(controller) {
         const signal = params.signal;
         if (signal && !abortAttached) {
           abortAttached = true;
           detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
         }
         if (finalized) {
-          return;
+          return undefined;
         }
-        try {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            controller.close();
-            await finalize();
-            return;
-          }
-          params.refreshTimeout?.();
-          controller.enqueue(chunk.value);
-        } catch (error) {
+        const onError = async (error: unknown) => {
           if (finalized) {
             return;
           }
@@ -113,7 +104,20 @@ function wrapBodyStream(
           }
           controller.error(error);
           await finalize();
-        }
+        };
+        return reader.read().then((chunk) => {
+          try {
+            if (chunk.done) {
+              controller.close();
+              return finalize().catch(onError);
+            }
+            params.refreshTimeout?.();
+            controller.enqueue(chunk.value);
+            return undefined;
+          } catch (error) {
+            return onError(error);
+          }
+        }, onError);
       },
       cancel,
     },

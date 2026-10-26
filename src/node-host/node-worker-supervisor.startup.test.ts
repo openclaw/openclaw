@@ -548,7 +548,7 @@ it.skipIf(process.platform === "win32").for(["uncertain", "confirmed"] as const)
       const replacement = testWorkerLaunchInput(workspaceDir, "replacement-owner");
       replacement.descriptor.admission.environmentId = "replacement-environment";
       replacement.descriptor.admission.sessionId = "replacement-session";
-      let clock: MockInstance<typeof Date.now> | undefined;
+      let clock: MockInstance<typeof performance.now> | undefined;
       const capacityClaim = vi.spyOn(NodeWorkerLaunchStore.prototype, "claim");
       try {
         const launching = supervisor.launch(replacement, TEST_WORKER_ENDPOINT);
@@ -562,7 +562,7 @@ it.skipIf(process.platform === "win32").for(["uncertain", "confirmed"] as const)
         });
         // Expire the real policy only after the worker proves the slot remains reserved.
         // Timers and database/process lifecycle keep their native behavior.
-        clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
+        clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10_000);
         await expect(launching).rejects.toMatchObject({
           code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
           message: "node worker capacity remained full for 10000 ms",

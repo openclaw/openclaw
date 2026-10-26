@@ -8,11 +8,11 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { SessionPatch } from "../../lib/sessions/index.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-  type SessionPatch,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";

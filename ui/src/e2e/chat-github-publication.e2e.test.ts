@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiMockPresenceUser } from "../test-helpers/control-ui-e2e-contract.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -26,7 +26,10 @@ import {
 import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI personal GitHub publication" });
+const suite = createControlUiE2eSuite({
+  name: "Control UI personal GitHub publication",
+  trackBrowserContexts: true,
+});
 
 function viewer(id: string, name: string): ControlUiMockPresenceUser[] {
   return [{ self: true, id, identity: { type: "profile", id }, name }];

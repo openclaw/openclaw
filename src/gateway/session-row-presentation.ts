@@ -48,7 +48,11 @@ import {
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  matchesSessionArchiveFilter,
+  resolveSessionChildOwners,
+  shouldPropagateChildActivity,
+} from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
@@ -238,11 +242,8 @@ export function prepareSessionRowPublication(
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
     return {
       getAudienceKey() {
-        return JSON.stringify([
-          recipient.sharing.getCacheKey(),
-          recipient.presentFastMode("ultrafast"),
-          recipient.publicationState?.factsRevision,
-        ]);
+        // Fixed-domain prefixes keep the opaque sharing key intact without re-encoding it.
+        return `${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey(projection.sharingRevision)}`;
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
@@ -265,10 +266,6 @@ function prepareSessionRowRecipient(
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
   const presentFastMode = prepareSessionFastModePresentation(client);
-  const models =
-    client === undefined
-      ? undefined
-      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationState = publication?.();
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
@@ -282,7 +279,7 @@ function prepareSessionRowRecipient(
         })
         ?.has(identityId) ?? false,
   });
-  return { cfg, policyConfig, rowContext, presentFastMode, models, publicationState, sharing };
+  return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -293,8 +290,11 @@ export function prepareProjectedSessionPresentation(
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
 ) {
-  const { cfg, policyConfig, rowContext, presentFastMode, models, publicationState, sharing } =
-    recipient;
+  const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
+  const models =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };
@@ -360,27 +360,8 @@ export function prepareProjectedSessionPresentation(
         : null);
     return viewerFacts;
   };
-  const projectModels = (row: GatewaySessionRow, view?: SessionRowView) => {
-    const projected = models?.session(row) ?? row;
-    if (projected === row || !view) {
-      return projected;
-    }
-    const variants = (view.modelRows ??= []);
-    for (const existing of variants) {
-      if (
-        existing.modelProvider === projected.modelProvider &&
-        existing.model === projected.model &&
-        existing.activeModelProvider === projected.activeModelProvider &&
-        existing.activeModel === projected.activeModel &&
-        existing.contextBudgetStatus === projected.contextBudgetStatus
-      ) {
-        return existing;
-      }
-    }
-    const snapshot = Object.freeze(projected);
-    variants.push(snapshot);
-    return snapshot;
-  };
+  const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
+    models?.session(row, view && (view.modelRows ??= [])) ?? row;
   const optionKeys = new WeakMap<PresentationOptions, string>();
   const optionKey = (options: PresentationOptions) => {
     let key = optionKeys.get(options);
@@ -492,15 +473,13 @@ export function prepareProjectedSessionPresentation(
         }
       }
       for (const child of record.materialized.source.childLinks ?? []) {
-        const { key, entry, parsedKey } = child;
+        const { key, entry } = child;
         const childActive = runState(key, child).fields.hasActiveSubagentRun;
         facts.push(
           key,
-          childActive,
+          childActive && shouldPropagateChildActivity(key, entry, record.key),
           resolveSessionChildOwners({
-            key,
-            entry,
-            parsedKey,
+            ...child,
             now,
             subagentRuns,
             hasActiveRun: childActive,

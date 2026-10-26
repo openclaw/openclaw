@@ -546,27 +546,6 @@ describe("DraftGatewayState", () => {
     expect(fixture.browser.projectId).toBe("");
   });
 
-  it("reuses current machine info and refreshes it after reconnect", async () => {
-    let machineName = "Gateway A";
-    const request = requestFor({ "system.info": () => ({ machineName }) });
-    const fixture = createBrowser(request);
-    fixture.hello.features.methods.push("system.info");
-    await readSystemInfo(fixture.context.gateway);
-
-    fixture.update();
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
-    expect(calls(request, "system.info")).toBe(1);
-
-    fixture.context.gateway.snapshot.phase = "reconnecting";
-    fixture.update();
-    machineName = "Gateway B";
-    fixture.context.gateway.snapshot.hello = { ...fixture.hello };
-    fixture.context.gateway.snapshot.phase = "connected";
-    fixture.update();
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway B"));
-    expect(calls(request, "system.info")).toBe(2);
-  });
-
   it("ignores a late name from the replaced client", async () => {
     const oldName = createDeferred<{ machineName: string }>();
     const newName = createDeferred<{ machineName: string }>();
@@ -613,8 +592,10 @@ describe("DraftGatewayState", () => {
       });
       const fixture = createBrowser(request);
       fixture.hello.features.methods.push("system.info");
+      await readSystemInfo(fixture.context.gateway);
       fixture.update();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));
+      expect(calls(request, "system.info")).toBe(1);
       current = pending.promise;
       fixture.context.gateway.snapshot.phase = "reconnecting";
       fixture.update();

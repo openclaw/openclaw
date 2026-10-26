@@ -109,6 +109,7 @@ type WorktreeSourceCurrent = {
 
 export type WorktreeSourceStage = <T>(
   run: (current: WorktreeSourceCurrent) => T | Promise<T>,
+  acquisition?: { waitMs?: number },
 ) => Promise<T>;
 
 export type CreateManagedWorktreeParams = {

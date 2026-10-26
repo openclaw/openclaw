@@ -19,6 +19,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 
 function makeResponseHeaderStallingFetch() {
   return vi.fn(
@@ -209,14 +210,7 @@ describe("readRemoteMediaBuffer", () => {
       const fetchImpl = vi
         .fn()
         .mockResolvedValueOnce(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array([1, 2]));
-              },
-            }),
-            { status: 200 },
-          ),
+          new Response(makeStallingStream([new Uint8Array([1, 2])]), { status: 200 }),
         )
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 

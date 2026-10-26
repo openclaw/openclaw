@@ -703,6 +703,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   ...[
+    "src/config/sessions/session-accessor.pending-input-retention.test.ts",
     "src/config/sessions/session-accessor.pending-inputs.test.ts",
     "src/config/sessions/session-accessor.question-answer-transcript.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -1673,7 +1674,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
     "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
     "src/gateway/server-methods/models-dispatch.catalog.integration.test.ts",
-    "src/gateway/server-methods/models-list.discovery-lifecycle.integration.test.ts",
     "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

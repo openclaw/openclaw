@@ -308,6 +308,7 @@ export function createSessionRowProjectionFixture(params: {
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
+    hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);

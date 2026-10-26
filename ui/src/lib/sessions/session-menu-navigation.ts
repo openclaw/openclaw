@@ -14,16 +14,6 @@ import { resolveSessionPreferredFaceForKey, sessionNavigationTarget } from "./ro
 
 registerSessionOrganizationSharedEnglish();
 
-type SessionNavigationActionKind =
-  | "copy-session-id"
-  | "copy-session-link"
-  | "copy-session-preview-link"
-  | "copy-markdown"
-  | "open-new-tab"
-  | "open-new-window"
-  | "split-right"
-  | "split-below";
-
 export type SessionNavigationTarget<TRouteId extends string> = {
   context: ApplicationContext<TRouteId>;
   session: Pick<GatewaySessionRow, "key" | "sessionId">;
@@ -55,7 +45,15 @@ export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | un
 }
 
 export async function runSessionNavigationAction<TRouteId extends string>(
-  kind: SessionNavigationActionKind,
+  kind:
+    | "copy-session-id"
+    | "copy-session-link"
+    | "copy-session-preview-link"
+    | "copy-markdown"
+    | "open-new-tab"
+    | "open-new-window"
+    | "split-right"
+    | "split-below",
   params: SessionNavigationTarget<TRouteId>,
 ): Promise<void> {
   try {

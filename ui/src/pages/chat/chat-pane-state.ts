@@ -85,15 +85,13 @@ export function createChatPaneSendActions(
   };
 }
 
-type SelectedSessionProjectionState = {
-  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
-  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
-  selectedChatSessionArchived: boolean;
-  selectedChatSessionIncognito: boolean;
-};
-
 export function applySelectedSessionProjection(
-  state: SelectedSessionProjectionState,
+  state: {
+    chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
+    chatQueueModeOverride?: GatewaySessionRow["queueMode"];
+    selectedChatSessionArchived: boolean;
+    selectedChatSessionIncognito: boolean;
+  },
   session: GatewaySessionRow | undefined,
 ): session is GatewaySessionRow {
   if (!session) {

@@ -13,14 +13,14 @@ import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { catalogList } from "./chat-pane-catalog.test-support.ts";
-import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionContext,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+} from "./chat-application-context.test-support.ts";
+import { catalogList } from "./chat-pane-catalog.test-support.ts";
+import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import * as chatThreadBuild from "./chat-thread-build.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {

@@ -247,6 +247,9 @@ memory, realtime, and other messages. Totals survive worker retirement and are
 published with memory samples. Posts queued on a worker-bound port count when
 accepted by the port, even if cancellation later prevents handing that port to a
 worker. These counters describe transport work, not confirmed delivery.
+Retained-worker `ref()` and `unref()` update host-owned process liveness locally;
+they do not send lifecycle messages to the supervisor. Active work, pending
+samples, and unfinished native cleanup still keep the host alive.
 
 Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
 they exclude transport framing and do not measure structured-clone allocations.
@@ -298,8 +301,11 @@ client receipt. Their only label is `event`: a known protocol event name, such a
 `chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
 session, user, or connection identifiers are exported. The
 `openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
-operator sockets without labels. These observations use the existing bounded
-diagnostic queue and shared exporter series cap. Event observations are batched
+operator sockets without labels. Event counters reach Prometheus directly at flush,
+without allocating diagnostic event snapshots. Explicit diagnostic subscribers,
+including OpenTelemetry metrics, still receive queued snapshots. Connection counts
+use the bounded diagnostic queue; all metrics share the exporter series cap.
+Event observations are batched
 by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or

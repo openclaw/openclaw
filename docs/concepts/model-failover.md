@@ -70,6 +70,11 @@ Anthropic streaming errors retain their structured error type, so rate limits,
 overload, and authentication failures follow the same recovery policy even when
 the provider's message is generic.
 
+Local worker deadlines and capacity refusals stop model fallback because another
+provider cannot repair local saturation. Capacity errors ask you to check for
+completed work before trying again. Genuine provider HTTP errors keep the normal
+fallback policy.
+
 Local transcript write conflicts do not retry the model, rotate accounts, or
 trigger model fallback. The transcript owner rereads the current revision and
 retries an eligible append once. A repeated conflict is reported as a local

@@ -364,10 +364,7 @@ export class SqliteDatabaseAdmissionRegistry {
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
   private readonly scopeSweeps = new WeakMap<Admission, number>();
-  readonly descriptors = new Map<
-    string,
-    { descriptor: number; facts: Map<string, AdmissionFact> }
-  >();
+  readonly descriptors = new Map<string, Pick<Admission, "descriptor" | "facts">>();
   private revision = 0;
   private retainProcessFacts = true;
 
@@ -729,10 +726,12 @@ export class SqliteDatabaseAdmissionRegistry {
           continue;
         }
         if (threadId === 0) {
-          advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+          const previousRevision = advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+          // The keyed publication covers this addition, never an unseen peer's retirement.
+          if (this.scopeSweeps.get(record) === previousRevision) {
+            this.scopeSweeps.set(record, (previousRevision + 1) | 0);
+          }
         }
-        // Workers can import a new scope after already observing its shared revision.
-        this.scopeSweeps.delete(record);
         retainSqliteDatabaseWriteScope(record, key, revision);
         scopeKeys.push(key);
         changed = true;

@@ -10,6 +10,7 @@ import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
+import * as repositoryPaths from "../agents/worktrees/repository-paths.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
   loadSessionEntry,
@@ -488,7 +489,7 @@ test.each(["empty metadata", "missing worktree target", "partial metadata"])(
       expect(stored).toMatchObject({ parentSessionKey: parentKey });
       expect(stored?.pendingWorktree).toBeUndefined();
       expect(await fs.readdir(metadata)).toEqual([]);
-      await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
+      await expect(repositoryPaths.resolveRepositoryPaths(workspace)).rejects.toThrow(
         "not a git checkout",
       );
       await expectCreationError(
@@ -754,7 +755,7 @@ test.each(["archive", "stale-child"] as const)(
       expect(readEntry(parentKey)?.archivedAt).toBeDefined();
     }
     mockDispatch();
-    const resolveRepository = vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths");
+    const resolveRepository = vi.spyOn(repositoryPaths, "resolveRepositoryPaths");
     const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     let replaced = false;
     const unsubscribe = onAgentEvent((event) => {

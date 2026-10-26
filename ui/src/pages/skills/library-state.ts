@@ -21,7 +21,7 @@ import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";

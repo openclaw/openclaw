@@ -82,7 +82,7 @@ export type CronExternalStateChange =
 
 export type CronRuntimeMutationInputs = {
   "cron.provisionDefaultProactive": {
-    storePath: string | undefined;
+    storeKey: string;
     agentId: string;
     planned: CronStoredJob;
     recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;

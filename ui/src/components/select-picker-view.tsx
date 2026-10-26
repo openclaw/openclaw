@@ -91,23 +91,28 @@ export function PickerContent<Option extends PickerOption>(props: {
     // SAFETY: Unknown selected references use only the base option fields, as before migration.
     return [...configuredOptions, { value, label: value } as Option];
   });
+  const catalog = createMemo(
+    () => options().map((option) => ({ option, group: props.params.groupBy?.(option) })),
+    { lazy: true },
+  );
+  const searchText = createMemo(
+    () =>
+      catalog().map(({ option, group }) =>
+        [option.label, option.value, option.description, group?.label]
+          .join(" ")
+          .toLocaleLowerCase(),
+      ),
+    { lazy: true },
+  );
   const sections = createMemo(
     () => {
       const search = query().trim().toLocaleLowerCase();
       const terms = search ? search.split(/\s+/u) : [];
+      const text = search ? searchText() : undefined;
       const ungrouped: Section<Option> = { options: [], expanded: true };
       const groups = new Map<string, Section<Option>>();
-      for (const option of options()) {
-        const group = props.params.groupBy?.(option);
-        if (
-          terms.length > 0 &&
-          !terms.every((term) =>
-            [option.label, option.value, option.description, group?.label]
-              .join(" ")
-              .toLocaleLowerCase()
-              .includes(term),
-          )
-        ) {
+      for (const [index, { option, group }] of catalog().entries()) {
+        if (text && !terms.every((term) => text[index]!.includes(term))) {
           continue;
         }
         if (!group) {

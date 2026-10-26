@@ -5,7 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
-import type { NativeWorkerRequest, NativeWorkerRuntime } from "./worker-native-lifecycle.types.js";
+import type {
+  NativeWorkerRequest,
+  NativeWorkerRuntime,
+  RetainedNativeWorker,
+} from "./worker-native-lifecycle.types.js";
 
 // These endpoints run on the Gateway main thread; Vitest itself runs in a worker.
 vi.mock("node:worker_threads", async (importOriginal) => ({
@@ -63,27 +67,36 @@ function fixture(directTaskPort = true) {
   return { worker, port, peer, context, sent, handles, runtime, references };
 }
 
-it("uses one captured transfer list for the control envelope and its native send", async () => {
-  const { worker, port, peer, sent } = fixture(false);
-  worker.receive({ type: "created", id: 1, threadId: 105 });
-  const post = vi.spyOn(port, "postMessage");
-  const bytes = new Uint8Array([2, 4, 6]);
-  const transfers = Object.freeze([bytes.buffer]);
-  const received = once(peer, "message");
+it.each([false, true])(
+  "borrows the transfer list until native send completes (direct: %s)",
+  async (direct) => {
+    const { worker, port, peer, sent } = fixture(direct);
+    worker.receive({ type: "created", id: 1, threadId: 105 });
+    const post = vi.spyOn(port, "postMessage");
+    const bytes = new Uint8Array([2, 4, 6]);
+    const transfers = Object.freeze([bytes.buffer]);
+    const sender: RetainedNativeWorker = worker;
+    const received = once(peer, "message");
 
-  worker.postMessage({ bytes }, transfers);
+    sender.postMessage({ bytes }, transfers);
 
-  expect(bytes.byteLength).toBe(0);
-  const [message] = await received;
-  expect(message).toMatchObject({
-    type: "post",
-    id: 1,
-    value: { bytes: new Uint8Array([2, 4, 6]) },
-  });
-  expect(message.transferList[0] === message.value.bytes.buffer).toBe(true);
-  const envelope = sent.find((entry) => entry.type === "post");
-  expect(envelope?.transferList === post.mock.calls[0]?.[1]).toBe(true);
-});
+    expect(bytes.byteLength).toBe(0);
+    const [message] = await received;
+    expect(post.mock.calls[0]?.[1] === transfers).toBe(true);
+    if (direct) {
+      expect(message).toEqual({ bytes: new Uint8Array([2, 4, 6]) });
+      return;
+    }
+    expect(message).toMatchObject({
+      type: "post",
+      id: 1,
+      value: { bytes: new Uint8Array([2, 4, 6]) },
+    });
+    expect(message.transferList[0] === message.value.bytes.buffer).toBe(true);
+    const envelope = sent.find((entry) => entry.type === "post");
+    expect(envelope?.transferList === post.mock.calls[0]?.[1]).toBe(true);
+  },
+);
 
 it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
   const { worker, port, peer, context } = fixture();
@@ -154,7 +167,7 @@ it("reports task-port loss without stopping native work or inventing its exit re
   expect(stopping.read()).toEqual({ status: "fulfilled", value: undefined });
 });
 
-it("sends reference transitions while retaining pending samples and checking repeated admission", async () => {
+it("keeps reference transitions local while retaining pending samples and checking repeated admission", async () => {
   const { worker, sent, runtime, references } = fixture();
   worker.receive({ type: "created", id: 1, threadId: 104 });
   worker.ref();
@@ -177,10 +190,8 @@ it("sends reference transitions while retaining pending samples and checking rep
 
   worker.ref();
   worker.ref();
-  expect(sent.filter((message) => message.type === "ref")).toEqual([
-    { type: "ref", id: 1, referenced: false },
-    { type: "ref", id: 1, referenced: true },
-  ]);
+  expect(references.at(-1)).toBe(true);
+  expect(sent).toEqual([{ type: "cpu", id: 1, requestId, previous: undefined }]);
   const unavailable = new Error("Native source no longer owns execution");
   runtime.failure = unavailable;
   expect(() => worker.ref()).toThrow(unavailable);

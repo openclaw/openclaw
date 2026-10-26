@@ -91,7 +91,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   isRawModelRun: boolean;
   orphanRepair?: OrphanRepairPlan;
   sessionAgentId: string;
-  runtimeModel: string;
+  /** Absent for a blind child, whose prompt never names its own model. */
+  runtimeModel?: string;
   systemPromptText: string;
   runAbortSignal?: AbortSignal;
   hasBaselineTools: () => boolean;

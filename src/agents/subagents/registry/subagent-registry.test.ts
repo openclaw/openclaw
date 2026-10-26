@@ -114,10 +114,11 @@ vi.mock("../../../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
+// mock-isolation: Registry fixtures control run ownership without the process-global registry.
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext: mocks.getAgentRunContext,
   listAgentRunsForSession: () => [],
-  hasLiveAgentRunContext: vi.fn(() => false),
+  hasLiveAgentRunContext: mocks.hasLiveAgentRunContext,
 }));
 
 vi.mock("../../../config/config.js", () => {
@@ -2309,17 +2310,19 @@ describe("subagent registry seam flow", () => {
       });
     }
 
-    await mod.testing.sweepOnceForTests();
-
-    await waitForFast(() => {
-      for (const kind of kinds) {
-        expect(mocks.resolveContextEngine).toHaveBeenCalledWith(mocks.getRuntimeConfig(), {
-          agentDir: `/tmp/agent-${kind}`,
-          workspaceDir: `/tmp/workspace-${kind}`,
-          initialize: mocks.ensureContextEnginesInitialized,
-        });
-      }
-    });
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.testing.sweepOnceForTests();
+    } finally {
+      await settleRootWork();
+    }
+    for (const kind of kinds) {
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(mocks.getRuntimeConfig(), {
+        agentDir: `/tmp/agent-${kind}`,
+        workspaceDir: `/tmp/workspace-${kind}`,
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
+    }
   });
 
   it.each(["main", "cron"] as const)(

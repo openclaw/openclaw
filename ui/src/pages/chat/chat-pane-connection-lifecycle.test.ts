@@ -18,12 +18,12 @@ import { chatHistoryRequests } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
 import {
-  createSessionCapabilityFixture,
   createTestChatPane,
   connectPaneTestView,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { retainSessionWorkspaceArtifacts } from "./components/chat-session-workspace-state.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";

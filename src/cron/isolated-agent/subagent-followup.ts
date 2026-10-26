@@ -99,9 +99,6 @@ export async function waitForDescendantSubagentSummary(params: {
   };
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const initialReply = params.initialReply;
-  // In-process duration budget: measured on the monotonic clock so wall-clock
-  // jumps (NTP corrections, VM suspend/resume) cannot expire it early or
-  // stretch it past the configured timeout.
   const deadline = performance.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
 
   const callGateway: typeof requestGateway = (request) =>
@@ -155,8 +152,6 @@ export async function waitForDescendantSubagentSummary(params: {
     let pendingRunIds = initialActiveRuns.map((entry) => entry.runId);
     while (performance.now() < deadline && !params.abortSignal?.aborted) {
       await waitForAgentRunsToDrain({
-        // Hand off the remaining monotonic budget; the drain keeps its own
-        // wall-clock deadline contract internally.
         timeoutMs: Math.max(0, deadline - performance.now()),
         callGateway,
         initialPendingRunIds: pendingRunIds,

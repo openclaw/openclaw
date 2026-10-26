@@ -23,6 +23,7 @@ import {
 } from "./control-ui-team-scale-inventory.ts";
 import {
   createTeamScalePeople,
+  TEAM_SCALE_AVATAR_ASSET,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
 import {
@@ -57,6 +58,7 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sidebarAvatars?: boolean;
+  transcriptAvatars?: boolean;
   sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
   sessionEventDurationMs?: number;
@@ -103,6 +105,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     },
   );
   const assets = new Map<string, FixtureAsset>(avatarAssets);
+  const transcriptSender = people[4]!;
+  if (options.transcriptAvatars) {
+    transcriptSender.avatarUrl = `/api/users/${transcriptSender.id}/avatar?v=${now}`;
+    profiles[4]!.hasAvatar = true;
+    profiles[4]!.avatarMime = "image/png";
+    assets.set(`/api/users/${transcriptSender.id}/avatar`, {
+      ...TEAM_SCALE_AVATAR_ASSET,
+      headers: { "Cache-Control": "private, max-age=31536000, immutable" },
+    });
+  }
   const { sessions, pinnedRows, pinnedKeys, selectedSessionKey, sidebarPersistentChildren } =
     createTeamScaleSessionInventory({
       now,
@@ -166,32 +178,27 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     now,
     selectedSessionKey,
   );
-  const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
+  const { messageIds, historyMessages, configuredHistory } = createTeamScaleHistoryFixture({
     messageCount: counts.transcriptMessages,
     inlineWidgets: counts.inlineWidgets,
     now,
     largeSnapshot: options.largeSnapshot,
     attachments: duplicateReads?.attachments,
+    sender: options.transcriptAvatars ? transcriptSender : undefined,
+    historyStateReceipt: options.historyStateReceipt,
+    sessionInfo: pinnedRows[0]!,
   });
-  const configuredHistory =
-    options.largeSnapshot || options.historyStateReceipt
-      ? {
-          messages: historyMessages,
-          sessionId: pinnedRows[0]!.sessionId,
-          sessionInfo: pinnedRows[0]!,
-          hasMore: false,
-          totalMessages: counts.transcriptMessages,
-          metadata: { commands: [], models: [] },
-          ...(options.historyStateReceipt
-            ? {
-                stateRevision: {
-                  sessionInfo: "fixture-session-v1",
-                  commands: "fixture-commands-v1",
-                },
-              }
-            : {}),
-        }
-      : undefined;
+  const historySnapshot = () => ({
+    sessionId: pinnedRows[0]!.sessionId,
+    sessionInfo: pinnedRows[0]!,
+    messages: historyMessages,
+  });
+  const inFlightRun = () => ({
+    runId: TEAM_SCALE_LIVE_RUN_ID,
+    text: "Synthetic streaming progress 0",
+    startedAt: now,
+    events: [],
+  });
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -346,6 +353,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
+    ...(options.transcriptAvatars
+      ? { deviceToken: null, hasMultipleSessionSharingIdentities: true }
+      : {}),
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
@@ -361,16 +371,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ]),
       ),
     },
-    ...(options.liveRun
-      ? {
-          inFlightRun: {
-            runId: TEAM_SCALE_LIVE_RUN_ID,
-            text: "Synthetic streaming progress 0",
-            startedAt: now,
-            events: [],
-          },
-        }
-      : {}),
+    ...(options.liveRun ? { inFlightRun: inFlightRun() } : {}),
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.list",
@@ -417,9 +418,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "users.list": { profiles },
       "users.prefs.get": {
         status: "ok",
-        entries: {
-          "ui.railShortcuts": sidebarEntries,
-        },
+        entries: { "ui.railShortcuts": sidebarEntries },
       },
       "users.prefs.set": { status: "ok" },
       "cron.status": {
@@ -500,6 +499,24 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     ...Array<string>(2).fill("run-state.unrelated"),
   ];
   const livePresence = presenceEntries.map((entry) => Object.assign({}, entry));
+  const sessionChanged = (
+    row: (typeof sessions)[number],
+    ts: number,
+    reason: string,
+    patch: Partial<(typeof sessions)[number]>,
+  ) => ({
+    sessionKey: row.key,
+    agentId: "main",
+    reason,
+    ts,
+    updatedAt: row.updatedAt,
+    sessionId: row.sessionId,
+    ...(patch.lastMessagePreview === undefined
+      ? {}
+      : { lastMessagePreview: patch.lastMessagePreview }),
+    session: { ...row, snapshotAt: ts, ...patch },
+    ancestorSessions: [],
+  });
   const liveEvents: TeamScaleLiveEvent[] = Array.from({ length: 125 }, (_, index) => {
     const kind = liveKinds[index % liveKinds.length]!;
     const ts = now + (index + 1) * 160;
@@ -531,22 +548,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
               ? 160
               : 240
         ]!;
-      payload = {
-        sessionKey: row.key,
-        agentId: "main",
-        reason: kind === "run-state.unrelated" ? "agent.run.started" : "patch",
+      payload = sessionChanged(
+        row,
         ts,
-        updatedAt: row.updatedAt,
-        sessionId: row.sessionId,
-        lastMessagePreview: `Synthetic live activity ${index + 1}`,
-        session: {
-          ...row,
-          snapshotAt: ts,
+        kind === "run-state.unrelated" ? "agent.run.started" : "patch",
+        {
           ...(kind === "run-state.unrelated" ? { hasActiveRun: index % 2 === 0 } : {}),
           lastMessagePreview: `Synthetic live activity ${index + 1}`,
         },
-        ancestorSessions: [],
-      };
+      );
     } else if (kind === "session.message.open") {
       event = "session.message";
       const message = {
@@ -639,21 +649,10 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           atMs,
           kind: genuineChange ? "run-state.visible-change" : "run-state.equivalent",
           event: "sessions.changed",
-          payload: {
-            sessionKey: row.key,
-            agentId: "main",
-            reason: "agent.run.started",
-            ts,
-            updatedAt: row.updatedAt,
-            sessionId: row.sessionId,
-            session: {
-              ...row,
-              snapshotAt: ts,
-              hasActiveRun: !genuineChange || index % 2 === 0,
-              status: genuineChange && index % 2 ? "done" : "running",
-            },
-            ancestorSessions: [],
-          },
+          payload: sessionChanged(row, ts, "agent.run.started", {
+            hasActiveRun: !genuineChange || index % 2 === 0,
+            status: genuineChange && index % 2 ? "done" : "running",
+          }),
         });
       }
     }
@@ -683,19 +682,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sidebarLiveChurn: options.sidebarLiveChurn
       ? { equivalentAfterMs: 14_000, quietAfterMs: 15_000, durationMs: 20_000 }
       : undefined,
-    liveHistory: options.liveRun
-      ? {
-          sessionId: pinnedRows[0]!.sessionId,
-          sessionInfo: pinnedRows[0]!,
-          messages: historyMessages,
-          inFlightRun: {
-            runId: TEAM_SCALE_LIVE_RUN_ID,
-            text: "Synthetic streaming progress 0",
-            startedAt: now,
-            events: [],
-          },
-        }
-      : undefined,
+    liveHistory: options.liveRun ? { ...historySnapshot(), inFlightRun: inFlightRun() } : undefined,
     counts: { ...counts, sessions: sessions.length, pinned: pinnedKeys.length },
     assets,
   };

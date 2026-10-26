@@ -17,7 +17,7 @@ import type { CronServiceDeps } from "./service/state.js";
 import {
   DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   MIN_REFIRE_GAP_MS,
-} from "./service/timer-execution-timeout.js";
+} from "./service/timer-constants.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";

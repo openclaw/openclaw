@@ -204,7 +204,6 @@ export async function withSessionEntryWorker<T>(
               ? err(decodeSessionTranscriptWorkerReadError(result.readError))
               : ok(result.entry)),
             source: result.source,
-            facts: result.facts,
           };
         },
         async entries(request) {

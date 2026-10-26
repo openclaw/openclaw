@@ -15,8 +15,8 @@ import {
 } from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";

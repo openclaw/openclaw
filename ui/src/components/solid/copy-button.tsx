@@ -7,7 +7,7 @@ import { Icon } from "./icon.tsx";
 import "../tooltip.ts";
 import "../../styles/copy-button.css";
 
-export type CopyButtonProps = {
+export function CopyButton(props: {
   text: string;
   ref?: (element: HTMLButtonElement) => void;
   idleLabel?: string;
@@ -15,9 +15,7 @@ export type CopyButtonProps = {
   buttonAttributes?: SolidJSX.ButtonHTMLAttributes<HTMLButtonElement> & {
     [name: `data-${string}`]: string | number | boolean | undefined;
   };
-};
-
-export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
+}): SolidJSX.Element {
   const label = () => props.idleLabel ?? t("chat.actions.copyAsMarkdown");
   return (
     <For each={[props.text]}>

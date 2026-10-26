@@ -184,7 +184,7 @@ describe("openclaw-router-outlet", () => {
       "true",
     );
     expect(loadingState?.getAttribute("aria-busy")).toBeNull();
-    expect(loadingState?.textContent?.trim()).toBe("");
+    expect(loadingState?.textContent?.trim()).toBe("Loading…");
     expect(outlet.textContent).not.toContain("Loading panel");
 
     routeModule.resolve({

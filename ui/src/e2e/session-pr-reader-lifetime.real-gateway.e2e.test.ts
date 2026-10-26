@@ -8,6 +8,7 @@ import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient, isGatewayProtocolResponseError } from "../../../src/gateway/client.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
@@ -22,7 +23,6 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {

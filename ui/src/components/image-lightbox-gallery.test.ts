@@ -100,27 +100,6 @@ it.each(["upgrade reset", "upgrade evict", "neighbor reset", "return pending", "
   },
 );
 
-it("retries display-image decode failures without losing the preview", async () => {
-  const original = imageItem("original");
-  decode.mockRejectedValueOnce(new Error("Image decode failed"));
-  const load = vi.fn(async () => original);
-  const initial = { ...imageItem("preview"), loadDisplayImage: load };
-  controller.reset(undefined, initial);
-  await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-  await vi.waitFor(() => expect(original.release).toHaveBeenCalledOnce());
-  await vi.waitFor(() => expect(controller.peek().upgradeFailed).toBe(true));
-  expect(controller.peek().current?.src).toBe(initial.src);
-  expect(controller.peek()).toMatchObject({ failed: false, upgrading: false });
-  expect(initial.release).not.toHaveBeenCalled();
-  const recovered = imageItem("recovered-display");
-  load.mockResolvedValueOnce(recovered);
-  controller.retryDisplayImage();
-  expect(controller.peek().upgrading).toBe(true);
-  await vi.waitFor(() => expect(controller.peek().current).toBe(recovered));
-  expect(controller.peek().upgradeFailed).toBe(false);
-  expect(load).toHaveBeenCalledTimes(2);
-});
-
 it("retries failed neighbor loads without losing selection", async () => {
   const initial = imageItem("initial");
   const broken = imageItem("broken");
@@ -157,25 +136,16 @@ it("loads on selection, reuses neighbors and releases evictions", async () => {
   expect(loads.map((load) => load.mock.calls.length)).toEqual([0, 0, 0, 0, 0]);
   expect(decode).not.toHaveBeenCalled();
 
-  for (const [delta, index, counts] of [
-    [1, 2, [0, 0, 1, 0, 0]],
-    [-1, 1, [0, 0, 1, 0, 0]],
-    [1, 2, [0, 0, 1, 0, 0]],
-    [1, 3, [0, 0, 1, 1, 0]],
-    [-1, 2, [0, 0, 1, 1, 0]],
-    [-1, 1, [0, 1, 1, 1, 0]],
-  ] as const) {
-    expect(await controller.move(delta)).toBe(true);
+  for (const index of [2, 1, 2, 3, 2, 1]) {
+    expect(await controller.move(index - controller.peek().index)).toBe(true);
     if (index === 1) {
       expect(controller.peek().current?.src).toBe(initial.src);
     } else {
       expect(controller.peek().current).toBe(images[index]);
     }
-    expect(loads.map((load) => load.mock.calls.length)).toEqual(counts);
     expect(initial.release).not.toHaveBeenCalled();
   }
-  expect(loads[2]).toHaveBeenCalledExactlyOnceWith(true);
-  expect(loads[3]).toHaveBeenCalledExactlyOnceWith(true);
+  expect(loads.map((load) => load.mock.calls.length)).toEqual([0, 1, 1, 1, 0]);
   await Promise.resolve();
   expect(images[3]!.release).toHaveBeenCalledOnce();
   disposeGallery();

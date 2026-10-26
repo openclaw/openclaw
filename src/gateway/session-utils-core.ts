@@ -188,6 +188,20 @@ export function resolveSessionChildController(
     normalizeOptionalString(run?.requesterSessionKey)
   );
 }
+
+/** Promotion cuts navigation activity, not a live controller's ownership. */
+export function shouldPropagateChildActivity(
+  key: string,
+  entry: SessionEntry,
+  ownerSessionKey: string,
+): boolean {
+  return (
+    entry.sidebarRoot !== true ||
+    parseAgentSessionKey(key)?.rest.startsWith("subagent:") === true ||
+    resolveSessionChildController(key, entry) === ownerSessionKey
+  );
+}
+
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {

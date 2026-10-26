@@ -1,5 +1,8 @@
 // Real CLI + WebSocket proof; external team-shape fixtures are never regenerated here.
 // Source mode: node --import ./scripts/tsx.mjs scripts/perf/gateway-ui-rpc-measure.ts --help
+// Tail-RPC proof: --method agents.list.capabilities --method sessions.branches.list
+// --method talk.config --method progressCard.get --samples 1000 --no-counters.
+// Use --entry dist/entry.js; add --profile --allocations for a separate allocation pass.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
@@ -35,6 +38,32 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 
+// Match non-native Control UI in ui/src/api/gateway-connect-plan.ts, without a hello modelCatalog request.
+const controlUiCapabilities = [
+  "agent-kind",
+  "approvals",
+  "task-suggestions",
+  "terminal-offset-seq",
+  "terminal-session-metadata",
+  "terminal-upload-path-style",
+  "tool-events",
+  "chat-only-assistant-text",
+  "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
+  "session-scoped-events",
+  "presence-deltas",
+  "session-row-deltas",
+  "session-event-field-refs",
+  "roster-message-bodies-optional",
+  "inline-widgets",
+  "model-selection-policy",
+  "model-wait-status",
+  "ui-commands",
+  "ultrafast",
+  "usage-refreshing",
+];
+
 const { values } = parseArgs({
   options: {
     sync: { type: "string" },
@@ -56,6 +85,7 @@ const { values } = parseArgs({
     "history-limit": { type: "string", default: "80" },
     method: { type: "string", multiple: true },
     profile: { type: "boolean", default: false },
+    allocations: { type: "boolean", default: false },
     "profile-samples": { type: "string", default: "5" },
     help: { type: "boolean", default: false },
   },
@@ -73,6 +103,7 @@ if (values.help) {
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
   --profile                       Main-isolate CPU profile per selected RPC case, outside timing samples.
+  --allocations                   With --profile, sample allocations instead of CPU (separate diagnostic pass).
   --profile-samples 5              Requests per profile; synchronized profiles start after every timed cell.
   --sync <dir> --cohort <nonce> --side base|control|head
                                   Three live Gateways, serial setup and interleaved measured cells.
@@ -85,6 +116,7 @@ main-isolate subsets, not disjoint handler phases. CPU profiles attribute residu
   process.exit(0);
 }
 assert(values.root && values.output, "--root and --output are required");
+assert(!values.allocations || values.profile, "--allocations requires --profile");
 const root = path.resolve(values.root);
 const output = path.resolve(values.output);
 const entry = path.resolve(values.entry);
@@ -112,6 +144,12 @@ assert(
     providerCount <= 100 &&
     modelsPerProvider <= 1000,
 );
+const expectedSyntheticModels = new Set<string>();
+for (let provider = 0; provider < providerCount; provider++) {
+  for (let model = 0; model < modelsPerProvider; model++) {
+    expectedSyntheticModels.add(`rpc-bench-${provider}/synthetic-${model}`);
+  }
+}
 const rawFixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
@@ -193,6 +231,9 @@ type Metrics = {
   socketWriteBytes?: number;
   processCpuMs: number;
   mainThreadCpuMs: number;
+  rpcReceivedCount?: number;
+  rpcProcessCpuMs?: number;
+  rpcMainThreadCpuMs?: number;
   windowMs: number;
 };
 type Sample = {
@@ -201,7 +242,9 @@ type Sample = {
   roundTripMs: number;
   ok: boolean;
   payloadBytes: number;
+  payloadSha256?: string;
   arrayCounts?: Record<string, number>;
+  syntheticModelCount?: number;
   requestParams?: unknown;
   error?: unknown;
   server: Metrics;
@@ -283,10 +326,31 @@ const rpcCases = [
     method: "models.list",
     params: { agentId: "main", view: "provider-config" },
   },
+  {
+    id: "models.list.configured.refresh",
+    method: "models.list",
+    params: { agentId: "main", view: "configured", refresh: true },
+  },
+  {
+    id: "models.list.provider-config.refresh",
+    method: "models.list",
+    params: { agentId: "main", view: "provider-config", refresh: true },
+  },
   { id: "config.get", method: "config.get", params: {} },
   { id: "config.schema", method: "config.schema", params: {} },
   { id: "models.authStatus", method: "models.authStatus", params: { agentId: "main" } },
   { id: "system.info", method: "system.info", params: {} },
+  { id: "talk.config", method: "talk.config", params: {} },
+  {
+    id: "sessions.branches.list",
+    method: "sessions.branches.list",
+    params: { sessionKey: values["history-key"], agentId: "main" },
+  },
+  {
+    id: "progressCard.get",
+    method: "progressCard.get",
+    params: { sessionKey: values["history-key"], agentId: "main" },
+  },
   {
     id: "agents.list.capabilities",
     method: "agents.list",
@@ -529,15 +593,7 @@ async function connectPeer(
       role: "operator",
       scopes,
       auth: { token },
-      caps: [
-        "hello-health-on-demand",
-        "health-summary",
-        "hello-presence-self",
-        "session-scoped-events",
-        "presence-deltas",
-        "session-row-deltas",
-        "roster-message-bodies-optional",
-      ],
+      caps: controlUiCapabilities,
       device: {
         id: device.id,
         publicKey,
@@ -550,6 +606,7 @@ async function connectPeer(
 }
 async function measure(id: string, method: string, params: unknown, peer: Peer, phase: string) {
   await control("begin", {
+    method,
     countOps: !values["no-counters"] || phase === "first" || phase === "counts",
   });
   const started = performance.now();
@@ -571,12 +628,31 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   }
   const roundTripMs = performance.now() - started;
   const server = await control("end");
+  const syntheticModels =
+    method === "models.list" && providerCount > 0 ? new Set<string>() : undefined;
+  let syntheticModelCount = 0;
+  if (syntheticModels && isRecord(response.payload) && Array.isArray(response.payload.models)) {
+    for (const model of response.payload.models) {
+      if (!isRecord(model) || typeof model.provider !== "string" || typeof model.id !== "string") {
+        continue;
+      }
+      const key = `${model.provider}/${model.id}`;
+      if (expectedSyntheticModels.has(key)) {
+        syntheticModelCount++;
+        syntheticModels.add(key);
+      }
+    }
+  }
   records.push({
     case: id,
     phase,
     roundTripMs,
     ok: response.ok,
     payloadBytes: Buffer.byteLength(JSON.stringify(response.payload ?? null)),
+    ...(syntheticModels ? { syntheticModelCount } : {}),
+    payloadSha256: createHash("sha256")
+      .update(JSON.stringify(response.payload ?? null))
+      .digest("hex"),
     requestParams: method === "cron.list" ? params : undefined,
     arrayCounts: isRecord(response.payload)
       ? Object.fromEntries(
@@ -600,8 +676,9 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     assert(
       isRecord(response.payload) &&
         Array.isArray(response.payload.models) &&
-        response.payload.models.length >= providerCount * modelsPerProvider,
-      `${id}: synthetic catalog was not loaded`,
+        syntheticModelCount === expectedSyntheticModels.size &&
+        syntheticModels?.size === expectedSyntheticModels.size,
+      `${id}: every synthetic provider/model pair must appear exactly once`,
     );
   }
   if (method === "cron.list" && id !== "cron.list.enabled") {
@@ -722,7 +799,13 @@ function summaries() {
           .map(read)
           .filter((value): value is number => typeof value === "number");
         return observations.length
-          ? { observations: observations.length, ...summarizeNumbers(observations) }
+          ? {
+              observations: observations.length,
+              ...summarizeNumbers(observations),
+              p99: observations.toSorted((a, b) => a - b)[
+                Math.ceil(observations.length * 0.99) - 1
+              ],
+            }
           : undefined;
       };
       const rpcMetric = (phase: string, key: string) =>
@@ -774,6 +857,9 @@ function summaries() {
             [
               "processCpuMs",
               "mainThreadCpuMs",
+              "rpcReceivedCount",
+              "rpcProcessCpuMs",
+              "rpcMainThreadCpuMs",
               "jsonStringifyMs",
               "jsonStringifyCount",
               "socketWriteMs",
@@ -903,7 +989,7 @@ try {
   assertWatcherHealthy();
   for (const candidate of selected) {
     if (values.profile) {
-      await control("profile-start");
+      await control("profile-start", { allocations: values.allocations });
       try {
         for (let index = 0; index < profileSamples; index++) {
           if (candidate.method === "connect") {
@@ -926,7 +1012,13 @@ try {
           }
         }
       } finally {
-        await control("profile-stop", { path: path.join(output, `${candidate.id}.cpuprofile`) });
+        await control("profile-stop", {
+          allocations: values.allocations,
+          path: path.join(
+            output,
+            `${candidate.id}.${values.allocations ? "heapprofile" : "cpuprofile"}`,
+          ),
+        });
       }
     }
     console.log(`${candidate.id}: ${samples} warm samples complete`);
@@ -980,6 +1072,7 @@ try {
     },
     measurement: {
       transport: "real Gateway CLI and WebSocket",
+      clientCapabilities: controlUiCapabilities,
       ingress: remoteIngress ? "synthetic trusted loopback proxy" : "direct-local",
       negotiatedExtensions: [...negotiatedExtensions],
       serialTimedRequests: true,
@@ -987,6 +1080,8 @@ try {
         "existing gateway.rpc response duration: admitted frame receipt through socket acceptance; no TCP delivery wait",
       cpuScope:
         "whole per-request IPC window, including event-loop work and worker CPU; not only the handler",
+      rpcCpuScope:
+        "diagnostic received through first-response callbacks for one matching method; omitted if receipt is ambiguous; excludes parse and IPC tails but may include overlapping work",
       jsonScope: values["no-counters"]
         ? "first/counts samples only; native JSON/socket methods in warmup and measured samples"
         : "all synchronous main-isolate JSON.stringify calls in each request window, including shaping",
@@ -995,6 +1090,7 @@ try {
       profile: values.profile
         ? {
             samplesPerCase: profileSamples,
+            kind: values.allocations ? "sampled-allocations" : "cpu",
             scope: "unmeasured per-case request loops; main isolate only",
             scheduling: syncRoot
               ? "concurrent across sides after every interleaved timed request completes"

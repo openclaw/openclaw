@@ -20,11 +20,6 @@ export type SessionPickerChoice = {
   matchText: string;
 };
 
-export type ResumeResolution =
-  | { kind: "match"; session: SessionPickerChoice }
-  | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
-  | { kind: "none" };
-
 /** Load the same bounded recent-session window used by the TUI Ctrl+P picker. */
 export async function loadRecentSessions(
   client: Pick<TuiBackend, "listSessions">,
@@ -72,7 +67,10 @@ export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): Sessi
 export function resolveResumeSession(
   sessions: readonly TuiSessionEntry[],
   query: string,
-): ResumeResolution {
+):
+  | { kind: "match"; session: SessionPickerChoice }
+  | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
+  | { kind: "none" } {
   const trimmedQuery = query.trim();
   const normalizedQuery = normalizeLowercaseStringOrEmpty(trimmedQuery);
   const choices = buildSessionChoices(sessions);

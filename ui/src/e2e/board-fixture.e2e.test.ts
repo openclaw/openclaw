@@ -4,16 +4,11 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  canRunPlaywrightChromium,
-  controlUiSessionUrl,
-  resolvePlaywrightChromiumExecutablePath,
-  type ControlUiMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   startFixtureServer,
   stopFixtureServer,
@@ -21,8 +16,11 @@ import {
 } from "./board-fixture-server.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const {
+  executablePath: chromiumExecutablePath,
+  available: chromiumAvailable,
+  wsEndpoint: chromiumWsEndpoint,
+} = inject("controlUiE2eChromium");
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
@@ -78,6 +76,12 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 
 let browser: Browser;
 let fixtureServer: FixtureServer;
+
+function connectFixtureBrowser() {
+  return chromiumWsEndpoint
+    ? chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+    : chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+}
 
 function withFixturePage(run: (page: Page) => Promise<void>) {
   return async () => {
@@ -287,7 +291,7 @@ async function probeNativeEgress(page: Page, sinkUrl: string) {
 describeStandaloneMockServer("standalone Control UI mock server", () => {
   beforeAll(async () => {
     fixtureServer = await startFixtureServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    browser = await connectFixtureBrowser();
   });
 
   afterAll(async () => {
@@ -477,7 +481,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     });
     await runQaGatewayFixture(
       async () => {
-        await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
         // The fixture viewer is Riley; this shared checkout belongs to Peter.
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
@@ -485,14 +489,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }
-        await page.goto(`${origin}/profile`, { waitUntil: "networkidle" });
+        await page.goto(`${origin}/profile`, { waitUntil: "domcontentloaded" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
           .toBe("Riley");
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifacts, "profile.png") });
         }
-        await page.goto(`${origin}/focus/terminal`, { waitUntil: "networkidle" });
+        await page.goto(`${origin}/focus/terminal`, { waitUntil: "domcontentloaded" });
         const terminal = page.locator("openclaw-terminal-panel");
         await terminal.locator(".tabstrip-tab.is-live").waitFor();
         await terminal.locator(".tp-host canvas").waitFor({ state: "visible" });
@@ -551,7 +555,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             }
           });
         });
-        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
+        await page.locator('[data-test-id="board-widget"]').first().waitFor();
         const localWorkerOutput = await page.evaluate(async () => {
           const canvas = new OffscreenCanvas(1, 1);
           canvas.getContext("2d")?.fillRect(0, 0, 1, 1);
@@ -651,7 +656,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
         context = isolated.context;
         const { page, origin, escaped } = isolated;
-        await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
         const result = await page.evaluate(async () => {
           const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");
           const blob = await response.blob();
@@ -691,7 +697,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       const context = await browser.newContext({ colorScheme: mode });
       try {
         const page = await context.newPage();
-        await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
         await expect
           .poll(() =>
             page.locator("html").evaluate((root) => ({
@@ -746,7 +752,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   it(
     "renders consistent menu options with a leading trash icon",
     withFixturePage(async (page) => {
-      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+      await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
       await openWidgetMenu(page);
       const presentation = await page
         .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
@@ -780,7 +786,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   it(
     "opens a visible catalog session with its transcript in chronological order",
     withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
+        waitUntil: "domcontentloaded",
+      });
       // External catalog sessions have no human owner.
       await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
@@ -808,14 +816,16 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   );
 
   it(
-    "starts with aligned build identity and an upgraded chat pane",
+    "starts with aligned build identity and renders a deterministic reply after generic chat.send",
     withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
+      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
+        waitUntil: "domcontentloaded",
+      });
       await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
       expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
       const paneState = await page
         .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
@@ -840,16 +850,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         upgraded: true,
       });
       expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-    }),
-  );
-
-  it(
-    "renders a deterministic reply after generic chat.send",
-    withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
-      await selectAllSidebarSessions(page);
-      await page.getByText("OpenClaw work checkout", { exact: true }).click();
-      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
 
       const prompt = "generic mock send probe";
       const composer = page.locator(
@@ -873,10 +873,7 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
 
   beforeAll(async () => {
     server = await startFixtureServer("workboard");
-    previewBrowser = await chromium.launch({
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
+    previewBrowser = await connectFixtureBrowser();
   });
 
   afterAll(async () => {
@@ -893,6 +890,7 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
         : undefined,
     });
     const page = await context.newPage();
+    let completed = false;
     try {
       await page.goto(new URL("/workboard", server.url).toString());
       await page.getByText("Capture customer feedback themes", { exact: true }).waitFor();
@@ -936,8 +934,11 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
           fullPage: true,
         });
       }
+      completed = true;
     } finally {
-      await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+      if (captureUiProof || !completed) {
+        await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
+      }
       await context.close();
     }
   });

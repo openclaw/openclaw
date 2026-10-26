@@ -294,52 +294,36 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("does not abandon the wait when the wall clock jumps forward mid-wait", async () => {
-    vi.useFakeTimers();
-    const paused = createDescendantRun({ pauseReason: "sessions_yield" });
-    listRuns.mockResolvedValue([paused]);
-    unsettled.mockResolvedValue(true);
-    latestReply.mockResolvedValue("on it");
-
-    let settled = false;
-    const resultPromise = waitSummary({ sessionKey: "test-session", timeoutMs: 300 }).then(
-      (result) => {
-        settled = true;
-        return result;
-      },
-    );
-    await vi.advanceTimersByTimeAsync(100);
-    vi.setSystemTime(Date.now() + 60_000);
-    await vi.advanceTimersByTimeAsync(150);
-    // Only 250ms of the 300ms budget elapsed; a forward jump (NTP sync,
-    // VM resume) must not make the follow-up drop the wait and lose results.
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(await resultPromise).toBeUndefined();
-  });
-
-  it("does not extend the wait when the wall clock jumps backward mid-wait", async () => {
-    vi.useFakeTimers();
-    const paused = createDescendantRun({ pauseReason: "sessions_yield" });
-    listRuns.mockResolvedValue([paused]);
-    unsettled.mockResolvedValue(true);
-    latestReply.mockResolvedValue("on it");
-
-    let settled = false;
-    const resultPromise = waitSummary({ sessionKey: "test-session", timeoutMs: 300 }).then(
-      (result) => {
-        settled = true;
-        return result;
-      },
-    );
-    await vi.advanceTimersByTimeAsync(100);
-    vi.setSystemTime(Date.now() - 60_000);
-    await vi.advanceTimersByTimeAsync(300);
-    // 400ms of monotonic time elapsed against a 300ms budget; a backward jump
-    // must not stretch the wait past the budget and hold the cron run slot.
-    expect(settled).toBe(true);
-    await expect(resultPromise).resolves.toBeUndefined();
-  });
+  it.each([-60_000, 60_000])(
+    "keeps the descendant wait budget after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      listRuns.mockResolvedValue([createDescendantRun({ pauseReason: "sessions_yield" })]);
+      unsettled.mockResolvedValue(true);
+      latestReply.mockResolvedValue("on it");
+      let settled = false;
+      const resultPromise = waitSummary({ timeoutMs: 300, abortSignal: controller.signal }).then(
+        (result) => {
+          settled = true;
+          return result;
+        },
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        await vi.advanceTimersByTimeAsync(150);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(settled).toBe(true);
+        await expect(resultPromise).resolves.toBeUndefined();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        await resultPromise;
+      }
+    },
+  );
 
   it.each(["handoff", "running"])("stops waiting when cron cancels during %s", async (phase) => {
     vi.useFakeTimers();

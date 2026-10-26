@@ -3,8 +3,11 @@ import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as transfer from "../../infra/sqlite-worker-transfer.js";
+import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { readConversation, registerConversationAddresses } from "./conversation-registry.js";
@@ -16,6 +19,7 @@ import {
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
 } from "./session-accessor.sqlite-entry.js";
+import { withActor } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import type { SessionEntry } from "./types.js";
@@ -25,6 +29,44 @@ const { getSessionEntryPatchDelivery } =
 const delivery = getSessionEntryPatchDelivery();
 const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+
+it("keeps resident SQL metadata out of callback patch preparation and commit bytes", async () => {
+  await withActor(async (f) => {
+    const prompt = "synthetic tool instructions ".repeat(400);
+    const label = "synthetic session title ".repeat(400);
+    f.writeEntry({ ...f.nativeEntry()!, label, skillsSnapshot: { prompt, skills: [] } });
+    f.read();
+    const context: AgentWorkerOperationContext = {
+      options: { agentId: f.database.agentId, path: f.database.path },
+      open: () => f.database,
+      admit() {},
+      writeTransaction: (_operation, _owner, write) =>
+        runSqliteImmediateTransactionSync(f.database.db, () => write(f.database)),
+    };
+    const operations = await createAgentWorkerTestLoaders(context)["session.entry.patch.prepare"]();
+    const selection = { kind: "entry" as const, sessionKey: f.target.sessionKey, exact: true };
+    const prepared = structuredClone(operations["session.entry.patch.prepare"](selection, context));
+    const writeBase = prepared[0]!.entry;
+    const input = {
+      selection,
+      prepared,
+      sessionKey: f.target.sessionKey,
+      writeBase,
+      next: { ...writeBase, label: "small patch" },
+      operationLabel: "session-entry.patch" as const,
+      validateCanonicalKeys: true,
+    };
+    // The logical preimage is required for CAS; its duplicate SQL JSON is not.
+    const logicalEntryBudget = Buffer.byteLength(prompt) + Buffer.byteLength(label) + 4_096;
+    expect(serialize(prepared).byteLength).toBeLessThan(logicalEntryBudget);
+    expect(serialize(input).byteLength).toBeLessThan(logicalEntryBudget);
+    f.patchEntry(structuredClone(input));
+    expect(f.nativeEntry()).toMatchObject({
+      label: "small patch",
+      skillsSnapshot: { prompt, skills: [] },
+    });
+  });
+});
 
 async function conversationGuard(f: ReturnType<typeof fixture>, peerId: string) {
   const identity = buildConversationIdentity({

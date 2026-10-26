@@ -4,6 +4,7 @@ import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
 } from "./tool-search-catalog.js";
+import { getTextLexicalIndex, prepareTextLexicalDocument } from "./tool-search-index.js";
 import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
@@ -16,6 +17,19 @@ import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keys prepared text by exact content and order without aliasing raw text", () => {
+  const documents = ["alpha", "beta"].map(prepareTextLexicalDocument);
+  const index = getTextLexicalIndex(documents);
+  expect(getTextLexicalIndex(["alpha", "beta"].map(prepareTextLexicalDocument))).toBe(index);
+  expect(getTextLexicalIndex(documents.toReversed())).not.toBe(index);
+  expect(getTextLexicalIndex(["alph", "abeta"].map(prepareTextLexicalDocument))).not.toBe(index);
+  expect(getTextLexicalIndex(documents.map(({ revision }) => revision))).not.toBe(index);
+  expect(getTextLexicalIndex([prepareTextLexicalDocument("\ud800")])).not.toBe(
+    getTextLexicalIndex([prepareTextLexicalDocument("\ud801")]),
+  );
+  expect(scoreLexical(index, tokenizeQuery("beta")).map(({ value }) => value)).toEqual([1]);
+});
 
 function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
   return {

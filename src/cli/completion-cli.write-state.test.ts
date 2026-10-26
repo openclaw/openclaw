@@ -14,6 +14,7 @@ import {
   resolveCompletionProfilePath,
   type CompletionShell,
 } from "./completion-runtime.js";
+import { formatCliFailureLines, isExpectedCliError } from "./failure-output.js";
 
 type PublishOutput = typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type SubcliGroups = typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
@@ -156,6 +157,33 @@ describe("completion-cli write-state", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each(["bash", "zsh"] as const)(
+    "prints the missing-cache recovery command and leaves the %s profile unchanged",
+    async (shell) => {
+      const profilePath = resolveCompletionProfilePath(shell);
+      const original = "# existing shell settings\n";
+      await fs.writeFile(profilePath, original, "utf8");
+
+      let caught: unknown;
+      try {
+        await runCompletion(["--shell", shell, "--install", "--yes"]);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(isExpectedCliError(caught)).toBe(true);
+      const lines = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: caught,
+        argv: ["node", "openclaw", "completion", "--shell", shell, "--install", "--yes"],
+      });
+      expect(lines.join("\n")).toContain("openclaw completion --write-state");
+      expect(lines.join("\n")).not.toContain("doctor");
+      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(original);
+      expectNoRegistration();
+    },
+  );
 
   it("preserves zsh completion when staged publication fails", async () => {
     const { cachePath, cacheDir } = await seedCache();

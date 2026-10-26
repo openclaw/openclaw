@@ -100,7 +100,9 @@ Host Code Mode using the Node executor, QA expressions, and plugins fetched afte
 the build run interpreted. Each feature emits one performance notice per process;
 use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
 through the normal loader against the compiled SDK in both emitted-JavaScript
-and original-TypeScript AOT builds. Missing runtime modules and
+and original-TypeScript AOT builds. The loader transfers compiled SDK exports to
+interpreted plugins; virtual SDK paths do not contain readable source files.
+Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
@@ -461,8 +463,8 @@ The sealed single-file update-recovery helper uses its existing in-process hashi
 fallback so its recorded recovery artifact remains self-contained. Normal
 installations use the declared hashing workers.
 
-Browser MCP and remote repository bootstrap scripts are generated from typed
-sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
+Browser MCP, widget keyboard shortcuts, and remote repository bootstrap scripts are
+generated from typed sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
 

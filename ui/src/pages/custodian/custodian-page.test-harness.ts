@@ -1,4 +1,4 @@
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import { type Mock, vi } from "vitest";
 import type {
   GatewayBrowserClient,

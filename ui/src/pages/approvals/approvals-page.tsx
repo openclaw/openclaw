@@ -345,6 +345,10 @@ export function ApprovalsPage() {
     state.error = null;
     publish();
     const isCurrent = () => isCurrentRequest(client, gateway, generation);
+    // Standing grants remain revocable even when the history read stalls or fails.
+    if (reset) {
+      void loadGrants(client, isCurrent);
+    }
     const completion = applyPage(client);
     setHistoryReceipt({
       generation,
@@ -367,9 +371,6 @@ export function ApprovalsPage() {
         state.items = reset ? result.items : [...state.items, ...result.items];
         state.nextCursor = result.nextCursor ?? null;
         state.hasLoaded = true;
-        if (reset) {
-          void loadGrants(admittedClient, isCurrent);
-        }
       } catch (error) {
         if (isCurrent()) {
           state.error = formatUiError(error);
@@ -609,6 +610,7 @@ export function ApprovalsPage() {
                     </thead>
                     <tbody>
                       <Loading
+                        on={requestGeneration()}
                         fallback={<EmptyRow columns={5} label={t("approvalHistory.unknown")} />}
                       >
                         {readGrants()}

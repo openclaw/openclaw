@@ -15,6 +15,7 @@ export async function startControlUiBenchGatewayServer(
             body: string | Buffer;
             contentType: string;
             delayMs?: number;
+            headers?: Record<string, string>;
           }
         | undefined)
     | undefined;
@@ -76,6 +77,7 @@ export async function startControlUiBenchGatewayServer(
           "Cache-Control": "no-store",
           "Access-Control-Allow-Origin": "*",
           "Cross-Origin-Resource-Policy": "cross-origin",
+          ...fixture.headers,
         });
         response.end(request.method === "HEAD" ? undefined : fixture.body);
       };

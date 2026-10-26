@@ -6,7 +6,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult, SessionGoal } from "../../api/types.ts";
 import { retireStoredGoalOperations } from "../../lib/chat/goal-operation-storage.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";

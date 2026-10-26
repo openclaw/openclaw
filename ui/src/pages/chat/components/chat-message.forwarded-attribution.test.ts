@@ -17,7 +17,7 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";

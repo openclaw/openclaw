@@ -1,3 +1,4 @@
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
@@ -97,7 +98,13 @@ function selectTaskPublicationSessions(
     }
     seen.add(identity);
     sessions.push(node.session);
-    node.children ??= projection.selectEntries({ parentSessionKey: row }).map(prepare);
+    // Qualified parents use logical membership; sentinels retain cross-store alias selection.
+    node.children ??=
+      row.key.startsWith("agent:") && !projection.hasLogicalChildEntries(row)
+        ? []
+        : runWithMainThreadTask("gateway:task-pr-lineage", () =>
+            projection.selectEntries({ parentSessionKey: row }).map(prepare),
+          );
     pending.push(...node.children);
   }
   sessions.sort(

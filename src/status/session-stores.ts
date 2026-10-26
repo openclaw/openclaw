@@ -24,7 +24,7 @@ const SESSION_STORE_READ_SLICE_MS = 8;
 type SessionStoreSummary = Awaited<ReturnType<SessionHistoryWorkerDatabase["readStoreSummary"]>>;
 const projectionSummaries = new WeakMap<
   SessionRowProjection,
-  { revision: object; windows: Map<number, Map<string, SessionStoreSummary>> }
+  Map<string, Map<number, SessionStoreSummary>>
 >();
 export type PreparedStatusSessionStores = Awaited<
   ReturnType<
@@ -58,13 +58,21 @@ function summarizeProjectionRows(
   recentLimit: number,
 ): SessionStoreSummary {
   const revision = projection.state.revision;
-  let retained = projectionSummaries.get(projection);
-  if (retained?.revision !== revision) {
-    retained = { revision, windows: new Map() };
-    projectionSummaries.set(projection, retained);
+  let stores = projectionSummaries.get(projection);
+  if (!stores) {
+    stores = new Map();
+    projectionSummaries.set(projection, stores);
+    const retained = stores;
+    projection.onSelectionChange((change) => {
+      if (change.kind === "reset" || !change.row) {
+        retained.clear();
+      } else {
+        retained.delete(change.row.storeTarget.storePath);
+      }
+    });
   }
-  let stores = retained.windows.get(recentLimit);
-  const cached = stores?.get(storePath);
+  let windows = stores.get(storePath);
+  const cached = windows?.get(recentLimit);
   if (cached) {
     return cached;
   }
@@ -92,10 +100,10 @@ function summarizeProjectionRows(
   const summary: SessionStoreSummary = { count: rows.length, recent: [], byAgent };
   // Selection can acquire dirty entries; retain only a stable owner revision.
   if (projection.state.revision === revision) {
-    if (!stores) {
-      retained.windows.set(recentLimit, (stores = new Map()));
+    if (!windows) {
+      stores.set(storePath, (windows = new Map()));
     }
-    stores.set(storePath, summary);
+    windows.set(recentLimit, summary);
   }
   return summary;
 }

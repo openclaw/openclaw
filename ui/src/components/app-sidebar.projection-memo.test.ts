@@ -225,8 +225,10 @@ describe("sidebar projection memo", () => {
     expect(row()?.textContent).not.toContain("Updated while hidden");
     expect(sessions.list).toHaveBeenCalledTimes(reads);
     sidebar.navigationVisible = true;
-    await waitForSolid(() => expect(row()?.textContent).toContain("Updated while hidden"));
-    expect(createdRow()?.textContent).toContain("created-while-hidden");
+    await waitForSolid(() => {
+      expect(row()?.textContent).toContain("Updated while hidden");
+      expect(createdRow()?.textContent).toContain("created-while-hidden");
+    });
   });
 
   it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {

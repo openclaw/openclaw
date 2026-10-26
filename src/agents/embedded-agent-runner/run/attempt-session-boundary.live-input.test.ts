@@ -23,10 +23,66 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import type { AgentSession } from "../../sessions/agent-session.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 
 registerAgentSessionLoopTestLifecycle();
+
+type Target = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
+
+function withLiveInput(
+  run: (target: Target, prior: ReturnType<typeof createAssistant>) => Promise<void>,
+) {
+  return withOpenClawTestState({ label: "live-input" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "live-input-session",
+      sessionKey: "agent:main:live-input",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = guardSessionManager(
+      await SessionManager.openAsync(target, state.workspaceDir),
+      {
+        runId: "prior-run",
+      },
+    );
+    const prior = createAssistant(testModel, [{ type: "text", text: "prior reply" }]);
+    await manager.appendMessageAsync(prior);
+    await run(target, prior);
+  });
+}
+
+function prepareBoundary(
+  session: AgentSession,
+  target: Target,
+  prompt: string,
+  recorder?: Recorder,
+  message?: Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0]["preparedUserTurnMessage"],
+) {
+  return prepareEmbeddedAttemptSessionBoundary({
+    activeSession: session,
+    attempt: {
+      prompt,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      userTurnTranscriptRecorder: recorder,
+    },
+    getUserTranscriptContexts: () => undefined,
+    isRawModelRun: false,
+    preparedUserTurnMessage: message,
+    sessionManager: session.sessionManager,
+    setActiveSessionSystemPrompt: vi.fn(),
+  });
+}
+
+function replyWith(text: string) {
+  streamMocks.streamSimple.mockImplementation((model) =>
+    createAssistantResultStream(createAssistant(model, [{ type: "text", text }])),
+  );
+}
 
 describe("live pending inputs at the attempt boundary", () => {
   it.each([
@@ -37,22 +93,7 @@ describe("live pending inputs at the attempt boundary", () => {
   ])(
     "keeps announcement effects separate from $custody input (metadata=$metadata, collected=$collected, excluded=$excluded, latePromotion=$latePromotion)",
     async ({ metadata, collected, excluded, custody, latePromotion }) => {
-      await withOpenClawTestState({ label: "live-input-orphan" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId: "live-input-session",
-          sessionKey: "agent:main:live-input",
-          storePath: path.join(state.sessionsDir(), "sessions.json"),
-        };
-        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        const manager = guardSessionManager(
-          await SessionManager.openAsync(target, state.workspaceDir),
-          {
-            runId: "prior-run",
-          },
-        );
-        const prior = createAssistant(testModel, [{ type: "text", text: "prior reply" }]);
-        await manager.appendMessageAsync(prior);
+      await withLiveInput(async (target, prior) => {
         const message: Parameters<typeof stageSessionPendingInput>[1]["message"] = {
           role: "user",
           content: "queued user request",
@@ -117,16 +158,6 @@ describe("live pending inputs at the attempt boundary", () => {
               api.on("before_agent_start", beforeStart);
             },
           });
-          const prepareAnnouncement = (session: typeof activeSession, prompt: string) =>
-            prepareEmbeddedAttemptSessionBoundary({
-              activeSession: session,
-              attempt: { prompt, sessionId: target.sessionId, sessionKey: target.sessionKey },
-              getUserTranscriptContexts: () => undefined,
-              isRawModelRun: false,
-              preparedUserTurnMessage: undefined,
-              sessionManager: session.sessionManager,
-              setActiveSessionSystemPrompt: vi.fn(),
-            });
           const prepare = pendingInputs.prepareForeignLiveSessionPendingInputEntries;
           const held = latePromotion
             ? vi
@@ -137,19 +168,15 @@ describe("live pending inputs at the attempt boundary", () => {
                   return read;
                 })
             : undefined;
-          let boundary: Awaited<ReturnType<typeof prepareAnnouncement>>;
+          let boundary: Awaited<ReturnType<typeof prepareBoundary>>;
           try {
-            boundary = await prepareAnnouncement(activeSession, "announce child result");
+            boundary = await prepareBoundary(activeSession, target, "announce child result");
           } finally {
             held?.mockRestore();
           }
           const promoted = expectDefined(persisted, "Expected promoted input");
           expect(activeSession.agent.state.messages).toMatchObject([prior]);
-          streamMocks.streamSimple.mockImplementation((replyModel) =>
-            createAssistantResultStream(
-              createAssistant(replyModel, [{ type: "text", text: "child result delivered" }]),
-            ),
-          );
+          replyWith("child result delivered");
           // The real SDK hook runs after boundary preparation and before provider/SQLite effects.
           await activeSession.prompt(
             boundary.orphanRepair?.contextEnginePrompt ?? "announce child result",
@@ -197,7 +224,11 @@ describe("live pending inputs at the attempt boundary", () => {
               model: testModel,
               sessionManager: guardSessionManager(reopened, { runId: "followup-announce" }),
             });
-            const followupBoundary = await prepareAnnouncement(followup, "announce another result");
+            const followupBoundary = await prepareBoundary(
+              followup,
+              target,
+              "announce another result",
+            );
             expect(followupBoundary.orphanRepair).toBeUndefined();
             await followup.prompt("announce another result", { expandPromptTemplates: false });
             expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
@@ -213,25 +244,14 @@ describe("live pending inputs at the attempt boundary", () => {
                 preparedUserTurnTranscriptRecorder: recorder,
               }),
             });
-            streamMocks.streamSimple.mockImplementation((replyModel) =>
-              createAssistantResultStream(
-                createAssistant(replyModel, [{ type: "text", text: "original user reply" }]),
-              ),
+            replyWith("original user reply");
+            await prepareBoundary(
+              original,
+              target,
+              "queued user request",
+              recorder,
+              promoted.message,
             );
-            await prepareEmbeddedAttemptSessionBoundary({
-              activeSession: original,
-              attempt: {
-                prompt: "queued user request",
-                sessionId: target.sessionId,
-                sessionKey: target.sessionKey,
-                userTurnTranscriptRecorder: recorder,
-              },
-              getUserTranscriptContexts: () => undefined,
-              isRawModelRun: false,
-              preparedUserTurnMessage: promoted.message,
-              sessionManager: original.sessionManager,
-              setActiveSessionSystemPrompt: vi.fn(),
-            });
             await receipt.run(() =>
               original.prompt("queued user request", {
                 persistedUserIdempotencyKey: receipt.message.idempotencyKey,
@@ -264,19 +284,7 @@ describe("live pending inputs at the attempt boundary", () => {
   );
 
   it("keeps live foreign input out of an already persisted current turn", async () => {
-    await withOpenClawTestState({ label: "live-input-current" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "live-input-current",
-        sessionKey: "agent:main:live-input-current",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const seed = guardSessionManager(await SessionManager.openAsync(target, state.workspaceDir), {
-        runId: "prior-run",
-      });
-      const prior = createAssistant(testModel, [{ type: "text", text: "prior reply" }]);
-      await seed.appendMessageAsync(prior);
+    await withLiveInput(async (target) => {
       const foreign = expectDefined(
         await stageSessionPendingInput(target, {
           runId: "queued-run",
@@ -332,21 +340,7 @@ describe("live pending inputs at the attempt boundary", () => {
               assertCommitAllowed: () => {},
               withTranscriptWrite: async (operation) => await operation(),
             },
-            () =>
-              prepareEmbeddedAttemptSessionBoundary({
-                activeSession,
-                attempt: {
-                  prompt: "current request",
-                  sessionId: target.sessionId,
-                  sessionKey: target.sessionKey,
-                  userTurnTranscriptRecorder: recorder,
-                },
-                getUserTranscriptContexts: () => undefined,
-                isRawModelRun: false,
-                preparedUserTurnMessage: current,
-                sessionManager: manager,
-                setActiveSessionSystemPrompt: vi.fn(),
-              }),
+            () => prepareBoundary(activeSession, target, "current request", recorder, current),
           );
         } finally {
           await selected.databaseClaim.release();

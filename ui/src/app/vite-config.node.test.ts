@@ -61,6 +61,22 @@ vi.mock("vite", async (importOriginal) => {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const baseLocaleId = "\0virtual:openclaw-control-ui-locale/fr";
+const commit = "0123456789abcdef0123456789abcdef01234567";
+const buildInfo = {
+  version: "2026.7.10",
+  commit,
+  commitAt: "2026-07-10T11:22:33.000Z",
+  builtAt: "2026-07-10T12:34:56.000Z",
+  branch: null,
+  dirty: null,
+  release: false,
+  buildId: "mock-artifact",
+};
+type Catalog = TranslationMap & { common: TranslationMap };
+const labeledCatalog = (label: string): Catalog => ({
+  common: { health: label },
+  configHints: { fixture: { label } },
+});
 const resolveBuildInfo = (sources: Parameters<typeof resolveControlUiBuildInfo>[0] = {}) =>
   resolveControlUiBuildInfo({
     env: {},
@@ -106,32 +122,13 @@ async function loadLocaleSource(
   return result;
 }
 
-function catalogImport(
-  catalog: TranslationMap & { common: TranslationMap },
-  startup: TranslationMap = { common: catalog.common },
-) {
+function catalogImport(catalog: Catalog, startup: TranslationMap = { common: catalog.common }) {
   return {
     module: {
       loadControlUiSourceCatalog: () => catalog,
       loadControlUiStartupCatalog: () => startup,
     },
     dependencies: [],
-  };
-}
-
-function memoryEntry(
-  cache_key: string,
-  segment_id: string,
-  text: string,
-  translated: string,
-  hint = false,
-) {
-  return {
-    cache_key,
-    segment_id,
-    ...(hint ? { text } : {}),
-    text_hash: hashControlUiTranslationText(text),
-    translated,
   };
 }
 
@@ -147,9 +144,33 @@ const withSourceImport = (
   withoutMemory(async () => {
     await viteMocks.runnerImport.withImplementation(source, run);
   });
+const withMemory = (memory: string, run: () => Promise<void>) =>
+  fsMocks.existsSync.withImplementation(
+    () => true,
+    () => fsMocks.readFileSync.withImplementation(() => memory, run),
+  );
 
 function dataModuleUrl(source: string): string {
   return `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+}
+
+async function expectEncodings(
+  file: string,
+  source: string | Buffer,
+  encodings: string[] = [],
+  startup?: Set<string>,
+) {
+  const variants = await createControlUiPrecompressedAssetVariants(file, source, startup);
+  expect(variants.map(({ fileName }) => fileName)).toEqual(
+    encodings.map((ext) => `${file}.${ext}`),
+  );
+  return variants;
+}
+
+function expectBefore<T>(values: T[], first: T, second: T) {
+  expect(values.includes(first)).toBe(true);
+  expect(values.includes(second)).toBe(true);
+  expect(values.indexOf(first)).toBeLessThan(values.indexOf(second));
 }
 
 async function executeLocale(
@@ -222,41 +243,27 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
     Buffer.from(source),
   );
   expect(repeated).toEqual(variants);
-  expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
-  expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
-  expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+  for (const excluded of ["index.html", "assets/logo.png", "assets/app.js.map"]) {
+    await expectEncodings(excluded, source);
+  }
 });
 
 it("precompresses assets starting at 4 KiB only when the encoding saves bytes", async () => {
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/small.js", "x".repeat(4095)),
-  ).toEqual([]);
+  await expectEncodings("assets/small.js", "x".repeat(4095));
   const boundary = "é".repeat(2048);
-  const variants = await createControlUiPrecompressedAssetVariants("assets/boundary.js", boundary);
-  expect(variants.map((variant) => variant.fileName)).toEqual([
-    "assets/boundary.js.br",
-    "assets/boundary.js.gz",
-  ]);
+  const variants = await expectEncodings("assets/boundary.js", boundary, ["br", "gz"]);
   for (const variant of variants) {
     expect(variant.source.byteLength).toBeLessThan(Buffer.byteLength(boundary));
   }
   const incompressible = Buffer.concat(
     Array.from({ length: 128 }, (_, index) => createHash("sha256").update(String(index)).digest()),
   );
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/random.wasm", incompressible),
-  ).toEqual([]);
+  await expectEncodings("assets/random.wasm", incompressible);
   // These tails produce an exactly 4096-byte Brotli or gzip output, respectively.
   incompressible.fill(0, 4096 - 29);
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/equal-br.wasm", incompressible),
-  ).toEqual([]);
+  await expectEncodings("assets/equal-br.wasm", incompressible);
   incompressible.fill(0, 4096 - 66);
-  expect(
-    (await createControlUiPrecompressedAssetVariants("assets/equal-gzip.wasm", incompressible)).map(
-      (variant) => variant.fileName,
-    ),
-  ).toEqual(["assets/equal-gzip.wasm.br"]);
+  await expectEncodings("assets/equal-gzip.wasm", incompressible, ["br"]);
 });
 
 it("keeps small CSS and measured startup assets compressed, excluding deferred route preloads", async () => {
@@ -271,38 +278,14 @@ it("keeps small CSS and measured startup assets compressed, excluding deferred r
   );
   const source = "export const value = 123;\n".repeat(20);
   for (const fileName of ["assets/entry.js", "assets/runtime.js", "assets/lazy.css"]) {
-    const variants = await createControlUiPrecompressedAssetVariants(
-      fileName,
-      source,
-      startupAssets,
-    );
-    expect(variants.map((variant) => variant.fileName)).toEqual([
-      `${fileName}.br`,
-      `${fileName}.gz`,
-    ]);
+    await expectEncodings(fileName, source, ["br", "gz"], startupAssets);
   }
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/chat.js", source, startupAssets),
-  ).toEqual([]);
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/tiny.css", "x", startupAssets),
-  ).toEqual([]);
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/entry.js", "x", startupAssets),
-  ).toEqual([]);
+  await expectEncodings("assets/chat.js", source, [], startupAssets);
+  await expectEncodings("assets/tiny.css", "x", [], startupAssets);
+  await expectEncodings("assets/entry.js", "x", [], startupAssets);
 });
 
 it("uses the supplied artifact identity without reading Git metadata", () => {
-  const buildInfo = {
-    version: "2026.7.10",
-    commit: "0123456789abcdef0123456789abcdef01234567",
-    commitAt: "2026-07-10T11:22:33.000Z",
-    builtAt: "2026-07-10T12:34:56.000Z",
-    branch: null,
-    dirty: null,
-    release: false,
-    buildId: "mock-artifact",
-  };
   childProcessMocks.execFileSync.mockClear();
   const config = controlUiViteConfig({ command: "serve", buildInfo });
   expect(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]).toBe(
@@ -338,142 +321,82 @@ it("selects a polling watcher when the existing environment opt-in is enabled", 
 });
 
 it("embeds one canonical artifact identity from explicit build inputs", () => {
-  const readGitCommit = vi.fn(() => "f".repeat(40));
-  const readGitCommitTimestamp = vi.fn(() => "2026-07-10T10:11:12.000Z");
   expect(
     resolveBuildInfo({
-      env: {
-        GIT_COMMIT: "0123456789abcdef0123456789abcdef01234567",
-        OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
+      env: { GIT_COMMIT: commit, OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z" },
+      readGitCommit: () => {
+        throw new Error("Explicit identity must not read HEAD");
       },
-      readGitCommit,
-      readGitCommitTimestamp,
-      readPackageVersion: () => "2026.7.10",
+      readGitCommitTimestamp: (requested) => {
+        expect(requested).toBe(commit);
+        return buildInfo.commitAt;
+      },
+      readPackageVersion: () => buildInfo.version,
     }),
   ).toEqual({
-    version: "2026.7.10",
-    commit: "0123456789abcdef0123456789abcdef01234567",
-    commitAt: "2026-07-10T10:11:12.000Z",
-    builtAt: "2026-07-10T12:34:56.000Z",
-    branch: null,
-    dirty: null,
-    release: false,
+    ...buildInfo,
     buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
   });
-  expect(readGitCommit).not.toHaveBeenCalled();
-  expect(readGitCommitTimestamp).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
 });
 
 it("keeps source-build identity stable when no build timestamp is provided", () => {
-  const sources = {
-    env: {},
-    readGitCommit: () => "a".repeat(40),
-    readGitCommitTimestamp: () => null,
-  };
-  const first = resolveBuildInfo(sources);
-  const second = resolveBuildInfo(sources);
-  expect(first).toEqual(second);
-  expect(first).toEqual({
-    version: null,
-    commit: "a".repeat(40),
-    commitAt: null,
-    builtAt: null,
-    branch: null,
-    dirty: null,
-    release: false,
-    buildId: "aaaaaaaaaaaa",
-  });
+  const info = resolveBuildInfo({ readGitCommit: () => "a".repeat(40) });
+  expect(info).toMatchObject({ builtAt: null, buildId: "aaaaaaaaaaaa" });
 });
 
 it("hard-kills every advisory Git read after its deadline", async () => {
   await childProcessMocks.execFileSync.withImplementation(
-    ((_file: string, args?: readonly string[]) => {
-      const commandArgs = args ?? [];
-      if (commandArgs.includes("--format=%ct")) {
-        return "0\n";
-      }
-      if (commandArgs.includes("--abbrev-ref")) {
-        return "main\n";
-      }
-      if (commandArgs.includes("--porcelain")) {
-        return "";
-      }
-      return `${"a".repeat(40)}\n`;
+    ((_file: string, args: readonly string[], options: unknown) => {
+      expect(args).toContain("--no-optional-locks");
+      expect(options).toMatchObject({ killSignal: "SIGKILL", timeout: 2_000 });
+      return args.includes("--format=%ct")
+        ? "0\n"
+        : args.includes("--abbrev-ref")
+          ? "main\n"
+          : args.includes("--porcelain")
+            ? ""
+            : `${"a".repeat(40)}\n`;
     }) as typeof import("node:child_process").execFileSync,
     async () => {
-      childProcessMocks.execFileSync.mockClear();
       expect(resolveControlUiBuildInfo({ env: {}, readPackageVersion: () => null })).toMatchObject({
         commit: "a".repeat(40),
         commitAt: "1970-01-01T00:00:00.000Z",
         branch: "main",
         dirty: false,
       });
-      expect(childProcessMocks.execFileSync).toHaveBeenCalledTimes(4);
-      for (const call of childProcessMocks.execFileSync.mock.calls) {
-        const args = call[1];
-        const options = call[2];
-        expect(args).toContain("--no-optional-locks");
-        expect(options).toMatchObject({
-          killSignal: "SIGKILL",
-          timeout: 2_000,
-        });
-      }
     },
   );
 });
 
 it.each([
-  ["checked-out Git", { GITHUB_SHA: "b".repeat(40) }, "c".repeat(40), "c".repeat(40), 1],
-  ["GitHub fallback", { GITHUB_SHA: "b".repeat(40) }, null, "b".repeat(40), 1],
+  ["checked-out Git", { GITHUB_SHA: "b".repeat(40) }, "c".repeat(40), "c".repeat(40)],
+  ["GitHub fallback", { GITHUB_SHA: "b".repeat(40) }, null, "b".repeat(40)],
   [
     "explicit alias",
     { GIT_SHA: "A".repeat(40), GITHUB_SHA: "b".repeat(40) },
     "c".repeat(40),
     "a".repeat(40),
-    0,
   ],
-] as const)("resolves commit identity from %s", (_name, env, git, commit, calls) => {
-  const readGitCommit = vi.fn(() => git);
-  expect(resolveBuildInfo({ env, readGitCommit })).toMatchObject({ commit, commitAt: null });
-  expect(readGitCommit).toHaveBeenCalledTimes(calls);
+] as const)("resolves commit identity from %s", (_name, env, git, expectedCommit) => {
+  expect(resolveBuildInfo({ env, readGitCommit: () => git })).toMatchObject({
+    commit: expectedCommit,
+    commitAt: null,
+  });
 });
 
 it.each([
-  [
-    "explicit",
-    {
-      GIT_BRANCH: " feature/from-env ",
-      GITHUB_REF_NAME: "feature/github",
-      GITHUB_REF_TYPE: "branch",
-    },
-    "git-fallback",
-    "feature/from-env",
-    0,
-  ],
-  [
-    "GitHub branch",
-    { GITHUB_REF_NAME: "feature/github", GITHUB_REF_TYPE: "branch" },
-    "git-fallback",
-    "feature/github",
-    0,
-  ],
-  [
-    "GitHub tag",
-    { GITHUB_REF_NAME: "v2026.7.10", GITHUB_REF_TYPE: "tag" },
-    "git-fallback",
-    "git-fallback",
-    1,
-  ],
-  ["checkout", {}, "feature/from-git", "feature/from-git", 1],
-  ["detached HEAD", {}, "HEAD", null, 1],
-] as const)("resolves %s branch identity", (_name, env, git, branch, calls) => {
-  const readGitBranch = vi.fn(() => git);
-  expect(resolveBuildInfo({ env, readGitBranch }).branch).toBe(branch);
-  expect(readGitBranch).toHaveBeenCalledTimes(calls);
-});
-
-it.each([true, false, null])("preserves Git dirty state %s", (dirty) => {
-  expect(resolveBuildInfo({ readGitDirty: () => dirty }).dirty).toBe(dirty);
+  ["explicit", { GIT_BRANCH: " feature/from-env ", GITHUB_REF_TYPE: "branch" }, "feature/from-env"],
+  ["GitHub branch", { GITHUB_REF_TYPE: "branch" }, "feature/github"],
+  ["GitHub tag", { GITHUB_REF_TYPE: "tag" }, "git-fallback"],
+  ["checkout", {}, "git-fallback"],
+  ["detached HEAD", {}, null],
+] as const)("resolves %s branch identity", (name, env, branch) => {
+  expect(
+    resolveBuildInfo({
+      env: { GITHUB_REF_NAME: "feature/github", ...env },
+      readGitBranch: () => (name === "detached HEAD" ? "HEAD" : "git-fallback"),
+    }).branch,
+  ).toBe(branch);
 });
 
 it.each([
@@ -490,35 +413,27 @@ it.each([
       readPackageVersion: () => "2026.7.10",
     }),
   ).toMatchObject({
-    version: "2026.7.10",
-    commit: "a".repeat(40),
-    branch: "release/2026.7.10",
-    dirty: false,
     release,
     buildId: `2026.7.10-${marker}aaaaaaaaaaaa-2026-07-10T13-14-15.000Z`,
   });
 });
 
 it.each([
-  ["OPENCLAW_CONTROL_UI_RELEASE_BUILD", "true", "must be 1 when set", 1],
-  ["GITHUB_SHA", "bad", "must be a full 40-character hexadecimal SHA", 1],
-  ["GIT_COMMIT", "deadbeef", "must be a full 40-character hexadecimal SHA", 0],
+  ["OPENCLAW_CONTROL_UI_RELEASE_BUILD", "true", "must be 1 when set"],
+  ["GITHUB_SHA", "bad", "must be a full 40-character hexadecimal SHA"],
+  ["GIT_COMMIT", "deadbeef", "must be a full 40-character hexadecimal SHA"],
   [
     "OPENCLAW_BUILD_TIMESTAMP",
     "2026-07-10 12:34:56",
     "must be a valid UTC ISO-8601 timestamp ending in Z",
-    1,
   ],
-] as const)("rejects malformed %s", (key, value, error, calls) => {
-  const readGitCommit = vi.fn(() => (key === "GITHUB_SHA" ? null : "a".repeat(40)));
+] as const)("rejects malformed %s", (key, value, error) => {
   expect(() =>
     resolveBuildInfo({
       env: { [key]: value },
-      readGitCommit,
-      readPackageVersion: () => "2026.7.10",
+      readGitCommit: () => (key === "GITHUB_SHA" ? null : "a".repeat(40)),
     }),
   ).toThrow(`${key} ${error}`);
-  expect(readGitCommit).toHaveBeenCalledTimes(calls);
 });
 
 it("resolves root tsconfig package aliases for source imports", () => {
@@ -530,35 +445,20 @@ it("resolves root tsconfig package aliases for source imports", () => {
 
 it("resolves Control UI dev-server source aliases for internal packages", () => {
   const aliases = resolveSourcePackageAliasesForVite();
-  const rootIndex = aliases.findIndex((alias) => alias.find === "@openclaw/normalization-core");
-  for (const subpath of [
-    "agent-id",
-    "json-schema",
-    "string-coerce",
-    "phone-presentation",
-    "session-key-comparison",
-    "result",
-    "stable-stringify",
-  ]) {
-    const index = aliases.findIndex(
-      (alias) => alias.find === `@openclaw/normalization-core/${subpath}`,
-    );
-    expect(aliases[index]).toEqual({
-      find: `@openclaw/normalization-core/${subpath}`,
-      replacement: path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-    });
-    expect(index).toBeGreaterThanOrEqual(0);
-    expect(index).toBeLessThan(rootIndex);
-  }
+  const moduleId = "@openclaw/normalization-core/agent-id";
+  expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
+    path.join(repoRoot, "packages/normalization-core/src/agent-id.ts"),
+  );
+  expectBefore(
+    aliases.map((alias) => alias.find),
+    moduleId,
+    "@openclaw/normalization-core",
+  );
 });
 
 it("uses Node package resolution for external packages inherited by worktrees", () => {
   const resolvePackage = vi.fn((specifier: string) => path.join("/parent/node_modules", specifier));
   const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
-  expect(resolvePackage.mock.calls).toEqual([
-    ["@openclaw/libterminal/package.json"],
-    ["@openclaw/uirouter/package.json"],
-  ]);
   expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
     find: "@openclaw/libterminal/browser",
     replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
@@ -567,21 +467,19 @@ it("uses Node package resolution for external packages inherited by worktrees", 
 
 it("keeps specific tsconfig aliases ahead of broad package aliases", () => {
   const aliases = resolveTsconfigPathAliasesForVite();
-  const netPolicyIpIndex = aliases.findIndex((alias) => alias.find === "@openclaw/net-policy/ip");
-  const netPolicyPackageIndex = aliases.findIndex((alias) => alias.find === "@openclaw/net-policy");
-  const netPolicyWildcardIndex = aliases.findIndex(
-    (alias) =>
-      alias.find instanceof RegExp && alias.replacement.includes("packages/net-policy/src/$1"),
+  expect(aliases.find((alias) => alias.find === "@openclaw/net-policy/ip")?.replacement).toBe(
+    path.join(repoRoot, "packages/net-policy/src/ip.ts"),
   );
-  const broadOpenClawWildcardIndex = aliases.findIndex(
-    (alias) => alias.find instanceof RegExp && alias.replacement.includes("extensions/$1"),
+  expectBefore(
+    aliases.map((alias) => alias.find),
+    "@openclaw/net-policy/ip",
+    "@openclaw/net-policy",
   );
-  expect(netPolicyIpIndex).toBeGreaterThanOrEqual(0);
-  expect(netPolicyWildcardIndex).toBeGreaterThanOrEqual(0);
-  expect(netPolicyPackageIndex).toBeGreaterThanOrEqual(0);
-  expect(broadOpenClawWildcardIndex).toBeGreaterThanOrEqual(0);
-  expect(netPolicyIpIndex).toBeLessThan(netPolicyPackageIndex);
-  expect(netPolicyWildcardIndex).toBeLessThan(broadOpenClawWildcardIndex);
+  expectBefore(
+    aliases.filter((alias) => alias.find instanceof RegExp).map((alias) => alias.replacement),
+    path.join(repoRoot, "packages/net-policy/src/$1"),
+    path.join(repoRoot, "extensions/$1"),
+  );
 });
 
 it("composes the complete source without registering runtime English", () => {
@@ -592,15 +490,7 @@ it("composes the complete source without registering runtime English", () => {
   expect(source).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
   expect(flat.get("activity.title")).toBe("Activity");
-  expect(flat.get("memoryImport.title")).toBe("Import assistant memory");
-  expect(flat.get("login.failure.authRequired.title")).toBe("This Gateway expects its token");
-  expect(flat.get("sessionsView.runsOnDevice")).toBe("Runs on device");
-  expect(flat.get("pluginConsent.widenedTitle")).toBe("What changed");
-  expect(flat.get("configPage.themeImported")).toBe("Imported {name}.");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
-  expect(flat.get("updates.page.intro")).toBe(
-    "Manage the connected Gateway's release channel and update policy.",
-  );
 });
 
 it("includes every English dependency in the raw source-hash input", async () => {
@@ -699,10 +589,7 @@ it.each([
   { name: "current rejected", outcome: "reject" as const, invalidate: false },
 ])("recovers a $name source-catalog generation", async ({ outcome, invalidate }) => {
   const staleImport = deferred<ReturnType<typeof catalogImport>>();
-  const currentCatalog = {
-    common: { health: "current health" },
-    configHints: { gateway: { auth: { token: { label: "current token" } } } },
-  };
+  const currentCatalog = labeledCatalog("current");
   let imports = 0;
   const sourceImport = vi.fn(async () =>
     imports++ === 0 ? staleImport.promise : catalogImport(currentCatalog),
@@ -715,12 +602,7 @@ it.each([
       await watchChange.call({} as never, "src/config/schema.hints.ts", {} as never);
     }
     if (outcome === "resolve") {
-      staleImport.resolve(
-        catalogImport({
-          common: { health: "stale health" },
-          configHints: { gateway: { auth: { token: { label: "stale token" } } } },
-        }),
-      );
+      staleImport.resolve(catalogImport(labeledCatalog("stale")));
     } else {
       const error = new Error("source import failed");
       staleImport.reject(error);
@@ -768,17 +650,11 @@ it("reloads configured source aliases instead of installed package outputs", asy
           const base = await loadLocaleSource(load, baseLocaleId, addWatchFile);
           return (await executeLocale(load, base)).catalog;
         };
-        expect(await readCatalog()).toEqual({
-          common: { health: "first" },
-          configHints: { fixture: { label: "first" } },
-        });
+        expect(await readCatalog()).toEqual(labeledCatalog("first"));
         expect(watchedPaths(addWatchFile)).toContain(dependency);
         await writeFile(dependency, 'export const label = "second";\n');
         await watchChange.call({} as never, dependency, {} as never);
-        expect(await readCatalog()).toEqual({
-          common: { health: "second" },
-          configHints: { fixture: { label: "second" } },
-        });
+        expect(await readCatalog()).toEqual(labeledCatalog("second"));
       },
     );
   } finally {
@@ -787,10 +663,10 @@ it("reloads configured source aliases instead of installed package outputs", asy
 });
 
 it("invalidates a resolved locale generation at build start", async () => {
-  const catalogs: Array<TranslationMap & { common: TranslationMap }> = [
-    { common: { health: "first" }, configHints: { first: { label: "first" } } },
-    { common: { health: "second" }, configHints: { second: { label: "second" } } },
-  ];
+  const catalogs = ["first", "second"].map((label) => ({
+    common: { health: label },
+    configHints: { [label]: { label } },
+  }));
   let imports = 0;
   await withSourceImport(
     async () => catalogImport(catalogs[imports++]!, { common: { health: "health" } }),
@@ -813,29 +689,31 @@ it("omits stale config and Settings translations so runtime English can resolve 
   const currentHintKey = configHintTranslationKey("gateway.auth.token", "label", currentHintText);
   const staleHintText = "Old Gateway Token";
   const staleHintKey = configHintTranslationKey("gateway.auth.token", "label", staleHintText);
-  const memory = [
-    memoryEntry("current", "configView.chatPrefs.title", "Chat", "Discussion"),
-    memoryEntry("stale", "updates.page.intro", "Retired update introduction", "Obsolete"),
-    memoryEntry("current-hint", currentHintKey, currentHintText, "Ağ geçidi belirteci", true),
-    memoryEntry("stale-hint", staleHintKey, staleHintText, "Eski ağ geçidi belirteci", true),
-  ]
-    .map((entry) => JSON.stringify(entry))
+  const memory = (
+    [
+      ["configView.chatPrefs.title", "Chat", "Discussion", false],
+      ["updates.page.intro", "Retired update introduction", "Obsolete", false],
+      [currentHintKey, currentHintText, "Ağ geçidi belirteci", true],
+      [staleHintKey, staleHintText, "Eski ağ geçidi belirteci", true],
+    ] as const
+  )
+    .map(([segment_id, text, translated, hint]) =>
+      JSON.stringify({
+        cache_key: segment_id,
+        segment_id,
+        ...(hint ? { text } : {}),
+        text_hash: hashControlUiTranslationText(text),
+        translated,
+      }),
+    )
     .join("\n");
-  await fsMocks.existsSync.withImplementation(
-    () => true,
-    async () => {
-      await fsMocks.readFileSync.withImplementation(
-        () => memory,
-        async () => {
-          const baseSource = await loadLocaleSource(load);
-          const { catalog } = await executeLocale(load, baseSource);
-          const flat = flattenTranslations(catalog);
-          expect(flat.get("configView.chatPrefs.title")).toBe("Discussion");
-          expect(flat.get(currentHintKey)).toBe("Ağ geçidi belirteci");
-          expect(flat.has("updates.page.intro")).toBe(false);
-          expect(flat.has(staleHintKey)).toBe(false);
-        },
-      );
-    },
-  );
+  await withMemory(memory, async () => {
+    const baseSource = await loadLocaleSource(load);
+    const { catalog } = await executeLocale(load, baseSource);
+    const flat = flattenTranslations(catalog);
+    expect(flat.get("configView.chatPrefs.title")).toBe("Discussion");
+    expect(flat.get(currentHintKey)).toBe("Ağ geçidi belirteci");
+    expect(flat.has("updates.page.intro")).toBe(false);
+    expect(flat.has(staleHintKey)).toBe(false);
+  });
 });

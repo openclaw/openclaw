@@ -9,6 +9,7 @@ import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-exec
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "./update-doctor-result.js";
 import { createUpdateRun } from "./update-run-ledger.js";
@@ -18,7 +19,6 @@ import {
   runFixtureGit as git,
   expectCancelledGitCandidateCleanup,
   expectStep,
-  writeFixtureTree,
   type GitUpdateFixture,
 } from "./update-runner-git-candidate.test-support.js";
 import { selectChannelTag } from "./update-runner-git-target.js";

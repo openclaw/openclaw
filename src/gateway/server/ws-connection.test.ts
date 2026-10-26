@@ -594,88 +594,105 @@ it.each(["closing", "failed-send"] as const)("retires both peers after %s", asyn
   await vi.waitFor(() => expect(peer.readyState).toBe(Ws.WebSocket.CLOSED));
 });
 
-it.each(["current", "stale", "draining"] as const)("retires %s nodes safely", async (state) => {
-  const draining = state === "draining";
-  const stale = state === "stale";
-  const unregister = vi.fn(() => (stale ? null : "node-1"));
-  const get = vi.fn();
-  const publishPresence = vi.fn();
-  const handler = await connectWs({
-    options: {
-      refreshHealthSnapshot: vi.fn(),
-      buildRequestContext: () =>
-        makeContext({ nodeRegistry: { get, unregister } as never, publishPresence }) as never,
-    },
-  });
-  if (state === "current") {
-    get.mockReturnValue({
+it.each(["current", "stale", "draining", "promoting"] as const)(
+  "retires %s nodes safely",
+  async (state) => {
+    const draining = state === "draining" || state === "promoting";
+    const stale = state === "stale";
+    const unregister = vi.fn(() => (stale ? null : "node-1"));
+    const get = vi.fn();
+    const publishPresence = vi.fn();
+    const handler = await connectWs({
+      options: {
+        refreshHealthSnapshot: vi.fn(),
+        buildRequestContext: () =>
+          makeContext({ nodeRegistry: { get, unregister } as never, publishPresence }) as never,
+      },
+    });
+    const hostStats = {
+      cpuCount: 2,
+      memoryTotalBytes: 8192,
+      memoryFreeBytes: 4096,
+      updatedAtMs: 1_250,
+    };
+    const nodeSession = {
       nodeId: "node-1",
       connId: handler.connId,
       connectedAtMs: 1_000,
       pairingGeneration: "generation-1",
+      hostStats,
+    };
+    if (state === "current" || state === "promoting") {
+      get.mockReturnValue(nodeSession);
+    }
+    const nodeClient = registerClient(handler, socket, {
+      connId: stale ? "conn-old" : handler.connId,
+      connect: {
+        ...nodeConnect,
+        ...(draining ? { minProtocol: 1, maxProtocol: 1 } : {}),
+        device: device("node-1"),
+      },
+      ...(!draining ? { presenceKey: "node-1" } : {}),
     });
-  }
-  const nodeClient = registerClient(handler, socket, {
-    connId: stale ? "conn-old" : handler.connId,
-    connect: {
-      ...nodeConnect,
-      ...(draining ? { minProtocol: 1, maxProtocol: 1 } : {}),
-      device: device("node-1"),
-    },
-    ...(!draining ? { presenceKey: "node-1" } : {}),
-  });
-  expect(nodeClient.connectionSignal?.aborted).toBe(false);
-  const subscriptionEnded = vi.fn();
-  nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
-  const healthySocket = makeSocket();
-  const { promise: pending, resolve: releaseDispatch } = createDeferred();
-  const dispatch = draining
-    ? handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending)
-    : undefined;
-  const broadcaster = createBroadcaster({ clients });
-  if (draining) {
-    clients.add(
-      makeClient(healthySocket, "healthy-during-node-drain", { connect: readableOperator }),
-    );
-    socket.send.mockClear();
-    socket.readyState = Ws.WebSocket.CLOSING;
-    expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
-    expect(clients.has(nodeClient)).toBe(true);
-    expect(nodeClient.connectionSignal?.aborted).toBe(true);
+    expect(nodeClient.connectionSignal?.aborted).toBe(false);
+    const subscriptionEnded = vi.fn();
+    nodeClient.connectionSignal?.addEventListener("abort", subscriptionEnded);
+    const healthySocket = makeSocket();
+    const { promise: pending, resolve: releaseDispatch } = createDeferred();
+    const dispatch = draining
+      ? handler.nodeLifecycleDispatch.dispatch("node.invoke.result", () => pending)
+      : undefined;
+    const broadcaster = createBroadcaster({ clients });
+    if (draining) {
+      clients.add(
+        makeClient(healthySocket, "healthy-during-node-drain", { connect: readableOperator }),
+      );
+      socket.send.mockClear();
+      socket.readyState = Ws.WebSocket.CLOSING;
+      expect(handler.send(responseFrame)).toEqual({ kind: "unavailable" });
+      expect(clients.has(nodeClient)).toBe(true);
+      expect(nodeClient.connectionSignal?.aborted).toBe(true);
+      expect(subscriptionEnded).toHaveBeenCalledOnce();
+      broadcaster.broadcast("tick", { source: "before-node-close" });
+    }
+    socket.emit("close", 1000, Buffer.from(state));
+    if (draining) {
+      expect(clients.has(nodeClient)).toBe(true);
+      expect(unregister).not.toHaveBeenCalled();
+      broadcaster.broadcast("tick", { source: "during-node-drain" });
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(healthySocket.send).toHaveBeenCalledTimes(2);
+      const revocableNode = [...clients].find((client) => client.connect.device?.id === "node-1");
+      expect(revocableNode).toBe(nodeClient);
+      if (state === "draining") {
+        revocableNode!.invalidated = true;
+      } else {
+        nodeSession.pairingGeneration = "generation-2";
+        nodeSession.hostStats = { ...hostStats, memoryFreeBytes: 2048, updatedAtMs: 1_500 };
+      }
+    }
+    releaseDispatch();
+    await dispatch;
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
+    expect(clients.has(nodeClient)).toBe(false);
     expect(subscriptionEnded).toHaveBeenCalledOnce();
-    broadcaster.broadcast("tick", { source: "before-node-close" });
-  }
-  socket.emit("close", 1000, Buffer.from(state));
-  if (draining) {
-    expect(clients.has(nodeClient)).toBe(true);
-    expect(unregister).not.toHaveBeenCalled();
-    broadcaster.broadcast("tick", { source: "during-node-drain" });
-    expect(socket.send).not.toHaveBeenCalled();
-    expect(healthySocket.send).toHaveBeenCalledTimes(2);
-    const revocableNode = [...clients].find((client) => client.connect.device?.id === "node-1");
-    expect(revocableNode).toBe(nodeClient);
-    revocableNode!.invalidated = true;
-  }
-  releaseDispatch();
-  await dispatch;
-  await vi.waitFor(() => expect(unregister).toHaveBeenCalledOnce());
-  expect(clients.has(nodeClient)).toBe(false);
-  expect(subscriptionEnded).toHaveBeenCalledOnce();
-  if (stale) {
-    expect(recordDisconnect).not.toHaveBeenCalled();
-    expect(upsertPresence).not.toHaveBeenCalled();
-    expect(publishPresence).not.toHaveBeenCalled();
-  } else if (!draining) {
-    expect(get).toHaveBeenCalledWith("node-1");
-    await vi.waitFor(() => expect(recordDisconnect).toHaveBeenCalledOnce());
-    expect(recordDisconnect).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      connectedAtMs: 1_000,
-      disconnectedAtMs: expect.any(Number),
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
-    });
-  }
-});
+    if (stale) {
+      expect(recordDisconnect).not.toHaveBeenCalled();
+      expect(upsertPresence).not.toHaveBeenCalled();
+      expect(publishPresence).not.toHaveBeenCalled();
+    } else if (state !== "draining") {
+      expect(get).toHaveBeenCalledWith("node-1");
+      await vi.waitFor(() => expect(recordDisconnect).toHaveBeenCalledOnce());
+      expect(recordDisconnect).toHaveBeenCalledWith({
+        nodeId: "node-1",
+        connectedAtMs: 1_000,
+        disconnectedAtMs: expect.any(Number),
+        hostStats: nodeSession.hostStats,
+        expectedPairingGeneration: { nodeId: "node-1", key: nodeSession.pairingGeneration },
+      });
+    }
+  },
+);
 
 it("distinguishes serialization failure from unavailable transports", async () => {
   const handler = await connectWs({ socket });

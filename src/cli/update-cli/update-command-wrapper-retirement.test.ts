@@ -56,7 +56,7 @@ describe("retireStandaloneGitWrapper", () => {
       }
     };
     const readFile = fs.readFile;
-    const observation =
+    using _ =
       stage === "pkg inspection"
         ? vi.spyOn(exec, "runCommandBuffered").mockImplementationOnce(async () => {
             await changeWrapper();
@@ -67,45 +67,39 @@ describe("retireStandaloneGitWrapper", () => {
             await changeWrapper();
             return contents;
           });
-    try {
-      const retiring = withMockedPlatform(platform, () => retire([base], assertCurrent));
-      const result =
-        change === "revoked finalizer"
-          ? await expect(retiring).rejects.toThrow("finalizer revoked")
-          : await retiring;
-      if (change === "directory") {
-        expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
-      } else {
-        await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
-          change === "content change"
-            ? replacement
-            : change === "oversized file"
-              ? "x".repeat(4097)
-              : original,
-        );
-      }
-      if (change !== "revoked finalizer") {
-        expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
-      }
-      expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
-    } finally {
-      observation.mockRestore();
+
+    const retiring = withMockedPlatform(platform, () => retire([base], assertCurrent));
+    const result =
+      change === "revoked finalizer"
+        ? await expect(retiring).rejects.toThrow("finalizer revoked")
+        : await retiring;
+    if (change === "directory") {
+      expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
+    } else {
+      await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
+        change === "content change"
+          ? replacement
+          : change === "oversized file"
+            ? "x".repeat(4097)
+            : original,
+      );
     }
+    if (change !== "revoked finalizer") {
+      expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+    }
+    expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
   });
 
   it("preserves a pkg-owned legacy wrapper even when its contents match", async () => {
     const { wrapper, original, retire } = await fixture("freebsd");
-    const query = vi
+    using _ = vi
       .spyOn(exec, "runCommandBuffered")
       .mockResolvedValue(pkgQueryResult(`${wrapper}\n`));
-    try {
-      await withMockedPlatform("freebsd", () =>
-        expect(retire()).rejects.toThrow("installed by FreeBSD pkg"),
-      );
-      await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
-    } finally {
-      query.mockRestore();
-    }
+
+    await withMockedPlatform("freebsd", () =>
+      expect(retire()).rejects.toThrow("installed by FreeBSD pkg"),
+    );
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
   });
   it("removes only the installer wrapper for the previous checkout", async () => {
     const { base: home, root: oldRoot, wrapper, write, retire } = await fixture();

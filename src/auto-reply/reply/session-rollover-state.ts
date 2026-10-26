@@ -58,6 +58,7 @@ export function resolveReplySessionRolloverState(
           spawnDepth: entry.spawnDepth,
           subagentRole: entry.subagentRole,
           subagentControlScope: entry.subagentControlScope,
+          blindPrompt: entry.blindPrompt,
         }
       : {}),
     // Native worktrees and registered projects belong to the logical session, not its

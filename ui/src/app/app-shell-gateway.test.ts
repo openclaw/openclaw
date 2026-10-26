@@ -4,7 +4,8 @@ import { GatewayProtocolClient } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
