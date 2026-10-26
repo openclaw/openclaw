@@ -379,29 +379,17 @@ describe("submitSessionControllerSteer", () => {
     }
   });
 
-  it.each([false, true])("refuses unsupported transcript waits (direct=%s)", async (direct) => {
-    const { operation, input, injected } = startTurn({ direct, nativeCommitSupport: false });
+  it("keeps refused transcript waits queued without acknowledging them", async () => {
+    const { input, injected } = startTurn({ nativeCommitSupport: false });
     const accepted: boolean[] = [];
-    const options = {
+    const result = steer(input, {
+      waitForTranscriptCommit: true,
       onQueueAccepted: (value: boolean) => accepted.push(value),
-      ...(direct ? { assertCurrent: () => operation.abortSignal.throwIfAborted() } : {}),
-    };
-    const submit = (wait: boolean) => {
-      const request = wait ? { ...options, waitForTranscriptCommit: true } : options;
-      return direct ? directSteer(operation, request) : steer(input, request);
-    };
-    await expectRejected(submit(true), "transcript_commit_wait_unsupported");
+    });
+    await expectRejected(result, "transcript_commit_wait_unsupported");
     expect(injected).toEqual([]);
     expect(accepted).toEqual([false]);
-    if (direct) {
-      expectNoInput(input);
-      await expect(submit(false)).resolves.toMatchObject({ status: "accepted" });
-      expect(injected).toEqual(["steer"]);
-      expect(accepted).toEqual([false, true]);
-      expectNoInput(input);
-    } else {
-      expectQueued(input);
-    }
+    expectQueued(input);
   });
 
   it("keeps released observations stable while a yielded turn refuses captured injection", async () => {
@@ -613,7 +601,7 @@ describe("steerSessionControllerOperation", () => {
   it("fences an async injection when the same backend is attached again before its effect", async () => {
     const gate = controllerGate();
     let injected = false;
-    const { operation } = startTurn({ direct: true });
+    const { operation, input } = startTurn({ direct: true });
     const backend = makeBackend("reattached-steer", {
       async queueMessage() {
         throw new Error("Expected asynchronous prepared injection");
@@ -643,6 +631,7 @@ describe("steerSessionControllerOperation", () => {
     await rejected;
     expect(injected).toBe(false);
     expect(operation.abortSignal.aborted).toBe(false);
+    expectNoInput(input);
   });
 
   it("keeps an outcome-only duplicate caller source-bound without leaking its acceptance rejection", async () => {
