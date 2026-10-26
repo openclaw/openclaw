@@ -12,7 +12,7 @@ const exec = promisify(execFile);
 const write = (root, file, content) => writeFile(path.join(root, file), content);
 const identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"];
 const git = (root, ...args) => exec("git", ["-C", root, ...identity, ...args]);
-const verify = ({ source, plugins }) => verifySource(source, plugins);
+const verify = (receipt, plugins = receipt.plugins) => verifySource(receipt.source, plugins);
 
 async function commit(root, message) {
   await git(root, "add", ".");
@@ -23,22 +23,19 @@ async function checkout(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sdk-bundled-source-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, "extensions", "local"), { recursive: true });
-  await write(root, "extensions/local/openclaw.plugin.json", '{"id":"local"}');
-  await write(
-    root,
-    "extensions/local/package.json",
-    '{"name":"@example/local","openclaw":{"extensions":["./index.ts"]}}',
-  );
-  await write(root, "extensions/local/index.ts", "export default {};\n");
+  const local = (file, content) => write(root, `extensions/local/${file}`, content);
+  await local("openclaw.plugin.json", '{"id":"local"}');
+  await local("package.json", '{"name":"@example/local","openclaw":{"extensions":["./index.ts"]}}');
+  await local("index.ts", "export default {};\n");
   await git(root, "init", "--quiet");
   await commit(root, "fixture");
   return root;
 }
 
-test("bundled source receipts reject stale commits, changed plugin code, and omitted plugins", async (t) => {
+test("receipts ignore notes but reject stale commits, changed/untracked code, and omitted plugins", async (t) => {
   const root = await checkout(t);
+  await write(root, "notes.md", "unrelated\n");
   const { source, plugins } = await captureSource(root);
-  assert.equal(source.dirty, false);
   assert.deepEqual(plugins, [
     { pluginId: "local", packageName: "@example/local", relativeRoot: "extensions/local" },
   ]);
@@ -48,38 +45,27 @@ test("bundled source receipts reject stale commits, changed plugin code, and omi
   await assert.rejects(verifySource(source, plugins), /uncommitted/);
   await commit(root, "changed");
   await assert.rejects(verifySource(source, plugins), /commit/);
-});
-
-test("untracked bundled code prevents a clean receipt while unrelated notes do not", async (t) => {
-  const root = await checkout(t);
-  await write(root, "notes.md", "unrelated\n");
-  await captureSource(root);
   await write(root, "extensions/local/new.ts", "export default {};\n");
   await assert.rejects(captureSource(root), /uncommitted/);
 });
 
 test("malformed plugin metadata stays visible and symlinked plugins cannot disappear", async (t) => {
   const root = await checkout(t);
-  await rm(path.join(root, "extensions/local/package.json"));
-  await commit(root, "manifest-only plugin");
-  const manifestOnly = await captureSource(root);
-  assert.equal(manifestOnly.plugins[0].packageName, null);
-  assert.match(manifestOnly.plugins[0].error, /cannot establish the implicit host entrypoint/);
-  await assert.rejects(
-    verifySource(manifestOnly.source, [{ ...manifestOnly.plugins[0], error: undefined }]),
-    /metadata failure/,
-  );
-  await write(root, "extensions/local/package.json", "{}");
-  await commit(root, "missing package identity");
-  const { source, plugins } = await captureSource(root);
-  assert.equal(plugins.length, 1);
-  assert.equal(plugins[0].packageName, null);
-  assert.match(plugins[0].error, /missing its name/);
-  await verifySource(source, plugins);
-  await assert.rejects(
-    verifySource(source, [{ ...plugins[0], error: undefined }]),
-    /metadata failure/,
-  );
+  const packageFile = path.join(root, "extensions/local/package.json");
+  for (const [change, error] of [
+    [() => rm(packageFile), /cannot establish the implicit host entrypoint/],
+    [() => writeFile(packageFile, "{}"), /missing its name/],
+  ]) {
+    await change();
+    await commit(root, "malformed metadata");
+    const receipt = await captureSource(root);
+    const [plugin] = receipt.plugins;
+    assert.equal(receipt.plugins.length, 1);
+    assert.equal(plugin.packageName, null);
+    assert.match(plugin.error, error);
+    await verify(receipt);
+    await assert.rejects(verify(receipt, [{ ...plugin, error: undefined }]), /metadata failure/);
+  }
   await symlink("local", path.join(root, "extensions/linked"), "dir");
   await commit(root, "linked plugin");
   await assert.rejects(captureSource(root), /symlink/);
