@@ -32,7 +32,7 @@ export function sidebarSessionBadgeFacts(
   );
 }
 
-export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 

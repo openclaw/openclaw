@@ -182,10 +182,14 @@ export function renderSessionUnreadBadge(): JSX.Element {
 }
 
 export function SessionRowBadges(props: SessionRowBadgesParams) {
-  const rendered = createMemo(() => {
+  const rendered = createMemo<{ facts: string; node?: HTMLElement }>((previous) => {
     const badges = resolveSessionRowBadges(props, t);
+    const facts = JSON.stringify(badges);
+    if (previous?.facts === facts) {
+      return previous;
+    }
     if (!badges.length) {
-      return undefined;
+      return { facts };
     }
     const group = document.createElement("span");
     group.className = "session-row-badges";
@@ -214,9 +218,9 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
       }
       group.append(element);
     }
-    return group;
+    return { facts, node: group };
   });
-  return <>{rendered()}</>;
+  return <>{rendered().node}</>;
 }
 
 export function SidebarSessionSubtitle(props: ReturnType<typeof resolveSidebarSessionSubtitle>) {
