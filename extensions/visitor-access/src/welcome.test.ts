@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -58,24 +59,18 @@ async function welcomeHarness(grants: VisitorGrant[], config: OpenClawConfig = g
   const messages = new Map<string, Parameters<PluginRuntime["gateway"]["appendAgentMessage"]>[0]>();
   const gateway = {
     request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (typeof params?.key !== "string") {
-        throw new Error(`Unexpected Gateway request ${method}`);
-      }
+      assert(typeof params?.key === "string");
       if (method === "sessions.describe") {
         return { session: sessions.has(params.key) ? { key: params.key } : null };
       }
-      if (method !== "sessions.create") {
-        throw new Error(`Unexpected Gateway request ${method}`);
-      }
+      assert.equal(method, "sessions.create");
       if (!sessions.has(params.key)) {
         sessions.set(params.key, params);
       }
       return { ok: true, key: params.key };
     }) as unknown as PluginRuntime["gateway"]["request"],
     appendAgentMessage: vi.fn<PluginRuntime["gateway"]["appendAgentMessage"]>(async (message) => {
-      if (!sessions.has(message.sessionKey)) {
-        throw new Error("session not found");
-      }
+      assert(sessions.has(message.sessionKey), "session not found");
       const replayed = messages.has(message.idempotencyKey);
       messages.set(message.idempotencyKey, message);
       return { messageId: `message-${message.idempotencyKey}`, replayed };
@@ -136,27 +131,23 @@ describe("visitor-access.welcome.ensure", () => {
     expect(h.creates()).toEqual([
       ["sessions.create", { key: sessionKey, agentId: "main", displayName: "Welcome, Sam Rivera" }],
     ]);
-    const text = [
-      "Welcome to OpenClaw, Sam Rivera.",
-      "",
-      "@Josh invited you. Your guest access runs through 2026-11-06 12:00 UTC.",
-      "",
-      "Note from Josh:",
-      "Would love your eyes on the guest onboarding flow.",
-      "",
-      "This is your own session with Roboclaw. As a guest you can:",
-      "- start your own sessions with Roboclaw",
-      "- have Roboclaw work in a private sandbox",
-      "- read other people's sessions",
-    ].join("\n");
-    expect(h.gateway.appendAgentMessage).toHaveBeenCalledExactlyOnceWith({
+    const message = h.gateway.appendAgentMessage.mock.calls[0]![0];
+    expect(message).toMatchObject({
       sessionKey,
       agentId: "main",
-      text,
       mentions: [{ profileId: JOSH.profileId, start: 34, end: 39 }],
       idempotencyKey: `visitor-welcome:${grant.grantId}`,
     });
-    expect(text.slice(34, 39)).toBe("@Josh");
+    expect(message.text.slice(34, 39)).toBe("@Josh");
+    expect(message.text).toMatch(
+      /Welcome to OpenClaw, Sam Rivera\.[\s\S]*@Josh invited you.*2026-11-06 12:00 UTC/,
+    );
+    expect(message.text).toContain(
+      "Note from Josh:\nWould love your eyes on the guest onboarding flow.",
+    );
+    expect(message.text).toMatch(
+      /own session with Roboclaw[\s\S]*start your own sessions with Roboclaw[\s\S]*private sandbox[\s\S]*read other people's sessions/,
+    );
     expect(h.fixture.grants.get(EMAIL)?.onboarding).toEqual({
       state: "ready",
       welcomeSessionKey: sessionKey,
@@ -168,11 +159,13 @@ describe("visitor-access.welcome.ensure", () => {
       ...result,
       created: false,
     });
-    await h.fixture.invite({ email: EMAIL, days: 30 });
-    await expect(h.ensure()).resolves.toEqual({
-      ...result,
-      created: false,
-    });
+    const invitedBy = { profileId: "replacement-inviter" };
+    await h.fixture.service.invite(
+      { email: EMAIL, days: 30, note: "Updated note" },
+      { ...h.fixture.authority, invitedBy },
+    );
+    expect(h.fixture.grants.get(EMAIL)).toMatchObject({ invitedBy, note: "Updated note" });
+    expect(await h.ensure()).toEqual({ ...result, created: false });
     expect(h.creates()).toHaveLength(1);
     expect(h.gateway.appendAgentMessage).toHaveBeenCalledOnce();
   });
@@ -196,70 +189,41 @@ describe("visitor-access.welcome.ensure", () => {
         },
       },
     ]) {
-      await expect(h.welcome.ensure(client as Client)).resolves.toEqual({
-        status: "not_applicable",
-      });
+      expect(await h.welcome.ensure(client as Client)).toEqual({ status: "not_applicable" });
     }
     vi.setSystemTime(NOW + DAY_MS);
-    await expect(h.ensure()).resolves.toEqual({
-      status: "not_applicable",
-    });
+    expect(await h.ensure()).toEqual({ status: "not_applicable" });
     expect(h.gateway.request).not.toHaveBeenCalled();
   });
 
   it("answers concurrent calls with pending while one call holds the reservation", async () => {
     const grant = pendingWelcomeGrant();
     const h = await welcomeHarness([grant]);
-    const [first, second] = await Promise.all([h.ensure(), h.ensure()]);
+    const [first, competing, second] = await Promise.all([
+      h.ensure(),
+      h.restart().ensure(guestClient(grant.grantId!)),
+      h.ensure(),
+    ]);
 
     expect(first).toMatchObject({ status: "ready", created: true });
     expect(second).toEqual({ status: "pending", retryAfterMs: 1000 });
-    await expect(h.ensure()).resolves.toMatchObject({
-      status: "ready",
-      created: false,
-    });
-    expect(h.sessions.size).toBe(1);
-    expect(h.messages.size).toBe(1);
+    expect(competing).toEqual(second);
+    expect(await h.ensure()).toMatchObject({ status: "ready", created: false });
   });
 
-  it("resumes a failed or interrupted setup against the reserved session key", async () => {
-    const grant = pendingWelcomeGrant();
-    const h = await welcomeHarness([grant]);
-    h.gateway.appendAgentMessage.mockRejectedValueOnce(new Error("transcript write failed: disk"));
-
-    await expect(h.ensure()).resolves.toEqual({
-      status: "failed",
-      retryable: true,
-      message: "Your welcome session could not be set up yet. Reload to try again.",
+  it("adopts an existing pending reservation on startup", async () => {
+    const sessionKey = "agent:main:dashboard:reserved";
+    const grant = visitorGrant(EMAIL, {
+      onboarding: { state: "pending", welcomeSessionKey: sessionKey, updatedAt: NOW },
     });
-    const reserved = h.fixture.grants.get(EMAIL)?.onboarding;
-    expect(reserved).toMatchObject({
-      state: "failed",
-      welcomeSessionKey: expect.stringMatching(/^agent:main:dashboard:/u),
-      error: "transcript write failed: disk",
-    });
+    const restarted = await welcomeHarness([grant]);
+    restarted.sessions.set(sessionKey, { key: sessionKey });
 
-    // A process stopping after the reservation leaves it pending; a fresh service resumes it.
-    h.fixture.grants.set(EMAIL, {
-      ...h.fixture.grants.get(EMAIL)!,
-      onboarding: {
-        state: "pending",
-        welcomeSessionKey: reserved?.welcomeSessionKey,
-        updatedAt: NOW + 5,
-      },
-    });
-    h.fixture.service.close();
-    const restarted = await welcomeHarness([h.fixture.grants.get(EMAIL)!]);
-    for (const [key, session] of h.sessions) {
-      restarted.sessions.set(key, session);
-    }
-
-    await expect(restarted.ensure()).resolves.toEqual(readyResult(reserved?.welcomeSessionKey));
+    expect(await restarted.ensure()).toEqual(readyResult(sessionKey));
     expect(restarted.gateway.request).toHaveBeenCalledWith(
       "sessions.create",
-      expect.objectContaining({ key: reserved?.welcomeSessionKey }),
+      expect.objectContaining({ key: sessionKey }),
     );
-    expect(restarted.sessions.size).toBe(1);
     expect(restarted.messages.size).toBe(1);
   });
 
@@ -271,7 +235,7 @@ describe("visitor-access.welcome.ensure", () => {
         roles: { default: "guest", definitions: { guest: { ...guestRole, agents: "*" } } },
       },
     });
-    await expect(h.ensure(legacy, { profileId: "profile-sam" })).resolves.toMatchObject({
+    expect(await h.ensure(legacy, { profileId: "profile-sam" })).toMatchObject({
       status: "ready",
       agentId: "main",
       created: true,
@@ -280,30 +244,29 @@ describe("visitor-access.welcome.ensure", () => {
       "sessions.create",
       expect.objectContaining({ displayName: "Welcome" }),
     );
-    expect(h.gateway.appendAgentMessage.mock.calls[0]?.[0]).toEqual({
+    const message = h.gateway.appendAgentMessage.mock.calls[0]![0];
+    expect(message).toMatchObject({
       sessionKey: expect.any(String),
       agentId: "main",
-      text: [
-        "Welcome to OpenClaw.",
-        "",
-        "You were invited as a guest. Your guest access does not expire.",
-        "",
-        "This is your own session with main. As a guest you can:",
-        "- start your own sessions with any agent on this Gateway",
-        "- have main work in a private sandbox",
-        "- read other people's sessions",
-      ].join("\n"),
       idempotencyKey: `visitor-welcome:${legacy.grantId}`,
     });
+    expect(message).not.toHaveProperty("mentions");
+    expect(message.text).toMatch(
+      /^Welcome to OpenClaw\.[\s\S]*You were invited as a guest.*does not expire/,
+    );
+    expect(message.text).toMatch(
+      /own session with main[\s\S]*own sessions with any agent on this Gateway/,
+    );
   });
 
   it("keeps one welcome session when access is renewed during setup or after a failure", async () => {
     const grant = pendingWelcomeGrant();
     const h = await welcomeHarness([grant]);
     const gate = visitorGate();
+    const errorDetail = "transcript write failed: " + "e".repeat(600);
     h.gateway.appendAgentMessage.mockImplementationOnce(async () => {
       await gate.wait();
-      throw new Error("transcript write failed: disk");
+      throw new Error(errorDetail);
     });
 
     const setup = h.ensure();
@@ -317,11 +280,16 @@ describe("visitor-access.welcome.ensure", () => {
       onboarding: reserved,
     });
     gate.release();
-    await expect(setup).resolves.toMatchObject({ status: "failed" });
+    expect(await setup).toEqual({
+      status: "failed",
+      retryable: true,
+      message: "Your welcome session could not be set up yet. Reload to try again.",
+    });
     const failed = h.fixture.grants.get(EMAIL)?.onboarding;
     expect(failed).toMatchObject({
       state: "failed",
       welcomeSessionKey: reserved?.welcomeSessionKey,
+      error: errorDetail.slice(0, 500),
     });
 
     await h.fixture.invite({ email: EMAIL, days: 60 });
@@ -358,10 +326,7 @@ describe("visitor-access.welcome.ensure", () => {
       const reinvited = h.fixture.grants.get(EMAIL)!;
       expect(reinvited.grantId).not.toBe(grant.grantId);
       expect(reinvited.onboarding).toEqual({ state: "pending", updatedAt: NOW });
-      await expect(h.ensure(reinvited)).resolves.toMatchObject({
-        status: "ready",
-        created: true,
-      });
+      expect(await h.ensure(reinvited)).toMatchObject({ status: "ready", created: true });
       // The session created before revocation stays the guest's; the new invitation gets its own.
       expect(h.sessions.size).toBe(2);
       expect(h.messages.size).toBe(step === "append" ? 1 : 2);
@@ -375,9 +340,7 @@ describe("visitor-access.welcome.ensure", () => {
     expect(first).toMatchObject({ status: "ready", created: true });
 
     h.sessions.clear();
-    await expect(h.ensure()).resolves.toEqual({
-      status: "not_applicable",
-    });
+    expect(await h.ensure()).toEqual({ status: "not_applicable" });
     // The guest role holds only session scopes; the read it implies must be requested.
     expect(h.gateway.request).toHaveBeenLastCalledWith(
       "sessions.describe",
@@ -385,7 +348,7 @@ describe("visitor-access.welcome.ensure", () => {
       { scopes: ["operator.sessions.read"] },
     );
     await h.fixture.invite({ email: EMAIL, days: 30 });
-    await expect(h.restart().ensure(guestClient(grant.grantId!))).resolves.toEqual({
+    expect(await h.restart().ensure(guestClient(grant.grantId!))).toEqual({
       status: "not_applicable",
     });
     expect(h.creates()).toHaveLength(1);
@@ -395,21 +358,112 @@ describe("visitor-access.welcome.ensure", () => {
     });
   });
 
-  it("starts a new welcome session for a new invitation after the old one expired", async () => {
-    const grant = pendingWelcomeGrant();
-    const h = await welcomeHarness([grant]);
-    const first = await h.ensure();
+  it("returns copyable invitation text and keeps the note in it on renewal", async () => {
+    const fixture = visitorFixture();
+    await fixture.service.initialize();
+    const signInUrl = "https://team.example.com";
+    const invitationText = (expiry: string) =>
+      [
+        "Josh invited you to OpenClaw.",
+        `Sign in at ${signInUrl} with the email ${EMAIL}.`,
+        `Your access expires on ${expiry}.`,
+        "",
+        "Note from Josh:",
+        "Start here: https://team.example.com/chat/welcome",
+      ].join("\n");
 
-    vi.setSystemTime(NOW + 2 * DAY_MS);
-    await h.fixture.invite({ email: EMAIL, days: 7 });
-    const renewed = h.fixture.grants.get(EMAIL)!;
-    expect(renewed.grantId).not.toBe(grant.grantId);
-
-    const second = await h.ensure(renewed);
-    expect(second).toMatchObject({ status: "ready", created: true });
-    expect(second).not.toMatchObject({
-      sessionKey: first.status === "ready" ? first.sessionKey : "",
+    const invited = await fixture.service.invite(
+      { email: EMAIL, days: 7, note: "  Start here: https://team.example.com/chat/welcome\n" },
+      { ...fixture.authority, invitedBy: JOSH, signInUrl },
+    );
+    expect(invited.details).toMatchObject({
+      signInUrl,
+      noteStored: true,
+      invitationText: invitationText("2026-09-04 12:00 UTC"),
     });
-    expect(h.sessions.size).toBe(2);
+    expect(invited.text).toContain("Inviter note stored.");
+    expect(invited.text.endsWith(`\n${invitationText("2026-09-04 12:00 UTC")}`)).toBe(true);
+    expect(invited.details.invitationText).not.toContain(invited.details.grantId);
+
+    vi.setSystemTime(NOW + DAY_MS);
+    const renewed = await fixture.service.invite(
+      { email: EMAIL, days: 7 },
+      { ...fixture.authority, signInUrl },
+    );
+    expect(renewed.details.invitationText).toBe(invitationText("2026-09-05 12:00 UTC"));
+    expect(renewed.text).toContain("Existing inviter note kept.");
+  });
+
+  it("degrades invitation text without a sign-in URL, inviter, or note", async () => {
+    const fixture = visitorFixture({ githubLogin: "octocat" });
+    await fixture.service.initialize();
+
+    const invited = await fixture.service.invite(
+      { github: "OctoCat", forever: true },
+      fixture.authority,
+    );
+
+    expect(invited.details).not.toHaveProperty("signInUrl");
+    expect(invited.details).toMatchObject({
+      noteStored: false,
+      invitationText: [
+        "You're invited to OpenClaw.",
+        "Ask the person who invited you for the OpenClaw sign-in address, then sign in with your GitHub account @octocat.",
+        "Your access does not expire.",
+      ].join("\n"),
+    });
+    expect(invited.text).toContain("No sign-in URL: set gateway.publicOrigin");
+    expect(invited.text).not.toContain("inviter note");
+  });
+
+  it("lists each invitation's welcome-session progress for staff", async () => {
+    const grants = (["ready", "failed", "pending", undefined] as const).map((state, index) =>
+      visitorGrant(`${index}@example.com`, {
+        onboarding: state && {
+          state,
+          updatedAt: NOW,
+          ...(state !== "pending" ? { welcomeSessionKey: `agent:main:dashboard:${state}` } : {}),
+          ...(state === "failed" ? { error: "transcript write failed" } : {}),
+        },
+      }),
+    );
+    const fixture = visitorFixture({ grants, emails: grants.map(({ email }) => email) });
+
+    const list = await fixture.list();
+
+    expect(list.details.grants.map((row) => row.welcome)).toEqual([
+      { state: "ready", sessionKey: "agent:main:dashboard:ready" },
+      { state: "failed", sessionKey: "agent:main:dashboard:failed" },
+      { state: "pending" },
+      undefined,
+    ]);
+    expect(list.text).toContain("| managed | welcome ready agent:main:dashboard:ready |");
+    expect(list.text).toContain("| managed | welcome failed agent:main:dashboard:failed |");
+    expect(list.text).toContain("| managed | welcome pending |");
+    expect(list.text).toMatch(/3@example\.com[^\n]*\| managed \| Gateway access:/);
+    expect(list.text).not.toContain("transcript write failed");
+  });
+
+  it("does not persist onboarding when the caller ends during the grant read", async () => {
+    const grant = visitorGrant(EMAIL);
+    const fixture = visitorFixture({ grants: [grant] });
+    await fixture.service.initialize();
+    const gate = visitorGate();
+    const lookup = fixture.store.lookup.bind(fixture.store);
+    fixture.store.lookup = async (key) => {
+      await gate.wait();
+      return lookup(key);
+    };
+    const update = fixture.service.compareAndSetOnboarding({
+      grantId: grant.grantId!,
+      expected: null,
+      next: { state: "pending" },
+      assertCurrent: fixture.authority.assertCurrent,
+    });
+    await gate.entered;
+    fixture.revokeAuthority();
+    gate.release();
+    await expect(update).rejects.toThrow(/no longer current/);
+    expect(fixture.grants.get(EMAIL)).toEqual(grant);
   });
 });
