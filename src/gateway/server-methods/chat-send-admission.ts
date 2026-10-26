@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunDirectAbortReason,
-} from "../../agents/run-termination.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
@@ -467,14 +464,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         return await commitChatWorkAdmission(acpMeta ?? null);
       },
       onInterrupt: (reason) => {
-        const stopReason = isAgentRunDirectAbortReason(reason) ? "rpc" : "restart";
-        if (!admittedRunAbort.controller.signal.aborted) {
-          // A later lifecycle drain must not overwrite the first abort reason.
-          if (admittedRunAbort.entry) {
-            admittedRunAbort.entry.adapter.abortStopReason = stopReason;
-          }
-          admittedRunAbort.controller.abort(reason);
-        }
+        admittedRunAbort.controller.abort(reason);
       },
     });
     if (workerGoalAdmission && !capturedOperator.authority) {

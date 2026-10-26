@@ -14,6 +14,7 @@ import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
@@ -31,6 +32,38 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
+
+/**
+ * Returns the conversation key when a successful persistent-session run notified its own
+ * conversation. Outbound skips that producer conversation, so the run records it itself.
+ */
+export function deliveredToPersistentExecution(
+  params: Pick<
+    DispatchCronDeliveryParams,
+    | "job"
+    | "undeliveredRunStatus"
+    | "resolvedDelivery"
+    | "agentId"
+    | "agentSessionKey"
+    | "cfgWithAgentDefaults"
+  >,
+  status: string | undefined,
+): string | undefined {
+  const routeKey = params.resolvedDelivery.ok
+    ? params.resolvedDelivery.sessionRoute?.sessionKey
+    : undefined;
+  const executionKey = toAgentStoreSessionKey({
+    agentId: params.agentId,
+    requestKey: params.agentSessionKey,
+    mainKey: params.cfgWithAgentDefaults.session?.mainKey,
+  });
+  return status === "delivered" &&
+    params.undeliveredRunStatus === "ok" &&
+    params.job.sessionTarget.startsWith("session:") &&
+    routeKey === executionKey
+    ? routeKey
+    : undefined;
+}
 
 /** Carry the implicit source's generation through outbound custody and recovery. */
 export function resolveDirectCronDeliveryGeneration(

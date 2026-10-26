@@ -45,9 +45,9 @@ export function registerChatHistoryDeliveryCases(
           const run = createQueueTestRun({ prompt: params.message });
           run.turnAdoptionLifecycle = options.replyOptions?.turnAdoptionLifecycle;
           bindSessionControllerSource(input, run);
-          const settings = createQueueSettings();
-          const queued = enqueueFollowupRun(key, run, settings, "none", undefined, false);
-          expect(queued).toBe(true);
+          expect(
+            enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false),
+          ).toBe(true);
           settleQueued = async () => {
             completeFollowupRunLifecycle(run);
             await input.settlement.promise;
@@ -85,10 +85,7 @@ export function registerChatHistoryDeliveryCases(
           },
           params.idempotencyKey,
         );
-        const appended = appendTranscriptMessageSync(scope, {
-          eventId: "route-answer",
-          message,
-        });
+        const appended = appendTranscriptMessageSync(scope, { eventId: "route-answer", message });
         assert(appended?.ok, "Expected committed route fixture answer");
         await publishTranscriptUpdate(scope, { message, messageId: "route-answer" });
         expect((await replyOptions?.resolveReplyDelivery?.()) ?? "missing").toBe(

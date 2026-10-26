@@ -258,6 +258,7 @@ export function createContext(
   const subscribe = () => () => undefined;
   return {
     basePath: "",
+    router: { getState: () => ({ matches: [] }) },
     gateway,
     navigation: createNavigationPreferencesFixture(),
     sessions,
@@ -271,7 +272,6 @@ export function createContext(
       subscribe,
     },
     channels: { subscribe },
-    runtimeConfig: { state: { configSnapshot: null }, subscribe },
     plugins: { registrations: vi.fn(() => []), reportError: vi.fn(), subscribe },
     navigate: vi.fn(),
     preload: vi.fn(),

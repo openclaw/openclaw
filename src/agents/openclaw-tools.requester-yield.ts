@@ -82,7 +82,9 @@ export function createRequesterYieldCallback(params: {
         runId: params.requesterTurnRunId,
         sessionKey: requesterSessionKey,
         agentId: params.requesterAgentId,
-        waitForMessage: intent?.waitFor === "message",
+        // Owned child or runtime completions resume this session; they are not an
+        // inbound continuation, so a message wait would publish a false pause notice.
+        waitForMessage: intent?.waitFor === "message" && !completionClaimed,
         acknowledgment: intent?.acknowledgment,
         // Exec completion cannot resume a self-paused task. An independently
         // owned runtime/child completion can, and retains its existing claim.

@@ -36,7 +36,7 @@ import {
 } from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { captureAuthProfileCredentialCommits } from "../state/user-model-account-authority.js";
 import {
   resolveAgentCredentialMapFromStore,
@@ -530,7 +530,8 @@ if (parentPort) {
       };
       nativeReferenceProgress.subscribe(reportProgress);
       const stopProgress = () => nativeReferenceProgress.unsubscribe(reportProgress);
-      return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
+      // The publisher validates this JSON; the private transport only clones its data.
+      return withRemoteModelCatalogSnapshot(freezeTrustedJsonSnapshot(value.remoteCatalog), () =>
         withPluginSourceCaptureDirectory(
           data.sourceCaptureDirectory,
           async () => {

@@ -26,17 +26,18 @@ import {
   resolveModelRuntimeEntry,
 } from "../../lib/model-runtime-choice.ts";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
+import type {
+  SessionCapability,
+  SessionArchivedFilter,
+  SessionListOptions,
+  SessionRefreshTarget,
+  SessionScopeHost,
+} from "../../lib/sessions/index.ts";
 import {
-  DEFAULT_SESSION_LIST_QUERY,
   scopedAgentParamsForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
-  type SessionCapability,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-  type SessionRefreshTarget,
-  type SessionScopeHost,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -44,6 +45,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/session-requests.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 

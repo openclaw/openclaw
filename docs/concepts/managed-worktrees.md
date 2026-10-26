@@ -19,9 +19,11 @@ local message attachments, and generation tools reading local references, wait f
 initial diff baseline. Tools that do not use the workspace can run immediately,
 including generation with inline or remote references. Completion also waits
 for preparation, and a preparation failure ends the turn with a retryable error.
+Accelerated clones can start prompt preparation once their files are complete,
+while Git index preparation finishes behind the same workspace-tool gate.
 
 Repositories with setup scripts, included files, unsupported checkout transforms,
-or project configuration that needs additional files finish preparation before
+or project configuration whose required files are not yet available finish preparation before
 the first turn starts. Active bootstrap hooks, including `bootstrap-extra-files`,
 also retain complete preparation so configured instructions remain available.
 Sandboxed projections require a fully published worktree before startup, as do
@@ -152,6 +154,8 @@ object lookup can still reach the idle timeout. Registration and other Git
 operations retain their existing execution deadlines.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
+
+If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. This reservation retry retains the existing 30-second project-access wait budget and remains cancellable.
 
 Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
 
@@ -442,7 +446,9 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
-`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and repository-update, checkout, and setup progress, including after reopening the session; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and repository-update, checkout, and setup progress, including after reopening the session; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. Ordinary session deletion waits for cleanup; if it cannot finish, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+
+For `sessions.delete` with `archivedOnly: true`, the response confirms durable session deletion and transcript export before worktree cleanup finishes. The Gateway retains the cleanup operation and blocks same-key successors until it settles. Inspect `worktrees.list` for the retained worktree and its `runEndCleanup` outcome; a snapshot failure preserves the checkout and records the failure there. A crash leaves the registry binding available to lossless garbage collection, which also runs hourly or through `worktrees.gc`. Removal still requires a completed snapshot; the early response does not authorize discarding unsaved work. Incognito deletion keeps its existing synchronous cleanup behavior.
 
 An explicit session base must resolve to a commit. Local refs are checked before the session is saved; remote-project refs are checked after cloning. A missing remote ref is refreshed from the recorded project URL and retried only in a Gateway-managed clone, never an operator-registered checkout. Once accepted, the commit stays pinned across setup failures and retries while the original ref remains publication metadata. Invalid explicit refs never silently switch to the repository default. Managed-clone refresh uses an isolated Git repository for network transport, so checkout-local URL rewrites and hooks cannot redirect or execute during the fetch. Pinned-commit presence checks disable lazy fetching; missing commits use the explicit incremental fetch rather than downloading their ancestry again through a promisor remote. Refresh preserves an existing clone's partial-clone filter; checkout preparation fetches the selected commit's missing contents when needed.
 
@@ -759,14 +765,21 @@ openclaw worktrees gc --job <id>
 
 For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
 objects needed by all Git-registered worktree indexes and current HEAD trees
-before attempting cleanup.
+during repository maintenance.
 It fetches missing objects from the existing promisor remote in bounded batches,
 preserving staged and working files. Historical commits remain filtered, and
 ordinary background maintenance does not fetch. Repair has a five-minute budget
-and a 4,096-object limit per pass; completed fetches survive interruption. If
-repair cannot finish, maintenance logs a warning. Restore remote access and run
-the command again to resume from the remaining missing objects. Locally created
-objects unavailable from the remote still require recovery from another copy.
+and a 4,096-object limit per pass; completed fetches survive interruption.
+Each checkout is inspected separately. The shared state database records the
+last attempted checkout, so the next explicit retry starts with its successor
+even after a Gateway restart. A slow or unreadable checkout cannot keep later
+linked indexes from being repaired. This position only schedules work; it never
+certifies object availability or permits checkout removal. Failed checkouts are
+revisited on later sweeps, and a completed sweep clears the position.
+If repair cannot finish, maintenance logs a warning. Restore remote access and
+run the command again to continue. A checkout whose own inventory exceeds the
+budget still needs repository repair; locally created objects unavailable from
+the remote require recovery from another copy.
 
 Gateway Git inspections also use only locally available objects. In partial
 clones, missing objects can leave optional checkout, branch, or diff facts

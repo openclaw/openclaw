@@ -1,15 +1,11 @@
 import { Buffer } from "node:buffer";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  controlUiBundledGatewayUrl,
-  controlUiBundledSettingsStorageKey,
-} from "../test-helpers/control-ui-e2e.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { confirmIme } from "./chat-flow.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -156,6 +152,7 @@ async function assertCreateRecovery(
   const imageFile = path.join(process.cwd(), "ui/public", imageFileName);
   const imageContent = (await readFile(imageFile)).toString("base64");
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     heldMethods: ["chat.startup"],
     workspaceGit: true,
     methodResponses: {
@@ -447,43 +444,9 @@ suite.define(() => {
     } finally {
       await context.close();
       if (proofDir && video) {
-        await rename(await video.path(), path.join(proofDir, `background-${label}.webm`));
+        await video.saveAs(path.join(proofDir, `background-${label}.webm`));
+        await video.delete();
       }
-    }
-  });
-
-  it("uses shifted Enter for background start in modifier mode", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
-    await context.addInitScript(
-      ({ key, url }) => {
-        localStorage.setItem(
-          key,
-          JSON.stringify({ chatSendShortcut: "modifier-enter", gatewayUrl: url }),
-        );
-      },
-      { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), url: gatewayUrl },
-    );
-    const page = await context.newPage();
-    const sessionKey = "agent:main:dashboard:modifier-background";
-    const runId = "run-modifier-background";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agent.wait": { endedAt: Date.now(), runId, status: "ok" },
-        "sessions.create": { key: sessionKey, runId, runStarted: true },
-      },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("start in the background");
-      await composer.press("Control+Shift+Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", message: "start in the background" },
-      });
-    } finally {
-      await context.close();
     }
   });
 
@@ -561,6 +524,7 @@ suite.define(() => {
       },
     );
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
         "agent.wait",

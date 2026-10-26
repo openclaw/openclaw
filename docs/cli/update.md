@@ -128,6 +128,10 @@ launcher scripts).
 Invalid configuration reports `invalid-config` before database schema inspection.
 An unreadable configuration file or failed configuration loading step instead
 reports `config-read-failed`, with a recognized filesystem error code when available.
+An ownership refusal during loading includes the `gateway-ownership-unverified`
+failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
+Neither diagnostic includes the recorded holder's private details.
 For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
 The local diagnostic identifies invalid fields and recommends

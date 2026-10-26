@@ -134,9 +134,8 @@ type AnnounceFlowOutcome = Awaited<
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Lifecycle fixtures supply their own registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => import("../../runtime-plugins.test-support.js"));
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});

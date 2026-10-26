@@ -2,6 +2,7 @@
  * Gateway startup plugin bootstrap tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
@@ -211,15 +212,6 @@ vi.mock("./server-startup-session-migration.js", () => ({
   runGatewaySessionStartupMaintenance: (params: unknown) =>
     runGatewaySessionStartupMaintenance(params),
 }));
-
-function createLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls.at(0);

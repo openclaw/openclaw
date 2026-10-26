@@ -390,7 +390,7 @@ it("preserves rollups and aborts when the transcript directory cannot be read", 
   expect(readSessionCostUsageRollupRows("main")).toEqual(rowsBefore);
 });
 
-it("refreshes the requested range before background aggregate catch-up", async () => {
+it("includes sessions outside the refreshed range in the first aggregate read", async () => {
   const oldSessionFile = await writeTranscript(
     "sess-cache-cold-sync-old",
     assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
@@ -414,16 +414,8 @@ it("refreshes the requested range before background aggregate catch-up", async (
     startMs: Date.UTC(2026, 1, 5),
     endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
   };
-  const summary = await readCachedAggregate(range);
-
-  expect(summary.totals.totalTokens).toBe(30);
-  await vi.waitFor(
-    async () => {
-      const refreshed = await readCachedAggregate({ ...range, requestRefresh: false });
-      expect(refreshed.totals.totalTokens).toBe(230);
-    },
-    { interval: 1, timeout: 2_000 },
-  );
+  // The read refreshes the uncached session before it answers.
+  expect((await readCachedAggregate(range)).totals.totalTokens).toBe(230);
 });
 
 it("waits for a busy refresh before loading a direct session summary", async () => {

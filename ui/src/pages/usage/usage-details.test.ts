@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createUsageDetailFixture } from "./usage-details.test-support.ts";
 import { cleanupUsagePageTest, contextWithClient } from "./usage-page.test-support.ts";

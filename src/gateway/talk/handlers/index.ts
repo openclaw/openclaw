@@ -636,15 +636,15 @@ async function resolveTalkResponseFromConfig(params: {
   const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
   const configuredPayload = normalizedTalk ? buildTalkConfigResponse(normalizedTalk) : undefined;
   // Resolve provider selection from materialized config, but project provider-owned fields from
-  // source config so SecretRefs stay redacted. The requested provider also avoids re-resolving them.
+  // source config so SecretRefs stay redacted.
   const runtimeRealtime = await buildTalkRealtimeConfig(params.runtimeConfig);
   const effectiveProvider = canonicalizeRealtimeVoiceProviderId(
     runtimeRealtime.provider,
     params.runtimeConfig,
   );
-  const sourceRealtime = await buildTalkRealtimeConfig(params.sourceConfig, effectiveProvider);
   const sourceProviders: Record<string, TalkProviderConfig> = {};
-  for (const [providerId, providerConfig] of Object.entries(sourceRealtime.providers)) {
+  const configuredProviders = params.sourceConfig.talk?.realtime?.providers ?? {};
+  for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
     const canonicalProviderId =
       canonicalizeRealtimeVoiceProviderId(providerId, params.runtimeConfig) ?? providerId;
     sourceProviders[canonicalProviderId] = {

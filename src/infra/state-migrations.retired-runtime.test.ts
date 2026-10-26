@@ -70,6 +70,13 @@ function expectArchived({ file, bytes }: ReturnType<typeof write>, suffix = ".mi
   expect(fs.existsSync(file)).toBe(false);
   expect(fs.readFileSync(`${file}${suffix}`)).toEqual(bytes);
 }
+function countImportedRowsSql(table: string) {
+  const where =
+    table === "config_machine_state"
+      ? " WHERE state_key IN ('voicewake.triggers', 'voicewake.routing')"
+      : "";
+  return `SELECT COUNT(*) AS count FROM ${table}${where}`;
+}
 
 it("preserves meaningful settings and bindings while archiving every retired source", async () => {
   const conversation = { ...binding.conversation, accountId: "default" };
@@ -166,7 +173,7 @@ it.each(imports)(
     expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
     expect(result.changes).not.toContainEqual(expect.stringContaining(`Migrated ${relative}`));
     expect(
-      openOpenClawStateDatabase({ env }).db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),
+      openOpenClawStateDatabase({ env }).db.prepare(countImportedRowsSql(table)).get(),
     ).toMatchObject({ count: 0 });
     expectArchived(source);
     expectArchived(valid);
@@ -186,7 +193,7 @@ it.each(imports)(
       await expect(migrate()).rejects.toThrow("synthetic runtime import failure");
       expect(fs.readFileSync(source.file)).toEqual(source.bytes);
       expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).toThrow("doctor --fix");
-      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+      expect(db.prepare(countImportedRowsSql(table)).get()).toMatchObject({
         count: 0,
       });
     } finally {
@@ -194,7 +201,7 @@ it.each(imports)(
     }
     await migrate();
     expectArchived(source);
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+    expect(db.prepare(countImportedRowsSql(table)).get()).toMatchObject({
       count: 1,
     });
     expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).not.toThrow();

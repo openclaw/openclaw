@@ -5,9 +5,11 @@ import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   isChatTranscriptMetadata,
   isProgressCard,
+  isMessageReactionSummary,
 } from "../../lib/protocol-validators.generated/transcript.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
+import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -46,7 +48,7 @@ import {
   discardPrewarmedChatSnapshot,
   peekPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
-const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
+const CHAT_SNAPSHOT_PROJECTION_VERSION = 4;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
@@ -92,6 +94,9 @@ const snapshotSchema = json.object(
       ),
     ),
     transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
+    messageReactions: json.optional(
+      json.record(json.array(json.checked(isMessageReactionSummary))),
+    ),
     progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
     deltaCursor: json.optional(json.text),
     // Only persisted warm metadata needs its full validator; read admission loads it below.
@@ -251,6 +256,15 @@ function createSnapshotRecord(
             ? { totalMessages: projected.pagination.totalMessages }
             : {}),
         },
+      };
+    }
+    if (projected.messageReactions) {
+      projected = {
+        ...projected,
+        messageReactions: projectChatMessageReactions(
+          projected.messages,
+          new Map(Object.entries(projected.messageReactions)),
+        ),
       };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.

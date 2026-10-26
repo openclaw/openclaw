@@ -10,6 +10,7 @@ import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "../session-catalog-types.js";
+import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import type { CodexThreadForkParams, CodexTurn } from "./protocol.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
@@ -39,27 +40,19 @@ export function codexForkTurn(id: string, text: string): CodexTurn {
 }
 
 export function forkResponse(threadId = "thread-forked") {
+  const response = threadStartResult(threadId, "/tmp");
   return {
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    cwd: "/tmp",
+    ...response,
     model: "gpt-5.6-luna",
-    modelProvider: "openai",
-    sandbox: { type: "dangerFullAccess" },
     thread: {
-      id: threadId,
+      ...response.thread,
       sessionId: "session-forked",
-      projectId: null,
       cliVersion: "0.150.1",
       createdAt: 1715299200,
       updatedAt: 1715299200,
-      cwd: "/tmp",
-      ephemeral: false,
-      modelProvider: "openai",
       preview: "forked thread",
       source: "appServer" as const,
       status: { type: "notLoaded" as const },
-      turns: [],
     },
   };
 }

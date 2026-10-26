@@ -395,7 +395,6 @@ async function gatherDaemonStatusImpl(
   if (
     shouldInspectLocalGateway &&
     loaded &&
-    runtime?.status === "running" &&
     portStatus &&
     (portStatus.status !== "busy" || rpc?.ok === false)
   ) {

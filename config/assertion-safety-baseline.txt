@@ -893,7 +893,7 @@ packages/acp-core/src/runtime/errors.ts	5
 packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
-packages/agent-core/src/harness/session/tool-result-pairing.ts	3
+packages/agent-core/src/harness/session/tool-result-pairing.ts	2
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1
@@ -914,7 +914,7 @@ packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	16
 packages/ai/src/providers/openai-completions.ts	1
-packages/ai/src/providers/openai-reasoning-effort.ts	6
+packages/ai/src/providers/openai-reasoning-effort.ts	5
 packages/ai/src/providers/openai-responses-shared.ts	4
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
@@ -955,7 +955,6 @@ packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/credential-redaction.ts	1
 packages/ai/src/utils/oauth/openai-chatgpt-jwt.ts	1
 packages/ai/src/utils/stream-first-event-timeout.ts	2
-packages/ai/src/utils/tls-certificate-errors.ts	1
 packages/gateway-client/src/client.ts	3
 packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
@@ -1041,11 +1040,11 @@ src/agents/agent-tools.read.ts	4
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
-src/agents/apply-patch.ts	2
+src/agents/apply-patch.ts	1
 src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
-src/agents/auth-profiles/oauth.ts	2
+src/agents/auth-profiles/oauth.ts	1
 src/agents/auth-profiles/persisted.ts	1
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/profiles.ts	1
@@ -1238,7 +1237,7 @@ src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
-src/agents/sessions/extensions/runner.ts	14
+src/agents/sessions/extensions/runner.ts	13
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	3
 src/agents/sessions/resolve-config-value.ts	1
@@ -1714,9 +1713,9 @@ src/gateway/board-host-tools.ts	1
 src/gateway/board-view-ticket.ts	1
 src/gateway/boot.ts	1
 src/gateway/call.ts	5
-src/gateway/chat-display-projection.core.ts	5
+src/gateway/chat-display-projection.core.ts	4
 src/gateway/chat-display-projection.history.ts	1
-src/gateway/chat-display-projection.sanitize.ts	5
+src/gateway/chat-display-projection.sanitize.ts	3
 src/gateway/chat-sanitize.ts	3
 src/gateway/cli-session-history.claude.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
@@ -1835,7 +1834,6 @@ src/gateway/tools-invoke-shared.ts	3
 src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	5
 src/gateway/worker-environments/inference-runtime.ts	2
-src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	2
 src/gateway/worker-environments/service-validation.ts	2
@@ -2031,7 +2029,6 @@ src/meeting-bot/runtime-setup.ts	1
 src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
 src/meeting-bot/session-transcript-store.ts	1
-src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
@@ -2059,7 +2056,7 @@ src/plugin-sdk/channel-entry-contract.ts	6
 src/plugin-sdk/channel-inbound.ts	2
 src/plugin-sdk/channel-ingress-runtime.ts	1
 src/plugin-sdk/channel-outbound.ts	1
-src/plugin-sdk/channel-replay-guard.ts	2
+src/plugin-sdk/channel-replay-guard.ts	1
 src/plugin-sdk/core.ts	3
 src/plugin-sdk/dedupe-runtime.ts	1
 src/plugin-sdk/extension-shared.ts	6

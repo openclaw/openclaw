@@ -127,10 +127,6 @@ export async function waitForSignalDaemonReady(params: {
   });
 }
 
-function isRecoverableSignalCliReceiveException(line: string): boolean {
-  return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
-}
-
 function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -141,7 +137,7 @@ function classifySignalCliLogLine(line: string): "log" | "error" | null {
   if (/\bERROR\b/.test(trimmed)) {
     return "error";
   }
-  if (isRecoverableSignalCliReceiveException(trimmed)) {
+  if (/\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(trimmed)) {
     return "log";
   }
   // Some signal-cli failures are not tagged with ERROR but should still be surfaced loudly.

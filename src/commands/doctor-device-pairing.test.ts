@@ -264,15 +264,12 @@ describe("collectDevicePairingHealthFindings", () => {
 
   it("preserves pairing diagnostics when the token inventory read rejects", async () => {
     await withApprovedOperatorPairing(async () => {
-      const inventory = vi
+      using inventory = vi
         .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
         .mockRejectedValueOnce(new Error("synthetic inventory failure"));
-      try {
-        await expect(collect("local")).resolves.toEqual([]);
-        expect(inventory).toHaveBeenCalledOnce();
-      } finally {
-        inventory.mockRestore();
-      }
+
+      await expect(collect("local")).resolves.toEqual([]);
+      expect(inventory).toHaveBeenCalledOnce();
     });
   });
 

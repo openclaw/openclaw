@@ -41,8 +41,8 @@ async function waitForProgressThreadIdle(thread: Locator) {
 }
 
 async function still(card: Locator, expected: number) {
-  // A real pause, longer than the retired 240ms animation, must not finish the reveal.
-  for (let i = 0; i < 6; i++) {
+  // Three real samples cross the retired 240ms animation without finishing the reveal.
+  for (let i = 0; i < 3; i++) {
     await card.page().waitForTimeout(100);
     expect(Math.abs((await height(card)) - expected)).toBeLessThanOrEqual(1);
   }
@@ -256,7 +256,7 @@ suite.define(() => {
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         if (mobile) {
           await card.locator("summary").click();
         }

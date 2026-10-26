@@ -5,7 +5,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { formatJsonConsoleLine } from "../logging/json-console-line.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { cliChildEnv } from "./cli-process-fixture.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,20 +25,18 @@ const cliSource = `
   registerLogsCli(program);
   await program.parseAsync(process.argv.slice(1), { from: "user" });
 `;
-const producerSource = `
-  import fs from "node:fs/promises";
-  import { formatJsonConsoleLine } from "./src/logging/json-console-line.ts";
-  const records = [
+const original =
+  [
     formatJsonConsoleLine({ level: "warn", subsystem: "gateway", message: "console warning" }),
     formatJsonConsoleLine({ level: "error", subsystem: "worker", message: "console error" }),
     JSON.stringify({
       time: "2026-01-09T02:10:00.000Z",
-      level: "warn", subsystem: "fallback", message: "metadata control",
+      level: "warn",
+      subsystem: "fallback",
+      message: "metadata control",
       _meta: { logLevelName: "INFO", name: '{"subsystem":"canonical"}' },
     }),
-  ];
-  await fs.writeFile(process.argv[1], records.join("\\n") + "\\n");
-`;
+  ].join("\n") + "\n";
 
 it.each(["sqlite", "postgres"])(
   "retains console metadata through passive %s config admission and file fallback",
@@ -61,27 +61,21 @@ it.each(["sqlite", "postgres"])(
         logging: { file: logFile, level: "silent", consoleLevel: "silent" },
       };
       await fs.writeFile(configPath, JSON.stringify(config));
-      const env: NodeJS.ProcessEnv = {
-        PATH: process.env.PATH,
-        SystemRoot: process.env.SystemRoot,
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: home,
+      const env = cliChildEnv(home, {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath,
         NO_COLOR: "1",
         TZ: "UTC",
-      };
-      const run = (source: string, ...args: string[]) =>
+      });
+      const run = (...args: string[]) =>
         execFileAsync(
           process.execPath,
-          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", source, "--", ...args],
+          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", cliSource, "--", ...args],
           { cwd: process.cwd(), env, timeout: 60_000, maxBuffer: 1024 * 1024 },
         );
-      await run(producerSource, logFile);
-      const original = await fs.readFile(logFile, "utf8");
-      const text = await run(cliSource, "logs", "--plain", "--utc", "--timeout", "100");
-      const json = await run(cliSource, "logs", "--json", "--timeout", "100");
+      await fs.writeFile(logFile, original);
+      const text = await run("logs", "--plain", "--utc", "--timeout", "100");
+      const json = await run("logs", "--json", "--timeout", "100");
       for (const row of expectedLogs) {
         expect(text.stdout).toContain(row.join(" "));
       }

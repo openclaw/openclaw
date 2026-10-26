@@ -13,6 +13,7 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import {
   bindExecutionGuards,
@@ -197,13 +198,10 @@ export function registerNativeAdmissionTests() {
         const candidate = path.join(dir, "candidate");
         for (const location of new Set([root, otherRoot, candidate])) {
           await fs.mkdir(path.join(location, "dist"), { recursive: true });
-          await fs.writeFile(
-            path.join(location, "package.json"),
-            JSON.stringify({
-              name: "openclaw",
-              version: location === candidate ? "1.0.1" : "1.0.0",
-            }),
-          );
+          await writeFixtureJson(path.join(location, "package.json"), {
+            name: "openclaw",
+            version: location === candidate ? "1.0.1" : "1.0.0",
+          });
           await fs.writeFile(path.join(location, "dist", "entry.js"), "original runtime");
         }
         if (scenario.linkedDist) {

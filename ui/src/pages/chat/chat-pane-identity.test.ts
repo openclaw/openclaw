@@ -14,19 +14,21 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { setChatHistoryLoad } from "./chat-history-state.ts";
-import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
-  createRenderTestChatPane,
-  createSessionCapabilityFixture,
   createSessionContext,
+} from "./chat-application-context.test-support.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
+import {
+  createRenderTestChatPane,
   createTestChatPane,
   connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";

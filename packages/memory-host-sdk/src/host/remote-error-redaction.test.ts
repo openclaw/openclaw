@@ -16,6 +16,7 @@ type RequestRecord = {
   contentType: string | undefined;
   path: string;
 };
+const caught = (operation: Promise<unknown>) => operation.catch((cause: unknown) => cause);
 
 async function fixture() {
   const records: RequestRecord[] = [];
@@ -106,9 +107,7 @@ describe("memory remote error redaction", { concurrent: false }, () => {
     [SHORT_API_KEY, "quoted-error", '{"Authorization":"***"}'],
   ])("redacts bearer credentials from %s embedding errors", async (key, route, redacted) => {
     const { records, baseUrl } = await fixture();
-    const error = await fetchVectors(baseUrl, `/v1/embeddings/${route}`, key).catch(
-      (cause: unknown) => cause,
-    );
+    const error = await caught(fetchVectors(baseUrl, `/v1/embeddings/${route}`, key));
     expectRedacted(error, redacted, key === API_KEY ? [API_KEY, UNIQUE_NEEDLE] : [SHORT_API_KEY]);
     if (key === API_KEY) {
       expect(error).toMatchObject({
@@ -135,11 +134,11 @@ describe("memory remote error redaction", { concurrent: false }, () => {
         parse: (payload) => payload,
       });
 
-    const secretError = await request("/v1/post/error").catch((cause: unknown) => cause);
-    expect((secretError as { status?: unknown }).status).toBe(401);
+    const secretError = await caught(request("/v1/post/error"));
+    expect(secretError).toMatchObject({ status: 401 });
     expectRedacted(secretError, "post failed (401)");
 
-    const benignError = await request("/v1/post/benign").catch((cause: unknown) => cause);
+    const benignError = await caught(request("/v1/post/benign"));
     expect(benignError).toBeInstanceOf(Error);
     expect(benignError).toMatchObject({
       status: 400,
@@ -160,12 +159,10 @@ describe("memory remote error redaction", { concurrent: false }, () => {
         errorPrefix: "file upload failed",
       });
 
-    const error = await upload("/error").catch((cause: unknown) => cause);
+    const error = await caught(upload("/error"));
     expectRedacted(error, "file upload failed: 401");
 
-    const shortError = await upload("/quoted-error", SHORT_API_KEY).catch(
-      (cause: unknown) => cause,
-    );
+    const shortError = await caught(upload("/quoted-error", SHORT_API_KEY));
     expectRedacted(shortError, '{"Authorization":"***"}', [SHORT_API_KEY]);
 
     await expect(upload("/ok")).resolves.toBe("file_control");

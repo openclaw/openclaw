@@ -81,7 +81,7 @@ export function openEngineStore(ref: {
   /** Bind owner-local state inside the new anchor transaction before connecting. */
   onFreshAnchor?: (anchor: DatabaseSync) => void;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
-  beforeMigrate?: (db: EngineConnection, fromVersion: number) => void;
+  beforeMigrate?: AdmittedStore["beforeMigrate"];
   /** Family custody for schema writes; shared state defaults to its physical owner. */
   assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;

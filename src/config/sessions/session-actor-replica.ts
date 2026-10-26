@@ -504,16 +504,25 @@ export function hasSessionActorEmptyPendingInputHistory(
   );
 }
 
+/** Borrow current physical facts; the admitted reader retains disclosure authority. */
+export function readSessionActorTranscriptStateFromReplica(params: {
+  path: string;
+  sessionKey: string;
+  sessionId: string;
+}) {
+  const snapshot = readCurrentEntryCellForPath(params)?.cell.snapshot;
+  return snapshot?.entry?.sessionId === params.sessionId ? snapshot : undefined;
+}
+
 /** Complete transcript bodies share the actor's receipt token and bounded residency. */
 export function readSessionActorCompleteTranscriptFromReplica(params: {
   path: string;
   sessionKey: string;
   sessionId: string;
 }) {
-  const current = readCurrentEntryCellForPath(params);
-  const snapshot = current?.cell.snapshot;
-  const context = current?.cell.transcript?.context;
-  return snapshot?.entry?.sessionId === params.sessionId && context?.rows
+  const snapshot = readSessionActorTranscriptStateFromReplica(params);
+  const context = snapshot && readSessionActorTranscriptReplica(snapshot)?.context;
+  return snapshot && context?.rows
     ? {
         snapshot,
         rows: context.rows,
@@ -692,6 +701,8 @@ export function createSessionActorReplica(params: {
       const previousGeneration = owned.generation;
       const expectedGeneration = begin();
       return {
+        // Compression only: the worker must confirm this exact revision before using it.
+        preimage: previousGeneration === expectedGeneration ? previous : undefined,
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           if (outcome.kind === "rolled-back") {
             const restored = previous !== undefined && install(previous, previousGeneration);

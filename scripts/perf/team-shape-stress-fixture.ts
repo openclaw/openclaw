@@ -54,6 +54,9 @@ export async function generateTeamShapeStressFixture(options: {
   now: number;
   sessions?: number;
   transcriptMiB?: number;
+  worktreeFiles?: number;
+  worktreeFileBytes?: number;
+  worktreeLocalOrigin?: boolean;
 }) {
   const sessions = options.sessions ?? 10_800;
   if (!Number.isSafeInteger(sessions) || sessions < 100) {
@@ -77,6 +80,11 @@ export async function generateTeamShapeStressFixture(options: {
       "--team-stress",
       "--transcript-mib",
       String(options.transcriptMiB ?? 128),
+      "--worktree-files",
+      String(options.worktreeFiles ?? 0),
+      "--worktree-file-bytes",
+      String(options.worktreeFileBytes ?? 0),
+      ...(options.worktreeLocalOrigin ? ["--worktree-local-origin"] : []),
       "--projects",
       "4",
       "--approvals",

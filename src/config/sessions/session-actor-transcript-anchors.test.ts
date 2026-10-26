@@ -33,17 +33,10 @@ function fixture() {
     lifecycleRevision: "lifecycle",
     activeWriterRunId: "run",
   });
-  hot.transcript = {
-    ...hot.transcript,
-    watermark: { generation: "generation", maxSeq: 4 },
-    version: { generation: "generation", rawSeq: 4, updatedAt: 1 },
-    anchors: [user, reply],
-  };
-  const message = {
-    role: "assistant",
-    content: [{ type: "text", text: "The answer" }],
-    __openclaw: { runId: "run" },
-  };
+  hot.transcript.watermark = { generation: "generation", maxSeq: 4 };
+  hot.transcript.version = { generation: "generation", rawSeq: 4, updatedAt: 1 };
+  hot.transcript.anchors = [user, reply];
+  const message = { role: "assistant", content: "answer", __openclaw: { runId: "run" } };
   const tail = {
     coveredAfterSeq: 2,
     events: [
@@ -107,20 +100,17 @@ it("uses admitted user bounds while validating the current writer and context", 
 
 it("refuses replay when the writer or selected session has changed", () => {
   const { hot, read } = fixture();
+  const selection = {
+    entryIds: [],
+    replayValidation: { allowInitial: false, expectedWriterRunId: "run" },
+  };
   for (const current of [
     { ...hot.entry!, activeWriterRunId: "replacement-run" },
     { ...hot.entry!, sessionId: "replacement-session" },
   ]) {
-    expect(() =>
-      read(
-        {
-          entryIds: [],
-          replayValidation: { allowInitial: false, expectedWriterRunId: "run" },
-        },
-        { ...hot, entry: current },
-        null,
-      ),
-    ).toThrow(SessionTranscriptWriterClaimReboundError);
+    expect(() => read(selection, { ...hot, entry: current }, null)).toThrow(
+      SessionTranscriptWriterClaimReboundError,
+    );
   }
 });
 
@@ -143,24 +133,10 @@ it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the
   const { hot, tail, read } = fixture();
   const selection = { entryIds: [], afterSeq: 2, includeMessagesForRunId: "run" };
   expect(read(selection, hot, { ...tail, coveredAfterSeq: 3 })).toBeUndefined();
-  expect(
-    read(
-      selection,
-      {
-        ...hot,
-        transcript: {
-          ...hot.transcript,
-          watermark: { generation: "generation", maxSeq: 5 },
-          version: { generation: "generation", rawSeq: 5, updatedAt: 2 },
-        },
-      },
-      {
-        ...tail,
-        events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }],
-      },
-    ),
-  ).toBeUndefined();
-  expect(
-    read(selection, { ...hot, transcript: { ...hot.transcript, anchorsState: "unavailable" } }),
-  ).toBeUndefined();
+  hot.transcript.watermark = { generation: "generation", maxSeq: 5 };
+  hot.transcript.version = { generation: "generation", rawSeq: 5, updatedAt: 2 };
+  const resetTail = { ...tail, events: [...tail.events, { rawSeq: 5, event: { type: "reset" } }] };
+  expect(read(selection, hot, resetTail)).toBeUndefined();
+  hot.transcript.anchorsState = "unavailable";
+  expect(read(selection, hot)).toBeUndefined();
 });

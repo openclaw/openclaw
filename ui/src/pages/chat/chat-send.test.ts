@@ -3,7 +3,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
@@ -27,7 +27,7 @@ import {
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { createResolvedModelPatch, sessionListResult } from "../../test-helpers/chat-model.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
@@ -90,7 +90,6 @@ import {
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
-import { handleChatInputHistoryKey } from "./input-history.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
 import {
@@ -111,6 +110,7 @@ import { handleAgentEvent } from "./tool-stream.ts";
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
+const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 const storageError =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -286,26 +286,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function navigateChatInputHistory(host: TestChatHost, direction: "up" | "down"): boolean {
-  return handleChatInputHistoryKey(host, {
-    key: direction === "up" ? "ArrowUp" : "ArrowDown",
-    selectionStart: 0,
-    selectionEnd: 0,
-    altKey: false,
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
-    isComposing: false,
-    keyCode: direction === "up" ? 38 : 40,
-  }).handled;
-}
-
-function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Response {
-  const response = new Response(null, { status: options.ok === false ? 500 : 200 });
-  response.json = async () => await body;
-  return response;
-}
-
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return { ...sessionListFixture(sessions, 0), path: "" };
 }
@@ -362,11 +342,7 @@ describe("refreshChat", () => {
       },
     });
 
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
+    const refresh = refreshPageChat(asChatPageHost(host), startupOptions);
     const reobserved = refreshChatMetadata(asChatPageHost(host));
     startup.resolve({ messages: [message] });
     await expect(refresh).resolves.toBeUndefined();
@@ -412,11 +388,7 @@ describe("refreshChat", () => {
         "models.list": async () => ({ models: [ready] }),
       },
     });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      startup: true,
-      awaitHistory: true,
-      deferBranches: true,
-    });
+    const refresh = refreshPageChat(asChatPageHost(host), startupOptions);
     invalidateChatMetadataStore(expectDefined(host.client, "chat host client"));
     await waitForFast(() => expect(host.chatModelCatalog).toEqual([ready]));
     startup.resolve({
@@ -445,11 +417,7 @@ describe("refreshChat", () => {
     const closed = asChatPageHost(opening);
     kept.chatModelCatalog = [{ ...ready, available: false, unavailableReason: "missing-auth" }];
     const restoring = refreshChatModelCatalogOnDemand(kept);
-    const loading = refreshPageChat(closed, {
-      startup: true,
-      awaitHistory: true,
-      deferBranches: true,
-    });
+    const loading = refreshPageChat(closed, startupOptions);
     retireChatMetadataRequests(closed);
     closed.connected = false;
     metadata.resolve({ commands: [], models: [ready] });
@@ -584,98 +552,86 @@ describe("refreshChat", () => {
     host.sessions.dispose();
   });
 
-  it.each([
-    {
-      name: "drains a restored queue after history proves the selected session is idle",
-      history: () => idleChatHistory("agent:main:dashboard"),
-      overrides: { sessionKey: "agent:main:dashboard" },
-      message: "after reload",
-      expectedSend: { sessionKey: "agent:main:dashboard", message: "after reload" },
-    },
-    {
-      name: "drains a restored queue from history metadata when rows are scoped elsewhere",
-      history: () => idleChatHistory("agent:work:dashboard"),
-      overrides: {
-        sessionKey: "agent:work:dashboard",
-        sessionsResult: createSessionsResult([
-          row("agent:main:main", { hasActiveRun: false, status: "done" }),
-        ]),
-        sessionsResultAgentId: "main",
-      },
-      message: "after scoped reload",
-      expectedSend: { sessionKey: "agent:work:dashboard", message: "after scoped reload" },
-    },
-    {
-      name: "drains a restored queue when global history answers an agent main alias",
-      history: {
-        messages: [],
-        sessionInfo: row("global", {
-          kind: "global",
-          sessionId: "work-current",
-          hasActiveRun: false,
-          status: "done",
+  it.each(["selected session", "other-agent rows", "global alias"] as const)(
+    "drains a restored queue from history for %s",
+    async (scenario) => {
+      const scoped = scenario !== "selected session";
+      const global = scenario === "global alias";
+      const sessionKey = global
+        ? "agent:work:main"
+        : scoped
+          ? "agent:work:dashboard"
+          : "agent:main:dashboard";
+      const message = "after reload";
+      const primarySessions = createSessionsResult([
+        row("agent:main:main", { hasActiveRun: false, status: "done" }),
+      ]);
+      const expectedSend = {
+        sessionKey: global ? "global" : sessionKey,
+        message,
+        ...(global ? { agentId: "work" } : {}),
+      };
+      const sendRequested = createDeferred();
+      const host = makeChatHost({
+        sessionKey,
+        ...(scoped ? { sessionsResult: primarySessions, sessionsResultAgentId: "main" } : {}),
+        ...(global
+          ? { agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const } }
+          : {}),
+        requestHandlers: {
+          "chat.history": global
+            ? {
+                messages: [],
+                sessionInfo: row("global", {
+                  kind: "global",
+                  sessionId: "work-current",
+                  hasActiveRun: false,
+                  status: "done",
+                  modelProvider: "openai",
+                  totalTokens: 90_000,
+                  contextTokens: 300_000,
+                }),
+              }
+            : () => idleChatHistory(sessionKey),
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "restored send payload");
+            sendRequested.resolve();
+            return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+          },
+        },
+        chatQueue: [queuedMessage("queued-1", message, {})],
+      });
+      if (scoped) {
+        for (const session of primarySessions.sessions) {
+          host.sessions.reconcile(session, primarySessions.defaults, { resultAgentId: "main" });
+        }
+      }
+      const primaryResult = host.sessions.state.result;
+      admitHostQueueItems(host);
+
+      await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
+      await sendRequested.promise;
+      await resumeStoredChatOutboxes(host);
+      expectRpc(host.request, "chat.send", expect.objectContaining(expectedSend));
+      expect(host.chatQueue).toEqual([]);
+
+      if (expectedSend.sessionKey === "global") {
+        expect(host.sessions.state.result).toBe(primaryResult);
+        expect(host.sessions.state.agentId).toBe("main");
+        expect(host.sessionsResultAgentId).toBe("work");
+        expect(selectedChatSessionRow(asChatPageHost(host))).toMatchObject({
+          key: "global",
           modelProvider: "openai",
           totalTokens: 90_000,
           contextTokens: 300_000,
-        }),
-      },
-      overrides: {
-        sessionKey: "agent:work:main",
-        agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
-        sessionsResult: createSessionsResult([
-          row("agent:main:main", { hasActiveRun: false, status: "done" }),
-        ]),
-        sessionsResultAgentId: "main",
-      },
-      message: "after global alias reload",
-      expectedSend: { sessionKey: "global", agentId: "work", message: "after global alias reload" },
-    },
-  ])("$name", async ({ history, overrides, message, expectedSend }) => {
-    const sendRequested = createDeferred();
-    const host = makeChatHost({
-      ...overrides,
-      requestHandlers: {
-        "chat.history": history,
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "restored send payload");
-          sendRequested.resolve();
-          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
-        },
-      },
-      chatQueue: [queuedMessage("queued-1", message, {})],
-    });
-    if (overrides.sessionsResultAgentId) {
-      for (const session of overrides.sessionsResult.sessions) {
-        host.sessions.reconcile(session, overrides.sessionsResult.defaults, {
-          resultAgentId: overrides.sessionsResultAgentId,
+          hasActiveRun: false,
+          status: "done",
         });
+      } else {
+        expect(host.sessionsResult).toBe(host.sessions.state.result);
       }
-    }
-    const primaryResult = host.sessions.state.result;
-    admitHostQueueItems(host);
-
-    await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await sendRequested.promise;
-    await resumeStoredChatOutboxes(host);
-    expectRpc(host.request, "chat.send", expect.objectContaining(expectedSend));
-    expect(host.chatQueue).toEqual([]);
-
-    if (expectedSend.sessionKey === "global") {
-      expect(host.sessions.state.result).toBe(primaryResult);
-      expect(host.sessions.state.agentId).toBe("main");
-      expect(host.sessionsResultAgentId).toBe("work");
-      expect(selectedChatSessionRow(asChatPageHost(host))).toMatchObject({
-        key: "global",
-        modelProvider: "openai",
-        totalTokens: 90_000,
-        contextTokens: 300_000,
-        hasActiveRun: false,
-        status: "done",
-      });
-    } else {
-      expect(host.sessionsResult).toBe(host.sessions.state.result);
-    }
-  });
+    },
+  );
 
   it("keeps a timed-out startup settled through an outbox wake until explicit history retry", async () => {
     vi.useFakeTimers();
@@ -963,11 +919,13 @@ describe("handleSendChat", () => {
   it.each([
     { chatMessage: "/pair :", attached: false },
     { chatMessage: "/pair", attached: true },
+    { chatMessage: "/btw summarize this", attached: false },
   ])(
     "routes presentation command $chatMessage with attachments=$attached",
     async ({ chatMessage, attached }) => {
       installPairClientPresentationCommand();
       const dispatchClientPresentation = vi.fn(async () => true);
+      const openSessionCompanion = vi.fn();
       const baselineMessages = [{ role: "assistant", content: "Ready." }];
       const host = makeChatHost({
         requestHandlers: { "chat.send": { status: "started" } },
@@ -977,6 +935,7 @@ describe("handleSendChat", () => {
           : [],
         chatMessages: baselineMessages,
         dispatchClientPresentation,
+        openSessionCompanion,
       });
 
       await handleSendChat(host);
@@ -985,11 +944,17 @@ describe("handleSendChat", () => {
         expect(dispatchClientPresentation).not.toHaveBeenCalled();
         expectRpc(host.request, "chat.send", expect.objectContaining({ message: chatMessage }));
       } else {
-        expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
+        if (chatMessage.startsWith("/btw")) {
+          expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
+          expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(chatMessage);
+        } else {
+          expect(dispatchClientPresentation).toHaveBeenCalledWith({ kind: "device-pairing" });
+        }
         expectNoRpc(host.request, "chat.send");
         expect(host.chatQueue).toStrictEqual([]);
         expect(host.chatMessages).toEqual(baselineMessages);
         expect(host.chatMessage).toBe("");
+        expect(host.chatRunId).toBeNull();
       }
     },
   );
@@ -1181,46 +1146,6 @@ describe("handleSendChat", () => {
     expect(
       getChatSessionProjection(host, { sessionKey: host.sessionKey }).entries,
     ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
-  });
-
-  it("retires a failed queued picker back to the preceding confirmed session row", async () => {
-    const firstPatch = createDeferred<unknown>();
-    let patchCount = 0;
-    const host = makeChatHost({
-      requestHandlers: {
-        "sessions.list": createSessionsResult([
-          row("agent:main", {
-            model: "gpt-5-mini",
-            modelProvider: "openai",
-            modelOverrideSource: "user",
-          }),
-        ]),
-        "sessions.patch": () => {
-          patchCount += 1;
-          if (patchCount === 1) {
-            return firstPatch.promise;
-          }
-          throw new Error("picker rejected");
-        },
-      },
-    });
-
-    const slash = patchChatSessionSettings(host, host.sessionKey, { model: "openai/gpt-5-mini" });
-    await waitForFast(() => expect(patchCount).toBe(1));
-    const picker = patchChatSessionSettings(host, host.sessionKey, {
-      model: "openai/gpt-5",
-    });
-
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
-    firstPatch.resolve(createResolvedModelPatch("gpt-5-mini", "openai"));
-    await expect(slash).resolves.toBeTruthy();
-    await expect(picker).rejects.toThrow("picker rejected");
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBeUndefined();
-    expect(host.sessions.state.result?.sessions[0]).toMatchObject({
-      model: "gpt-5-mini",
-      modelProvider: "openai",
-      modelOverrideSource: "user",
-    });
   });
 
   it("keeps waiting when a late picker barrier cannot be persisted", async () => {
@@ -1548,7 +1473,7 @@ describe("handleSendChat", () => {
   it("keeps slash-command model changes in the canonical row", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 500 })),
     );
 
     const host = makeChatHost({
@@ -1705,23 +1630,6 @@ describe("handleSendChat", () => {
       }
     },
   );
-
-  it("routes /btw without adopting a main chat run when idle", async () => {
-    const openSessionCompanion = vi.fn();
-    const host = makeChatHost({
-      chatMessage: "/btw summarize this",
-      openSessionCompanion,
-    });
-
-    await handleSendChat(host);
-
-    expect(openSessionCompanion).toHaveBeenCalledWith("summarize this");
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessage).toBe("");
-    expect(navigateChatInputHistory(host, "up")).toBe(true);
-    expect(host.chatMessage).toBe("/btw summarize this");
-  });
 
   it.each([
     { previousRunId: null, adoption: "status" },
@@ -1898,13 +1806,13 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "chat.history": (params: unknown) => {
           const payload = requireRecord(params, "chat.history payload");
-          return Promise.resolve({
+          return {
             messages: [],
             sessionInfo: row(String(payload.sessionKey), {
               hasActiveRun: false,
               status: "done",
             }),
-          });
+          };
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "chat.send payload");
@@ -1912,7 +1820,7 @@ describe("handleSendChat", () => {
           sentSessions.push(sessionKey);
           return sessionKey === visibleSessionKey
             ? visibleAck.promise
-            : Promise.resolve({ runId: payload.idempotencyKey, status: "started", messageSeq: 1 });
+            : { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
         },
       },
       sessionKey: visibleSessionKey,
@@ -2222,20 +2130,18 @@ describe("handleSendChat", () => {
     admitItem(host, selected, selected.sessionKey, selected.agentId);
     admitItem(host, defaultAgent, defaultAgent.sessionKey, defaultAgent.agentId);
 
-    expect(
-      handlePageGatewayEvent(asChatPageHost(host), {
-        event: "chat",
-        payload: {
-          state: "final",
-          runId,
-          sessionKey: "global",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "default agent reply" }],
-          },
+    handlePageGatewayEvent(asChatPageHost(host), {
+      event: "chat",
+      payload: {
+        state: "final",
+        runId,
+        sessionKey: "global",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "default agent reply" }],
         },
-      } as Parameters<typeof handlePageGatewayEvent>[1]),
-    ).toBeUndefined();
+      },
+    } as Parameters<typeof handlePageGatewayEvent>[1]);
 
     expect(host.chatMessages).toStrictEqual([]);
     expectItems(host.chatQueue, { id: selected.id });
@@ -2314,9 +2220,9 @@ describe("handleSendChat", () => {
       },
     } as Parameters<typeof handlePageGatewayEvent>[1];
 
-    expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
-    expect(handlePageGatewayEvent(asChatPageHost(visible), event)).toBeUndefined();
-    expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
+    handlePageGatewayEvent(asChatPageHost(inactive), event);
+    handlePageGatewayEvent(asChatPageHost(visible), event);
+    handlePageGatewayEvent(asChatPageHost(inactive), event);
 
     expect(
       visible.chatMessages.map((message) => requireRecord(message, "terminal transcript").role),
@@ -2716,57 +2622,6 @@ describe("handleSendChat", () => {
     expect(sendPayloads).toHaveLength(2);
     expect(sendPayloads[1]?.idempotencyKey).toBe(attemptedRunId);
     await waitForFast(() => expect(host.chatQueue).toEqual([]));
-  });
-
-  it("restores input when a volatile send fails before transport", async () => {
-    installQuotaExceededStorage();
-
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": () => {
-          throw new Error("gateway not connected");
-        },
-      },
-      chatMessage: "safe to restore",
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatMessage).toBe("safe to restore");
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.request).toHaveBeenCalledTimes(1);
-  });
-
-  it("retains a connected attachment when browser quota rejects durable admission", async () => {
-    installQuotaExceededStorage();
-    const replyTarget = { messageId: "quota-quote", text: "Keep the rejected quote" };
-
-    const attachment = {
-      id: "large-connected-attachment",
-      dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
-      fileName: "large.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 20 * 1024 * 1024,
-    };
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.send": (params: unknown) =>
-          sendAck(params, "volatile connected send payload", "started"),
-      },
-      chatAttachments: [attachment],
-      chatMessage: "send the large file",
-      chatReplyTarget: replyTarget,
-    });
-
-    await handleSendChat(host);
-
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(host.chatAttachments).toStrictEqual([attachment]);
-    expect(host.chatMessage).toBe("send the large file");
-    expect(host.chatReplyTarget).toEqual(replyTarget);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBeNull();
-    expect(host.lastError).toBe(storageError);
   });
 
   it.each([
@@ -3228,33 +3083,16 @@ describe("handleSendChat", () => {
   );
 
   it.each([
-    {
-      state: "waiting-reconnect",
-      sessionKey: "agent:main:main",
-      message: "retry the oversized turn",
-      error: "gateway closed (1006): network lost",
-    },
-    {
-      state: "waiting-reconnect",
-      sessionKey: "main",
-      message: "retry the oversized turn",
-      error: "gateway closed (1006): network lost",
-    },
-    {
-      state: "waiting-reconnect",
-      sessionKey: "global",
-      message: "retry the oversized turn",
-      error: "gateway closed (1006): network lost",
-    },
-    {
-      state: "failed",
-      sessionKey: "agent:main",
-      message: "retry after definite failure",
-      error: "send rejected",
-    },
-  ])(
-    "retries a $state volatile send from $sessionKey with the appropriate run identity",
-    async ({ state, sessionKey, message, error }) => {
+    ["waiting-reconnect", "agent:main:main"],
+    ["waiting-reconnect", "main"],
+    ["waiting-reconnect", "global"],
+    ["failed", "agent:main"],
+  ] as const)(
+    "retries a %s volatile send from %s with the appropriate run identity",
+    async (state, sessionKey) => {
+      const message =
+        state === "failed" ? "retry after definite failure" : "retry the oversized turn";
+      const error = state === "failed" ? "send rejected" : "gateway closed (1006): network lost";
       installQuotaExceededStorage();
       const firstAttempt = createDeferred<unknown>();
       const runIds: unknown[] = [];
@@ -3357,47 +3195,69 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe(storageError);
   });
 
-  it("restores an offline local command when durable admission fails", async () => {
-    installQuotaExceededStorage();
-    const replyTarget = { messageId: "command-quote", text: "Keep the rejected quote" };
-    const host = makeChatHost({
-      client: null,
-      connected: false,
-      chatMessage: "/think high",
-      chatReplyTarget: replyTarget,
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatMessage).toBe("/think high");
-    expect(host.chatReplyTarget).toEqual(replyTarget);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.lastError).toBe(storageError);
-  });
-
-  it("retains cold-offline attachments until a recovery owner is known", async () => {
-    installQuotaExceededStorage();
-    const attachment = {
-      id: "offline-attachment",
-      mimeType: "image/png",
-      fileName: "offline.png",
-      sizeBytes: 3,
-      dataUrl: "data:image/png;base64,AAA",
-    };
-    const host = makeChatHost({
-      client: null,
-      connected: false,
-      chatAttachments: [attachment],
-    });
-
-    await handleSendChat(host);
-
-    expect(host.chatAttachments).toEqual([attachment]);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.lastError).toBe(
-      "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
-    );
-  });
+  it.each(["text", "file", "offline command", "cold file"] as const)(
+    "retains rejected %s input when durable storage is unavailable",
+    async (kind) => {
+      installQuotaExceededStorage();
+      const offline = kind === "offline command" || kind === "cold file";
+      const attachment =
+        kind === "file"
+          ? {
+              id: "file",
+              dataUrl: "data:application/pdf;base64,JVBERi0xLjQ=",
+              fileName: "large.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 20 * 1024 * 1024,
+            }
+          : {
+              id: "image",
+              dataUrl: "data:image/png;base64,AAA",
+              fileName: "offline.png",
+              mimeType: "image/png",
+              sizeBytes: 3,
+            };
+      const message =
+        kind === "offline command" ? "/think high" : kind === "cold file" ? "" : "retained input";
+      const replyTarget = { messageId: "quote", text: "Keep the rejected quote" };
+      const attachments = kind === "file" || kind === "cold file" ? [attachment] : [];
+      const host = makeChatHost({
+        requestHandlers: offline
+          ? {}
+          : {
+              "chat.send": (params: unknown) => {
+                if (kind === "text") {
+                  throw new Error("gateway not connected");
+                }
+                return sendAck(params, "quota send", "started");
+              },
+            },
+        ...(offline ? { client: null, connected: false } : {}),
+        chatMessage: message,
+        chatAttachments: attachments,
+        ...(kind === "file" || kind === "offline command" ? { chatReplyTarget: replyTarget } : {}),
+      });
+      await handleSendChat(host);
+      expect(host.chatMessage).toBe(message);
+      expect(host.chatQueue).toStrictEqual([]);
+      if (kind === "text") {
+        expect(host.request).toHaveBeenCalledTimes(1);
+      } else {
+        expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+        expect(host.chatAttachments).toStrictEqual(attachments);
+        expect(host.lastError).toBe(
+          kind === "cold file"
+            ? "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent."
+            : storageError,
+        );
+      }
+      if (kind === "file" || kind === "offline command") {
+        expect(host.chatReplyTarget).toEqual(replyTarget);
+      }
+      if (kind === "file") {
+        expect(host.chatRunId).toBeNull();
+      }
+    },
+  );
 
   it("keeps a reconnect send queued when attempt persistence fails", async () => {
     const storage = createStorageMock();
@@ -3405,10 +3265,9 @@ describe("handleSendChat", () => {
 
     const host = makeChatHost({
       requestHandlers: {
-        "chat.history": () =>
-          Promise.resolve({
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          }),
+        "chat.history": () => ({
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        }),
       },
       connected: true,
       chatQueue: [

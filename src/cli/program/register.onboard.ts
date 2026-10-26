@@ -148,7 +148,7 @@ export function registerOnboardRuntimeOptions(
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun (default: node)")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun|standalone (default: node)")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")

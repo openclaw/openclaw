@@ -201,6 +201,31 @@ use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
 Playwright headless shell for both arms. The manifest records the executable;
 compare only against the same browser configuration.
 
+## Control UI route dependency probes
+
+`bench-control-ui-route-leaks.ts` compares cold direct navigation using separate
+coverage and interleaved timing contexts. The optional `apps-catalog`,
+`apps-open-immediate`, and `apps-open-idle` routes seed a synthetic catalog and
+open its first App through the real launch, view, and sandbox path. Immediate
+opens have no intentional wait; idle opens wait at least two seconds without
+manual preloading. Each starts in a fresh context without visiting Chat first.
+
+Use `--routes apps-catalog,apps-open-immediate,apps-open-idle,memory` to include
+the shared-code control. The report retains cold and first-open measurements
+separately, plus combined elapsed time, JS/CSS transfer phases, and native counter
+and close checks after the action cutoff. Combined elapsed does not waive a
+first-open regression. Phase timestamps require an aligned document/CDP clock;
+coverage timings are diagnostic. Main-target CPU and V8 omit inner-App and worker
+execution. The 100 ms HTTP profile does not delay the synthetic WebSocket.
+
+Browser/Reader probes are opt-in: `browser-focus-existing`,
+`browser-session-mobile-first-open`, `browser-session-mobile-dark-first-open`,
+and `reader-activity-first-open`. These use native navigation/panel controls and
+retain separate cold and first-open phases, raw clock evidence, no-write checks,
+and post-close settlement. They cannot be combined with `--interactions`.
+Completed contexts append once to `samples.jsonl`; `summary.json` is written
+after browser/server cleanup, including when a later context fails.
+
 ## Control UI request waterfalls
 
 The production-bundle cold-load harness can record usable-screen readiness,
@@ -358,6 +383,22 @@ under `.artifacts`: the key includes the base Git tree, analyzer/config source,
 native compiler/API bytes, Node version, platform and checkout path. One base
 generation is retained per cache root; changed inputs or damaged outputs rebuild
 it. The complete semantic program is preserved on cache misses.
+
+`pnpm check:database-dialect-ratchet` also runs `check-sql-portability.mts`.
+It rejects multi-argument `fn("max" | "min", [...])` (including `fn.agg`),
+equivalent raw SQL, and negative literal LIMITs in production `src`, `extensions`,
+and `packages` code and SQL source files. Use the existing database-engine expression helpers. This
+is a syntax check: it does not infer the values of variable argument lists or
+prove general control-flow reachability.
+The existing `--staged` mode checks the index, including this portability guard.
+
+A physically SQLite-only owner or an explicitly `!postgres`-guarded expression
+can put `/* pg-sqlite-only: <specific owner or guard reason> */` immediately before
+that expression. The marker applies only to that expression, never a file or
+function. Do not use it to suppress PostgreSQL-reachable SQL. Scalar extrema
+helpers require non-NULL, SQL-typed operands: SQLite propagates any NULL, whereas
+PostgreSQL greatest/least ignore NULL operands. Normalize nullable inputs at the
+caller according to its contract.
 
 - `check-*.mts` / `check-*.ts` / retained `check-*.mjs`: guardrails for architecture, docs, package
   contents, boundaries, workflows, and generated artifacts.

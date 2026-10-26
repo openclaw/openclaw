@@ -44,6 +44,7 @@ const nativeExit = {
   promiseCallbackRanWhileBlocked: false,
 };
 const cases = [
+  { ending: "reference-liveness", activeCompleted: true },
   {
     ending: "resource-idle-broker",
     ...resourceCustody,

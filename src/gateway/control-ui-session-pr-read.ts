@@ -265,7 +265,21 @@ export function createControlUiSessionPrRead(params: {
   const actorProfile = actor?.kind === "operator" ? actor.profileId : undefined;
   const profileInput = client.authenticatedUserProfile?.profileId;
   const userInput = client.authenticatedUserId;
-  const scopes = (client.connect.scopes ?? []).toSorted().join("\0");
+  const scopes = [...(client.connect.scopes ?? [])];
+  const scopeKey = scopes.toSorted().join("\0");
+  const hasCurrentScopes = () => {
+    const current = client.connect.scopes;
+    if ((current?.length ?? 0) !== scopes.length) {
+      return false;
+    }
+    for (let index = 0; index < scopes.length; index++) {
+      if (current![index] !== scopes[index]) {
+        // Reordering preserves the grant, including duplicate multiplicity.
+        return current!.toSorted().join("\0") === scopeKey;
+      }
+    }
+    return true;
+  };
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
   const projection = getSessionRowProjection();
@@ -300,7 +314,7 @@ export function createControlUiSessionPrRead(params: {
         client.authenticatedUserId !== userInput ||
         currentActor?.kind !== actorKind ||
         (currentActor?.kind === "operator" ? currentActor.profileId : undefined) !== actorProfile ||
-        (client.connect.scopes ?? []).toSorted().join("\0") !== scopes ||
+        !hasCurrentScopes() ||
         client.internal?.operatorAccessAuthority !== access ||
         !hasCurrentGatewayOperatorAccess(access)
       ) {
@@ -544,8 +558,7 @@ export function createControlUiSessionPrRead(params: {
                 (current.selected !== target.captured ||
                   current.selected.databaseFactsRevision !== target.factsRevision ||
                   current.cfg !== target.cfg ||
-                  (current.selected.materialized?.row.repository ?? null) !== target.repository ||
-                  projection.readTaskPublicationRevision() !== target.taskRevision)
+                  (current.selected.materialized?.row.repository ?? null) !== target.repository)
               ) {
                 // Enrichment can replace a row without changing its incarnation or PR source.
                 if (current.selected.generation !== target.captured?.generation) {
@@ -568,11 +581,12 @@ export function createControlUiSessionPrRead(params: {
               target.target.assertCurrent?.();
               validated = current;
               if (!original) {
+                // Lineage changes revalidate the audience without rebuilding the root's source.
+                target.taskRevision = projection.readTaskPublicationRevision();
                 if (refreshedRow) {
                   target.captured = refreshedRow;
                   target.factsRevision = refreshedRow.databaseFactsRevision;
                   target.cfg = current.cfg;
-                  target.taskRevision = projection.readTaskPublicationRevision();
                   target.repository = refreshedRow.materialized.row.repository ?? null;
                 }
                 return;

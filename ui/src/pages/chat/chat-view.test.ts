@@ -317,6 +317,8 @@ describe("chat typing status", () => {
   ])(
     "renders $expectedText in the transcript",
     async ({ actors, expectedText, expectedAvatars }) => {
+      // This checks presentation; cold module compilation is separate fixture setup.
+      await import("./components/chat-typing-indicator.tsx");
       const container = renderChatView({ typingActors: actors });
       await waitForSolid(() =>
         expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull(),
@@ -1428,7 +1430,7 @@ describe("chat loading skeleton", () => {
     const container = renderChatView({
       realtimeTalkActive: true,
       messages: [{ role: "user", content: "Repeated words", __openclaw: { id: "voice:call:1" } }],
-      realtimeTalkConversation: [
+      readRealtimeTalkConversation: () => [
         {
           id: "u1",
           role: "user",
@@ -1836,6 +1838,9 @@ describe("chat voice controls", () => {
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
       expect(centerBar?.style.getPropertyValue("--talk-bar-scale")).not.toBe(initialScale);
+      expect(visualizer?.querySelector(".agent-chat__voice-activity-bar:nth-child(4)")).toBe(
+        centerBar,
+      );
 
       const replacement = new RealtimeTalkLevelSignal();
       replacement.set(0.35);

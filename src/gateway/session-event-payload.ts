@@ -1,10 +1,8 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
-import {
-  deriveGatewaySessionLifecycleProjectionPatch,
-  isStaleLifecycleEventForSession,
-} from "./session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "./session-lifecycle-projection.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 
 export function buildGatewaySessionSnapshot(params: {

@@ -15,7 +15,7 @@ import {
   setupCronServiceSuite,
 } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { MIN_REFIRE_GAP_MS } from "./service/timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./service/timer-constants.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";

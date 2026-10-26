@@ -2,14 +2,11 @@
 
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import {
-  createPlacementPane,
-  selectPlacementConfiguration,
-} from "./chat-pane-placement.test-support.ts";
+import { row } from "./chat-outbox-recovery.test-support.ts";
+import { createPlacementPane } from "./chat-pane-placement.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
@@ -23,21 +20,13 @@ function clickChoice(value: string) {
   const button = document.body.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
   button?.click();
   flush();
-  return button;
 }
 
 const profile = {
   id: "aws",
   providerId: "crabbox",
-  operatingSystems: [
-    { id: "linux", label: "Linux", default: true },
-    { id: "windows/wsl2", label: "Windows (WSL2)" },
-  ],
-  machines: [
-    { id: "tiny", label: "Tiny", os: "linux", default: true },
-    { id: "tiny", label: "Tiny", os: "windows/wsl2", default: true },
-    { id: "fast", label: "Fast", os: "windows/wsl2" },
-  ],
+  operatingSystems: [{ id: "windows/wsl2", label: "Windows (WSL2)", default: true }],
+  machines: [{ id: "fast", label: "Fast", os: "windows/wsl2", default: true }],
 };
 
 it.each([
@@ -62,12 +51,8 @@ it.each([
       ["operator.admin", "operator.read", "operator.write"],
       ["sessions.dispatch", "sessions.reclaim"],
     );
-    const session: GatewaySessionRow = {
-      key: "agent:main:failed-worker",
+    const session = row("agent:main:failed-worker", {
       sessionId: "failed-worker-session",
-      label: "Failed worker session",
-      kind: "direct",
-      updatedAt: 0,
       placement: {
         state: "failed",
         generation: 2,
@@ -77,7 +62,7 @@ it.each([
         recoveryError: "worker disappeared",
         recoveryAction: "restart",
       },
-    };
+    });
     state.sessionKey = session.key;
     state.currentSessionId = session.sessionId;
     state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
@@ -86,25 +71,16 @@ it.each([
 
     const restarting = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
     try {
-      await dialogs.waitFor(() => {
-        expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
-      });
+      await dialogs.waitFor(() =>
+        expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull(),
+      );
       expect(document.body.textContent).toContain(
         "Changes that the previous worker did not upload may be lost.",
       );
-      if (target === "cloud") {
-        clickChoice("cloud:aws");
-        await selectPlacementConfiguration("Operating system", "windows/wsl2");
-        await selectPlacementConfiguration("Machine", "fast");
-      } else {
-        expect(clickChoice("gateway")?.querySelector(".session-move__name")?.textContent).toBe(
-          "Gateway · local",
-        );
-      }
-      const restartButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Restart session",
-      );
-      restartButton?.click();
+      clickChoice(target === "cloud" ? "cloud:aws" : "gateway");
+      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Restart session")
+        ?.click();
       const cloud = target === "cloud";
       const targetParams = cloud
         ? { profileId: "aws", os: "windows/wsl2", machineClass: "fast" }

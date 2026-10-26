@@ -23,8 +23,10 @@ import {
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { buildRestartRecoveryTerminalDeliveryEvidence } from "../../agent-command-restart-recovery.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { ReplaySafeTranscriptConflictError } from "../../embedded-agent-runner/transcript-conflict.js";
+import { buildMainSessionRecoverySettlementPatch } from "../../main-session-recovery/main-session-recovery-clear.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -388,6 +390,7 @@ it.each([
     throw new Error("unexpected recovery dispatch");
   };
   const unregister = registerGatewayRecoveryRuntime({
+    prepareFailedWorkerPlacement: unused,
     prepareRestartRecovery: unused,
     resumeChatInput: unused,
     dispatchSessionMethod: unused,
@@ -539,24 +542,80 @@ it.each`
   expectNoReplay(fixture);
 });
 
-it.each(["private", "incognito"] as const)("no recovery reads for %s", async (scope) => {
+it.each(["visible", "silent"] as const)(
+  "settles a private %s completion on the next retry after requester recovery",
+  async (reply) => {
+    const fixture = setup("subagent_announce");
+    Object.assign(fixture.params, {
+      completionTarget: "parent",
+      completionRequesterSessionId: "requester-session",
+      completionRequesterLifecycleRevision: "requester-revision",
+    });
+    const first = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.state.entry = { ...fixture.state.entry, ...liveClaim };
+    fixture.readDone.resolve();
+    fixture.dispatchDone.reject(createSessionWorkStartChangedError(sessionKey));
+    expect((await first).delivered).toBe(false);
+
+    fixture.state.entry = {
+      ...fixture.state.entry,
+      ...buildMainSessionRecoverySettlementPatch({
+        entry: fixture.state.entry,
+        recordTerminalSource: true,
+        terminalRunId: "successor",
+        terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
+          reply === "visible"
+            ? { payloads: [{ text: "Requester processed the child result" }] }
+            : { meta: { terminalReply: { disposition: "silent" } } },
+        ),
+      }),
+    };
+    for (let retry = 0; retry < 2; retry += 1) {
+      await expect(fixture.startDelivery()).resolves.toMatchObject({
+        delivered: true,
+        path: "direct",
+      });
+    }
+    expectNoReplay(fixture);
+  },
+);
+
+it.each([
+  { captured: true as const, meta: { error: true as const } },
+  { captured: true as const, meta: { aborted: true as const } },
+  { payloads: [{ visible: true }] },
+])("does not accept unsuccessful private recovery evidence: %j", async (evidence) => {
+  const fixture = setup("subagent_announce");
+  Object.assign(fixture.params, {
+    completionTarget: "parent",
+    completionRequesterSessionId: "requester-session",
+    completionRequesterLifecycleRevision: "requester-revision",
+  });
+  fixture.state.entry = {
+    ...fixture.state.entry,
+    restartRecoveryTerminalRunIds: [sourceRunId],
+    restartRecoveryTerminalDeliveryEvidence: [{ runId: sourceRunId, ...evidence }],
+  };
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
+    delivered: false,
+    disposition: "permanent_failure",
+  });
+  expectNoReplay(fixture, 0);
+});
+
+it("does not read durable recovery receipts for incognito", async () => {
   const fixture = setup();
-  if (scope === "private") {
-    fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
-  } else {
-    fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
-    fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-    onTestFinished(() =>
-      memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
-    );
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
-      { ...fixture.state.entry, incognito: true },
-    );
-  }
+  fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
+  fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  onTestFinished(() =>
+    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
+  );
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
+    { ...fixture.state.entry, incognito: true },
+  );
   const delivery = fixture.startDelivery();
   await awaitGateBeforeSettlement(
     fixture.dispatchEntered.promise,

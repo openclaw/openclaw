@@ -5,7 +5,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state.js";
 import type { DefaultProactiveJobReceipt } from "./proactive-job-receipt.types.js";
-import { cronStoreKey } from "./store/key.js";
 export type { DefaultProactiveJobReceipt } from "./proactive-job-receipt.types.js";
 
 export function isProactiveJobMigrationPending(
@@ -45,7 +44,7 @@ function defaultProactiveJobReceiptKey(
   storePath: string,
   agentId: string,
 ): `automation-default:${string}:${string}` {
-  return `automation-default:${cronStoreKey(storePath)}:${normalizeAgentId(agentId)}`;
+  return `automation-default:${storePath}:${normalizeAgentId(agentId)}`;
 }
 
 export function readDefaultProactiveJobReceiptInDatabase(

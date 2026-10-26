@@ -18,6 +18,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   }
 
   return {
+    daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
     repositoryPublicationRestore: runtimeProcessEntrypoint(
@@ -196,6 +197,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "config/sessions/session-accessor.sqlite-archive.worker",
     ),
     sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
+    usageOverview: runtimeProcessEntrypoint("infra/session-cost-usage-overview-report.worker"),
     workerTranscriptCommit: runtimeProcessEntrypoint(
       "gateway/worker-environments/transcript-commit.worker",
     ),
@@ -702,6 +704,7 @@ export const runtimeProcessScriptEntrypoints = {
     kind: "file",
     fileName: "daemon-runtime-probe.mjs",
     materialize: true,
+    runtimeEntrypoint: "daemonRuntimeProbe",
   },
   updateStateSizes: {
     sourceModule: "src/infra/update-state-sizes.generated.mjs",

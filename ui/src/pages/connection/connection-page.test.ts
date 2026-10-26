@@ -4,11 +4,8 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,

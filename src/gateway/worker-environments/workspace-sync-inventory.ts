@@ -161,8 +161,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
           }
           childStderr.destroy();
           finish({ code: child.exitCode });
-        }, COMMAND_KILL_GRACE_MS + 1_000);
-        terminationTimer.unref?.();
+        }, COMMAND_KILL_GRACE_MS + 1_000).unref();
       };
       if (boundedOutput) {
         const childStdout = child.stdout;
@@ -208,8 +207,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
       timer = setTimeout(() => {
         timedOut = !terminationStarted && child.exitCode === null && child.signalCode === null;
         terminate();
-      }, params.timeoutMs);
-      timer.unref?.();
+      }, params.timeoutMs).unref();
       if (params.signal.aborted) {
         abort();
       }

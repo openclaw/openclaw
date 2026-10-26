@@ -1,4 +1,4 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -203,9 +203,8 @@ suite.define(() => {
     } finally {
       await page.close();
       if (proofDir && video) {
-        const recordingPath = await video.path();
         await video.saveAs(path.join(proofDir, "task-progress-final-expand-cycle.webm"));
-        await unlink(recordingPath);
+        await video.delete();
       }
       await suite.closeBrowserContext(context);
     }

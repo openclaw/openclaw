@@ -167,10 +167,9 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  --chat-composer-secondary: color-mix(
-    in srgb,
-    var(--text-strong) 65%,
-    var(--chat-composer-surface)
+  --chat-composer-secondary: var(
+    --control-secondary-text,
+    color-mix(in srgb, var(--text-strong) 65%, var(--chat-composer-surface))
   );
   --chat-composer-tertiary: color-mix(
     in srgb,
@@ -627,7 +626,7 @@
   height: var(--chat-composer-control-size);
   padding: 0;
   border-radius: var(--radius-full);
-  color: var(--chat-composer-secondary);
+  color: var(--icon-interactive, var(--chat-composer-secondary));
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -835,7 +834,7 @@
    a second primary action. */
 .agent-chat__input .chat-send-btn--voice {
   background: transparent;
-  color: var(--text);
+  color: var(--icon-interactive, var(--text));
 }
 
 .agent-chat__input .chat-send-btn--voice:disabled {
@@ -1195,7 +1194,7 @@
     --chat-mobile-row-icon-padding: 0px;
     --chat-mobile-row-muted-icon-size: 18px;
     --chat-mobile-row-context-icon-size: 16px;
-    --chat-mobile-row-muted-opacity: 0.55;
+    --chat-mobile-row-muted-opacity: 1;
     --chat-mobile-row-permission-stroke: 2.25;
     --chat-mobile-row-plus-target-size: 36px;
     --chat-mobile-row-plus-icon-size: 24px;
@@ -1205,7 +1204,7 @@
     --chat-mobile-row-action-padding: var(--chat-mobile-row-icon-padding);
     --chat-mobile-row-action-gap: 4px;
     --chat-mobile-row-stop-icon-size: 18px;
-    --chat-mobile-row-mic-opacity: 0.72;
+    --chat-mobile-row-mic-opacity: 1;
     --chat-mobile-row-mic-stroke: 2;
     --chat-composer-control-size: var(--chat-mobile-row-target-size);
     --chat-composer-chip-height: var(--chat-mobile-row-target-size);
@@ -1315,6 +1314,12 @@
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .chat-send-btn--voice:not(:disabled, [aria-disabled="true"])
+    > svg {
+    color: inherit;
   }
 }
 

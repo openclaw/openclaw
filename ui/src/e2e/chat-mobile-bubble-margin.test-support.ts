@@ -211,13 +211,13 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
   const scope = page.locator(".chat-pane-cache__pane--active");
   const target = scope.locator(`.chat-thread ${testCase.selector}`).first();
   await target.waitFor();
-  await scope
-    .locator(".chat-thread img.chat-message-image")
-    .evaluateAll((images: HTMLImageElement[]) =>
-      Promise.all(images.map((element) => element.decode())),
-    );
-  await page.evaluate(() => document.fonts.ready);
   return target.evaluate(async (element, side) => {
+    const activePane = element.closest(".chat-pane-cache__pane--active")!;
+    const images = activePane.querySelectorAll<HTMLImageElement>(
+      ".chat-thread img.chat-message-image",
+    );
+    await Promise.all(Array.from(images, (imageElement) => imageElement.decode()));
+    await document.fonts.ready;
     const finiteAnimations = element
       .getAnimations()
       .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));

@@ -20,6 +20,9 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+Queued native service commands use elapsed-time deadlines, so system-clock
+corrections do not prematurely expire or extend their admission budgets.
+
 `gateway stop`, `gateway uninstall`, and `gateway restart` remain available when
 configuration is invalid or needs Doctor migration, including configuration written
 by a newer OpenClaw version. They control the recorded service and report config
@@ -48,11 +51,17 @@ belong to an earlier run, and do not establish the current process's startup pha
 Routine startup and shutdown messages are not reported as errors. Doctor and
 onboarding use the same error selection.
 
+On macOS, stop waits for the LaunchAgent to unload, its processes to exit, and the
+Gateway port to be released. These waits measure elapsed time, so system-clock
+corrections do not shorten or extend their deadlines.
+
 On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
 and exit. Older or unresponsive Gateways fall back to termination of the captured
 process tree; a replacement instance is preserved. Transient SQLite sharing errors
 after confirmed process exit are retried; if inspection remains unavailable, the
 command warns and checks that the Gateway port is free before continuing with restart.
+The 15-second SQLite retry budget measures elapsed time, so system-clock corrections
+do not shorten or extend it.
 
 Port confirmation shares the five-second settlement budget across the configured
 addresses, allowing slow Windows LAN connection refusals to confirm shutdown. If

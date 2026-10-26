@@ -4,6 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -43,10 +44,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { createSessionGoalFixture } from "./session-goal.test-support.js";
-import {
-  deriveGatewaySessionLifecycleProjectionPatch,
-  isStaleLifecycleEventForSession,
-} from "./session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "./session-lifecycle-projection.js";
 import {
   persistLifecycleThroughMockedStore,
   type LifecycleEvent,

@@ -1,10 +1,16 @@
 import type { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
+import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
+import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
 export function createTeamScaleHistoryFixture(options: {
   messageCount: number;
   inlineWidgets: number;
   now: number;
   largeSnapshot?: boolean;
+  historyStateReceipt?: boolean;
+  sessionInfo: ControlUiSessionFixture;
+  sender?: ControlUiMockPresenceUser;
+  rowFacts?: boolean;
   attachments?: ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"];
 }) {
   const messageIds = Array.from(
@@ -15,7 +21,17 @@ export function createTeamScaleHistoryFixture(options: {
   const historyMessages = messageIds.map((id, index) => ({
     role:
       options.largeSnapshot && index % 4 === 2 ? "toolResult" : index % 2 ? "assistant" : "user",
-    __openclaw: { id, seq: index + 1 },
+    __openclaw: {
+      id,
+      seq: index + 1,
+      ...(options.sender && index % 2 === 0 && !(options.largeSnapshot && index % 4 === 2)
+        ? {
+            senderIdentity: options.sender.identity,
+            senderName: options.sender.name,
+            senderProfileAvatarUrl: options.sender.avatarUrl,
+          }
+        : {}),
+    },
     ...(options.largeSnapshot
       ? {
           idempotencyKey: `synthetic-message-${index}`,
@@ -48,5 +64,68 @@ export function createTeamScaleHistoryFixture(options: {
       },
     ],
   }));
-  return { messageIds, historyMessages };
+  if (options.rowFacts) {
+    const runId = "synthetic-row-facts-run";
+    const tail = historyMessages.slice(-3);
+    for (const message of tail) {
+      const { __openclaw: identity } = message;
+      Object.assign(message, { runId });
+      Object.assign(identity, { runId });
+    }
+    Object.assign(tail[0]!, { role: "user" });
+    Object.assign(tail[1]!, {
+      role: "toolResult",
+      toolCallId: "synthetic-row-facts-read",
+      toolName: "read",
+      content: [{ type: "text", text: "Synthetic verification output." }],
+      activity: [
+        {
+          itemId: "tool:synthetic-row-facts-read",
+          toolCallId: "synthetic-row-facts-read",
+          kind: "tool",
+          phase: "end",
+          name: "read",
+          title: "Read",
+          status: "completed",
+        },
+      ],
+    });
+    Object.assign(tail[2]!, {
+      model: "gpt-5-mini",
+      usage: { input: 1200, output: 400, cost: { total: 0.01 } },
+    });
+    const id = "synthetic-row-facts-failure";
+    const summary = "Synthetic verification failed; retry the check.";
+    messageIds.push(id);
+    historyMessages.push(
+      Object.assign({}, historyMessages.at(-1)!, {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: [{ type: "text", text: summary }],
+        openclawRunError: { runId, summary },
+        __openclaw: { id, seq: options.messageCount + 1, runId },
+        timestamp: options.now + 1,
+      }),
+    );
+  }
+  const configuredHistory =
+    options.largeSnapshot || options.historyStateReceipt
+      ? {
+          messages: historyMessages,
+          sessionId: options.sessionInfo.sessionId,
+          sessionInfo: options.sessionInfo,
+          hasMore: false,
+          totalMessages: historyMessages.length,
+          metadata: { commands: [], models: [] },
+          ...(options.historyStateReceipt
+            ? {
+                stateRevision: {
+                  sessionInfo: "fixture-session-v1",
+                  commands: "fixture-commands-v1",
+                },
+              }
+            : {}),
+        }
+      : undefined;
+  return { messageIds, historyMessages, configuredHistory };
 }

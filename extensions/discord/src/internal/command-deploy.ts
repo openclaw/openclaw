@@ -74,7 +74,14 @@ export class DiscordCommandDeployer {
       try {
         await this.request("post", Routes.applicationCommands(this.params.clientId), command);
       } catch (error) {
-        if (!isApplicationCommandLimitError(error)) {
+        if (
+          !(
+            error !== null &&
+            typeof error === "object" &&
+            "discordCode" in error &&
+            error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
+          )
+        ) {
           throw error;
         }
         // Reconcile cannot create before deleting at Discord's hard cap. Bulk
@@ -137,15 +144,6 @@ export class DiscordCommandDeployer {
 
 function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
-}
-
-function isApplicationCommandLimitError(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === "object" &&
-    "discordCode" in error &&
-    error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
-  );
 }
 
 function stableCommandSetHash(commands: SerializedCommand[]): string {

@@ -21,8 +21,8 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { createFirstTurnContextFixture } from "./mcp-http.context-fixture.test-support.js";
 
 const { execute, resolveTools } = vi.hoisted(() => ({ execute: vi.fn(), resolveTools: vi.fn() }));
 vi.mock("../config/io.js", () => {
@@ -156,19 +156,7 @@ it("serves fresh request scopes after its replacement creator closes", async () 
 });
 
 it("keeps Gateway readers while shedding the starting turn's async stores", async () => {
-  const session = { agentId: "main", sessionId: "first-turn-session" };
-  const receipt: UserTurnTranscriptAdmissionReceipt = {
-    ...session,
-    sessionKey: "agent:main:first-turn",
-    storePath: "first-turn-store",
-    generation: "first-turn-generation",
-    entryId: "first-turn-user",
-    rawSeq: 1,
-    effectiveParentId: null,
-    activeMessagePosition: 0,
-    logicalTurnId: "first-turn",
-    role: "user",
-  };
+  const { session, receipt } = createFirstTurnContextFixture();
   // Stands in for turn-local stores this listener does not name explicitly.
   const turnLocal = new AsyncLocalStorage<string>();
   const readers = createSqliteReadOnlyWorkerScope();

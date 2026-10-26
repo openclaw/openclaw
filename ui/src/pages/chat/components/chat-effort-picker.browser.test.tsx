@@ -323,6 +323,12 @@ it("uses entitled Access segments with shared keyboard behavior and a separate d
   const render = async (access = accessProgram) =>
     fixture(["low", "high"], "low", false, undefined, true, access);
   await render();
+  const sectionBorders = () =>
+    Array.from(
+      host!.querySelector(".chat-controls__effort-menu")!.children,
+      (section) => getComputedStyle(section).borderTopWidth,
+    );
+  expect(sectionBorders()).toEqual(["0px", "1px"]);
   const group = host!.querySelector<HTMLElement>("[data-chat-access-program]")!;
   const option = (value: string) =>
     group.querySelector<HTMLButtonElement>('[data-chat-access-option="' + value + '"]')!;
@@ -361,5 +367,6 @@ it("uses entitled Access segments with shared keyboard behavior and a separate d
   for (const programs of [[], ["standard"]] as const) {
     await fixture(["low", "high"], "low", false, undefined, true, { ...accessProgram, programs });
     expect(host!.querySelector("[data-chat-access-program]")).toBeNull();
+    expect(sectionBorders()).toEqual(["0px"]);
   }
 });

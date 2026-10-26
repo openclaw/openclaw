@@ -99,7 +99,7 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   store.write(cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 3) => ({
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 4) => ({
   projectionVersion,
   sessionKey: cacheKey,
   savedAt: 1,
@@ -449,7 +449,7 @@ describe("persistent chat session snapshots", () => {
     "discards a superseded unbounded projection (%s)",
     async (mode) => {
       await persist(writer, sessionKey, snapshot("current"));
-      await putRawRecord(envelope(sessionKey, snapshot("old"), 2));
+      await putRawRecord(envelope(sessionKey, snapshot("old"), 3));
       if (mode === "prewarmed") {
         void prewarmChatSnapshot(sessionKey);
       }
