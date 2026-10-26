@@ -45,7 +45,7 @@ it("retains overlapping daily/idle captures with matching content and provenance
   }
 
   await Promise.all(
-    sessions.map((session) => {
+    sessions.map(async (session) => {
       const event = createInternalHookEvent("session", "auto-reset", session.sessionKey, {
         cfg,
         agentId: "main",
@@ -55,7 +55,7 @@ it("retains overlapping daily/idle captures with matching content and provenance
         reason: session.reason,
       });
       event.timestamp = new Date("2026-10-21T20:30:00.000Z");
-      return handler(event);
+      await handler(event);
     }),
   );
 
