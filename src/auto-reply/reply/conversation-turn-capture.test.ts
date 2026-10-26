@@ -109,7 +109,7 @@ async function persistSentOperation(params: {
 }
 
 function inboundReply(
-  setup: Awaited<ReturnType<typeof setupReefConversation>>,
+  setup: { scope: { agentId: string }; sessionKey: string },
   outboundMessageId: string,
   overrides: Partial<FinalizedRuntimeMsgContext> = {},
   text = "ordinary reply",
@@ -135,9 +135,17 @@ function inboundReply(
 }
 
 async function registerCapture(
-  setup: Awaited<ReturnType<typeof setupReefConversation>>,
+  setup: Pick<Conversation, "scope" | "conversationRef" | "sessionId">,
   id: string,
-  { outboundMessageId = id, timeoutMs = 50 } = {},
+  {
+    outboundMessageId = id,
+    timeoutMs = 50,
+    threadId,
+  }: {
+    outboundMessageId?: string;
+    timeoutMs?: number;
+    threadId?: string;
+  } = {},
 ) {
   await persistSentOperation({ ...setup, operationId: id, outboundMessageId });
   const pending = registerPendingConversationTurn({
@@ -145,10 +153,37 @@ async function registerCapture(
     id,
     conversationRef: setup.conversationRef,
     sessionId: setup.sessionId,
+    threadId,
     timeoutMs,
   });
   pending.setOutboundMessageId(outboundMessageId);
   return pending;
+}
+
+type Conversation = Awaited<ReturnType<typeof setupReefConversation>>;
+const transcriptEvents = (setup: Conversation) =>
+  sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId });
+const captureReply = (
+  setup: Conversation,
+  id: string,
+  overrides: Partial<FinalizedRuntimeMsgContext> = {},
+  text?: string,
+) =>
+  capturePendingConversationTurnReply({
+    cfg: setup.cfg,
+    ctx: inboundReply(setup, id, overrides, text),
+  });
+
+function replaceIdentity(setup: Conversation, outcome: "replace" | "lifecycle" | "writer") {
+  const scope = { ...setup.scope, sessionKey: setup.sessionKey };
+  sessionAccessor.replaceSessionEntrySync(scope, {
+    ...sessionAccessor.loadSessionEntryReadOnly(scope)!,
+    ...(outcome === "replace"
+      ? { sessionId: "replacement" }
+      : outcome === "lifecycle"
+        ? { lifecycleRevision: "replacement-lifecycle" }
+        : { activeWriterRunId: "replacement-writer" }),
+  });
 }
 
 describe("conversation turn capture", () => {
@@ -179,10 +214,7 @@ describe("conversation turn capture", () => {
       await entered.promise;
       let capture: Promise<boolean> | undefined;
       try {
-        capture = capturePendingConversationTurnReply({
-          cfg: setup.cfg,
-          ctx: inboundReply(setup, id),
-        });
+        capture = captureReply(setup, id);
         await prepared.promise;
         expect(readConversationDeliveryStateForTest(setup.scope, id)?.status).toBe("sent");
         if (outcome === "cancel") {
@@ -192,14 +224,7 @@ describe("conversation turn capture", () => {
           await vi.advanceTimersByTimeAsync(50);
         }
         if (outcome === "replace" || outcome === "lifecycle") {
-          const scope = { ...setup.scope, sessionKey: setup.sessionKey };
-          const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
-          sessionAccessor.replaceSessionEntrySync(scope, {
-            ...entry,
-            ...(outcome === "replace"
-              ? { sessionId: "replacement" }
-              : { lifecycleRevision: "replacement-lifecycle" }),
-          });
+          replaceIdentity(setup, outcome);
         }
         release.resolve();
         await blocker;
@@ -212,12 +237,7 @@ describe("conversation turn capture", () => {
           pending.cancel();
           await expect(pending.wait()).resolves.toBeUndefined();
           expect(record?.reply).toBeUndefined();
-          expect(
-            await sessionAccessor.loadTranscriptEvents({
-              ...setup.scope,
-              sessionId: setup.sessionId,
-            }),
-          ).toEqual([]);
+          expect(await transcriptEvents(setup)).toEqual([]);
         }
       } finally {
         pending.cancel();
@@ -244,24 +264,13 @@ describe("conversation turn capture", () => {
           if (outcome === "timeout") {
             await vi.advanceTimersByTimeAsync(50);
           } else {
-            const scope = { ...setup.scope, sessionKey: setup.sessionKey };
-            const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
-            sessionAccessor.replaceSessionEntrySync(scope, {
-              ...entry,
-              ...(outcome === "replace"
-                ? { sessionId: "replacement" }
-                : outcome === "lifecycle"
-                  ? { lifecycleRevision: "replacement-lifecycle" }
-                  : { activeWriterRunId: "replacement-writer" }),
-            });
+            replaceIdentity(setup, outcome);
           }
           return committed;
         },
       );
       try {
-        await expect(
-          capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
-        ).resolves.toBe(true);
+        await expect(captureReply(setup, id)).resolves.toBe(true);
         if (outcome === "timeout") {
           await expect(pending.wait()).resolves.toBeUndefined();
         } else {
@@ -273,12 +282,7 @@ describe("conversation turn capture", () => {
           status: "replied",
           reply: { messageId: "inbound-admission", text: "ordinary reply", replyToId: id },
         });
-        expect(
-          await sessionAccessor.loadTranscriptEvents({
-            ...setup.scope,
-            sessionId: setup.sessionId,
-          }),
-        ).toEqual([]);
+        expect(await transcriptEvents(setup)).toEqual([]);
       } finally {
         pending.cancel();
         vi.useRealTimers();
@@ -301,20 +305,10 @@ describe("conversation turn capture", () => {
           return claimReply(...args);
         },
       );
-      const capture = capturePendingConversationTurnReply({
-        cfg: setup.cfg,
-        ctx: inboundReply(setup, id),
-      });
+      const capture = captureReply(setup, id);
       try {
         await correlating.promise;
-        const scope = { ...setup.scope, sessionKey: setup.sessionKey };
-        const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
-        sessionAccessor.replaceSessionEntrySync(scope, {
-          ...entry,
-          ...(outcome === "replace"
-            ? { sessionId: "replacement" }
-            : { lifecycleRevision: "replacement-lifecycle" }),
-        });
+        replaceIdentity(setup, outcome);
         pending.markReady();
         await expect(capture).resolves.toBe(false);
         expect((await getConversationDeliveryOperation(setup.scope, id))?.reply).toBeUndefined();
@@ -342,10 +336,7 @@ describe("conversation turn capture", () => {
       toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
       () => release.promise,
     );
-    const capture = capturePendingConversationTurnReply({
-      cfg: setup.cfg,
-      ctx: inboundReply(setup, id),
-    });
+    const capture = captureReply(setup, id);
     try {
       await setImmediate();
       expect(readConversationDeliveryStateForTest(setup.scope, id)?.status).toBe("queued");
@@ -354,11 +345,10 @@ describe("conversation turn capture", () => {
       await expect(capture).resolves.toBe(false);
       expect(await getConversationDeliveryOperation(setup.scope, id)).toMatchObject({
         status: "sent",
+        platformMessageId: id,
       });
       expect((await getConversationDeliveryOperation(setup.scope, id))?.reply).toBeUndefined();
-      expect(
-        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
-      ).toEqual([]);
+      expect(await transcriptEvents(setup)).toEqual([]);
     } finally {
       release.resolve();
       await blocker;
@@ -382,10 +372,7 @@ describe("conversation turn capture", () => {
       vi.useFakeTimers();
       const id = `state-${refused}`;
       const pending = await registerCapture(setup, id);
-      const capture = capturePendingConversationTurnReply({
-        cfg: setup.cfg,
-        ctx: inboundReply(setup, id),
-      });
+      const capture = captureReply(setup, id);
       const refusalEnv = refused === "source" ? sourceEnv : ambientEnv;
       try {
         recordAgentDatabaseAdmissions(
@@ -428,15 +415,11 @@ describe("conversation turn capture", () => {
     const pending = await registerCapture(setup, id);
     pending.markReady();
     try {
-      await expect(
-        capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundReply(setup, id) }),
-      ).resolves.toBe(true);
+      await expect(captureReply(setup, id)).resolves.toBe(true);
       await expect(pending.wait()).resolves.toMatchObject({ messageId: "inbound-admission" });
       expect((await getConversationDeliveryOperation(setup.scope, id))?.status).toBe("replied");
       expect(physical.agentId).toBe("schema-owner");
-      expect(
-        await sessionAccessor.loadTranscriptEvents({ ...setup.scope, sessionId: setup.sessionId }),
-      ).toHaveLength(1);
+      expect(await transcriptEvents(setup)).toHaveLength(1);
     } finally {
       pending.cancel();
       vi.useRealTimers();
@@ -474,10 +457,7 @@ describe("conversation turn capture", () => {
     vi.useFakeTimers();
     const id = "replaced-owner-capture";
     const pending = await registerCapture(setup, id);
-    const capture = capturePendingConversationTurnReply({
-      cfg: setup.cfg,
-      ctx: inboundReply(setup, id),
-    });
+    const capture = captureReply(setup, id);
     try {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
@@ -489,12 +469,7 @@ describe("conversation turn capture", () => {
       pending.markReady();
       await expect(capture).resolves.toBe(false);
       expect((await getConversationDeliveryOperation(replacement.scope, id))?.status).toBe("sent");
-      expect(
-        await sessionAccessor.loadTranscriptEvents({
-          ...replacement.scope,
-          sessionId: replacement.sessionId,
-        }),
-      ).toEqual([]);
+      expect(await transcriptEvents(replacement)).toEqual([]);
     } finally {
       pending.cancel();
       await capture;
@@ -516,16 +491,12 @@ describe("conversation turn capture", () => {
     await expect(
       capturePendingConversationTurnReply({
         cfg: {} as OpenClawConfig,
-        ctx: {
-          SessionKey: "agent:main:reef:direct:untrusted",
-          ChatType: "direct",
-          Provider: "reef",
-          ReplyToIdFull: "outbound-untrusted",
-          RawBody: "untrusted reply",
-          commandText: "untrusted reply",
-          agentText: "untrusted reply",
-          rawText: "untrusted reply",
-        } as FinalizedRuntimeMsgContext,
+        ctx: inboundReply(
+          { scope: { agentId: "main" }, sessionKey: "agent:main:reef:direct:untrusted" },
+          "outbound-untrusted",
+          { InboundAccessAuthorized: undefined },
+          "untrusted reply",
+        ),
       }),
     ).resolves.toBe(false);
     pending.cancel();
@@ -579,11 +550,7 @@ describe("conversation turn capture", () => {
         text: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
       },
     });
-    const events = await sessionAccessor.loadTranscriptEvents({
-      agentId: "main",
-      sessionId: setup.sessionId,
-      storePath: setup.storePath,
-    });
+    const events = await transcriptEvents(setup);
     expect(events.filter((event) => "message" in (event as Record<string, unknown>))).toEqual([]);
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -618,13 +585,7 @@ describe("conversation turn capture", () => {
         } as FinalizedRuntimeMsgContext,
       }),
     ).resolves.toBe(false);
-    expect(
-      await sessionAccessor.loadTranscriptEvents({
-        agentId: "main",
-        sessionId: setup.sessionId,
-        storePath: setup.storePath,
-      }),
-    ).toHaveLength(1);
+    expect(await transcriptEvents(setup)).toHaveLength(1);
   });
 
   it("preserves the durable reply and its audit artifact despite log patterns", async () => {
@@ -661,11 +622,7 @@ describe("conversation turn capture", () => {
 
     const operation = await getConversationDeliveryOperation(setup.scope, operationId);
     expect(operation?.reply?.text).toBe(replyText);
-    const events = await sessionAccessor.loadTranscriptEvents({
-      agentId: "main",
-      sessionId: setup.sessionId,
-      storePath: setup.storePath,
-    });
+    const events = await transcriptEvents(setup);
     expect(JSON.stringify(events)).toContain(replyValue);
   });
 
@@ -687,15 +644,12 @@ describe("conversation turn capture", () => {
     });
     pending.markReady();
     await expect(
-      capturePendingConversationTurnReply({
-        cfg: setup.cfg,
-        ctx: inboundReply(
-          setup,
-          outboundMessageId,
-          { MessageSidFull: "reef-inbound-audit-failure" },
-          "reply survives audit failure",
-        ),
-      }),
+      captureReply(
+        setup,
+        outboundMessageId,
+        { MessageSidFull: "reef-inbound-audit-failure" },
+        "reply survives audit failure",
+      ),
     ).resolves.toBe(true);
     const reply = await pending.wait();
     expect(reply).toMatchObject({ text: "reply survives audit failure" });
@@ -704,46 +658,6 @@ describe("conversation turn capture", () => {
       status: "replied",
       reply: { text: "reply survives audit failure" },
     });
-  });
-
-  it("does not make an ordinary post-restart reply replayable inline", async () => {
-    const setup = await setupReefConversation();
-    const operationId = "turn-after-restart";
-    await beginConversationDeliveryOperation(setup.scope, {
-      operationId,
-      operationKind: "turn",
-      conversationRef: setup.conversationRef,
-      message: "outbound",
-      preparedMessageId: "reef-outbound-restart",
-    });
-    await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
-
-    await expect(
-      capturePendingConversationTurnReply({
-        cfg: setup.cfg,
-        ctx: inboundReply(
-          setup,
-          "reef-outbound-restart",
-          { MessageSidFull: "reef-inbound-restart" },
-          "reply after restart",
-        ),
-      }),
-    ).resolves.toBe(false);
-
-    expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
-      status: "sent",
-      platformMessageId: "reef-outbound-restart",
-    });
-    expect(
-      (await getConversationDeliveryOperation(setup.scope, operationId))?.reply,
-    ).toBeUndefined();
-    expect(
-      await sessionAccessor.loadTranscriptEvents({
-        agentId: "main",
-        sessionId: setup.sessionId,
-        storePath: setup.storePath,
-      }),
-    ).toEqual([]);
   });
 
   it("leaves replies to plain sends for ordinary inbound dispatch", async () => {
@@ -759,11 +673,8 @@ describe("conversation turn capture", () => {
     await markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
 
     await expect(
-      capturePendingConversationTurnReply({
-        cfg: setup.cfg,
-        ctx: inboundReply(setup, "reef-outbound-send", {
-          MessageSidFull: "reef-inbound-send-reply",
-        }),
+      captureReply(setup, "reef-outbound-send", {
+        MessageSidFull: "reef-inbound-send-reply",
       }),
     ).resolves.toBe(false);
     expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
@@ -836,21 +747,11 @@ describe("conversation turn capture", () => {
       peerId: "ops-room",
       threadId: "user-context",
     });
-    await persistSentOperation({
-      scope,
-      operationId: "turn-thread",
-      conversationRef,
+    const pending = await registerCapture({ scope, conversationRef, sessionId }, "turn-thread", {
       outboundMessageId: "discord-outbound-full",
-    });
-    const pending = registerPendingConversationTurn({
-      agentId: "main",
-      id: "turn-thread",
-      conversationRef,
-      sessionId,
       threadId: "user-context",
       timeoutMs: 5_000,
     });
-    pending.setOutboundMessageId("discord-outbound-full");
     pending.markReady();
 
     await expect(

@@ -14,32 +14,29 @@ import {
   stripLeadingInboundMetadata,
 } from "./strip-inbound-meta.js";
 
+function metadataBlock(label: string, value: unknown, pretty = false) {
+  return `${markInboundContextLabel(label)}\n\`\`\`json\n${JSON.stringify(value, null, pretty ? 2 : undefined)}\n\`\`\``;
+}
+
 const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 
-const CONV_BLOCK = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{"message_id":"msg-abc","sender":{"id":"+1555000"}}
-\`\`\``;
+const CONV_BLOCK = metadataBlock("Conversation info:", {
+  message_id: "msg-abc",
+  sender: { id: "+1555000" },
+});
 
-const LEGACY_PRETTY_CONV_BLOCK = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "message_id": "msg-abc"
-}
-\`\`\``;
+const LEGACY_PRETTY_CONV_BLOCK = metadataBlock(
+  "Conversation info:",
+  { message_id: "msg-abc" },
+  true,
+);
 
 // Frozen #159694 producer bytes, before #161012 moved the hint inside JSON.
 const LEGACY_REQUESTER_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const LEGACY_REQUESTER_BLOCK = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n${JSON.stringify({ requester_profile: { id: "human-1", display_name: "Ada" } })}\n\`\`\``;
 
-const SENDER_BLOCK = `${markInboundContextLabel("Sender:")}
-\`\`\`json
-{
-  "label": "Alice",
-  "name": "Alice"
-}
-\`\`\``;
+const SENDER_BLOCK = metadataBlock("Sender:", { label: "Alice", name: "Alice" }, true);
 
 const UNTRUSTED_CONTEXT_BLOCK = `${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
@@ -258,10 +255,7 @@ Hello from user`;
   });
 
   it("ignores metadata blocks whose json decodes to a non-object", () => {
-    const input = `${markInboundContextLabel("Sender:")}
-\`\`\`json
-["not","an","object"]
-\`\`\`
+    const input = `${metadataBlock("Sender:", ["not", "an", "object"])}
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe("Hello from user");
     expect(extractInboundSenderLabel(input)).toBeNull();
@@ -278,20 +272,14 @@ describe("timestamp prefix stripping", () => {
   });
 
   it("strips timestamp prefix and inbound metadata blocks together", () => {
-    const input = `[Wed 2026-03-11 23:51 PDT] ${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{"message_id":"msg-1","sender":"+1555"}
-\`\`\`
+    const input = `[Wed 2026-03-11 23:51 PDT] ${metadataBlock("Conversation info:", { message_id: "msg-1", sender: "+1555" })}
 
 Hello`;
     expect(stripInboundMetadata(input)).toBe("Hello");
   });
 
   it("strips a timestamp prefix that remains after removing metadata blocks", () => {
-    const input = `${markInboundContextLabel("Sender:")}
-\`\`\`json
-{"label":"OpenClaw UI"}
-\`\`\`
+    const input = `${metadataBlock("Sender:", { label: "OpenClaw UI" })}
 
 [Thu 2026-03-12 07:00 UTC] what time is it?`;
     expect(stripInboundMetadata(input)).toBe("what time is it?");
@@ -317,30 +305,14 @@ describe("extractInboundSenderLabel", () => {
   });
 
   it("prefers nested conversation sender name", () => {
-    const input = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "sender": {
-    "id": "sender-1",
-    "name": "Alice",
-    "username": "alice"
-  }
-}
-\`\`\`
+    const input = `${metadataBlock("Conversation info:", { sender: { id: "sender-1", name: "Alice", username: "alice" } }, true)}
 
 Hello from user`;
     expect(extractInboundSenderLabel(input)).toBe("Alice");
   });
 
   it("extracts nested phone-only conversation sender", () => {
-    const input = `${markInboundContextLabel("Conversation info:")}
-\`\`\`json
-{
-  "sender": {
-    "e164": "+1555000"
-  }
-}
-\`\`\`
+    const input = `${metadataBlock("Conversation info:", { sender: { e164: "+1555000" } }, true)}
 
 Hello from user`;
     expect(extractInboundSenderLabel(input)).toBe("+1555000");
