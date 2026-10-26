@@ -8,7 +8,8 @@ import type {
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import type { WorktreeWaitBudget } from "./allocation.js";
+
+export type WorktreeWaitBudget = { remainingMs: number };
 
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 

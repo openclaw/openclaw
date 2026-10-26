@@ -12,7 +12,6 @@ import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js
 import {
   withWorktreeSourceWait,
   WORKTREE_CREATE_LEASE_WAIT_MS,
-  type WorktreeWaitBudget,
 } from "../agents/worktrees/allocation.js";
 import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
 import { SessionWorktreeSourceChangedError } from "../agents/worktrees/errors.js";
@@ -30,6 +29,7 @@ import { ManagedWorktreeService, WorktreeRepositoryError } from "../agents/workt
 import type {
   CreateManagedWorktreeParams,
   WorktreeSourceStage,
+  WorktreeWaitBudget,
 } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";

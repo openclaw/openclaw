@@ -21,14 +21,13 @@ import type {
   WorktreeLeaseSet,
   WorktreeSourceCurrent,
   WorktreeSourceStage,
+  WorktreeWaitBudget,
   WorktreeWorkerAuthority,
 } from "./types.js";
 
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 // A dependency install can take 15 minutes; contenders also wait for checkout and cleanup.
 export const WORKTREE_CREATE_LEASE_WAIT_MS = 30 * 60_000;
-
-export type WorktreeWaitBudget = { remainingMs: number };
 
 export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
   rollbackGuard: () => void;
