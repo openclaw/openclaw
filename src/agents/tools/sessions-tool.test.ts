@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import {
@@ -63,6 +62,14 @@ function visibleTool(callGateway: AgentToolGatewayRequestCaller) {
   return mainTool({ config: { tools: { sessions: { visibility: "agent" } } }, callGateway });
 }
 
+function expectGateway(
+  callGateway: ReturnType<typeof vi.fn>,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  expect(callGateway).toHaveBeenCalledWith({ method, params });
+}
+
 function expectReceipt(
   work: ExecutionDecisionWork[],
   operation: string,
@@ -97,11 +104,17 @@ async function modelSession(
   };
   await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1, ...entry });
   return {
+    scope,
+    config: { ...cfg, session: { ...cfg.session, store: scope.storePath } },
     read: () => loadSessionEntry(scope),
     guard: () => createAgentPatchedSessionModelRunGuard({ cfg, ...scope }),
     patch: (patch: Parameters<typeof upsertSessionEntryCore>[1]) =>
       patchSessionEntryCore(scope, () => patch),
   };
+}
+
+function modelSelection(model: string, provider = "openai") {
+  return { model, modelProvider: provider, modelOverride: model, providerOverride: provider };
 }
 
 describe("sessions tool", () => {
@@ -140,9 +153,10 @@ describe("sessions tool", () => {
 
     await tool.execute("owned-patch", { action: "patch", label: "Ops" });
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "sessions.patch",
-      params: { key: "global", agentId: "ops", label: "Ops" },
+    expectGateway(callGateway, "sessions.patch", {
+      key: "global",
+      agentId: "ops",
+      label: "Ops",
     });
   });
 
@@ -161,9 +175,9 @@ describe("sessions tool", () => {
       label: "Research",
     });
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "sessions.patch",
-      params: { key: "agent:research:main", label: "Research" },
+    expectGateway(callGateway, "sessions.patch", {
+      key: "agent:research:main",
+      label: "Research",
     });
     expect(callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.resolve" }),
@@ -189,8 +203,6 @@ describe("sessions tool", () => {
           ownership: "explicit",
           entries: { ops: {}, research: {} },
         },
-        // Narrowed visibility keeps the cross-agent denial as the observable proof
-        // that the foreign bare row was resolved to its owner, not treated as self.
         tools: { sessions: { visibility: "agent" } },
       },
       callGateway,
@@ -313,17 +325,11 @@ describe("sessions tool", () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = visibleTool(callGateway as never);
 
-    const { work } = await captureSessionDecisionWork(
-      async () => await tool.execute("reset-session", { action: "reset", sessionKey }),
+    const { work } = await captureSessionDecisionWork(() =>
+      tool.execute("reset-session", { action: "reset", sessionKey }),
     );
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "sessions.reset",
-      params: {
-        key: sessionKey,
-        reason: "reset",
-      },
-    });
+    expectGateway(callGateway, "sessions.reset", { key: sessionKey, reason: "reset" });
     expectReceipt(work, "reset", "session_reset_committed");
   });
 
@@ -336,8 +342,8 @@ describe("sessions tool", () => {
     });
     const tool = mainTool({ agentSessionId: "session-main" });
 
-    const { work } = await captureSessionDecisionWork(
-      async () => await tool.execute("committed-restore", { action: "patch", archived: false }),
+    const { work } = await captureSessionDecisionWork(() =>
+      tool.execute("committed-restore", { action: "patch", archived: false }),
     );
 
     expect(work).toHaveLength(1);
@@ -366,11 +372,6 @@ describe("sessions tool", () => {
   });
 
   it("drops a session result when receipt authority closes across its awaited RPC", async () => {
-    const work: ExecutionDecisionWork[] = [];
-    const clear = configureExecutionDecisionWorkSink((item) => {
-      work.push(item);
-      return true;
-    });
     const token = createExecutionIdentityAdmissionToken("sessions-tool-closed", {
       contextId: "sessions-tool-closed-context",
       executionId: "sessions-tool-closed-execution",
@@ -386,21 +387,19 @@ describe("sessions tool", () => {
       };
     });
     const tool = mainTool();
-    try {
-      await withGatewayToolCallerIdentity(
+    const { work } = await captureSessionDecisionWork(() =>
+      withGatewayToolCallerIdentity(
         {
           agentId: "main",
           sessionKey: "agent:main:main",
           executionIdentityToken: token,
           receiptAuthority: () => authorityActive,
         },
-        async () => await tool.execute("closed-patch", { action: "patch", label: "Updated" }),
-      );
-      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      expect(work).toEqual([]);
-    } finally {
-      clear();
-    }
+        () => tool.execute("closed-patch", { action: "patch", label: "Updated" }),
+      ),
+    );
+    expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+    expect(work).toEqual([]);
   });
 
   it("refuses to delete its currently running session", async () => {
@@ -414,19 +413,8 @@ describe("sessions tool", () => {
   });
 
   it("patches its session, then reverts a failed agent-selected model", async () => {
-    const dir = sessionDirs.make();
-    const storePath = path.join(dir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const cfg: OpenClawConfig = {
-      session: { store: storePath },
-      agents: { defaults: { model: { primary: "openai/good" } } },
-    };
-    const sessionScope = { agentId: "main", sessionKey, storePath };
     const initialModel = {
-      model: "good",
-      modelProvider: "openai",
-      modelOverride: "good",
-      providerOverride: "openai",
+      ...modelSelection("good"),
       modelOverrideSource: "auto" as const,
       modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "primary",
@@ -434,21 +422,18 @@ describe("sessions tool", () => {
       authProfileOverrideSource: "user" as const,
       thinkingLevel: "high",
     };
-    await upsertSessionEntryCore(sessionScope, {
-      sessionId: "session-main",
-      updatedAt: 1,
-      ...initialModel,
+    const session = await modelSession(initialModel, {
+      agents: { defaults: { model: { primary: "openai/good" } } },
     });
+    const sessionScope = session.scope;
+    const { sessionKey } = sessionScope;
     const callGateway = vi.fn(
       async (request: { method: string; params: Record<string, unknown> }) => {
         expect(request.method).toBe("sessions.patch");
         expect(isAgentSessionModelPatchOrigin()).toBe(true);
         await patchSessionEntryCore(sessionScope, () => ({
           label: request.params.label as string,
-          model: "bad",
-          modelProvider: "broken",
-          modelOverride: "bad",
-          providerOverride: "broken",
+          ...modelSelection("bad", "broken"),
           modelOverrideSource: "user",
           modelOverrideFallbackOriginProvider: undefined,
           modelOverrideFallbackOriginModel: undefined,
@@ -473,14 +458,12 @@ describe("sessions tool", () => {
         return { ok: true };
       },
     );
-    const tool = createSessionsTool({
-      agentSessionKey: sessionKey,
-      config: cfg,
+    const tool = mainTool({
+      config: session.config,
       callGateway: callGateway as never,
     });
-    const guardParams = { cfg, ...sessionScope };
-    const currentRunGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
-    const failedCurrentRunGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
+    const currentRunGuard = await session.guard();
+    const failedCurrentRunGuard = await session.guard();
 
     await tool.execute("patch-model", {
       action: "patch",
@@ -488,13 +471,10 @@ describe("sessions tool", () => {
       model: "broken/bad",
     });
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "sessions.patch",
-      params: {
-        key: sessionKey,
-        label: "Research",
-        model: "broken/bad",
-      },
+    expectGateway(callGateway, "sessions.patch", {
+      key: sessionKey,
+      label: "Research",
+      model: "broken/bad",
     });
     await currentRunGuard.finish(true);
     expect(loadSessionEntry(sessionScope)).toHaveProperty("modelFallback");
@@ -524,37 +504,23 @@ describe("sessions tool", () => {
     expect(loadSessionEntry(sessionScope)).toEqual(entryBeforeFailure);
     expect(await loadTranscriptEvents(transcriptScope)).toEqual(transcriptBeforeFailure);
 
-    const runGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
+    const runGuard = await session.guard();
     await runGuard.fail(failure);
     expect(loadSessionEntry(sessionScope)).toMatchObject(initialModel);
     expect(loadSessionEntry(sessionScope)).not.toHaveProperty("modelFallback");
-    const events = await loadTranscriptEvents(transcriptScope);
-    expect(events).toContainEqual(
+    const messages = (await loadTranscriptEvents(transcriptScope)).map(({ message }) => message);
+    expect(messages).toContainEqual(
       expect.objectContaining({
-        message: expect.objectContaining({
-          customType: "openclaw.system-note",
-          content: "System note: model broken/bad failed; reverted to openai/good.",
-        }),
+        customType: "openclaw.system-note",
+        content: "System note: model broken/bad failed; reverted to openai/good.",
       }),
     );
-    expect(events).not.toContainEqual(
+    expect(messages).not.toContainEqual(
       expect.objectContaining({
-        message: expect.objectContaining({
-          customType: "openclaw.system-note",
-          excludeFromContext: expect.anything(),
-        }),
+        customType: "openclaw.system-note",
+        excludeFromContext: expect.anything(),
       }),
     );
-  });
-
-  it("clears the model fallback marker after a successful run", async () => {
-    const session = await modelSession({
-      modelFallback: makeAgentPatchFallback("good", 1),
-    });
-
-    const guard = await session.guard();
-    await guard.finish(true);
-    expect(session.read()).not.toHaveProperty("modelFallback");
   });
 
   it("denies model patches without in-process gateway context", async () => {
@@ -573,29 +539,23 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("reverts when the patched model fails but a fallback completes the run", async () => {
+  it.each([true, false])("settles the model marker after a successful run: %s", async (success) => {
     const session = await modelSession({
-      model: "bad",
-      modelProvider: "broken",
-      modelOverride: "bad",
-      providerOverride: "broken",
+      ...(success ? {} : modelSelection("bad", "broken")),
       modelFallback: makeAgentPatchFallback("good", 1),
     });
     const runGuard = await session.guard();
 
-    const needsRevert = runGuard.captureFallbackFailure([
-      {
-        error: "No endpoints found for broken/bad.",
-        reason: "model_not_found",
-      },
-      { error: "Fallback context overflow.", reason: "context_overflow" },
-    ]);
+    const needsRevert = success
+      ? false
+      : runGuard.captureFallbackFailure([
+          { error: "No endpoints found for broken/bad.", reason: "model_not_found" },
+          { error: "Fallback context overflow.", reason: "context_overflow" },
+        ]);
     await runGuard.finish(!needsRevert);
-
-    expect(session.read()).toMatchObject({
-      model: "good",
-      modelProvider: "openai",
-    });
+    if (!success) {
+      expect(session.read()).toMatchObject({ model: "good", modelProvider: "openai" });
+    }
     expect(session.read()).not.toHaveProperty("modelFallback");
   });
 
@@ -605,10 +565,7 @@ describe("sessions tool", () => {
     };
     const session = await modelSession(
       {
-        model: "b",
-        modelProvider: "openai",
-        modelOverride: "b",
-        providerOverride: "openai",
+        ...modelSelection("b"),
         modelFallback: makeAgentPatchFallback("a", 10),
       },
       cfg,
@@ -637,12 +594,7 @@ describe("sessions tool", () => {
     });
 
     await runD.fail({ status: 404, message: "No endpoints found for openai/d." });
-    expect(session.read()).toMatchObject({
-      model: "c",
-      modelProvider: "openai",
-      modelOverride: "c",
-      providerOverride: "openai",
-    });
+    expect(session.read()).toMatchObject(modelSelection("c"));
   });
 
   it("keeps resolved model and thinking metadata when self-archive is deferred", async () => {
@@ -674,17 +626,15 @@ describe("sessions tool", () => {
     });
 
     try {
-      const { result, work } = await captureSessionDecisionWork(
-        async () =>
-          await admission.run(
-            async () =>
-              await tool.execute("patch-model-thinking-archive", {
-                action: "patch",
-                archived: true,
-                model: "openai/luna",
-                thinkingLevel: "med",
-              }),
-          ),
+      const { result, work } = await captureSessionDecisionWork(() =>
+        admission.run(() =>
+          tool.execute("patch-model-thinking-archive", {
+            action: "patch",
+            archived: true,
+            model: "openai/luna",
+            thinkingLevel: "med",
+          }),
+        ),
       );
       expect(result.details).toEqual({
         status: "scheduled",
@@ -695,12 +645,8 @@ describe("sessions tool", () => {
       expectExactResolvedAcknowledgement(result, adversarialResolved);
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(work).toHaveLength(1);
+      expectReceipt(work, "archive", "session_archive_scheduled");
       expect(work[0]).toMatchObject({
-        receipt: {
-          action: { family: "session", operation: "archive" },
-          decision: { outcome: "allowed", reasonCode: "session_archive_scheduled" },
-          enforcement: { coverageState: "attribution-only" },
-        },
         refs: { target: { namespace: "session", value: `["main","${sessionKey}"]` } },
       });
     } finally {
@@ -759,9 +705,9 @@ describe("sessions tool", () => {
         });
       } else {
         await patch;
-        expect(callGateway).toHaveBeenCalledWith({
-          method: "sessions.patch",
-          params: { key: "agent:main:other", category: "Projects" },
+        expectGateway(callGateway, "sessions.patch", {
+          key: "agent:main:other",
+          category: "Projects",
         });
       }
     },
