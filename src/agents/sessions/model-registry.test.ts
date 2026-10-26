@@ -257,16 +257,14 @@ describe("ModelRegistry", () => {
 
   it("keeps estimates out of SQLite catalog metadata and reconstructs them on reload", async () => {
     const provider = "window-fixture";
+    const models = [
+      { id: "unknown" },
+      { id: "prompt-only", contextTokens: 777_000 },
+      { id: "reported", contextWindow: 128_000, contextTokens: 777_000 },
+      { id: "authored", contextWindow: 64_000 },
+    ];
     const modelsPath = await writeCatalogs({
-      [provider]: providerConfig(
-        [
-          { id: "unknown" },
-          { id: "prompt-only", contextTokens: 777_000 },
-          { id: "reported", contextWindow: 128_000, contextTokens: 777_000 },
-          { id: "authored", contextWindow: 64_000 },
-        ],
-        { api: "openai-responses" },
-      ),
+      [provider]: providerConfig(models, { api: "openai-responses" }),
     });
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
     const stored = JSON.parse(pluginCatalogs[0]!.contents).providers[provider].models;
@@ -281,22 +279,20 @@ describe("ModelRegistry", () => {
       pluginMetadataSnapshot: pluginOwnerSnapshot(provider, provider),
     });
     for (const candidate of [registry, registry.fork(AuthStorage.inMemory())]) {
-      expect(candidate.find(provider, "unknown")).toMatchObject({
-        contextWindow: 128_000,
-        contextWindowSource: "synthetic",
-      });
-      expect(candidate.find(provider, "prompt-only")).toMatchObject({
-        contextWindow: 777_000,
-        contextTokens: 777_000,
-        contextWindowSource: "synthetic",
-      });
-      for (const [id, window] of [
-        ["reported", 128_000],
-        ["authored", 64_000],
+      for (const [id, expected] of [
+        ["unknown", { contextWindow: 128_000, contextWindowSource: "synthetic" }],
+        [
+          "prompt-only",
+          { contextWindow: 777_000, contextTokens: 777_000, contextWindowSource: "synthetic" },
+        ],
+        ["reported", { contextWindow: 128_000 }],
+        ["authored", { contextWindow: 64_000 }],
       ] as const) {
         const runtime = candidate.find(provider, id);
-        expect(runtime?.contextWindow).toBe(window);
-        expect(runtime).not.toHaveProperty("contextWindowSource");
+        expect(runtime).toMatchObject(expected);
+        if (!("contextWindowSource" in expected)) {
+          expect(runtime).not.toHaveProperty("contextWindowSource");
+        }
       }
     }
   });
@@ -364,24 +360,20 @@ describe("ModelRegistry", () => {
   });
 
   it.each([
-    { label: "non-generated", generated: false, options: {} },
-    {
-      label: "without current ownership",
-      generated: true,
-      options: { pluginMetadataSnapshot: pluginOwnerSnapshot("other", "other") },
-    },
-    {
-      label: "owned by disabled plugins",
-      generated: true,
-      options: { pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai", false) },
-    },
-  ])("ignores $label catalog providers", async ({ generated, options }) => {
+    ["non-generated", false, undefined],
+    ["without current ownership", true, pluginOwnerSnapshot("other", "other")],
+    ["owned by disabled plugins", true, pluginOwnerSnapshot("zai", "zai", false)],
+  ] as const)("ignores %s catalog providers", async (_label, generated, pluginMetadataSnapshot) => {
     const modelsPath = await writeModelsJsonWithPluginCatalog({
       root: { providers: {} },
       pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
       pluginCatalog: generated ? catalog({ zai }) : { providers: { zai } },
     });
-    const registry = createRegistry(modelsPath, options, apiKeyAuth("zai", "sk-test"));
+    const registry = createRegistry(
+      modelsPath,
+      { pluginMetadataSnapshot },
+      apiKeyAuth("zai", "sk-test"),
+    );
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
@@ -612,8 +604,8 @@ describe("ModelRegistry source composition", () => {
   }
 
   it.each([rootUrl, catalogUrl])(
-    "preserves source-route compatibility and context choices at %s",
-    (baseUrl) => {
+    "scopes generated compatibility, context choices and request settings at %s",
+    async (baseUrl) => {
       const contextWindows = [
         { id: "200k", label: "200K", contextWindow: 200000 },
         { id: "1m", label: "1M", contextWindow: 1000000 },
@@ -657,6 +649,14 @@ describe("ModelRegistry source composition", () => {
         expect(model).toHaveProperty("contextWindowDefault", undefined);
       }
       expect(model?.compat).toEqual(baseUrl === rootUrl ? generatedCompat : authoredCompat);
+      const generatedModel = registry.find(provider, "generated-only")!;
+      expect(registry.hasConfiguredAuth(generatedModel)).toBe(baseUrl === rootUrl);
+      expect(registry.getAvailable().includes(generatedModel)).toBe(baseUrl === rootUrl);
+      await expect(getAuth(registry, "generated-only")).resolves.toEqual(
+        baseUrl === rootUrl
+          ? authResult("authored-fixture-key", { "X-Authored-Provider": "root" })
+          : authResult(),
+      );
     },
   );
 
@@ -675,26 +675,6 @@ describe("ModelRegistry source composition", () => {
       headers: { "X-Authored-Model": "private" },
     });
   });
-
-  it.each([rootUrl, catalogUrl])(
-    "scopes generated-only request settings to authored endpoints at %s",
-    async (baseUrl) => {
-      const registry = sourceRegistry({
-        generated: { ...generated, baseUrl, models: [{ id: "generated-only" }] },
-      });
-      const model = registry.find(provider, "generated-only");
-      expect(registry.hasConfiguredAuth(model!)).toBe(baseUrl === rootUrl);
-      expect(registry.getAvailable().some((entry) => entry.id === "generated-only")).toBe(
-        baseUrl === rootUrl,
-      );
-      await expect(getAuth(registry, "generated-only")).resolves.toEqual(
-        authResult(
-          baseUrl === rootUrl ? "authored-fixture-key" : undefined,
-          baseUrl === rootUrl ? { "X-Authored-Provider": "root" } : undefined,
-        ),
-      );
-    },
-  );
 
   it.each([false, true])(
     "keeps authored routes on generated conflicts (model pin: %s)",

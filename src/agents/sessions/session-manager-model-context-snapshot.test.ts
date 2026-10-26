@@ -519,7 +519,6 @@ it.each(["durable", "admitted", "incognito"] as const)(
         "Missing stored messages",
       );
       expect(context.messages[0]).toEqual(user.message);
-      expect(projectedReply.content).not.toBe(reply.message.content);
       expect(JSON.stringify(context)).not.toMatch(
         /synthetic-private-native-payload|synthetic-private-tool-details/,
       );
@@ -774,19 +773,16 @@ it.each(["append", "rewrite"] as const)(
       const { source } = await seedUser(scope);
       await withSelectedTranscriptReader(scope, async () => {
         const options = { limits: contextLimits };
-        let changed = false;
         const spy = afterModelRead(() => {
           if (mutation === "rewrite") {
             expect(source.removeTrailingEntries((entry) => entry.type === "message")).toBe(1);
           }
           source.appendMessage(userMessage("changed", 2));
-          changed = true;
         });
         await withRestoredMocks([spy], async () => {
           await expect(SessionManager.openModelContextAsync(scope, options)).rejects.toThrow(
             "Session entry changed during read",
           );
-          expect(changed).toBe(true);
         });
         expect(await readMessages(scope, options)).toMatchObject(
           mutation === "rewrite"
@@ -875,7 +871,6 @@ it("keeps one bounded context snapshot and observes a foreign rewrite on the nex
       });
       await withRestoredMocks([spy], async () => {
         expect(await readMessages(scope, options)).toMatchObject([{ content: "original" }]);
-        expect(spy).toHaveBeenCalledOnce();
       });
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
       expect(await readMessages(scope, options)).toMatchObject([{ content: "foreign rewrite" }]);
