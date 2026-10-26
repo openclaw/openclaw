@@ -10,18 +10,18 @@ import {
 import { withExecutionPhaseDiagnostics } from "./execution-phase-diagnostics.js";
 
 describe("withExecutionPhaseDiagnostics", () => {
+  const identity = {
+    runId: "run-1",
+    sessionId: "sid-1",
+    sessionKey: "agent:main:mattermost:channel:town-square",
+  };
+  const phase = { phase: "model_call_started", firstModelCallStarted: true } as const;
   let events: DiagnosticEventPayload[];
   let types: string[];
   let stop: () => void;
   const makeParams = (
     overrides: Partial<Parameters<typeof withExecutionPhaseDiagnostics>[0]> = {},
-  ) =>
-    withExecutionPhaseDiagnostics({
-      runId: "run-1",
-      sessionId: "sid-1",
-      sessionKey: "agent:main:mattermost:channel:town-square",
-      ...overrides,
-    });
+  ) => withExecutionPhaseDiagnostics({ ...identity, ...overrides });
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     setDiagnosticsEnabledForProcess(true);
@@ -40,25 +40,14 @@ describe("withExecutionPhaseDiagnostics", () => {
     resetDiagnosticEventsForTest();
   });
 
-  test.each([true, false])(
-    "forwards phases with process diagnostics enabled=%s",
-    async (enabled) => {
-      setDiagnosticsEnabledForProcess(enabled);
-      const seen = vi.fn();
-      const phase = { phase: "model_call_started", firstModelCallStarted: true } as const;
-      makeParams({ onExecutionPhase: seen }).onExecutionPhase(phase);
-      await waitForDiagnosticEventsDrained();
-      expect(seen.mock.calls).toEqual([[phase]]);
-      const event = {
-        type: "run.execution_phase",
-        runId: "run-1",
-        sessionId: "sid-1",
-        sessionKey: "agent:main:mattermost:channel:town-square",
-        ...phase,
-      };
-      expect(events).toMatchObject(enabled ? [event] : []);
-    },
-  );
+  test("forwards phases without emitting when diagnostics are disabled", async () => {
+    setDiagnosticsEnabledForProcess(false);
+    const seen = vi.fn();
+    makeParams({ onExecutionPhase: seen }).onExecutionPhase(phase);
+    await waitForDiagnosticEventsDrained();
+    expect(seen.mock.calls).toEqual([[phase]]);
+    expect(events).toEqual([]);
+  });
 
   test("delivers phases through the async lane, ordered after earlier model events", async () => {
     types.push("model.call.started");
@@ -70,27 +59,25 @@ describe("withExecutionPhaseDiagnostics", () => {
       provider: "anthropic",
       model: "claude",
     });
-    makeParams().onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
-    // Nothing is delivered synchronously: both event kinds ride the async lane.
+    const seen = vi.fn();
+    makeParams({ onExecutionPhase: seen }).onExecutionPhase(phase);
     expect(events).toEqual([]);
     await waitForDiagnosticEventsDrained();
 
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "run.execution_phase",
+    expect(seen.mock.calls).toEqual([[phase]]);
+    expect(events).toMatchObject([
+      { type: "model.call.started" },
+      { type: "run.execution_phase", ...identity, ...phase },
     ]);
   });
 
   test("tracks session rotation so later phases carry the current session id", async () => {
     const adopted = vi.fn();
-    const params = makeParams({
-      sessionId: "sid-before",
-      onSessionIdChanged: adopted,
-    });
+    const params = makeParams({ sessionId: "sid-before", onSessionIdChanged: adopted });
 
     params.onExecutionPhase({ phase: "context_assembled" });
     params.onSessionIdChanged("sid-after");
-    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
+    params.onExecutionPhase(phase);
     await waitForDiagnosticEventsDrained();
     expect(adopted.mock.calls).toEqual([["sid-after"]]);
     expect(events).toMatchObject([

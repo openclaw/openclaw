@@ -93,11 +93,8 @@ it("marks yield state before fallible abort settlement", async () => {
     throw recoveryError;
   });
 
-  const input = createInput({
-    markYieldAborted: () => {
-      marked = true;
-    },
-    yieldDetected: true,
+  hoisted.markYieldAborted.mockImplementationOnce(() => {
+    marked = true;
   });
-  await expect(handleError(input)).rejects.toBe(recoveryError);
+  await expect(handleError(createInput({ yieldDetected: true }))).rejects.toBe(recoveryError);
 });

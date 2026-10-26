@@ -17,10 +17,14 @@ function waitForRetry(overrides: Partial<AggregateTimeoutParams> = {}) {
   });
 }
 
+async function expectSettled(result: ReturnType<typeof waitForRetry>, timedOut: boolean) {
+  expect(await result).toEqual({ timedOut });
+  expect(vi.getTimerCount()).toBe(0);
+}
+
 describe("waitForCompactionRetryWithAggregateTimeout", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.clearAllTimers();
   });
   afterEach(async () => {
     await vi.runOnlyPendingTimersAsync();
@@ -29,20 +33,14 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
   });
 
   it("keeps waiting while compaction retry work remains active", async () => {
-    let retryWorkActive = true;
+    const retry = createDeferredCore();
     const result = waitForRetry({
-      waitForCompactionRetry: () =>
-        new Promise<void>((resolve) => {
-          setTimeout(() => {
-            retryWorkActive = false;
-            resolve();
-          }, 170_000);
-        }),
-      isCompactionRetryStillActive: () => retryWorkActive,
+      waitForCompactionRetry: () => retry.promise,
+      isCompactionRetryStillActive: () => true,
     });
     await vi.advanceTimersByTimeAsync(170_000);
-    expect((await result).timedOut).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
+    retry.resolve();
+    await expectSettled(result, false);
   });
 
   it("times out after an idle timeout window", async () => {
@@ -52,20 +50,18 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     }, 90_000);
     const result = waitForRetry({ isCompactionRetryStillActive: () => compactionInFlight });
     await vi.advanceTimersByTimeAsync(120_000);
-    expect((await result).timedOut).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
+    await expectSettled(result, true);
   });
 
   it("caps aggregate timeout before scheduling", async () => {
     using timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    const result = await waitForRetry({
+    const result = waitForRetry({
       waitForCompactionRetry: async () => {},
       aggregateTimeoutMs: Number.MAX_SAFE_INTEGER,
     });
-    expect(result.timedOut).toBe(false);
+    await expectSettled(result, false);
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([
@@ -86,19 +82,15 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     const wait = createDeferredCore();
     const result = waitForRetry({ waitForCompactionRetry: () => wait.promise });
     await vi.advanceTimersByTimeAsync(60_000);
-    const settled = await result;
+    await expectSettled(result, true);
     wait.reject(new Error("cancelled after timeout"));
     await Promise.resolve();
-    expect(settled.timedOut).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
 
 it("returns true while the retry model is streaming", () => {
   expect(
-    hasActiveCompactionRetryWork({
-      isCompactionInFlight: false,
-      isSessionStreaming: true,
-    }),
+    hasActiveCompactionRetryWork({ isCompactionInFlight: false, isSessionStreaming: true }),
   ).toBe(true);
 });
