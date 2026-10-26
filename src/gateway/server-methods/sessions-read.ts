@@ -30,7 +30,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { errorShapeFromError } from "../error-shape.js";
-import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
@@ -115,8 +115,21 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       const roleVisibilityFilter = hasOperatorBoundary(client, policyConfig)
         ? createSessionListEntryFilter({ client, cfg: policyConfig })
         : undefined;
+      const membershipProjection =
+        operatorSessionCap(client, policyConfig) === "invited"
+          ? requireSessionRowProjection(context)
+          : undefined;
+      if (membershipProjection) {
+        await membershipProjection.prepareSelection();
+        await membershipProjection.prepareMembership();
+      }
+      const profileId = gatewayClientSessionCreator(client)?.id;
       const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-      const canSearchSessionKey = (sessionKey: string, entry?: SessionEntry) => {
+      const canSearchSessionKey = (
+        sessionKey: string,
+        entry: SessionEntry | undefined,
+        target: SessionStoreTarget,
+      ) => {
         if (
           isIncognitoSessionKey(sessionKey) &&
           authorizeIncognitoSessionTarget({ client: client ?? null, sessionKey, target: null }) !==
@@ -127,7 +140,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (!roleVisibilityFilter) {
           return true;
         }
-        return Boolean(entry && roleVisibilityFilter(sessionKey, entry));
+        const membership = membershipProjection?.readMembership({
+          key: sessionKey,
+          agentId: target.agentId,
+          storePath: target.storePath,
+        });
+        return Boolean(
+          entry &&
+          roleVisibilityFilter(sessionKey, entry, Boolean(profileId && membership?.has(profileId))),
+        );
       };
       if (requestedAgentId && !params.sessionKeys && configured) {
         respond(
@@ -202,7 +223,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const parsed = parseAgentSessionKey(sessionKey);
           return (
             (!parsed || normalizeAgentId(parsed.agentId) === agentId) &&
-            canSearchSessionKey(sessionKey, entries.get(sessionKey))
+            canSearchSessionKey(sessionKey, entries.get(sessionKey), target)
           );
         });
         if (targetSessionKeys?.length === 0) {
@@ -393,7 +414,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             }
             const current = read.describe({ key, agentId: currentAgent.agentId });
             const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-              ? createSessionListEntryFilter({ client, cfg: policyConfig })
+              ? createSessionListEntryFilter({
+                  client,
+                  cfg: policyConfig,
+                  membership: current?.membership,
+                })
               : undefined;
             return current?.entry.sessionId &&
               visibilityFilter?.(current.key, current.entry) !== false
@@ -437,9 +462,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         (read) => {
           sessionMutationAuthorization?.assertCurrent();
           const { cfg, policyConfig } = read.state;
-          const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-            ? createSessionListEntryFilter({ client, cfg: policyConfig })
-            : undefined;
           for (const previous of buffered) {
             const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
             const current = agent.ok
@@ -447,6 +469,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   { key: previous.preview.key, agentId: agent.agentId },
                   previous.record,
                 )
+              : undefined;
+            const visibilityFilter = hasOperatorBoundary(client, policyConfig)
+              ? createSessionListEntryFilter({
+                  client,
+                  cfg: policyConfig,
+                  membership: current?.membership,
+                })
               : undefined;
             if (
               !current ||
