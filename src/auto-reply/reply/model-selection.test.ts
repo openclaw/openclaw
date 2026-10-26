@@ -4,6 +4,7 @@ import { getContextWindowCaches } from "../../agents/context-cache.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -12,11 +13,7 @@ import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thin
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { isThinkingLevelSupported } from "../thinking.js";
 import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
-import {
-  createInitialState,
-  makeConfiguredModel,
-  makeEntry,
-} from "./model-selection.inputs.test-support.js";
+import { createInitialState, makeEntry } from "./model-selection.inputs.test-support.js";
 import { createModelSelectionState } from "./model-selection.js";
 
 type PersistReplySessionEntry =
@@ -274,21 +271,18 @@ describe("catalog and thinking selection", () => {
         ],
       },
     });
-    const ambient = vi
+    using ambient = vi
       .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
-    try {
-      const state = await createInitialState({}, provider, model, {
-        hasModelDirective: true,
-        preparedModelCatalog,
-      });
-      await expect(
-        state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
-      ).resolves.toBe("ultra");
-      expect(ambient).not.toHaveBeenCalled();
-    } finally {
-      ambient.mockRestore();
-    }
+
+    const state = await createInitialState({}, provider, model, {
+      hasModelDirective: true,
+      preparedModelCatalog,
+    });
+    await expect(
+      state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
+    ).resolves.toBe("ultra");
+    expect(ambient).not.toHaveBeenCalled();
   });
 });
 

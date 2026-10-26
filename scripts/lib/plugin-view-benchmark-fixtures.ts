@@ -8,7 +8,6 @@ export const remainingPluginIds = [
   "knowledge",
   "mcp-relay",
 ] as const;
-export type RemainingPluginId = (typeof remainingPluginIds)[number];
 
 export const remainingPluginPages = {
   x: { id: "replies", label: "X replies" },

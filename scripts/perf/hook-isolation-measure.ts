@@ -1,6 +1,8 @@
 // node --import ./scripts/tsx.mjs scripts/perf/hook-isolation-measure.ts --expect-shared-history
 // Compare the same --calls/--samples with --prompt-chars 16 and 262144 on both revisions.
 // Add --unowned-history to cover callers without transcript-owner sealing.
+// Combine --unowned-history --projected-history for already-sanitized mutable worker model context.
+// Add --no-result to measure hooks that observe inputs without returning modifications.
 // Counts, unprofiled CPU, and sampled allocations are separate passes; use built Gateway stress too.
 import assert from "node:assert/strict";
 import type { HeapProfiler } from "node:inspector";
@@ -12,12 +14,15 @@ import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-j
 import type { PluginHookBeforePromptBuildEvent } from "../../src/plugins/hook-before-agent-start.types.js";
 import { createHookRunner } from "../../src/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { projectModelContextMessages } from "../../src/shared/model-context-message.js";
 
 const { values } = parseArgs({
   options: {
     calls: { type: "string", default: "40" },
     "prompt-chars": { type: "string", default: "16" },
     "unowned-history": { type: "boolean", default: false },
+    "projected-history": { type: "boolean", default: false },
+    "no-result": { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     "start-at": { type: "string", default: "0" },
     "expect-shared-history": { type: "boolean", default: false },
@@ -27,6 +32,7 @@ const { values } = parseArgs({
 const promptChars = Number(values["prompt-chars"]);
 assert.ok(Number.isSafeInteger(promptChars) && promptChars >= 0);
 const expectSharedHistory = values["expect-shared-history"] && !values["unowned-history"];
+assert.ok(!values["projected-history"] || values["unowned-history"]);
 const calls = Number(values.calls);
 const samples = Number(values.samples);
 assert.ok(Number.isSafeInteger(calls) && calls > 0, "calls must be a positive integer");
@@ -96,14 +102,29 @@ function fixture(size: number) {
 }
 
 const cells = [64, 200, 1_000].flatMap((size) => {
-  const source = fixture(size);
-  const messages = values["unowned-history"] ? structuredClone(source) : source;
+  const fixtureMessages = fixture(size);
+  const source = values["projected-history"]
+    ? projectModelContextMessages(fixtureMessages)
+    : fixtureMessages;
+  const isFixtureMessage = (message: unknown): message is { content: unknown[] } =>
+    Boolean(
+      message &&
+      typeof message === "object" &&
+      "content" in message &&
+      Array.isArray(message.content),
+    );
+  const messages = (values["unowned-history"] ? structuredClone(source) : source).map((message) => {
+    assert.ok(isFixtureMessage(message));
+    return message;
+  });
   for (const message of messages) {
-    assert.equal(isOwnedTranscriptPayload(message), !values["unowned-history"]);
+    if (!values["projected-history"]) {
+      assert.equal(isOwnedTranscriptPayload(message), !values["unowned-history"]);
+    }
     assert.equal(Object.isFrozen(message.content), !values["unowned-history"]);
     assert.ok(!isOwnedTranscriptPayload(message.content));
   }
-  return [1, 2].map((handlers) => {
+  return [0, 1, 2].map((handlers) => {
     const registry = createEmptyPluginRegistry();
     let handlerCalls = 0;
     let verifyHistory = false;
@@ -125,7 +146,7 @@ const cells = [64, 200, 1_000].flatMap((size) => {
               assert.equal(Object.isFrozen(received.content), expectSharedHistory);
             }
           }
-          return { prependContext: "synthetic context" };
+          return values["no-result"] ? undefined : { prependContext: "synthetic context" };
         },
       });
     }
@@ -172,10 +193,20 @@ const counts = [];
 for (const cell of cells) {
   const ownKeys = Reflect.ownKeys;
   const clone = globalThis.structuredClone;
+  const getDescriptor = Object.getOwnPropertyDescriptor;
   let clones = 0;
   let ownedPayloadClones = 0;
   let sourceEnumerations = 0;
   let cloneEnumerations = 0;
+  let snapshotDescriptorReads = 0;
+  Object.getOwnPropertyDescriptor = new Proxy(getDescriptor, {
+    apply(target, receiver, args: Parameters<typeof getDescriptor>) {
+      if (clones > 0) {
+        snapshotDescriptorReads++;
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
   Reflect.ownKeys = new Proxy(ownKeys, {
     apply(target, receiver, args: Parameters<typeof ownKeys>) {
       if (clones === 0) {
@@ -203,10 +234,12 @@ for (const cell of cells) {
       ownedPayloadClones,
       sourceEnumerations,
       cloneEnumerations,
+      snapshotDescriptorReads,
     });
   } finally {
     Reflect.ownKeys = ownKeys;
     globalThis.structuredClone = clone;
+    Object.getOwnPropertyDescriptor = getDescriptor;
   }
   if (!values["preflight-only"]) {
     await cell.run(10);
@@ -218,6 +251,7 @@ if (values["preflight-only"]) {
       node: process.version,
       expectedSharedHistory: expectSharedHistory,
       unownedHistory: values["unowned-history"],
+      projectedHistory: values["projected-history"],
       counts,
     }),
   );
@@ -296,6 +330,7 @@ console.log(
     includeCollectedObjects: true,
     expectedSharedHistory: expectSharedHistory,
     unownedHistory: values["unowned-history"],
+    projectedHistory: values["projected-history"],
     counts,
     fixtures: cells.map(({ messages, handlers, fixtureBytes }) => ({
       messages,

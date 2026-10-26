@@ -221,6 +221,7 @@ it("prepares search text and its revision once across warm searches and runtimes
   const catalog = CATALOG.map((item) => entry({ ...item, id: `warm-index:${item.id}` }));
   const render = vi.spyOn(ranking, "readParameterText");
   const build = vi.spyOn(ranking, "buildLexicalIndex");
+  const tokenize = vi.spyOn(ranking, "tokenizeDocument");
   const allowedIds = new Set(catalog.map(({ id }) => id));
   for (let turn = 0; turn < 3; turn++) {
     const search = runtime(catalog);
@@ -235,6 +236,15 @@ it("prepares search text and its revision once across warm searches and runtimes
   expect(await names(runtime(catalog), "repository", { allowedIds })).toEqual(["issue_create"]);
   expect(render).toHaveBeenCalledTimes(catalog.length);
   expect(build).toHaveBeenCalledTimes(2);
+  expect(tokenize).toHaveBeenCalledTimes(catalog.length);
+
+  // A new descriptor revision only tokenizes its changed text; old views remain valid.
+  const revised = catalog.map((item, index) =>
+    index === 2 ? entry({ ...item, description: "Track asteroids" }) : item,
+  );
+  expect(await names(runtime(revised), "asteroids")).toEqual(["issue_create"]);
+  expect(await runtime(catalog).search("asteroids")).toEqual([]);
+  expect(tokenize).toHaveBeenCalledTimes(catalog.length + 1);
 });
 
 it("keeps BM25 population statistics scoped to the current visibility", async () => {

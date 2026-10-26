@@ -14,7 +14,7 @@ import type { ConfigMachineStateDatabase } from "./config-machine-state-row.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
-export const CRON_DEFAULT_STORE_KEY_STATE_KEY = "cron.defaultStoreKey";
+const CRON_DEFAULT_STORE_KEY_STATE_KEY = "cron.defaultStoreKey";
 export const CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION = 34;
 
 export type CronStorePartitionInventory = {

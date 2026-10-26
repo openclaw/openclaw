@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { overbroadBootstrapProfile } from "./device-bootstrap-profile.test-support.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
@@ -677,18 +678,7 @@ describe("device pairing tokens", () => {
       scopes: ["node.exec", "operator.approvals", "operator.read", "operator.write"],
     });
 
-    await approveBootstrap(request, {
-      roles: ["node", "operator"],
-      scopes: [
-        "node.exec",
-        "operator.admin",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-    });
+    await approveBootstrap(request, overbroadBootstrapProfile());
 
     const paired = await getPairedDevice("device-1", baseDir);
     const granted = ["operator.approvals", "operator.read", "operator.write"];

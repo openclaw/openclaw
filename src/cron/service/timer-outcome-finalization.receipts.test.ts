@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import {
   CronJobsStoreChangedError,
   loadCronStore,
@@ -91,6 +92,43 @@ function completion(
 }
 
 describe("cron outcome receipt finalization", () => {
+  it.each([
+    { classification: undefined, reason: "timeout", errors: 3 },
+    { classification: { kind: "permanent" }, reason: undefined, errors: 3 },
+    { classification: { kind: "aborted" }, reason: undefined, errors: 2 },
+    { classification: { kind: "reason", reason: "rate_limit" }, reason: "rate_limit", errors: 3 },
+  ] as const)(
+    "records host classification $classification with the receipt and job outcome",
+    async ({ classification, reason, errors }) => {
+      const { storePath } = fixtures.makeStorePath();
+      const startedAt = Date.now();
+      const job = dueJob("classified-outcome", startedAt);
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      job.state.consecutiveErrors = 2;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const receipt = claimReceipt(storePath, job, startedAt);
+      const state = createState(storePath, startedAt + 10);
+      await finalizeCompletedCronRunOutcomes(state, [
+        completion(job, startedAt, startedAt + 10, receipt, {
+          status: "error",
+          error: "internal_error from provider",
+          provider: "anthropic",
+          errorClassification: classification,
+        }),
+      ]);
+      const stored = (await loadCronStore(storePath)).jobs[0]!;
+      expect(stored.state.lastErrorReason).toBe(reason);
+      expect(stored.state.consecutiveErrors).toBe(errors);
+      expect(receiptStatus(receipt)).toEqual({ status: "error" });
+      const history = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storePath),
+        jobId: job.id,
+      });
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]?.errorReason).toBe(reason);
+    },
+  );
+
   it.each(["current", "legacy definition", "legacy state"])(
     "accepts the first guarded update after publishing a completed run (%s)",
     async (shape) => {

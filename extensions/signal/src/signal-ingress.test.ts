@@ -5,12 +5,13 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
-import type { SignalDataMessage, SignalEnvelope } from "./monitor/event-handler.types.js";
+import type { SignalDataMessage, SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 type SignalIngressDispatch = Parameters<typeof startSignalIngressMonitor>[0]["dispatch"];
+type SignalEnvelope = NonNullable<SignalReceivePayload["envelope"]>;
 const defer = (_event: SignalSseEvent, lifecycle: Parameters<SignalIngressDispatch>[1]) => {
   lifecycle.onDeferred();
   return { kind: "deferred" } as const;

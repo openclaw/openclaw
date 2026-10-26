@@ -596,9 +596,11 @@ export function mutateSubagentCompletionInDatabase(
       if (endedAt === undefined || !marker) {
         return noMutation(null);
       }
-      if (!Number.isFinite(marker.killedAt) || marker.killedAt > endedAt) {
+      if (!Number.isFinite(marker.killedAt)) {
         return noMutation(false);
       }
+      // A cleanup kill may arrive after execution ended. The current generation,
+      // not timestamp ordering, owns reconciliation of that retired cancellation.
       const current = readSubagentRun(database, expected.runId);
       if (
         !current ||

@@ -330,6 +330,79 @@ async function scrollSurface(page: Page, selector: string) {
   return { scrollBefore: before, scrollAfter: after };
 }
 
+function workspaceInitialScenario(roundTripMs: 0 | 100): InteractionScenario {
+  return {
+    id: `data-workspace-first-render${roundTripMs ? "-100ms" : ""}`,
+    dataPage: "workspace",
+    route: controlUiSessionPath(sessionKey),
+    expected: "Opening Files reads one root listing with 20 folders and 100 touched files.",
+    fixtureOverrides: createWorkspaceFixture,
+    rowSelector: ".workspace-desktop__row",
+    createRequestHandlers: roundTripMs
+      ? () => ({
+          "sessions.files.list": async (params: unknown) => {
+            if (
+              !isRecord(params) ||
+              params.sessionKey !== sessionKey ||
+              params.path !== "" ||
+              params.search !== ""
+            ) {
+              throw new Error("Expected one Workspace root-listing request");
+            }
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, roundTripMs);
+            });
+            return workspaceListing();
+          },
+        })
+      : undefined,
+    prepare: async (page, gateway) => {
+      await page.locator(".chat-thread").first().waitFor();
+      if ((await gateway.getRequests("sessions.files.list", { sessionKey })).length !== 0) {
+        throw new Error("Workspace initial-load fixture was already fetched before opening Files");
+      }
+    },
+    run: async (page, gateway) => {
+      await prepareWorkspace(page);
+      const requests = await gateway.getRequests("sessions.files.list", { sessionKey });
+      const first = requests[0];
+      if (
+        requests.length !== 1 ||
+        !first ||
+        !isRecord(first.params) ||
+        first.params.path !== "" ||
+        first.params.search !== ""
+      ) {
+        throw new Error("Workspace initial load did not use exactly one root listing");
+      }
+      await page.waitForFunction(
+        ({ selector, count }) => {
+          const folders = [
+            ...document.querySelectorAll(
+              `${selector} .workspace-desktop__project-scroll .workspace-desktop__row[aria-expanded]`,
+            ),
+          ];
+          return (
+            folders.length === count &&
+            folders.every(
+              (folder, index) =>
+                folder.getAttribute("aria-label") === `package-${String(index).padStart(2, "0")}`,
+            )
+          );
+        },
+        { selector: workspaceHost, count: directoryCount },
+      );
+      return {
+        rootListingRequests: requests.length,
+        rootListingRoundTripMs: roundTripMs,
+        initialFolders: directoryCount,
+        rootResponseTouchedFiles: directoryCount * 5,
+        descendantListingRequests: 0,
+      };
+    },
+  };
+}
+
 function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
   return {
     id: roundTripMs ? "data-workspace-search-100ms" : "data-workspace-search",
@@ -608,21 +681,8 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
       }
     },
   },
-  {
-    id: "data-workspace-first-render",
-    dataPage: "workspace",
-    route: controlUiSessionPath(sessionKey),
-    expected:
-      "Opening Files presents 20 folders and 100 touched files without reading descendants.",
-    fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
-    prepare: async (page) => {
-      await page.locator(".chat-thread").first().waitFor();
-    },
-    run: async (page) => {
-      await prepareWorkspace(page);
-    },
-  },
+  workspaceInitialScenario(0),
+  workspaceInitialScenario(100),
   {
     id: "data-workspace-expand",
     dataPage: "workspace",

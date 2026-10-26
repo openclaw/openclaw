@@ -7,6 +7,7 @@ import type { UsageSessionEntry } from "./types.ts";
 import {
   createUsagePageFixture,
   usageCalls,
+  usageButton,
   textOf,
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -98,6 +99,53 @@ function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   move();
   return { move, end: () => document.dispatchEvent(new MouseEvent("mouseup")) };
 }
+
+it("retains chart bars across conversation changes and updates chart modes", async () => {
+  const { page } = await timelineFixture("stable-instance", "[Tool: read]\nRetained turn");
+  await vi.waitFor(() => expect(page.querySelectorAll(".session-log-tools")).toHaveLength(3));
+  await Promise.all([page.read().detail.timeSeriesRead, page.read().detail.context.read]);
+  await page.updateComplete;
+  const bars = [...page.querySelectorAll(".ts-bar")];
+  expect(bars).toHaveLength(3);
+  const expectRetainedBars = () => {
+    const current = [...page.querySelectorAll(".ts-bar")];
+    expect(current).toHaveLength(bars.length);
+    current.forEach((bar, index) => expect(bar).toBe(bars[index]));
+  };
+
+  usageButton(page, "Expand All", ".session-logs-header button").click();
+  await page.updateComplete;
+  expect(
+    [...page.querySelectorAll<HTMLDetailsElement>(".session-log-tools")].every(
+      (tools) => tools.open,
+    ),
+  ).toBe(true);
+  expectRetainedBars();
+
+  const search = page.querySelector<HTMLInputElement>(".session-log-filters input[type=text]")!;
+  for (const [query, rows] of [
+    ["absent", 0],
+    ["Retained", 3],
+  ] as const) {
+    search.value = query;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    expect(page.querySelectorAll(".session-log-entry")).toHaveLength(rows);
+    expectRetainedBars();
+  }
+
+  usageButton(page, "Cumulative", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("300 tokens");
+  expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
+  usageButton(page, "Per Turn", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("100 tokens");
+  expect(page.querySelectorAll(".ts-bar.usage-token-input")).toHaveLength(3);
+  usageButton(page, "Total", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
+});
 
 it.each([
   { refresh: "automatic", points: 1, activeDrag: false },

@@ -362,10 +362,10 @@ it.each([
 
 it("bounds the warm set and retires every idle pool on memory pressure", async () => {
   const start = fixture.pools.length;
-  const results = await Promise.all(Array.from({ length: 6 }, run));
+  const results = await Promise.all(Array.from({ length: 10 }, run));
   expect(results.every((result) => result.status === "completed")).toBe(true);
   const idle = fixture.pools.filter((pool) => !pool.isClosed);
-  expect(idle).toHaveLength(4);
+  expect(idle).toHaveLength(8);
   const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
   expect(evicted).toHaveLength(2);
   channel("openclaw.memory.critical").publish({});
@@ -487,7 +487,7 @@ it("does not release an excess completed pool after native cleanup fails", async
   const held = holdRun(first);
   const pending = run();
   await held.started;
-  const siblings = await Promise.all(Array.from({ length: 4 }, run));
+  const siblings = await Promise.all(Array.from({ length: 8 }, run));
   expect(siblings.every((result) => result.status === "completed")).toBe(true);
   first.close.mockRejectedValueOnce(new Error("native exit uncertain"));
   held.complete(fixture.completed);

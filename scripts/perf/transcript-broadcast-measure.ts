@@ -192,6 +192,7 @@ const { values } = parseArgs({
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
+    "team-stress-retention-sampling": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -809,6 +810,9 @@ if (teamStressListWeight > 64) {
 }
 if (values["team-stress"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--team-stress requires memory-soak and --mixed-rpc");
+}
+if (values["team-stress-retention-sampling"] && !values["team-stress-allocation-sampling"]) {
+  throw new Error("--team-stress-retention-sampling requires --team-stress-allocation-sampling");
 }
 if (
   values["team-stress-allocation-sampling"] &&
@@ -3468,7 +3472,7 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
     const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
     const timeout = setTimeout(
       () => finish(new Error(`Team stress telemetry ${action} timed out`)),
-      60_000,
+      action === "stop" && values["team-stress-retention-sampling"] ? 600_000 : 60_000,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);
@@ -3479,6 +3483,7 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
         action,
         output,
         allocations: values["team-stress-allocation-sampling"],
+        retention: values["team-stress-retention-sampling"],
       },
       (error) => {
         if (error) {
@@ -4399,9 +4404,9 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet ||
-        (performance.now() - lastSubscriberEventAt >= 1000 &&
-          !teamStressFanout?.pendingInjections().length))
+      (teamStressFanout
+        ? teamStressFanout.isDrained(requireSubscriberQuiet)
+        : !requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
     ) {
       return;
     }
@@ -6493,8 +6498,8 @@ try {
         }
         measuring = true;
         await workload();
-        // Polling has stopped and in-flight RPCs have completed; drain their
-        // remaining events before freezing measured counters.
+        // Polling has stopped and in-flight RPCs have completed. Team receipts
+        // drain their workload while unrelated background metadata stays active.
         if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();

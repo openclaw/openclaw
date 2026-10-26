@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { shouldUseRuntimeOnlyVitestWorkers } from "../../scripts/lib/vitest-runtime-selection.mts";
+import {
+  TUI_PTY_BUILT_CLI_CANARY_PATTERN,
+  shouldUseRuntimeOnlyVitestWorkers,
+} from "../../scripts/lib/vitest-runtime-selection.mts";
 
 const e2e = "test/vitest/vitest.e2e.config.ts";
 const tui = "test/vitest/vitest.tui-pty.config.ts";
@@ -35,16 +39,61 @@ it.each([
     runtime: false,
   },
   { name: "custom config", config: "custom.config.ts", files: [doctor], env: {}, runtime: false },
-  { name: "built local PTY", config: tui, files: [local], env: built, runtime: true },
+  {
+    name: "built local PTY canaries",
+    config: tui,
+    files: [local],
+    env: built,
+    pattern: TUI_PTY_BUILT_CLI_CANARY_PATTERN,
+    runtime: true,
+  },
+  {
+    name: "built local PTY canaries as RegExp",
+    config: tui,
+    files: [local],
+    env: built,
+    pattern: new RegExp(TUI_PTY_BUILT_CLI_CANARY_PATTERN),
+    runtime: true,
+  },
+  { name: "complete built local PTY", config: tui, files: [local], env: built, runtime: false },
+  {
+    name: "arbitrary built local PTY selection",
+    config: tui,
+    files: [local],
+    env: built,
+    pattern: "launches openclaw|control-channel",
+    runtime: false,
+  },
+  {
+    name: "source local PTY canaries",
+    config: tui,
+    files: [local],
+    env: {},
+    pattern: TUI_PTY_BUILT_CLI_CANARY_PATTERN,
+    runtime: false,
+  },
   { name: "source local PTY", config: tui, files: [local], env: {}, runtime: false },
-  { name: "broad built PTY", config: tui, files: [], env: built, runtime: false },
+  {
+    name: "broad built PTY",
+    config: tui,
+    files: [],
+    env: built,
+    pattern: TUI_PTY_BUILT_CLI_CANARY_PATTERN,
+    runtime: false,
+  },
   {
     name: "mixed built PTY",
     config: tui,
     files: [local, "src/tui/tui-pty-harness.e2e.test.ts"],
     env: built,
+    pattern: TUI_PTY_BUILT_CLI_CANARY_PATTERN,
     runtime: false,
   },
-])("keeps the compiler scope for $name", ({ config, files, env, runtime }) => {
-  expect(shouldUseRuntimeOnlyVitestWorkers(config, ["run", ...files], env)).toBe(runtime);
+])("keeps the compiler scope for $name", ({ config, files, env, pattern, runtime }) => {
+  expect(shouldUseRuntimeOnlyVitestWorkers(config, ["run", ...files], env, pattern)).toBe(runtime);
+});
+
+it("keeps the built PTY CI canary aligned with runtime-only preparation", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  expect(workflow).toContain(`--testNamePattern "${TUI_PTY_BUILT_CLI_CANARY_PATTERN}"`);
 });

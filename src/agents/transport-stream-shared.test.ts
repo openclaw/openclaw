@@ -14,55 +14,36 @@ import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
-type AssistantMessageBuilder = (usage?: AssistantMessage["usage"]) => AssistantMessage;
-
-const assistantMessageBuilders: Array<[string, AssistantMessageBuilder]> = [
-  [
-    "makeAssistantMessageFixture",
-    (usage) => makeAssistantMessageFixture({ content: [], ...(usage ? { usage } : {}) }),
-  ],
-  [
-    "makeAgentAssistantMessage",
-    (usage) => makeAgentAssistantMessage({ content: [], ...(usage ? { usage } : {}) }),
-  ],
-];
-
-function createTransportOutput() {
-  return makeAssistantMessageFixture({ stopReason: "stop", content: [] });
-}
-
-function projectFailure(output: ReturnType<typeof createTransportOutput>, error: unknown): void {
-  failTransportStream({
-    stream: { push: () => {}, end: () => {} },
-    output,
-    error,
-  });
+function projectFailure(error: unknown) {
+  const output = makeAssistantMessageFixture({ stopReason: "stop", content: [] });
+  failTransportStream({ stream: { push: () => {}, end: () => {} }, output, error });
+  return output;
 }
 
 describe("transport stream shared helpers", () => {
-  it.each(assistantMessageBuilders)(
-    "%s owns usage across transcript and transport lifetimes",
-    (_name, buildMessage) => {
-      const stored = buildMessage();
-      normalizeTranscriptJsonValue({ message: stored }, "entry");
+  it.each([
+    ["makeAssistantMessageFixture", makeAssistantMessageFixture],
+    ["makeAgentAssistantMessage", makeAgentAssistantMessage],
+  ] as const)("%s owns usage across transcript and transport lifetimes", (_name, builder) => {
+    const buildMessage = (usage?: AssistantMessage["usage"]) =>
+      builder({ content: [], ...(usage ? { usage } : {}) });
+    const stored = buildMessage();
+    normalizeTranscriptJsonValue({ message: stored }, "entry");
 
-      const transport = buildMessage();
-      expect(transport.usage).toEqual(createZeroUsageFixture());
-      expect(transport.usage).not.toBe(stored.usage);
-      expect(transport.usage.cost).not.toBe(stored.usage.cost);
-      expect(Object.isExtensible(transport.usage)).toBe(true);
-      expect(Object.isExtensible(transport.usage.cost)).toBe(true);
+    const transport = buildMessage();
+    expect(transport.usage).toEqual(createZeroUsageFixture());
+    expect(transport.usage).not.toBe(stored.usage);
+    expect(transport.usage.cost).not.toBe(stored.usage.cost);
+    expect(Object.isExtensible(transport.usage)).toBe(true);
+    expect(Object.isExtensible(transport.usage.cost)).toBe(true);
 
-      expect(() =>
-        assignTransportErrorDetails(transport, new Error("fixture failure")),
-      ).not.toThrow();
-      expect(transport.usage.usageReport).toEqual({ state: "unavailable" });
-      expect(transport.usage.contextUsage).toEqual({ state: "unavailable" });
+    assignTransportErrorDetails(transport, new Error("fixture failure"));
+    expect(transport.usage.usageReport).toEqual({ state: "unavailable" });
+    expect(transport.usage.contextUsage).toEqual({ state: "unavailable" });
 
-      const explicitUsage = createZeroUsageFixture();
-      expect(buildMessage(explicitUsage).usage).toBe(explicitUsage);
-    },
-  );
+    const explicitUsage = createZeroUsageFixture();
+    expect(buildMessage(explicitUsage).usage).toBe(explicitUsage);
+  });
 
   it("returns empty string for nullish payloads instead of throwing", () => {
     expect(sanitizeTransportPayloadText(undefined as unknown as string)).toBe("");
@@ -93,9 +74,7 @@ describe("transport stream shared helpers", () => {
     circular.self = circular;
 
     for (const error of [1n, circular]) {
-      const output = createTransportOutput();
-
-      expect(() => projectFailure(output, error)).not.toThrow();
+      const output = projectFailure(error);
       expect(output.stopReason).toBe("error");
       expect(output.errorMessage).toBeTruthy();
     }
@@ -107,9 +86,7 @@ describe("transport stream shared helpers", () => {
     });
     const fetchError = new TypeError("fetch failed", { cause: socketError });
     const sdkError = new OpenAI.APIConnectionError({ cause: fetchError });
-    const output = makeAssistantMessageFixture({ stopReason: "stop", content: [] });
-
-    projectFailure(output, sdkError);
+    const output = projectFailure(sdkError);
 
     expect(output.errorCode).toBe("ECONNREFUSED");
     expect(classifyAssistantFailoverReason(output)).toBe("timeout");
