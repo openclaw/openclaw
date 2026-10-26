@@ -174,7 +174,19 @@ try {
         return digest.digest("hex");
       });
       assert.equal(digests[0], digests[1], "per-recipient rows must remain byte-identical");
-      const results = [];
+      const results: Array<{
+        pair: number;
+        variant: string;
+        presentations: number;
+        elapsedMs: number;
+        threadCpuMs: number;
+        sampledBytes: number | undefined;
+        checksum: number;
+        hostLoadBefore: number[];
+        hostLoadAfter: number[];
+        memoryBefore: NodeJS.MemoryUsage;
+        memoryAfter: NodeJS.MemoryUsage;
+      }> = [];
       if (values.allocations) {
         inspector.connect();
       }
