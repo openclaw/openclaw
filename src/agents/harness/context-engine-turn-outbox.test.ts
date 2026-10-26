@@ -268,10 +268,7 @@ describe("context-engine turn outbox", () => {
   it.each(["invalid-result", "missing-state"] as const)(
     "retains a queued turn with %s",
     async (failure) => {
-      let valid = failure === "missing-state";
-      const commitTurn = vi.fn(async () =>
-        valid ? { status: "committed" as const } : ({ status: "ignored" } as never),
-      );
+      const commitTurn = createCommitTurn().mockResolvedValueOnce({ status: "ignored" } as never);
       const { database, warn, enqueue, drain } = outboxFixture(commitTurn, false);
       const payload = enqueue(`session-a:${failure}`);
       if (failure === "missing-state") {
@@ -294,7 +291,6 @@ describe("context-engine turn outbox", () => {
         attempt_count: 1,
         last_error: "invalid commitTurn result status: ignored",
       });
-      valid = true;
       const onCommitted = vi.fn(() => {
         throw new Error("maintenance handoff failed");
       });
@@ -455,13 +451,7 @@ describe("context-engine turn outbox", () => {
   });
 
   it("does not let later same-session turns overtake a failed commit", async () => {
-    let failFirstTurn = true;
-    const commitTurn = vi.fn(async ({ advancementKey }: { advancementKey: string }) => {
-      if (advancementKey === "session-a:z-first" && failFirstTurn) {
-        throw new Error("temporary failure");
-      }
-      return { status: "committed" as const };
-    });
+    const commitTurn = createCommitTurn().mockRejectedValueOnce(new Error("temporary failure"));
     const { database, enqueue, drain } = outboxFixture(commitTurn, false);
     enqueue("session-a:z-first", "session-a", 1);
     for (let turn = 2; turn <= 17; turn += 1) {
@@ -486,7 +476,6 @@ describe("context-engine turn outbox", () => {
       attempt_count: 1,
     });
     commitTurn.mockClear();
-    failFirstTurn = false;
 
     await drain({ limit: 2 });
 
@@ -504,13 +493,7 @@ describe("context-engine turn outbox", () => {
   });
 
   it("retries the current session before the next run and degrades if it stays blocked", async () => {
-    let blocked = true;
-    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => {
-      if (blocked) {
-        throw new Error("temporary failure");
-      }
-      return { status: "committed" as const };
-    });
+    const commitTurn = createCommitTurn().mockRejectedValueOnce(new Error("temporary failure"));
     const { database, lease, warn, drain, enqueue } = outboxFixture(commitTurn);
     const payload = {
       ...createPayload(database.path, "session-a:retry"),
@@ -519,7 +502,6 @@ describe("context-engine turn outbox", () => {
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     const { degradeBeforeStart } = lease;
     await drain();
-    blocked = false;
     await drainPendingContextEngineTurnsBeforeRun({
       admission: payload.boundary.admission,
       lease,
@@ -535,7 +517,7 @@ describe("context-engine turn outbox", () => {
     expect(degradeBeforeStart).not.toHaveBeenCalled();
 
     enqueue("session-a:blocked", "session-a", 3);
-    blocked = true;
+    commitTurn.mockRejectedValue(new Error("temporary failure"));
     await drainPendingContextEngineTurnsBeforeRun({
       admission: payload.boundary.admission,
       lease,

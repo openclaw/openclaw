@@ -33,13 +33,6 @@ const questionId = "ask_1234567890abcdef1234567890abcdef";
 type Answer = { status: "answered"; answers: { answers: Record<string, string[]> } };
 type QuestionOptions = Parameters<typeof runAgentHarnessGatewayQuestion>[0];
 
-function settled<T>(promise: Promise<T>) {
-  return promise.then(
-    (accepted) => ({ accepted }),
-    (error: unknown) => ({ error }),
-  );
-}
-
 function expectUncalled(...mocks: Array<ReturnType<typeof vi.fn>>) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
@@ -89,22 +82,21 @@ function reserveQuestion(sessionKey: string, gatewayCall: AgentHarnessQuestionGa
   return registerPendingAgentQuestion({ questionId, sessionKey, questions, gatewayCall });
 }
 
-function answerGateway(cancel: () => unknown) {
+function answerGateway() {
   const answer = createDeferred<Answer>();
-  const gatewayCall = gatewayStub({
+  return gatewayStub({
     "question.request": (params) => ({ id: (params as { id: string }).id }),
     "question.waitAnswer": () => answer.promise,
     "question.resolve": (params) => {
       const resolved = (params as { answers?: Answer["answers"] }).answers;
       if (!resolved) {
-        return cancel();
+        return { status: "cancelled" };
       }
       const result: Answer = { status: "answered", answers: resolved };
       answer.resolve(result);
       return result;
     },
   });
-  return gatewayCall;
 }
 
 function gatewayStub(
@@ -247,7 +239,7 @@ describe("gateway harness questions", () => {
           return change === "uncommitted" ? undefined : persistApproved(options);
         });
       const legacyPersist = vi.fn(async () => {});
-      let claim: Promise<{ accepted: boolean } | { error: unknown }> | undefined;
+      let claim: Promise<unknown> | undefined;
       let replacement: ReturnType<typeof runAgentHarnessGatewayQuestion> | undefined;
       let replacementController: AbortController | undefined;
       try {
@@ -262,9 +254,9 @@ describe("gateway harness questions", () => {
             assertCurrent: () => source.signal.throwIfAborted(),
           },
         };
-        claim = settled(claimPendingAgentQuestionAnswer(claimParams));
+        claim = claimPendingAgentQuestionAnswer(claimParams).catch((error: unknown) => error);
         if (change === "unstaged") {
-          expect(await claim).toEqual({ accepted: true });
+          expect(await claim).toBe(true);
           await expect(question).resolves.toMatchObject({ status: "answered" });
           expect(persist).not.toHaveBeenCalled();
           expect(sourceRecorder.hasPersisted()).toBe(false);
@@ -285,7 +277,7 @@ describe("gateway harness questions", () => {
           await promptDelivered.promise;
         }
         releasePersistence.resolve();
-        expect(await claim).toMatchObject({ error: expect.any(QuestionDispatchRefusedError) });
+        expect(await claim).toBeInstanceOf(QuestionDispatchRefusedError);
         if (change === "uncommitted" || change === "question-replaced") {
           await expect(
             claimPendingAgentQuestionAnswer({
@@ -336,17 +328,15 @@ describe("gateway harness questions", () => {
           throw new QuestionDispatchRefusedError("prepared route changed");
         }
       });
-      const attempt = settled(
-        claimPreparedPendingAgentQuestionAnswer(
-          {
-            sessionKey,
-            text: "prepared answer",
-            persist,
-            authority: { kind: "run", assertCurrent: () => source.signal.throwIfAborted() },
-          },
-          prepare,
-        ),
-      );
+      const attempt = claimPreparedPendingAgentQuestionAnswer(
+        {
+          sessionKey,
+          text: "prepared answer",
+          persist,
+          authority: { kind: "run", assertCurrent: () => source.signal.throwIfAborted() },
+        },
+        prepare,
+      ).catch((error: unknown) => error);
       try {
         expectUncalled(persist, prepare);
         registration.resolve();
@@ -359,9 +349,7 @@ describe("gateway harness questions", () => {
           source.abort();
         }
         preparation.release();
-        expect(await attempt).toMatchObject({
-          error: expect.any(PreparedQuestionAnswerRefusedError),
-        });
+        expect(await attempt).toBeInstanceOf(PreparedQuestionAnswerRefusedError);
         expect(gatewayCall).not.toHaveBeenCalled();
         await expect(
           claimPendingAgentQuestionAnswer({ sessionKey, text: "fresh answer" }),
@@ -485,19 +473,16 @@ describe("gateway harness questions", () => {
     async (outcome) => {
       const registration = createDeferred<{ id: string }>();
       const sessionKey = "agent:main:registering";
-      let resolveCount = 0;
+      const resolve = vi.fn(async () => ({ status: "cancelled" }));
+      if (outcome !== "failed") {
+        resolve.mockRejectedValueOnce(gatewayError("not registered yet", "QUESTION_NOT_FOUND"));
+      }
+      if (outcome === "answered") {
+        resolve.mockRejectedValue(gatewayError("already answered", "QUESTION_ALREADY_TERMINAL"));
+      }
       const handlers: Parameters<typeof gatewayStub>[0] = {
         "question.request": () => registration.promise,
-        "question.resolve": () => {
-          resolveCount += 1;
-          if (outcome !== "failed" && resolveCount === 1) {
-            throw gatewayError("not registered yet", "QUESTION_NOT_FOUND");
-          }
-          if (outcome === "answered") {
-            throw gatewayError("already answered", "QUESTION_ALREADY_TERMINAL");
-          }
-          return { status: "cancelled" };
-        },
+        "question.resolve": resolve,
       };
       if (outcome === "answered") {
         handlers["question.waitAnswer"] = () => answerResult("Continue");
@@ -519,7 +504,7 @@ describe("gateway harness questions", () => {
       }
       expect(onBlockReply).not.toHaveBeenCalled();
       if (outcome === "cancelled") {
-        expect(resolveCount).toBe(2);
+        expect(resolve).toHaveBeenCalledTimes(2);
         expect(gatewayCall.mock.calls.some(([method]) => method === "question.waitAnswer")).toBe(
           false,
         );
@@ -630,7 +615,7 @@ describe("gateway harness questions", () => {
   });
 
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
-    const gatewayCall = answerGateway(() => ({ status: "cancelled" }));
+    const gatewayCall = answerGateway();
     let deliverySignal: AbortSignal | undefined;
     const onBlockReply = vi.fn(
       async (_payload, context?: { abortSignal?: AbortSignal }) =>
