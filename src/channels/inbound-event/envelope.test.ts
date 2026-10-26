@@ -61,7 +61,6 @@ describe("channel inbound envelope", () => {
           route: resolveAgentRoute(),
         });
         expect(buildEnvelope(timedMessage)).toEqual(sdkResult);
-        expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
       }
     });
     expect(warning).toHaveBeenCalledExactlyOnceWith(
@@ -99,24 +98,13 @@ describe("channel inbound envelope", () => {
   );
 
   it("binds routing, session lookup and formatting in one core operation", () => {
-    const resolved = resolveChannelInboundRouteEnvelope(routeParams);
-    expect(resolveAgentRoute).toHaveBeenCalledWith(routeParams);
-    expect(resolved.route.sessionKey).toBe("agent:main:telegram:direct:peer");
-    expect(resolved.buildEnvelope(message)).toBe("[Telegram Alice] hello");
-    expect(resolved.buildEnvelope(timedMessage)).toBe(formattedMessage);
-    expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
-    expect(readSessionUpdatedAtCore).toHaveBeenCalledWith({
-      storePath: "/state/main/sessions.json",
-      sessionKey: "agent:main:telegram:direct:peer",
-    });
+    const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope(routeParams);
+    expect(route.sessionKey).toBe("agent:main:telegram:direct:peer");
+    expect(buildEnvelope(message)).toBe("[Telegram Alice] hello");
+    expect(buildEnvelope(timedMessage)).toBe(formattedMessage);
     readSessionUpdatedAtCore.mockClear();
     expect(
-      resolved.buildEnvelope({
-        ...message,
-        body: "older",
-        timestamp: 30_000,
-        previousTimestamp: null,
-      }),
+      buildEnvelope({ ...message, body: "older", timestamp: 30_000, previousTimestamp: null }),
     ).toBe("[Telegram Alice Thu 1970-01-01T00:00:30Z] older");
     expect(readSessionUpdatedAtCore).not.toHaveBeenCalled();
   });

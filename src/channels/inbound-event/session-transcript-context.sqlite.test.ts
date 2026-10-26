@@ -7,7 +7,7 @@ import {
   persistSessionTranscriptTurn as persistTurn,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import { appendAssistantMessageToSessionTranscript as mirrorReply } from "../../config/sessions/transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
@@ -19,7 +19,7 @@ function chatWindow(source: string, messages: object[]) {
 const sessionDirs = useSessionStoreTempDirs(afterAll, "source-reply-context-");
 
 it.each([false, true])(
-  "keeps delivered close-outs beside questions (aborted: %s)",
+  "restores SQLite close-outs beside questions (aborted: %s)",
   async (aborted) => {
     const scope = {
       agentId: "main",
@@ -32,9 +32,7 @@ it.each([false, true])(
       chatType: "direct",
       updatedAt: 1,
     });
-    const append = (
-      ...messages: Parameters<typeof persistTurn>[1]["messages"][number]["message"][]
-    ) =>
+    const append = (...messages: unknown[]) =>
       persistTurn(scope, {
         updateMode: "none",
         messages: messages.map((message) => ({ message })),
@@ -61,13 +59,7 @@ it.each([false, true])(
         sourceTurnId: `source-turn-${index}`,
         toolCallId,
       };
-      expect(
-        await appendAssistantMessageToSessionTranscript({
-          ...scope,
-          text: answer,
-          deliveryMirror,
-        }),
-      ).toMatchObject({ ok: true });
+      expect((await mirrorReply({ ...scope, text: answer, deliveryMirror })).ok).toBe(true);
       await append({
         role: "toolResult",
         toolName: "message",
