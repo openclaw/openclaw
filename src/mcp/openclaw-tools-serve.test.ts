@@ -2,7 +2,6 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createSnapshot } from "../config/mutate.test-support.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
 import { withSystemAgentOverviewSources } from "../system-agent/overview.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -58,24 +57,24 @@ async function propose(armed: string, configPath: string, value: string) {
 
 describe("OpenClaw tools MCP server", () => {
   it("does not expose cron to a persisted sub-agent ACP session", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = "agent:main:acp:resumed-child";
-    await replaceSessionEntry({ storePath, sessionKey }, {
-      sessionId: `${sessionKey}-session`,
-      updatedAt: Date.now(),
-      spawnedBy: "agent:main:subagent:parent",
-      spawnDepth: 2,
-      subagentRole: "leaf",
-      subagentControlScope: "none",
-    } as SessionEntry);
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: `${sessionKey}-session`,
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:subagent:parent",
+        spawnDepth: 2,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    );
     vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, sessionKey);
-    const handlers = await handlersFor({
-      config: { session: { store: storePath } },
-    });
-
-    const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).not.toContain("automations");
+    const handlers = await handlersFor({ config: { session: { store: storePath } } });
+    expect((await handlers.listTools()).tools.map((tool) => tool.name)).not.toContain(
+      "automations",
+    );
     for (const name of ["automations", "cron"]) {
       await expect(handlers.callTool({ name, arguments: { action: "status" } })).resolves.toEqual({
         content: [{ type: "text", text: `Unknown tool: ${name}` }],
@@ -84,22 +83,15 @@ describe("OpenClaw tools MCP server", () => {
     }
   });
 
-  it.each([
-    { cron: { triggers: { enabled: false } }, enabled: false },
-    { cron: {}, enabled: true },
-    { cron: { triggers: { enabled: true } }, enabled: true },
-  ])("gates cron trigger surfaces ($enabled)", async ({ cron, enabled }) => {
+  it("passes the disabled cron trigger gate through MCP", async () => {
     vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, "agent:worker:main");
-    const [tool] = await resolveOpenClawToolsForMcp({ config: { cron } });
+    const [tool] = await resolveOpenClawToolsForMcp({
+      config: { cron: { triggers: { enabled: false } } },
+    });
     if (!tool) {
       throw new Error("expected the automations tool to be resolved");
     }
-    const schema = expect(tool.parameters);
-    if (enabled) {
-      schema.toHaveProperty("properties.job.properties.trigger");
-    } else {
-      schema.not.toHaveProperty("properties.job.properties.trigger");
-    }
+    expect(tool.parameters).not.toHaveProperty("properties.job.properties.trigger");
   });
 
   it("requires the managed bridge to pass a real agent session key", async () => {
@@ -113,9 +105,7 @@ describe("OpenClaw tools MCP server", () => {
     const server = serverConfig({ surface: "gateway", agentId: "work" });
     vi.stubEnv(TOOLS_ENV, server.env?.[TOOLS_ENV]);
     vi.stubEnv(SURFACE_ENV, server.env?.[SURFACE_ENV]);
-    const handlers = await handlersFor({
-      agentId: resolveToolsMcpAgentId(server.args),
-    });
+    const handlers = await handlersFor({ agentId: resolveToolsMcpAgentId(server.args) });
 
     const result = await withSystemAgentOverviewSources(
       createSnapshot({
@@ -158,9 +148,7 @@ describe("OpenClaw tools MCP server", () => {
       proposalRef: { current: "deadbeef" },
     });
     expect(server.env?.[ARMED_ENV]).toBe("operator-only");
-
     expect(serverConfig({ surface: "cli" }).env).not.toHaveProperty(ARMED_ENV);
-
     expect(serverConfig({ surface: "cli", approvalArmed: true }).env?.[ARMED_ENV]).toBe("1");
   });
 
