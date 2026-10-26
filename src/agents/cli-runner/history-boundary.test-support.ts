@@ -1,4 +1,3 @@
-// Shared session fixture for the CLI transcript account boundary tests.
 import path from "node:path";
 import { expect } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -8,7 +7,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import type { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
@@ -16,11 +14,10 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-type SessionStoreTempDirs = ReturnType<typeof useSessionStoreTempDirs>;
 type RunParams = PreparedCliRunContext["params"];
 
 export async function createHistoryBoundaryFixture(
-  sessionDirs: SessionStoreTempDirs,
+  sessionDirs: { make(): string },
   withHeader = true,
 ) {
   setRuntimeConfigSnapshot({});

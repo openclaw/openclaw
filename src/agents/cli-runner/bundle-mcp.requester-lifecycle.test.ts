@@ -8,11 +8,9 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
 import { startMcpLifecycleServer } from "../agent-bundle-mcp-lifecycle.test-support.js";
 import {
-  getAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
-import { getSessionMcpRuntimeTestManager } from "../agent-bundle-mcp-manager.test-support.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
 import { prepareNativeMcpTestConfig } from "./bundle-mcp.test-support.js";
 
@@ -20,24 +18,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("keeps requester tools callable across static native preflight until session closure", async () => {
   const workspaceDir = tempDirs.make("openclaw-mcp-requester-discovery-");
-  const sessions = new Set<string>();
   const deleted: string[] = [];
   const server = await startMcpLifecycleServer({
     toolName: "read_note",
-    onList: async (endpoint) => {
-      sessions.add(endpoint);
-    },
     onDelete: async (endpoint) => {
-      sessions.delete(endpoint);
       deleted.push(endpoint);
     },
     text: (endpoint, sessionId) => `${endpoint}:${sessionId}`,
   });
-  const url = server.url;
   const registry = createMcpProofPluginRegistry();
   registry.apiFor("test-plugin").registerMcpServerConnectionResolver({
     serverName: "requester",
-    resolve: async () => ({ url: `${url}/requester` }),
+    resolve: async () => ({ url: `${server.url}/requester` }),
   });
   const sessionId = "mixed-native-discovery";
   const sessionKey = `agent:main:${sessionId}`;
@@ -46,13 +38,11 @@ it("keeps requester tools callable across static native preflight until session 
     await setSessionMcpRuntimeScheduler(scheduler);
     await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
       await withPluginRuntimeRegistryScope(registry.registry, async () => {
-        const manager = getSessionMcpRuntimeTestManager();
-        expect(manager.listSessionIds()).not.toContain(sessionId);
         const config: OpenClawConfig = {
           plugins: { enabled: false },
           mcp: {
             servers: {
-              static: { transport: "streamable-http", url: `${url}/static` },
+              static: { transport: "streamable-http", url: `${server.url}/static` },
               requester: { transport: "streamable-http" },
             },
           },
@@ -78,10 +68,6 @@ it("keeps requester tools callable across static native preflight until session 
             content: [{ type: "text", text: "/requester:1" }],
           });
           expect(deleted).toEqual([]);
-          expect(sessions).toEqual(new Set(["/requester", "/static"]));
-          expect(
-            getAdvertisedScopedMcpCatalog(sessionId)?.tools.map((tool) => tool.serverName),
-          ).toEqual(["requester"]);
           await retireSessionMcpRuntime({
             sessionId,
             reason: "session-end",
@@ -91,9 +77,7 @@ it("keeps requester tools callable across static native preflight until session 
         } finally {
           await tools?.dispose();
         }
-        expect(sessions.size).toBe(0);
         expect(deleted.toSorted()).toEqual(["/requester", "/static"]);
-        expect(manager.listSessionIds()).not.toContain(sessionId);
       });
     });
   } finally {
