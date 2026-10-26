@@ -65,10 +65,16 @@ import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { createConfigOverride } from "./subagent-spawn.test-helpers.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle:
-    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: In-process spawn tests supply registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => {
+  const loadRegistry =
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>();
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
+});
 vi.mock("../registry/subagent-registry-state.js", { spy: true });
 vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 

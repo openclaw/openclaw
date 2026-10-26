@@ -194,9 +194,8 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 // Manual mocks can bypass concurrent lazy imports in Vitest; warm the autospy once.
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
 const wakeRequester = vi.mocked(maybeWakeRequesterAfterAllChildrenSettled);
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
-}));
+// mock-isolation: Lifecycle fixtures supply their own registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => import("../../runtime-plugins.test-support.js"));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.getGlobalHookRunner,

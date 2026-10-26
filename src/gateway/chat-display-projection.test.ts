@@ -7,6 +7,7 @@ import {
   projectLiveSessionMessage,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
+import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
@@ -16,6 +17,35 @@ import {
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("admits display content once before sanitizing a history page", () => {
+  const messages = [
+    { role: "user", content: "Show the report" },
+    {
+      role: "assistant",
+      content: [text("model-only")],
+      openclawDisplayContent: [text("Visible report")],
+      providerReplay: { private: "replay" },
+    },
+    { role: "toolResult", toolCallId: "read-1", content: [text("Tool output")] },
+  ];
+  const original = structuredClone(messages);
+  const admission = vi.spyOn(assistantDisplay, "projectAssistantDisplayContent");
+  try {
+    const projected = projectChatDisplayMessages([null, ...messages, "invalid"]);
+    expect(JSON.stringify(projected)).toBe(
+      JSON.stringify([
+        messages[0],
+        { role: "assistant", content: [text("Visible report")] },
+        messages[2],
+      ]),
+    );
+    expect(messages).toEqual(original);
+    expect(admission).toHaveBeenCalledTimes(messages.length);
+  } finally {
+    admission.mockRestore();
+  }
+});
 
 it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
   expect(
