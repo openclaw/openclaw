@@ -184,7 +184,7 @@ it("the config watcher restarts a channel that can save provider settings after 
       onNoopConfigCommit: async () => {},
       onHotReload: async (plan, next, ownership) => {
         await withPluginLifecycleLeaseAsync({}, async (lease) => {
-          assertReloadOwned = () => lease.assertOwned();
+          assertReloadOwned = async () => lease.assertOwned();
         });
         await reloadChannels(owner, plan.restartChannels, {
           log,
