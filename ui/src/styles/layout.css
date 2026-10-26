@@ -1366,9 +1366,12 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-group-actions:is(:hover, :focus-visible),
 .sidebar-session-group-actions[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
+
+  &:not(.sidebar-new-session) {
+    background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  }
 }
 
 /* Trailing header actions read as one cluster: 2px apart, not the 8px header gap.
