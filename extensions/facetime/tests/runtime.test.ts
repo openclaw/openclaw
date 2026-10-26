@@ -392,7 +392,7 @@ describe("FaceTime runtime call sequencing", () => {
     const { runtime, talk } = await startActiveCall(carrierPeer);
     vi.clearAllMocks();
     mocks.helper.connectedSockets = 1;
-    mocks.helper.connectedHelperBundles = ["com.apple.mobilephone"];
+    mocks.helper.connectedHelperBundles = ["com.apple.FaceTime.FTConversationService"];
     talk.suspendMedia.mockRejectedValueOnce(new Error("local suspension failed"));
     const survivingHelperAbsence = helperResult([{ outcome: "absent", found: false }]);
     mocks.helper.safetyMute.mockResolvedValue(survivingHelperAbsence);
@@ -412,7 +412,10 @@ describe("FaceTime runtime call sequencing", () => {
     expect(talk.close).not.toHaveBeenCalled();
 
     mocks.helper.connectedSockets = 2;
-    mocks.helper.connectedHelperBundles = ["com.apple.mobilephone", "com.apple.FaceTime"];
+    mocks.helper.connectedHelperBundles = [
+      "com.apple.FaceTime.FTConversationService",
+      "com.apple.FaceTime",
+    ];
     mocks.helper.inspectCall.mockResolvedValue(completeAbsence());
     mocks.helperParams?.onConnect("com.apple.FaceTime");
     await vi.waitFor(async () => expect((await runtime.status()).calls).toEqual([]));
