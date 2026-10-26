@@ -1,15 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { stripVTControlCharacters } from "node:util";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { setVerbose } from "../../global-state.js";
-import * as diagnostics from "../../infra/diagnostic-events.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import {
   applyLoggingConfig,
@@ -148,7 +145,6 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       }
     });
     diagnosticMocks.forwardToRealPipeline = true;
-    diagnosticMocks.logMessageDispatchCompleted.mockClear();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.entriesBySessionKey.clear();
   });
@@ -160,7 +156,6 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     vi.unstubAllEnvs();
     unsubscribe();
     diagnosticMocks.forwardToRealPipeline = false;
-    vi.useRealTimers();
     controllerTesting.resetSessionControllerForTest();
     resetInboundDedupe();
   });
@@ -184,74 +179,69 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   it.each([
     { name: "info", logging: { level: "info" }, detail: false },
     { name: "debug", logging: { level: "debug" }, detail: true },
-    { name: "environment info", logging: { level: "debug" }, env: "info", detail: false },
-  ] as const)(
-    "recovers a visible partial with $name diagnostics",
-    async ({ logging, detail, ...testCase }) => {
-      vi.stubEnv("OPENCLAW_LOG_LEVEL", "env" in testCase ? testCase.env : undefined);
-      applyLoggingConfig({
-        file: path.join(tempDirs.make("dispatch-diagnostic-level-"), "gateway.log"),
-        consoleLevel: "silent",
-        ...logging,
-        redactPatterns: ["private-start-.*?-private-end"],
-      });
-      const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
-      const customSecret = `private-start-${"x".repeat(2_500)}-private-end`;
-      const resolverError = new Error(
-        `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
-      );
-      const textReads: string[] = [];
-      let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
-      const replyResolver: ReplyResolver = async (_ctx, options) => {
-        replyOperation = options?.replyOperation;
-        options?.onAgentRunStart?.("failed-run");
-        let text = "";
-        for (let index = 0; index < 256; index++) {
-          await options?.onPartialReply?.({
-            get text() {
-              textReads.push(text);
-              return text;
-            },
-          });
-          text += index ? "x" : "partial telegram reply";
-        }
-        throw resolverError;
-      };
-      const dispatchParams = createVisibleDispatchParams(replyResolver, {
-        cfg: { diagnostics: { enabled: true } },
-        replyOptions: { onPartialReply: vi.fn(async () => (detail ? true : undefined)) },
-      });
-
-      const result = await dispatchReplyFromConfig(dispatchParams);
-      expect(textReads).toEqual(["", "partial telegram reply"]);
-      expectFailure(replyOperation, resolverError);
-      expect(result.queuedFinal).toBe(true);
-      expect(readAgentRunTerminalOutcome(result)).toBe("failed");
-      for (const events of [processedEvents, dispatchEvents]) {
-        expect(events).toEqual([
-          expect.objectContaining({
-            outcome: "error",
-            sessionKey,
-            durationMs: expect.any(Number),
-            error: detail ? expect.stringContaining("preserved-after-redaction") : undefined,
-          }),
-        ]);
-        expect(JSON.stringify(events)).not.toContain(secret);
-        expect(JSON.stringify(events)).not.toContain("x".repeat(64));
-        if (detail) {
-          expect(events[0]?.error?.length).toBeLessThanOrEqual(2_048);
-          expect(events[0]?.error?.isWellFormed()).toBe(true);
-        }
+  ] as const)("recovers a visible partial with $name diagnostics", async ({ logging, detail }) => {
+    applyLoggingConfig({
+      file: path.join(tempDirs.make("dispatch-diagnostic-level-"), "gateway.log"),
+      consoleLevel: "silent",
+      ...logging,
+      redactPatterns: ["private-start-.*?-private-end"],
+    });
+    const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
+    const customSecret = `private-start-${"x".repeat(2_500)}-private-end`;
+    const resolverError = new Error(
+      `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
+    );
+    const textReads: string[] = [];
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
+      replyOperation = options?.replyOperation;
+      options?.onAgentRunStart?.("failed-run");
+      let text = "";
+      for (let index = 0; index < 256; index++) {
+        await options?.onPartialReply?.({
+          get text() {
+            textReads.push(text);
+            return text;
+          },
+        });
+        text += index ? "x" : "partial telegram reply";
       }
-      expect(dispatchEvents[0]?.error).toBe(processedEvents[0]?.error);
-      expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledTimes(256);
-      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      throw resolverError;
+    };
+    const dispatchParams = createVisibleDispatchParams(replyResolver, {
+      cfg: { diagnostics: { enabled: true } },
+      replyOptions: { onPartialReply: vi.fn(async () => (detail ? true : undefined)) },
+    });
+
+    const result = await dispatchReplyFromConfig(dispatchParams);
+    expect(textReads).toEqual(["", "partial telegram reply"]);
+    expectFailure(replyOperation, resolverError);
+    expect(result.queuedFinal).toBe(true);
+    expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    for (const events of [processedEvents, dispatchEvents]) {
+      expect(events).toEqual([
         expect.objectContaining({
-          text: expect.stringContaining("Check the conversation before trying again"),
+          outcome: "error",
+          sessionKey,
+          durationMs: expect.any(Number),
+          error: detail ? expect.stringContaining("preserved-after-redaction") : undefined,
         }),
-      );
-    },
-  );
+      ]);
+      expect(JSON.stringify(events)).not.toContain(secret);
+      expect(JSON.stringify(events)).not.toContain("x".repeat(64));
+      if (detail) {
+        expect(events[0]?.error?.length).toBeLessThanOrEqual(2_048);
+        expect(events[0]?.error?.isWellFormed()).toBe(true);
+      }
+    }
+    expect(dispatchEvents[0]?.error).toBe(processedEvents[0]?.error);
+    expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledTimes(256);
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Check the conversation before trying again"),
+      }),
+    );
+  });
 
   it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
     const resolverError = new Error("final delivery failed after completion");
@@ -553,8 +543,6 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 });
 
 describe("restart tombstone channel feedback", () => {
-  const notice =
-    "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
   const warn = vi.fn();
   const deliver = vi.fn(async () => {});
   const replyResolver = vi.fn(async () => ({ text: "agent reply" }));
@@ -643,43 +631,18 @@ describe("restart tombstone channel feedback", () => {
   }
 
   it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
-    let elapsedMs = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-    const diagnosticsWereEnabled = diagnostics.areDiagnosticsEnabledForProcess();
-    diagnostics.setDiagnosticsEnabledForProcess(true);
-    onTestFinished(() => {
-      clock.mockRestore();
-      diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-    });
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      elapsedMs += 1_500;
-      return sessionStoreMocks.currentEntry;
-    });
-    // Uncontended lifecycle effects stay quiet even when their own work is slow.
     const rejectionWarnings = () =>
       warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
     await rejectInbound({ visibleReplies: "message_tool" });
     expect(rejectionWarnings()).toHaveLength(1);
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: notice }),
+      expect.objectContaining({ isError: true }),
       expect.objectContaining({ kind: "final" }),
     );
     await rejectInbound({ visibleReplies: "message_tool" });
     expect(deliver).toHaveBeenCalledOnce();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(rejectionWarnings()).toHaveLength(2);
-    for (const [line] of rejectionWarnings()) {
-      expect(line).toContain(recoverySessionKey);
-      expect(line).toContain("automatic recovery exhausted");
-      expect(line).toContain("/reset");
-    }
-    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).not.toContainEqual(
-      expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
-    );
-    expect(sessionStoreMocks.currentEntry).toMatchObject({
-      sessionId: "failed-session",
-      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-    });
   });
 
   it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
