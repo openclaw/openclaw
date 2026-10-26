@@ -137,14 +137,10 @@ describe("private subagent completion processing receipts", () => {
   };
   const scope = () => ({ agentId: "main", sessionKey, sessionId, storePath });
   const database = () => openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope())));
-  const completions = () =>
-    database()
-      .db.prepare("SELECT * FROM session_input_completions WHERE session_id = ?")
-      .all(sessionId);
-  const pending = () =>
-    database()
-      .db.prepare("SELECT * FROM session_pending_inputs WHERE session_id = ?")
-      .all(sessionId);
+  const rows = (table: "session_input_completions" | "session_pending_inputs") =>
+    database().db.prepare(`SELECT * FROM ${table} WHERE session_id = ?`).all(sessionId);
+  const completions = () => rows("session_input_completions");
+  const pending = () => rows("session_pending_inputs");
   const transcript = () => sessionAccessor.loadTranscriptEventsSync(scope());
   const request = (message?: string) =>
     createPrivateCompletionRequest({ sessionKey, sessionId, runId, message });
@@ -154,13 +150,15 @@ describe("private subagent completion processing receipts", () => {
     operatorRoleActor: { kind: "system" as const },
     resolveGatewayContext: gatewayContext,
   });
-  const dispatch = (message?: string, onAccepted?: () => void) =>
-    dispatchGatewayMethodInProcess<Record<string, unknown>>("agent", request(message), {
+  const dispatchInput = (params: ReturnType<typeof request>, onAccepted?: () => void) =>
+    dispatchGatewayMethodInProcess<Record<string, unknown>>("agent", params, {
       ...rpcOptions(),
       privateCompletion: true,
       expectFinal: true,
       onAccepted,
     });
+  const dispatch = (message?: string, onAccepted?: () => void) =>
+    dispatchInput(request(message), onAccepted);
   const announce = (overrides: Partial<Parameters<typeof runAnnounceAgentCall>[0]> = {}) =>
     runAnnounceAgentCall({
       agentParams: request(),
@@ -206,6 +204,12 @@ describe("private subagent completion processing receipts", () => {
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(previousDedupe);
   }
   const recorder = (input: unknown) => readPrivateCompletionRecorder(input, sessionId);
+  const agentResult = (meta: Partial<EmbeddedAgentRunResult["meta"]> = {}) =>
+    ({ payloads: [], meta: { durationMs: 1, ...meta } }) satisfies EmbeddedAgentRunResult;
+  const expectProcessed = async (calls = 1) => {
+    expect(await dispatch()).toMatchObject(processed);
+    expect(agentCommandMock).toHaveBeenCalledTimes(calls);
+  };
 
   registerSessionsSendPrivateCompletionTests(() => ({
     context: kernel.gatewayRequestContext,
@@ -284,10 +288,7 @@ describe("private subagent completion processing receipts", () => {
 
   async function processPrivateInput(input: unknown) {
     await recorder(input).persistApproved();
-    return {
-      payloads: [],
-      meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
-    } satisfies EmbeddedAgentRunResult;
+    return agentResult({ terminalReply: { disposition: "silent" } });
   }
 
   it("keeps private completion streams and retained followups private before the next public turn", async () => {
@@ -386,7 +387,7 @@ describe("private subagent completion processing receipts", () => {
       expect(command.trustedInternalHandoff?.sourceSessionKey).toBe(sourceSessionKeys[1]);
       expect(command.replyExpectation).toBe("optional");
       await recorder(input).persistApproved();
-      return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
+      return agentResult({ terminalReply: { disposition: "empty" } });
     });
     try {
       const result = await announce({
@@ -436,8 +437,7 @@ describe("private subagent completion processing receipts", () => {
         expect(await dispatch()).toMatchObject({ status: "timeout", stopReason: reason });
         expect(agentCommandMock).not.toHaveBeenCalled();
       } else {
-        expect(await dispatch()).toMatchObject(processed);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
+        await expectProcessed();
       }
     },
   );
@@ -465,10 +465,7 @@ describe("private subagent completion processing receipts", () => {
         if (kind !== "handled-hook") {
           expect(await inputRecorder.persistApproved()).toMatchObject({ appended: true });
         }
-        return {
-          payloads: [],
-          meta: { durationMs: 1, ...(kind === "yielded" ? { yielded: true } : {}) },
-        };
+        return agentResult(kind === "yielded" ? { yielded: true } : {});
       });
       if (stopped) {
         const observed = observe(dispatch());
@@ -512,19 +509,12 @@ describe("private subagent completion processing receipts", () => {
         sourceTool: "subagent_settle",
       },
     };
-    const dispatchSettle = () =>
-      dispatchGatewayMethodInProcess<Record<string, unknown>>("agent", settleRequest, {
-        privateCompletion: true,
-        expectFinal: true,
-        forceSyntheticClient: true,
-        operatorRoleActor: { kind: "system" },
-        resolveGatewayContext: () => kernel.gatewayRequestContext,
-      });
+    const dispatchSettle = () => dispatchInput(settleRequest);
     agentCommandMock.mockImplementationOnce(async (input) => {
       await recorder(input).persistApproved();
-      return { payloads: [], meta: { durationMs: 1 } };
+      return agentResult();
     });
-    expect(await dispatchSettle()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+    expect(await dispatchSettle()).toMatchObject(processed);
     const completed = completions();
     expect(completed).toMatchObject([{ run_id: runId, succeeded: 1 }]);
     const committed = transcript();
@@ -556,10 +546,7 @@ describe("private subagent completion processing receipts", () => {
     // prevent this old delivery from adopting the target's newer paused run.
     kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
     try {
-      expect(await dispatchSettle()).toMatchObject({
-        status: "ok",
-        inputProcessingCompleted: true,
-      });
+      expect(await dispatchSettle()).toMatchObject(processed);
       expect(agentCommandMock).toHaveBeenCalledOnce();
       expect(await getSubagentRunByChildSessionKey(sessionKey)).toEqual(paused);
       expect(
@@ -692,11 +679,10 @@ describe("private subagent completion processing receipts", () => {
     agentCommandMock.mockImplementationOnce(async (input) => {
       await recorder(input).persistApproved();
       processingCount += 1;
-      return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "silent" } } };
+      return agentResult({ terminalReply: { disposition: "silent" } });
     });
-    expect(await dispatch()).toMatchObject(processed);
+    await expectProcessed(2);
     expect(processingCount).toBe(1);
-    expect(agentCommandMock).toHaveBeenCalledTimes(2);
     expect(transcript()).toEqual(before);
     expect(pending()).toEqual([]);
   });
@@ -729,8 +715,7 @@ describe("private subagent completion processing receipts", () => {
     } finally {
       refusal.mockRestore();
     }
-    expect(await dispatch()).toMatchObject(processed);
-    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    await expectProcessed(2);
     expect(completions()).toMatchObject([{ succeeded: 1 }]);
   });
 
@@ -769,8 +754,7 @@ describe("private subagent completion processing receipts", () => {
       expect(agentCommandMock).not.toHaveBeenCalled();
       expect(pending()).toMatchObject([{ state: "interrupted" }]);
       agentCommandMock.mockImplementationOnce(processPrivateInput);
-      expect(await dispatch()).toMatchObject(processed);
-      expect(agentCommandMock).toHaveBeenCalledOnce();
+      await expectProcessed();
       expect(pending()).toEqual([]);
       expect(
         hostSql.queries.filter((sql) =>
@@ -865,8 +849,7 @@ describe("private subagent completion processing receipts", () => {
           expect(agentCommandMock).not.toHaveBeenCalled();
           return;
         }
-        expect(await dispatch()).toMatchObject(processed);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
+        await expectProcessed();
         expect(pending()).toEqual([]);
       } finally {
         vi.useRealTimers();
@@ -919,8 +902,7 @@ describe("private subagent completion processing receipts", () => {
         refusal.mockRestore();
       }
       agentCommandMock.mockImplementationOnce(processPrivateInput);
-      expect(await dispatch()).toMatchObject(processed);
-      expect(agentCommandMock).toHaveBeenCalledOnce();
+      await expectProcessed();
     },
   );
 
