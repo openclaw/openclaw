@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // budget; the limits are process constants, not per-backend configuration.
 import type { CliStreamJsonOutputLimits } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
+import { readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
@@ -86,21 +87,17 @@ export function measureClaudePartialMessage(
   );
 }
 
-// Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`, and the
-// parser keeps nothing from it but that id for progress: the subagent's answer reaches
-// the parent through the Agent tool result. Charging those records their size let a
-// 19-subagent research turn spend the 8 MiB budget on output it never kept and lose its
-// reply. A fixed per-record allowance keeps subagent floods bounded by the same budget.
+// Forwarded child message payloads are discarded; only their progress id survives.
+// Stream events can retain text even with child attribution, so keep their full charge.
 const CLAUDE_SUBAGENT_RECORD_CHARS = 64;
 
-/** Fixed charge for one forwarded subagent record; undefined for parent-lane records. */
-export function measureClaudeSubagentRecord(parsed: Record<string, unknown>): number | undefined {
-  const parentToolUseId = parsed.parent_tool_use_id;
-  if (
-    typeof parentToolUseId !== "string" ||
-    !parentToolUseId.trim() ||
-    parentToolUseId.length > 128
-  ) {
+/** Fixed charge only for child message records the parser discards. */
+function measureClaudeSubagentRecord(parsed: Record<string, unknown>): number | undefined {
+  if ((parsed.type !== "assistant" && parsed.type !== "user") || parsed.item != null) {
+    return undefined;
+  }
+  const parentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
+  if (!parentToolUseId || parentToolUseId.length > 128) {
     return undefined;
   }
   return CLAUDE_SUBAGENT_RECORD_CHARS;

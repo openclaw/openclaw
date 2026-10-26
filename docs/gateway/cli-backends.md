@@ -411,11 +411,11 @@ For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
 counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Records Claude Code forwards
-from its subagents (`parent_tool_use_id` set) are charged a fixed allowance each,
-because OpenClaw keeps only their parent id; the subagent's answer arrives through
-the Agent tool result. Single-line limits and bounded frame counts remain active,
-including for empty or unrecognized events and for subagent records.
+tool results still count toward the output budget. Forwarded subagent assistant
+messages and tool-result messages that the parser discards are charged a fixed
+allowance for their parent progress id. Child attribution alone does not earn
+that discount: retained stream-event text still counts toward the same 8 MiB
+output limit. Single-line limits and bounded frame counts remain active.
 
 Input modes:
 

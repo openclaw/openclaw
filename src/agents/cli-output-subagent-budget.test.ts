@@ -61,6 +61,25 @@ describe("Claude subagent output budget", () => {
     expect(parser.getOutput()?.text).toBe("");
   });
 
+  it("charges retained child-attributed text deltas against the parent budget", () => {
+    const parser = createParser();
+    for (let index = 0; index < 2; index += 1) {
+      parser.push(
+        `${JSON.stringify({
+          type: "stream_event",
+          parent_tool_use_id: AGENT_CALL,
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "r".repeat(4_300_000) },
+          },
+        })}\n`,
+      );
+    }
+    parser.finish();
+    expect(parser.getErrorText()).toMatch(/exceeded 8388608 characters/);
+  });
+
   it("still bounds a subagent flood by frames", () => {
     const { parser } = runTurn(AGENT_CALL, 20_001, 1);
     expect(parser.getErrorText()).toMatch(/exceeded 20000 lines/);
