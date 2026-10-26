@@ -105,6 +105,7 @@ async function startApproval() {
   });
   const client = makeClient(host);
   const ws = await connect(client);
+  const observed = vi.spyOn(client, "request");
   const settled = vi.fn();
   const sending = handleSendChat(host).then(settled);
   await vi.advanceTimersByTimeAsync(0);
@@ -112,13 +113,13 @@ async function startApproval() {
   expect(send.params).toMatchObject({ message, sessionKey: host.sessionKey });
   expect(host.chatMessage).toBe("");
   expect(host.chatSubmitGuards?.size).toBe(1);
-  return { host, client, ws, settled, sending, send, attachment, bytes, message };
+  return { host, client, ws, observed, settled, sending, send, attachment, bytes, message };
 }
 
 it.each(["unchanged", "newer input", "navigation", "account"] as const)(
   "settles the ACK deadline without replay or stale recovery after %s",
   async (change) => {
-    const { host, client, ws, settled, sending, send, attachment, bytes, message } =
+    const { host, client, ws, observed, settled, sending, send, attachment, bytes, message } =
       await startApproval();
     const originalSessionKey = host.sessionKey;
     const newerAttachment =
@@ -143,6 +144,16 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
     expect(client.connected).toBe(true);
     expect(settled).toHaveBeenCalledOnce();
     await sending;
+    const result = observed.mock.results[0]!;
+    if (result.type !== "return") {
+      throw new Error("chat.send did not return its protocol promise");
+    }
+    await expect(result.value).rejects.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    await expect(result.value).rejects.toMatchObject({
+      requestSent: true,
+      timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+      method: "chat.send",
+    });
     const expectedError =
       change === "unchanged" || change === "newer input"
         ? "gateway request timed out after 300000ms: chat.send"
@@ -185,25 +196,48 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
   },
 );
 
-it("preserves a known rejection after the ACK deadline", async () => {
-  const { host, ws, settled, sending, send, attachment, message } = await startApproval();
-  ws.emitMessage({
-    type: "res",
-    id: send.id,
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: "Approval rejected" },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(settled).toHaveBeenCalledOnce();
-  await sending;
-  expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
-  expectComposer(host, message, "Approval rejected");
-  await heartbeatUntilDeadline(ws);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(host.chatError).toBe("Approval rejected");
-  expect(settled).toHaveBeenCalledOnce();
-  expect(requests(ws, "chat.send")).toHaveLength(1);
-});
+it.each(["success", "terminal error", "known rejection"] as const)(
+  "preserves detached approval %s settlement before the ACK deadline",
+  async (outcome) => {
+    const { host, ws, settled, sending, send, attachment, message } = await startApproval();
+    if (outcome === "known rejection") {
+      ws.emitMessage({
+        type: "res",
+        id: send.id,
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "Approval rejected" },
+      });
+    } else {
+      respond(ws, send.id, {
+        status: outcome === "success" ? "started" : "error",
+        runId: "command-run",
+      });
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledOnce();
+    await sending;
+    if (outcome === "success") {
+      expectComposer(host, "", null);
+      expect(host.chatAttachments).toEqual([]);
+      expect(getChatAttachmentBlob(attachment)).toBeNull();
+    } else {
+      expect(host.chatAttachments).toMatchObject([{ id: attachment.id }]);
+      expectComposer(
+        host,
+        message,
+        outcome === "known rejection"
+          ? "Approval rejected"
+          : "Chat failed before the run started; try again.",
+      );
+    }
+    const previousError = host.chatError;
+    await heartbeatUntilDeadline(ws);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(host.chatError).toBe(previousError);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(requests(ws, "chat.send")).toHaveLength(1);
+  },
+);
 
 it("restores detached approval after a known unsent timeout", async () => {
   const error = new GatewayProtocolRequestTimeoutError({

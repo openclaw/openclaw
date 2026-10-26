@@ -7,6 +7,13 @@ import {
 } from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
+const updateIssue = {
+  code: "update-required",
+  action: "update-and-reconnect",
+  updateCommand: "openclaw update",
+  headlessReconnectCommand: "openclaw node restart",
+} as const;
+
 function node(overrides: Partial<DraftEnvironment>): DraftEnvironment {
   return {
     id: "node:runner",
@@ -31,14 +38,29 @@ describe("device placement projection", () => {
       undefined,
     ],
     [
+      "saturated host",
+      { workerSlots: { total: 2, available: 0 } },
+      "No worker slots are available. Wait for a slot or pick another device.",
+    ],
+    [
       "missing live capacity",
       { workerSlots: undefined },
       "Worker capacity is unavailable. Restart the device session host and try again.",
     ],
     [
+      "offline durable host",
+      { status: "unavailable", workerSlots: undefined },
+      "Device unavailable. Reconnect it and try again.",
+    ],
+    [
       "connected non-host",
       { sessionHost: false, workerSlots: undefined },
       "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
+    ],
+    [
+      "update required",
+      { issues: [updateIssue] },
+      "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
     ],
   ] satisfies [string, Partial<DraftEnvironment>, string | undefined][])(
     "projects %s with one canonical eligibility decision",
@@ -48,7 +70,12 @@ describe("device placement projection", () => {
           deviceId: "runner",
           label: "Build runner",
           selectable: reason === undefined,
-          facts: [...(reason ? [reason] : []), "macOS", "Camera"],
+          facts: [
+            ...(overrides.status === "unavailable" ? ["Never connected"] : []),
+            ...(reason ? [reason] : []),
+            "macOS",
+            "Camera",
+          ],
           ...(reason ? { disabledReason: reason } : {}),
         },
       ]);
@@ -83,6 +110,20 @@ describe("device placement projection", () => {
       facts: [message, "macOS", "Camera"],
     });
     expect(resolveAutomaticDevicePlacementDisabledReason(environments, devices)).toBe(message);
+  });
+
+  it("adds short device ids only when labels collide", () => {
+    expect(
+      projectDevicePlacements([
+        node({ id: "node:unique", label: "Unique runner" }),
+        node({ id: "node:alpha-device", label: "Duplicate runner" }),
+        node({ id: "node:beta-device", label: "Duplicate runner" }),
+      ]).map(({ deviceId, subtitle }) => ({ deviceId, subtitle })),
+    ).toEqual([
+      { deviceId: "alpha-device", subtitle: "alpha-de" },
+      { deviceId: "beta-device", subtitle: "beta-dev" },
+      { deviceId: "unique", subtitle: undefined },
+    ]);
   });
 
   const command = "codex.exec-server.stdio.v1";

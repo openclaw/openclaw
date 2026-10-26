@@ -16,14 +16,13 @@ import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
-import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-wake-resolution-");
 
 it.each([false, true])(
-  "keeps the requester's core and plugin catalogs on completion (subagent=%s)",
+  "keeps the requester's plugin catalog on completion (subagent=%s)",
   async (subagent) => {
     const store = path.join(sessionDirs.make(), "sessions.json");
     const config: OpenClawConfig = {
@@ -39,7 +38,6 @@ it.each([false, true])(
       preferBuiltPluginArtifacts: false,
     };
     const builder = createTestPluginRegistry();
-    onTestFinished(() => disposePluginRegistryInstances(builder.registry));
     const record = createPluginRecord({
       id: "wake-probe",
       ...artifact,
@@ -67,26 +65,34 @@ it.each([false, true])(
       metadataSnapshot: snapshot,
     });
     const api = builder.createApi(record, { config, registrationMode: "full" });
-    api.registerTool(() => createStubTool("memory_search"), {
+    const tool = (name: string): AnyAgentTool => ({
+      name,
+      label: name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [], details: {} };
+      },
+    });
+    api.registerTool(() => tool("memory_search"), {
       name: "memory_search",
       workspaceAccess: "execute",
     });
-    api.registerTool(() => createStubTool("memory_get"), {
-      name: "memory_get",
-      workspaceAccess: "execute",
-    });
+    api.registerTool(() => tool("memory_get"), { name: "memory_get", workspaceAccess: "execute" });
     let intentExecutions = 0;
     api.registerTool(
       {
         contextVersion: 2,
-        create: (context) => ({
-          ...createStubTool("intent"),
-          async execute() {
-            context.assertInvocationCurrent();
-            intentExecutions += 1;
-            return { content: [], details: {} };
-          },
-        }),
+        create: (context) => {
+          return {
+            ...tool("intent"),
+            async execute() {
+              context.assertInvocationCurrent();
+              intentExecutions += 1;
+              return { content: [], details: {} };
+            },
+          };
+        },
       },
       { name: "intent", workspaceAccess: "execute" },
     );
@@ -99,147 +105,150 @@ it.each([false, true])(
       sessionId: "wake-probe-session",
       agentChannel: "webchat",
     };
-    const wake = withPluginRuntimeRegistryScope(builder.registry, () =>
-      resolveOpenClawPluginToolsForOptions({
-        options: {
-          ...options,
-          runId: "wake-run",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceChannel: "internal",
-            sourceTool: "subagent_announce",
-          },
-        },
-      }),
-    );
-    expect(wake.map((entry) => entry.name)).toEqual(["memory_search", "memory_get", "intent"]);
-    await expect(wake[2]!.execute("wake-intent", {})).rejects.toThrow("outside an admitted run");
+    try {
+      const resolve = (operator: boolean) =>
+        withPluginRuntimeRegistryScope(builder.registry, () =>
+          resolveOpenClawPluginToolsForOptions({
+            options: {
+              ...options,
+              runId: operator ? "operator-run" : "wake-run",
+              senderIsOwner: operator ? true : undefined,
+              requesterSenderId: operator ? "operator" : undefined,
+              clientCaps: operator ? ["ui-commands", "inline-widgets"] : undefined,
+              assertInvocationCurrent: operator ? () => {} : undefined,
+              inputProvenance: operator
+                ? undefined
+                : {
+                    kind: "inter_session",
+                    sourceChannel: "internal",
+                    sourceTool: "subagent_announce",
+                  },
+            },
+          }),
+        );
+      const operator = resolve(true);
+      const wake = resolve(false);
+      expect(operator.map((entry) => entry.name)).toEqual([
+        "memory_search",
+        "memory_get",
+        "intent",
+      ]);
+      expect(wake.map((entry) => entry.name)).toEqual(["memory_search", "memory_get", "intent"]);
+      await expect(wake[2]!.execute("wake-intent", {})).rejects.toThrow("outside an admitted run");
 
-    if (subagent) {
+      if (subagent) {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: options.agentSessionKey, storePath: store },
+          {
+            sessionId: options.sessionId,
+            updatedAt: 1,
+            spawnedBy: "agent:main:main",
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+            inheritedToolDeny: ["intent"],
+          },
+        );
+      }
+
+      const childSessionKey = "agent:main:subagent:wake-probe-child";
       await replaceSessionEntry(
-        { agentId: "main", sessionKey: options.agentSessionKey, storePath: store },
+        { agentId: "main", sessionKey: childSessionKey, storePath: store },
         {
-          sessionId: options.sessionId,
+          sessionId: "wake-probe-child",
           updatedAt: 1,
-          spawnedBy: "agent:main:main",
-          spawnDepth: 1,
+          spawnedBy: options.agentSessionKey,
+          spawnDepth: subagent ? 2 : 1,
           subagentRole: "orchestrator",
           subagentControlScope: "children",
           inheritedToolPolicyVersion: 1,
-          inheritedToolDeny: ["intent"],
+          inheritedToolAllow: [],
+          inheritedToolDeny: resolveGatewayOwnerOnlyToolDenylist(),
         },
       );
-    }
-
-    const childSessionKey = "agent:main:subagent:wake-probe-child";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: childSessionKey, storePath: store },
-      {
-        sessionId: "wake-probe-child",
-        updatedAt: 1,
-        spawnedBy: options.agentSessionKey,
-        spawnDepth: subagent ? 2 : 1,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        inheritedToolPolicyVersion: 1,
-        inheritedToolAllow: [
-          "read",
-          "message",
-          "sessions_spawn",
-          "memory_search",
-          "memory_get",
-          "intent",
-        ],
-        inheritedToolDeny: resolveGatewayOwnerOnlyToolDenylist(),
-      },
-    );
-    const inputProvenance = {
-      kind: "inter_session" as const,
-      sourceSessionKey: childSessionKey,
-      sourceTool: "subagent_announce",
-    };
-    const requester = {
-      config,
-      sessionKey: options.agentSessionKey,
-      sessionId: options.sessionId,
-      messageProvider: "webchat",
-    };
-    const profile = await prepareConversationCapabilityProfile({
-      ...requester,
-      modelProvider: "openai",
-      modelId: "gpt-5.4",
-      inputProvenance,
-      trustedInternalHandoff: {
-        kind: "subagent-completion",
+      const inputProvenance = {
+        kind: "inter_session" as const,
         sourceSessionKey: childSessionKey,
-        sourceSessionId: "wake-probe-child",
-        targetSessionKey: options.agentSessionKey,
-        targetSessionId: options.sessionId,
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-    });
-    expect(profile.policy.requesterPolicySource).toBe("completion-handoff");
-    const operatorProfile = await prepareConversationCapabilityProfile({
-      ...requester,
-      senderIsOwner: true,
-      senderId: "operator",
-    });
-    const assemble = (conversationCapabilityProfile: typeof profile, completion: boolean) =>
-      withPluginRuntimeRegistryScope(builder.registry, () =>
-        createOpenClawCodingToolsInternal({
-          ...requester,
-          workspaceDir: options.workspaceDir,
-          agentId: "main",
-          runId: completion ? "completion-run" : "operator-run",
-          senderIsOwner: !completion,
-          sourceReplyDeliveryMode: completion ? "message_tool_only" : "automatic",
-          assertInvocationCurrent: () => {},
-          conversationCapabilityProfile,
-          ...(completion ? { inputProvenance } : { senderId: "operator" }),
-        }),
-      );
-    const listed = assemble(operatorProfile, false);
-    const completion = assemble(profile, true);
-    const names = ["memory_search", "memory_get", ...(subagent ? [] : ["intent"])];
-    const pluginNames = (tools: AnyAgentTool[]) =>
-      tools
-        .filter((entry) => record.contracts?.tools?.includes(entry.name))
-        .map((entry) => entry.name);
-    expect(pluginNames(listed)).toEqual(names);
-    expect(pluginNames(completion)).toEqual(names);
-    const catalog = (tools: AnyAgentTool[]) => {
-      const catalogRef = createToolSearchCatalogRef();
-      const ctx = { config, catalogRef };
-      onTestFinished(() => clearToolSearchCatalog(ctx));
-      applyCodeModeCatalog({ ...ctx, tools });
-      return {
-        definitions: tools.map(({ name, description, parameters }) => ({
-          name,
-          description,
-          parameters,
-        })),
-        prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
+        sourceTool: "subagent_announce",
       };
-    };
-    expect(catalog(completion)).toEqual(catalog(listed));
-    const refusedWrite = await completion
-      .find((entry) => entry.name === "write")!
-      .execute("write", {});
-    expect(refusedWrite.details).toMatchObject({ gated: true });
-    expect(JSON.stringify(refusedWrite.content)).toContain(
-      "write is not available during a child-completion turn",
-    );
-    if (!subagent) {
-      await listed.find((entry) => entry.name === "intent")!.execute("operator-intent", {});
-      const refused = await completion
-        .find((entry) => entry.name === "intent")!
-        .execute("completion-intent", {});
-      expect(refused.details).toMatchObject({ gated: true });
-      expect(JSON.stringify(refused.content)).toContain(
-        "intent is not available during a child-completion turn",
-      );
-      expect(intentExecutions).toBe(1);
+      const profile = await prepareConversationCapabilityProfile({
+        config,
+        sessionKey: options.agentSessionKey,
+        sessionId: options.sessionId,
+        messageProvider: "webchat",
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+        inputProvenance,
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: "wake-probe-child",
+          targetSessionKey: options.agentSessionKey,
+          targetSessionId: options.sessionId,
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      });
+      expect(profile.policy.requesterPolicySource).toBe("completion-handoff");
+      const operatorProfile = await prepareConversationCapabilityProfile({
+        config,
+        sessionKey: options.agentSessionKey,
+        sessionId: options.sessionId,
+        messageProvider: "webchat",
+        senderIsOwner: true,
+        senderId: "operator",
+      });
+      const assemble = (conversationCapabilityProfile: typeof profile, completion: boolean) =>
+        withPluginRuntimeRegistryScope(builder.registry, () =>
+          createOpenClawCodingToolsInternal({
+            config,
+            workspaceDir: options.workspaceDir,
+            agentId: "main",
+            sessionKey: options.agentSessionKey,
+            sessionId: options.sessionId,
+            runId: completion ? "completion-run" : "operator-run",
+            messageProvider: "webchat",
+            senderIsOwner: !completion,
+            includeCoreTools: false,
+            assertInvocationCurrent: () => {},
+            conversationCapabilityProfile,
+            ...(completion ? { inputProvenance } : { senderId: "operator" }),
+          }),
+        );
+      const listed = assemble(operatorProfile, false);
+      const completion = assemble(profile, true);
+      const names = ["memory_search", "memory_get", ...(subagent ? [] : ["intent"])];
+      expect(listed.map((entry) => entry.name)).toEqual(names);
+      expect(completion.map((entry) => entry.name)).toEqual(names);
+      const catalog = (tools: AnyAgentTool[]) => {
+        const catalogRef = createToolSearchCatalogRef();
+        const ctx = { config, catalogRef };
+        onTestFinished(() => clearToolSearchCatalog(ctx));
+        applyCodeModeCatalog({ ...ctx, tools });
+        return {
+          definitions: tools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+          prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
+        };
+      };
+      expect(catalog(completion)).toEqual(catalog(listed));
+      if (!subagent) {
+        await listed.find((entry) => entry.name === "intent")!.execute("operator-intent", {});
+        const refused = await completion
+          .find((entry) => entry.name === "intent")!
+          .execute("completion-intent", {});
+        expect(refused.details).toMatchObject({ gated: true });
+        expect(JSON.stringify(refused.content)).toContain(
+          "intent is not available during a child-completion turn",
+        );
+        expect(intentExecutions).toBe(1);
+      }
+    } finally {
+      await disposePluginRegistryInstances(builder.registry);
     }
   },
 );

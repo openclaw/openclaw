@@ -1,4 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-registry-queries.js";
 import {
   registryRuntimeMock,
@@ -12,43 +16,14 @@ import {
   makeSettledChild,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-afterEach(() => vi.useRealTimers());
-
-const yieldedWake = (batchRunIds: string[]) => ({
-  status: "pending" as const,
-  attemptCount: 0,
-  requesterYieldBatch: true,
-  rearmGeneration: 1,
-  batchRunIds,
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ session: { mainKey: "main", scope: "per-sender" } });
 });
-function observeRuns(
-  children: ReturnType<typeof makeSettledChild>[],
-  deliveryWaitUntil?: number,
-  active?: number,
-) {
-  const runs = new Map(children.map((entry) => [entry.runId, entry]));
-  registryRuntimeMock.listSubagentRunsForRequester.mockImplementation((key) =>
-    children.filter((entry) => entry.requesterSessionKey === key),
-  );
-  readDescendantFacts.mockImplementation(async (params) => {
-    const index = buildScopedSubagentRunReadIndexFromRuns(
-      runs,
-      params.requesterSessionKey,
-      params.requesterAgentId,
-      params.requesterStorePath,
-      params.rootRunIds,
-    );
-    return {
-      deliveryWaitUntil,
-      unsettled: index.hasDescendantRunAwaitingSettle(
-        params.requesterSessionKey,
-        params.settledEntry.runId,
-        params.settledBefore,
-      ),
-      active: active ?? index.countActiveDescendantRuns(params.requesterSessionKey),
-    };
-  });
-}
+
+afterEach(() => {
+  vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
+});
 
 it.each(["older batch", "cross-agent descendant", "paused member", "pending cleanup"] as const)(
   "waits only for owned work: %s",
@@ -64,7 +39,13 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
       createdAt: now - 100,
       endedAt: now,
       completion: { required: true, terminalReply: { disposition: "empty" } },
-      requesterSettleWake: yieldedWake(sameBatch ? ["short", "long"] : ["short"]),
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        batchRunIds: sameBatch ? ["short", "long"] : ["short"],
+      },
     });
     const long = makeSettledChild({
       runId: "long",
@@ -79,9 +60,39 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
           : { status: "running", startedAt: now - 200 },
       ...(scenario === "paused member" ? { pauseReason: "sessions_yield" as const } : {}),
       ...(scenario === "pending cleanup" ? { delivery: { status: "pending" as const } } : {}),
-      requesterSettleWake: yieldedWake(sameBatch ? ["short", "long"] : ["long"]),
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        batchRunIds: sameBatch ? ["short", "long"] : ["long"],
+      },
     });
-    observeRuns([short, long], now + 300_000);
+    const runs = new Map([short, long].map((entry) => [entry.runId, entry]));
+    registryRuntimeMock.listSubagentRunsForRequester.mockImplementation((key) =>
+      [...runs.values()].filter((entry) => entry.requesterSessionKey === key),
+    );
+    readDescendantFacts.mockImplementation(async (params) => ({
+      deliveryWaitUntil: now + 300_000,
+      unsettled: buildScopedSubagentRunReadIndexFromRuns(
+        runs,
+        params.requesterSessionKey,
+        params.requesterAgentId,
+        params.requesterStorePath,
+        params.rootRunIds,
+      ).hasDescendantRunAwaitingSettle(
+        params.requesterSessionKey,
+        params.settledEntry.runId,
+        params.settledBefore,
+      ),
+      active: buildScopedSubagentRunReadIndexFromRuns(
+        runs,
+        params.requesterSessionKey,
+        params.requesterAgentId,
+        params.requesterStorePath,
+        params.rootRunIds,
+      ).countActiveDescendantRuns(params.requesterSessionKey),
+    }));
     const early = scenario === "older batch";
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short })),
@@ -95,11 +106,15 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
     long.execution = { status: "terminal", startedAt: now - 200, endedAt: now + 1 };
     long.pauseReason = undefined;
     long.cleanupCompletedAt = now + 1;
-    expect(
-      await maybeWakeRequesterAfterAllChildrenSettled(
-        wakeParams({ settledEntry: short.requesterSettleWake ? short : long }),
-      ),
-    ).toBe(true);
+    if (short.requesterSettleWake) {
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: short })),
+      ).toBe(true);
+    } else {
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: long })),
+      ).toBe(true);
+    }
     expect(deliverSpy).toHaveBeenCalledTimes(early ? 2 : 1);
   },
 );
@@ -143,7 +158,22 @@ it.each([
       execution: { status: "running", startedAt: now - 200 },
       requesterSettleWake: undefined,
     });
-    observeRuns([...children, long], undefined, 1);
+    const runs = new Map([...children, long].map((entry) => [entry.runId, entry]));
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([...runs.values()]);
+    readDescendantFacts.mockImplementation(async (params) => ({
+      unsettled: buildScopedSubagentRunReadIndexFromRuns(
+        runs,
+        params.requesterSessionKey,
+        params.requesterAgentId,
+        params.requesterStorePath,
+        params.rootRunIds,
+      ).hasDescendantRunAwaitingSettle(
+        params.requesterSessionKey,
+        params.settledEntry.runId,
+        params.settledBefore,
+      ),
+      active: 1,
+    }));
 
     await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[0] }));
 

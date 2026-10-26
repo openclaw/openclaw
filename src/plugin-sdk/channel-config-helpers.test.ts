@@ -45,10 +45,18 @@ const credentialsAndSettings = {
   channels: { demo: { token: "secret", markdown: { tables: false } } },
 };
 
-const configWritesCfg = {
-  channels: { telegram: { configWrites: true, accounts: { Work: { configWrites: false } } } },
-};
-const workScope = { channelId: "telegram", accountId: "work" };
+function createConfigWritesCfg() {
+  return {
+    channels: {
+      telegram: {
+        configWrites: true,
+        accounts: {
+          Work: { configWrites: false },
+        },
+      },
+    },
+  };
+}
 
 function expectAdapterAllowFromAndDefaultTo(
   channelAdapter: Pick<
@@ -127,19 +135,31 @@ describe("channel DM access helpers", () => {
 
 describe("config write helpers", () => {
   it("matches account ids case-insensitively", () => {
-    expect(resolveChannelConfigWrites({ cfg: configWritesCfg, ...workScope })).toBe(false);
+    expect(
+      resolveChannelConfigWrites({
+        cfg: createConfigWritesCfg(),
+        channelId: "telegram",
+        accountId: "work",
+      }),
+    ).toBe(false);
   });
 
   it("blocks account-scoped writes when the configured account key differs only by case", () => {
     expect(
       authorizeConfigWrite({
-        cfg: configWritesCfg,
-        target: { kind: "account", scope: workScope },
+        cfg: createConfigWritesCfg(),
+        target: {
+          kind: "account",
+          scope: { channelId: "telegram", accountId: "work" },
+        },
       }),
     ).toEqual({
       allowed: false,
       reason: "target-disabled",
-      blockedScope: { kind: "target", scope: workScope },
+      blockedScope: {
+        kind: "target",
+        scope: { channelId: "telegram", accountId: "work" },
+      },
     });
   });
 });
@@ -196,10 +216,14 @@ describe("createScopedChannelConfigAdapter", () => {
   it("requires a producer for a distinct accessor account shape", () => {
     type RuntimeAccount = { token: string };
     type AccessorAccount = { allowFrom: string[] };
-    type MissingProjection = Omit<typeof namedAccountBase, "resolveAccount"> & {
+    type MissingProjection = {
+      sectionKey: string;
+      listAccountIds: () => string[];
       resolveAccount: () => RuntimeAccount;
+      defaultAccountId: () => string;
+      clearBaseFields: string[];
       resolveAllowFrom: (account: AccessorAccount) => string[];
-      formatAllowFrom: typeof mapAllowFromEntries;
+      formatAllowFrom: (entries: Array<string | number>) => string[];
     };
     expectTypeOf<MissingProjection>().not.toMatchTypeOf<
       Parameters<typeof createScopedChannelConfigAdapter<RuntimeAccount, AccessorAccount>>[0]
@@ -332,8 +356,10 @@ it("createTopLevelChannelConfigBase wires top-level enable/delete semantics", ()
   expect(base.defaultAccountId!({})).toBe("default");
   expect(base.setAccountEnabled!(enableDefault).channels?.demo).toEqual({ enabled: true });
   expect(
-    base.deleteAccount!({ ...defaultAccount, cfg: { channels: { demo: { enabled: true } } } })
-      .channels,
+    base.deleteAccount!({
+      cfg: { channels: { demo: { enabled: true } } },
+      accountId: "default",
+    }).channels,
   ).toBeUndefined();
 });
 
@@ -378,7 +404,13 @@ it("createHybridChannelConfigBase enables default at root and named accounts und
     accounts: { alt: { enabled: false } },
     enabled: true,
   });
-  expect(base.setAccountEnabled!({ ...enableDefault, accountId: "alt" }).channels?.demo).toEqual({
+  expect(
+    base.setAccountEnabled!({
+      cfg: {},
+      accountId: "alt",
+      enabled: true,
+    }).channels?.demo,
+  ).toEqual({
     accounts: { alt: { enabled: true } },
   });
 });
