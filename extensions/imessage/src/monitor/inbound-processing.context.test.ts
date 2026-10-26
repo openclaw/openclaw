@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import {
@@ -12,7 +11,6 @@ type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
-const cfg = {} as OpenClawConfig;
 
 beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
@@ -21,30 +19,30 @@ beforeAll(async () => {
 });
 
 function resolveDecision(overrides: Parameters<typeof createInboundDecisionParams>[0] = {}) {
-  return resolveIMessageInboundDecision(createInboundDecisionParams({ cfg, ...overrides }));
+  return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
 }
 
 async function buildContext(
   messageOverrides: Partial<InboundDecisionParams["message"]>,
   overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  const { message } = createInboundDecisionParams({ message: messageOverrides });
-  const admitted = await resolveDecision({ ...overrides, message });
+  const params = createInboundDecisionParams({ ...overrides, message: messageOverrides });
+  const admitted = await resolveIMessageInboundDecision(params);
   expect(admitted.kind).toBe("dispatch");
   if (admitted.kind !== "dispatch") {
     throw new Error("expected context fixture admission");
   }
   return buildIMessageInboundContext({
-    cfg,
+    cfg: params.cfg,
     accountService: undefined,
     decision: admitted,
-    message,
-    historyLimit: 0,
-    groupHistories: new Map(),
+    message: params.message,
+    historyLimit: params.historyLimit,
+    groupHistories: params.groupHistories,
   });
 }
 
-describe("buildIMessageInboundContext presentation", () => {
+describe("iMessage inbound context and admission", () => {
   it.each([
     [
       { sender_name: "Alice", chat_name: "" },
@@ -65,9 +63,6 @@ describe("buildIMessageInboundContext presentation", () => {
     expect(actual).toMatchObject({ fromLabel, ctxPayload });
     expect(actual.ctxPayload.CommandSource).toBeUndefined();
   });
-});
-
-describe("resolveIMessageInboundDecision command auth", () => {
   it("treats a failed pairing read as an empty allowlist", async () => {
     await expect(
       resolveDecision({
@@ -81,12 +76,12 @@ describe("resolveIMessageInboundDecision command auth", () => {
   });
 
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    const decision = await resolveDecision({
-      message: { id: 100, text: "/status" },
-      allowFrom: [],
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
+    expect(
+      await resolveDecision({
+        message: { id: 100, text: "/status" },
+        allowFrom: [],
+      }),
+    ).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
   it("marks authorized iMessage control commands as text command turns", async () => {
@@ -106,9 +101,6 @@ describe("resolveIMessageInboundDecision command auth", () => {
       CommandTurn: { kind: "text-slash", source: "text", authorized: true, commandName: "new" },
     });
   });
-});
-
-describe("iMessage bot-owned thread mention policy", () => {
   const rootGuid = "imessage-bot-thread-root";
 
   beforeAll(async () => {
@@ -133,10 +125,7 @@ describe("iMessage bot-owned thread mention policy", () => {
         channels: {
           imessage: {
             groupPolicy: "open",
-            groups: {
-              "*": { requireMention: true, requireMentionInBotThreads: false },
-              "123": {},
-            },
+            groups: { "*": { requireMention: true, requireMentionInBotThreads: false }, "123": {} },
           },
         },
       },

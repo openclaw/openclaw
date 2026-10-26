@@ -44,11 +44,11 @@ describe("deliverIMessageReply", () => {
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
   const remember = vi.fn();
   const destination = { target: "chat_id:20", accountId: "acct-2" };
-  const deliveryDefaults = { cfg, runtime, textLimit: 4000, maxBytes: 2048, ...destination };
+  const defaults = { cfg, runtime, textLimit: 4000, maxBytes: 2048, ...destination };
   const deliver = (
     payload: Parameters<typeof deliverIMessageReply>[0]["payload"],
     options: Partial<Parameters<typeof deliverIMessageReply>[0]> = {},
-  ) => deliverIMessageReply({ ...deliveryDefaults, payload, ...options });
+  ) => deliverIMessageReply({ ...defaults, payload, ...options });
 
   beforeAll(async () => {
     ({ createIMessageEchoCachingSend, deliverIMessageReply } = await import("./deliver.js"));
@@ -66,20 +66,28 @@ describe("deliverIMessageReply", () => {
   });
 
   it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
+    const mediaUrl = "https://example.com/voice.caf";
+    const media = { contentType: "audio/x-caf", kind: "audio" };
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-media-1",
+      sentText: "",
+      echoMedia: media,
+      receipt: createTestIMessageReceipt("imsg-media-1", "media"),
+    });
     await deliver(
-      { mediaUrl: "https://example.com/voice.caf", audioAsVoice: true },
-      { maxBytes: 8192 },
+      { mediaUrl, audioAsVoice: true },
+      { maxBytes: 8192, sentMessageCache: { remember } },
     );
 
     expect(sendMessageIMessageMock).toHaveBeenCalledWith(
       "chat_id:20",
       "",
-      expect.objectContaining({
-        accountId: "acct-2",
-        audioAsVoice: true,
-        mediaUrl: "https://example.com/voice.caf",
-      }),
+      expect.objectContaining({ accountId: "acct-2", audioAsVoice: true, mediaUrl }),
     );
+    expect(remember).toHaveBeenCalledWith("acct-2:chat_id:20", {
+      media,
+      messageId: "imsg-media-1",
+    });
   });
 
   it("sanitizes durable outbound text before sending", async () => {
@@ -97,10 +105,7 @@ describe("deliverIMessageReply", () => {
     expect(sendMessageIMessageMock).toHaveBeenCalledExactlyOnceWith(
       "chat_id:60",
       "Visible reply",
-      expect.objectContaining({
-        config: cfg,
-        accountId: "acct-ignored",
-      }),
+      expect.objectContaining({ config: cfg, accountId: "acct-ignored" }),
     );
     expect(remember).toHaveBeenCalledWith("acct-6:chat_id:60", {
       text: "Visible reply",
@@ -121,22 +126,6 @@ describe("deliverIMessageReply", () => {
       ["acct-2:chat_id:20", { text: "first", messageId: "imsg-1" }],
       ["acct-2:chat_id:20", { text: "second", messageId: "imsg-2" }],
     ]);
-  });
-
-  it("records the internal echo key for media-only replies", async () => {
-    sendMessageIMessageMock.mockResolvedValueOnce({
-      messageId: "imsg-media-1",
-      sentText: "",
-      echoMedia: { contentType: "image/jpeg", kind: "image" },
-      receipt: createTestIMessageReceipt("imsg-media-1", "media"),
-    });
-
-    await deliver({ mediaUrls: ["https://example.com/a.jpg"] }, { sentMessageCache: { remember } });
-
-    expect(remember).toHaveBeenCalledWith("acct-2:chat_id:20", {
-      media: { contentType: "image/jpeg", kind: "image" },
-      messageId: "imsg-media-1",
-    });
   });
 
   it("preserves earlier media receipts when a later native caption fails", async () => {
@@ -180,10 +169,7 @@ describe("deliverIMessageReply", () => {
   });
 
   it("returns a recorded non-visible outcome when sanitization removes the complete reply", async () => {
-    const delivered = await deliver(
-      { text: "<thinking>private reasoning</thinking>" },
-      { maxBytes: 4096 },
-    );
+    const delivered = await deliver({ text: "<thinking>private reasoning</thinking>" });
 
     expect(sendMessageIMessageMock).not.toHaveBeenCalled();
     expect(delivered).toEqual({

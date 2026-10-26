@@ -27,9 +27,7 @@ function mockClient(chats: Array<{ id: number; messages: Record<string, unknown>
       return { chats: chats.map((chat) => ({ id: chat.id })) };
     }
     if (method === "messages.history") {
-      return {
-        messages: chats.find((chat) => chat.id === params?.chat_id)?.messages ?? [],
-      };
+      return { messages: chats.find((chat) => chat.id === params?.chat_id)?.messages ?? [] };
     }
     throw new Error(`unexpected method ${method}`);
   });
@@ -76,7 +74,6 @@ describe("repairIMessageConversationAnchor", () => {
   });
 
   it("recovers the full authoritative projection from recent history by GUID", async () => {
-    const message = anchorlessMessage();
     const authoritative = {
       chat_id: 349,
       chat_guid: "iMessage;+;chat349",
@@ -92,7 +89,7 @@ describe("repairIMessageConversationAnchor", () => {
       chat(100, { guid: "OTHER-GUID", chat_id: 100, is_group: true }),
       chat(349, { guid: "ANCHORLESS-GUID-1", ...authoritative }),
     ]);
-    expect(await repair(client, message)).toMatchObject(authoritative);
+    expect(await repair(client)).toMatchObject(authoritative);
   });
 
   it("clears stale destination_caller_id on the monitor path when history omits it", async () => {
@@ -100,21 +97,12 @@ describe("repairIMessageConversationAnchor", () => {
       await import("./inbound-processing.js");
     const message = anchorlessMessage({
       guid: "33333333-3333-4333-8333-333333333333",
-      sender: "+15550000001",
-      destination_caller_id: "+15550000001",
     });
     const client = mockClient([
-      chat(
-        42,
-        historyRow(42, {
-          guid: message.guid,
-          destination_caller_id: undefined,
-        }),
-      ),
+      chat(42, historyRow(42, { guid: message.guid, destination_caller_id: undefined })),
     ]);
     const repaired = await repair(client, message);
-    expect(repaired?.sender).toBe("+15550000002");
-    expect(repaired?.destination_caller_id ?? null).toBeNull();
+    expect(repaired).toMatchObject({ sender: "+15550000002", destination_caller_id: null });
 
     const decision = await resolveIMessageInboundDecision(
       createInboundDecisionParams({ message: repaired! }),
@@ -125,7 +113,7 @@ describe("repairIMessageConversationAnchor", () => {
     }
 
     const { imessageTo, ctxPayload } = await buildIMessageInboundContext({
-      cfg: {} as never,
+      cfg: {},
       accountService: undefined,
       decision,
       message: repaired!,
