@@ -142,25 +142,19 @@ async function mountedBridge(
   table: string,
   extraMounts: { Type: string; Source: string; Destination: string; RW: boolean }[] = [],
 ) {
+  const inspected = {
+    Mounts: [
+      mount("bind", "/host/project", "/workspace"),
+      ...extraMounts,
+      ...binds.map(({ source, target, writable }) => mount("bind", source, target, writable)),
+    ],
+    Tmpfs: tmpfs,
+  };
+  const baseMounts =
+    "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /project /workspace rw - ext4 /dev/root rw\n";
   mocks.execContainer
-    .mockResolvedValueOnce(
-      engineResult(
-        JSON.stringify({
-          Mounts: [
-            mount("bind", "/host/project", "/workspace"),
-            ...extraMounts,
-            ...binds.map(({ source, target, writable }) => mount("bind", source, target, writable)),
-          ],
-          Tmpfs: tmpfs,
-        }),
-      ),
-    )
-    .mockResolvedValueOnce(
-      engineResult(
-        "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /project /workspace rw - ext4 /dev/root rw\n" +
-          table,
-      ),
-    );
+    .mockResolvedValueOnce(engineResult(JSON.stringify(inspected)))
+    .mockResolvedValueOnce(engineResult(baseMounts + table));
   const backend = await createDockerExecBackend();
   return backend.createFsBridge!({
     sandbox: {
@@ -458,12 +452,7 @@ it("stages exec environment privately until finalization", async () => {
   const requestedPath = "$(touch /tmp/openclaw-path-injection)";
   const backend = await createDockerExecBackend();
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
-    expect.objectContaining({
-      scopeKey,
-      readOnlyResourceMounts: [
-        { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
-      ],
-    }),
+    expect.objectContaining({ scopeKey, readOnlyResourceMounts }),
   );
 
   const execSpec = await backend.buildExecSpec({

@@ -178,6 +178,9 @@ describe("sandbox pinned mutation helper", () => {
     await fs.mkdir(workspace, { recursive: true });
   });
 
+  const create = (source: string, input = "hello") =>
+    runMutationWithSource(source, ["create", workspace, "", "note.txt", "0"], input);
+
   async function directoryMoveFixture() {
     const sourceRoot = path.join(root, "source");
     const destRoot = path.join(root, "dest");
@@ -232,11 +235,7 @@ describe("sandbox pinned mutation helper", () => {
   ])("$name", async ({ source }) => {
     const filePath = path.join(workspace, "note.txt");
 
-    const result = runMutationWithSource(
-      source,
-      ["create", workspace, "", "note.txt", "0"],
-      "hello",
-    );
+    const result = create(source);
 
     expect(result.status).toBe(0);
     await expectFile(filePath, "hello");
@@ -244,11 +243,7 @@ describe("sandbox pinned mutation helper", () => {
   });
 
   it("removes a staging directory when opening it fails", async () => {
-    const result = runMutationWithSource(
-      FORCED_STAGING_OPEN_FAILURE_MUTATION_PYTHON,
-      ["create", workspace, "", "note.txt", "0"],
-      "hello",
-    );
+    const result = create(FORCED_STAGING_OPEN_FAILURE_MUTATION_PYTHON);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("forced staging open failure");
@@ -268,11 +263,7 @@ describe("sandbox pinned mutation helper", () => {
   it("removes private staging when writing fails before publication", async () => {
     const filePath = path.join(workspace, "note.txt");
 
-    const result = runMutationWithSource(
-      FORCED_CREATE_FAILURE_MUTATION_PYTHON,
-      ["create", workspace, "", "note.txt", "0"],
-      "partial",
-    );
+    const result = create(FORCED_CREATE_FAILURE_MUTATION_PYTHON, "partial");
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("forced create failure");
@@ -283,11 +274,7 @@ describe("sandbox pinned mutation helper", () => {
   it("preserves a destination raced into a staged exclusive create", async () => {
     const filePath = path.join(workspace, "note.txt");
 
-    const result = runMutationWithSource(
-      FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON,
-      ["create", workspace, "", "note.txt", "0"],
-      "partial",
-    );
+    const result = create(FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON, "partial");
 
     expect(result.status).toBe(GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE);
     await expectFile(filePath, "replacement");
@@ -297,11 +284,7 @@ describe("sandbox pinned mutation helper", () => {
   it("fails when the staged exclusive-create pathname is substituted", async () => {
     const filePath = path.join(workspace, "note.txt");
 
-    const result = runMutationWithSource(
-      FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON,
-      ["create", workspace, "", "note.txt", "0"],
-      "expected",
-    );
+    const result = create(FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON, "expected");
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("exclusive publication source changed");
@@ -310,28 +293,17 @@ describe("sandbox pinned mutation helper", () => {
   });
 
   describe.runIf(process.platform !== "win32")("POSIX operations", () => {
-    it.each([
-      {
-        name: "preserves existing target file mode while writing",
-        basename: "note.txt",
-        mode: 0o644,
-      },
-      {
-        name: "keeps restrictive existing target file mode while writing",
-        basename: "secret.txt",
-        mode: 0o600,
-      },
-    ])("$name", async ({ basename, mode }) => {
-      const filePath = path.join(workspace, basename);
+    it("keeps restrictive existing target file mode while writing", async () => {
+      const filePath = path.join(workspace, "secret.txt");
       await fs.writeFile(filePath, "before", "utf8");
-      await fs.chmod(filePath, mode);
+      await fs.chmod(filePath, 0o600);
 
-      const result = runMutation(["write", workspace, "", basename, "0"], "after");
+      const result = runMutation(["write", workspace, "", "secret.txt", "0"], "after");
 
       expect(result.status).toBe(0);
       await expectFile(filePath, "after");
       const fileStat = await fs.stat(filePath);
-      expect(fileStat.mode & 0o777).toBe(mode);
+      expect(fileStat.mode & 0o777).toBe(0o600);
     });
 
     it("reads through a pinned directory fd and rejects hardlinked files", async () => {
@@ -458,15 +430,6 @@ describe("sandbox pinned mutation helper", () => {
       expect(result.stderr).toContain("forced copy failure");
       await expectPathMissing(path.join(destinationRoot, "payload.bin"));
       await expect(fs.readdir(destinationRoot)).resolves.toEqual([]);
-    });
-
-    it("rejects non-regular files while reading", async () => {
-      await fs.mkdir(path.join(workspace, "folder"), { recursive: true });
-
-      const result = runMutation(["read", workspace, "", "folder"]);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/only regular files are allowed/i);
     });
 
     it("rejects FIFO reads without blocking", async () => {

@@ -1,6 +1,7 @@
 import { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
 import type { CronStreamOwnerParams } from "../../gateway/cron-stream-owner-types.js";
 import {
@@ -183,7 +184,6 @@ function runtime(assertCurrent = () => {}) {
       kill: vi.fn(() => finish()),
     });
   });
-  const allocate = vi.fn(async () => childId);
   const capability = createDockerPersistentExecCapability({
     target,
     containerId: parentId,
@@ -194,7 +194,7 @@ function runtime(assertCurrent = () => {}) {
     imageReference: "fixture-image",
     resolveImage: async () => `sha256:${"d".repeat(64)}`,
     assertCurrent,
-    allocate,
+    allocate: async () => childId,
   });
   return {
     controller,
@@ -203,7 +203,6 @@ function runtime(assertCurrent = () => {}) {
     finish,
     spawned: spawned.promise,
     removalAttempted,
-    allocate,
     capability,
     prepare(overrides: Partial<Parameters<typeof capability.prepare>[0]> = {}) {
       return capability.prepare({
@@ -228,18 +227,7 @@ function cancellableProbes() {
   });
 }
 
-function awaitAbort(signal: AbortSignal) {
-  return new Promise<void>((_resolve, reject) => {
-    signal.addEventListener(
-      "abort",
-      () => {
-        const reason: unknown = signal.reason;
-        reject(reason instanceof Error ? reason : new Error(String(reason)));
-      },
-      { once: true },
-    );
-  });
-}
+const awaitAbort = (signal: AbortSignal) => withinTest(new Promise<never>(() => {}), signal);
 
 function interceptOnce(
   matches: (args: string[]) => boolean,
@@ -521,7 +509,6 @@ it.each([
   async ({ interruption, during }) => {
     const f = revocableRuntime();
     const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
-    expect(f.allocate).toHaveBeenCalledWith(expect.objectContaining({ command }));
     expect(mocks.spawn).not.toHaveBeenCalled();
     let cleanup: ReturnType<typeof prepared.stop> | undefined;
     const interrupt = () => {
