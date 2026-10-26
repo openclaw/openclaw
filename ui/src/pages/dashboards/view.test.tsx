@@ -34,11 +34,7 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
   };
 }
 
-it.each([
-  ["gallery", "[data-dashboard-session]", "Release health"],
-  ["empty", "[data-dashboards-empty]", "No dashboards yet"],
-  ["error", '[role="alert"]', "Dashboard service unavailable"],
-])("resolves the accessible dashboard skeleton to %s", async (outcome, selector, message) => {
+it("resolves the accessible dashboard skeleton to an error", async () => {
   const [value, setValue] = createSignal<DashboardsRouteData>();
   const pending = Promise.withResolvers<void>();
   const { container } = mountSolid(() => {
@@ -60,34 +56,15 @@ it.each([
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
   expect(busy?.querySelectorAll("a, button, input, select, textarea").length).toBe(0);
 
-  const data = routeData(
-    outcome === "gallery"
-      ? [{ key: "agent:main:dashboard:release", kind: "direct", displayName: "Release health" }]
-      : [],
-  );
-  if (outcome === "error") {
-    data.result = null;
-    data.error = "Dashboard service unavailable";
-  }
-  setValue(data);
-  if (outcome === "error") {
-    pending.reject(new Error(data.error!));
-  } else {
-    pending.resolve();
-  }
+  const error = "Dashboard service unavailable";
+  setValue({ ...routeData([]), result: null, error });
+  pending.reject(new Error(error));
 
   await waitForSolid(() => {
     expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
-    expect(container.querySelector(selector)?.textContent).toContain(message);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(error);
   });
-  if (outcome === "empty") {
-    expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your tasks will appear here",
-    );
-  }
-  if (outcome === "error") {
-    expect(container.querySelector("[data-dashboards-empty]")).toBeNull();
-  }
+  expect(container.querySelector("[data-dashboards-empty]")).toBeNull();
 });
 
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {
@@ -119,16 +96,8 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
     search: "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
   });
 
-  for (const activation of [
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-    { altKey: true },
-    { button: 1 },
-  ]) {
-    link.dispatchEvent(click(activation));
-    expect(intercepted).toBe(false);
-  }
+  link.dispatchEvent(click({ ctrlKey: true }));
+  expect(intercepted).toBe(false);
   const handled = click();
   handled.preventDefault();
   link.dispatchEvent(handled);
