@@ -1,6 +1,6 @@
-import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
+import "../../test/dom.setup.ts";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import { notifyWorkboard, resetWorkboardConnectionState } from "../../lib/workbo
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
+import { element, expectAbsent, selectedView } from "./view-dom.test-support.ts";
 import {
   type SelectPicker,
   createWorkboardView,
@@ -36,16 +37,13 @@ describe("WorkboardView", () => {
       }
       current.state.collapsedStatuses.add("todo");
       current.renderView();
-      const selected = expectDefined(
-        current.container.querySelector<HTMLElement>(".workboard-card--selected"),
-        "visible selected card",
-      );
+      const selected = element<HTMLElement>(current.container, ".workboard-card--selected");
       const clear = requireButton(current.container, "Clear selection");
       clear.focus();
       clear.click();
       current.renderView();
       expect(current.state.selectedCardIds.size).toBe(0);
-      expect(current.container.querySelector(".workboard-selection")).toBeNull();
+      expectAbsent(current.container, ".workboard-selection");
       expect(document.activeElement).toBe(selected);
       expect(other.state.selectedCardIds).toEqual(new Set(["collapsed", "selected"]));
     },
@@ -63,19 +61,17 @@ describe("WorkboardView", () => {
       .mockResolvedValueOnce({
         card: { ...second, agentId: "main", updatedAt: second.updatedAt + 1 },
       });
-    const { state, container, renderView } = createWorkboardView({
+    const { state, container, renderView } = selectedView([first, second], {
       client: { request },
       connected: true,
       canWrite: true,
       agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
     });
-    state.cards = [first, second];
-    state.selectedCardIds = new Set([first.id, second.id]);
     renderView();
     requireButton(container, "Edit properties").click();
     renderView();
-    const picker = expectDefined(
-      container.querySelector<SelectPicker>(".workboard-bulk-dialog [data-test-select-picker]"),
+    const picker = element<SelectPicker>(
+      container,
       ".workboard-bulk-dialog [data-test-select-picker]",
     );
     expect(picker.accessibleLabel).toBe("Agent");
@@ -121,14 +117,12 @@ describe("WorkboardView", () => {
         .fn()
         .mockImplementationOnce(() => firstWrite.promise)
         .mockResolvedValue({ card: { ...second, agentId: "main" } });
-      const { state, container, renderView } = createWorkboardView({
+      const { state, container, renderView } = selectedView([first, second], {
         client: { request },
         connected: true,
         canWrite: true,
         agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] },
       });
-      state.cards = [first, second];
-      state.selectedCardIds = new Set([first.id, second.id]);
       renderView();
       const picker = expectDefined(
         [
@@ -174,23 +168,15 @@ describe("WorkboardView", () => {
       .fn()
       .mockImplementationOnce(() => pending.promise)
       .mockResolvedValue({ deleted: true });
-    const { state, container, renderView } = createWorkboardView({
+    const { state, container, renderView } = selectedView([first, second], {
       client: { request },
       canWrite: true,
     });
-    state.cards = [first, second];
-    state.selectedCardIds = new Set([first.id, second.id]);
     renderView();
-    expectDefined(
-      container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
-      ".workboard-selection__delete",
-    ).click();
+    element<HTMLButtonElement>(container, ".workboard-selection__delete").click();
     renderView();
     expect(state.bulkDialog?.cardIds).toEqual([first.id, second.id]);
-    expectDefined(
-      container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
-      '.workboard-bulk-dialog button[type="submit"]',
-    ).click();
+    element<HTMLButtonElement>(container, '.workboard-bulk-dialog button[type="submit"]').click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     setWorkboardCards(state, [first, outside]);
     pending.resolve({ deleted: true });
@@ -251,22 +237,14 @@ describe("WorkboardView", () => {
         }
         return { deleted: true };
       });
-      const { state, container, renderView } = createWorkboardView({
+      const { state, container, renderView } = selectedView([parent, child], {
         client: { request },
         canWrite: true,
       });
-      state.cards = [parent, child];
-      state.selectedCardIds = new Set([parent.id, child.id]);
       renderView();
-      expectDefined(
-        container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
-        ".workboard-selection__delete",
-      ).click();
+      element<HTMLButtonElement>(container, ".workboard-selection__delete").click();
       renderView();
-      expectDefined(
-        container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
-        '.workboard-bulk-dialog button[type="submit"]',
-      ).click();
+      element<HTMLButtonElement>(container, '.workboard-bulk-dialog button[type="submit"]').click();
       await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
       expect(request).toHaveBeenCalledTimes(2);
       expect(request).toHaveBeenNthCalledWith(2, "workboard.cards.delete", {
@@ -302,27 +280,22 @@ describe("WorkboardView", () => {
             details: { type: "workboard_card_conflict", card: newer },
           });
         });
-      const { state, container, renderView } = createWorkboardView({
+      const { state, container, renderView } = selectedView([first, second], {
         client: { request },
         canWrite: true,
       });
-      state.cards = [first, second];
-      state.selectedCardIds = new Set([first.id, second.id]);
       renderView();
       if (action === "move") {
-        expectDefined(
-          container.querySelector<SelectPicker>(".workboard-selection [data-test-select-picker]"),
-          ".workboard-selection [data-test-select-picker]",
-        ).onSelect("done");
+        element<SelectPicker>(container, ".workboard-selection [data-test-select-picker]").onSelect(
+          "done",
+        );
       } else {
         requireButton(container, action === "archive" ? "Archive" : "Delete").click();
         if (action === "delete") {
           setWorkboardCards(state, [first, newer]);
           renderView();
-          expectDefined(
-            container.querySelector<HTMLButtonElement>(
-              '.workboard-bulk-dialog button[type="submit"]',
-            ),
+          element<HTMLButtonElement>(
+            container,
             '.workboard-bulk-dialog button[type="submit"]',
           ).click();
         }
@@ -363,7 +336,7 @@ describe("WorkboardView", () => {
     expect(container.querySelector(".workboard-card")?.classList).toContain(
       "workboard-card--dragging",
     );
-    expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
+    expectAbsent(container, ".workboard-column--drop-target");
     const running = container.querySelector(".workboard-column--running")!;
     const todo = container.querySelector(".workboard-column--todo")!;
     running.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
@@ -378,14 +351,14 @@ describe("WorkboardView", () => {
     expect(state.dragOverStatus).toBe("todo");
     todo.dispatchEvent(new Event("dragleave"));
     renderView();
-    expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
+    expectAbsent(container, ".workboard-column--drop-target");
     running.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
     container.querySelector(".workboard-card")!.dispatchEvent(new Event("dragend"));
     renderView();
     expect(state.draggedCardId).toBeNull();
     expect(state.dragOverStatus).toBeNull();
-    expect(container.querySelector(".workboard-card--dragging")).toBeNull();
-    expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
+    expectAbsent(container, ".workboard-card--dragging");
+    expectAbsent(container, ".workboard-column--drop-target");
   });
 
   it("places variable-height card drops without measuring unrelated rows", async () => {
@@ -402,12 +375,9 @@ describe("WorkboardView", () => {
     );
     state.draggedCardId = "dragged";
     renderView();
-    const column = expectDefined(container.querySelector(".workboard-column--todo"), "todo column");
+    const column = element(container, ".workboard-column--todo");
     const row = (id: string) =>
-      expectDefined(
-        column.querySelector<HTMLElement>(`.workboard-column__item[data-card-id="${id}"]`),
-        id,
-      );
+      element<HTMLElement>(column, `.workboard-column__item[data-card-id="${id}"]`);
     const measurements = [
       { id: "first", top: 0, height: 40 },
       { id: "second", top: 52, height: 120 },
@@ -416,7 +386,7 @@ describe("WorkboardView", () => {
     ].map(({ id, top, height }) =>
       vi.spyOn(row(id), "getBoundingClientRect").mockReturnValue(new DOMRect(0, top, 240, height)),
     );
-    const secondTitle = expectDefined(row("second").querySelector("h3"), "second title");
+    const secondTitle = element(row("second"), "h3");
     const hover = (target: Element, clientY: number, beforeId: string | null, reads: number) => {
       measurements.forEach((measurement) => measurement.mockClear());
       target.dispatchEvent(
@@ -434,13 +404,8 @@ describe("WorkboardView", () => {
     };
     hover(secondTitle, 111, "second", 1);
     hover(secondTitle, 112, "last", 1);
-    hover(
-      expectDefined(column.querySelector(".workboard-column__cards"), "cards"),
-      45,
-      "second",
-      2,
-    );
-    hover(expectDefined(row("dragged").querySelector("h3"), "dragged title"), 190, "last", 0);
+    hover(element(column, ".workboard-column__cards"), 45, "second", 2);
+    hover(element(row("dragged"), "h3"), 190, "last", 0);
     hover(row("first"), 19, "first", 1);
     hover(row("last"), 306, null, 1);
     measurements.forEach((measurement) => measurement.mockClear());
@@ -484,10 +449,8 @@ describe("WorkboardView", () => {
       expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(
         0,
       );
-      expect(
-        container.querySelector<HTMLButtonElement>(".workboard-heading__actions .btn.primary"),
-      ).toBeNull();
-      expect(container.querySelector<HTMLSelectElement>(".workboard-card__move-select")).toBeNull();
+      expectAbsent(container, ".workboard-heading__actions .btn.primary");
+      expectAbsent(container, ".workboard-card__move-select");
       expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
     }
   });
@@ -524,7 +487,7 @@ describe("WorkboardView", () => {
     renderView();
     expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
     expect(second.getAttribute("aria-pressed")).toBe("true");
-    expect(second.querySelector(".workboard-card__action-menu-panel")).toBeNull();
+    expectAbsent(second, ".workboard-card__action-menu-panel");
     const panel = openCardMenu(second);
     const firstAction = requireButton(panel, "Edit card");
     expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
@@ -604,17 +567,11 @@ describe("WorkboardView", () => {
     });
     setWorkboardCards(state, [parent, child]);
     renderView();
-    const childRow = expectDefined(
-      container.querySelector<HTMLElement>('[data-card-id="child"] .workboard-card'),
-      "dependent card",
-    );
+    const childRow = element<HTMLElement>(container, '[data-card-id="child"] .workboard-card');
     expect(childRow.textContent).toContain("1 blocked");
     childRow.click();
     renderView();
-    const dependencies = expectDefined(
-      container.querySelector(".workboard-detail__dependencies"),
-      "dependency details",
-    );
+    const dependencies = element(container, ".workboard-detail__dependencies");
     expect(dependencies.textContent).toContain("Parent draft");
     expect(dependencies.textContent).toContain("Todo");
     replaceCard(state, { ...parent, title: "Parent complete", status: "done", updatedAt: 2 });
@@ -622,7 +579,7 @@ describe("WorkboardView", () => {
     flush();
     expect(state.cards.find((card) => card.id === "child")).toBe(child);
     expect(container.querySelector('[data-card-id="child"] .workboard-card')).toBe(childRow);
-    expect(childRow.querySelector(".workboard-card__alert")).toBeNull();
+    expectAbsent(childRow, ".workboard-card__alert");
     expect(dependencies.textContent).toContain("Parent complete");
     expect(dependencies.textContent).toContain("Done");
     expect(dependencies.querySelector("li")?.classList.contains("is-done")).toBe(true);
@@ -632,8 +589,8 @@ describe("WorkboardView", () => {
     notifyWorkboard(host);
     flush();
     expect(dependencies.textContent).toContain("Not loaded");
-    expect(dependencies.querySelector(".is-blocked")).toBeNull();
-    expect(childRow.querySelector(".workboard-card__alert")).toBeNull();
+    expectAbsent(dependencies, ".is-blocked");
+    expectAbsent(childRow, ".workboard-card__alert");
     const partialCards = state.cards;
     state.nextCursor = null;
     notifyWorkboard(host);

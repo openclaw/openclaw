@@ -1,6 +1,6 @@
-import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { flush } from "solid-js";
+import "../../test/dom.setup.ts";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -11,6 +11,13 @@ import {
 } from "../../lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
+import {
+  element,
+  enterText,
+  expectText,
+  expectAbsent,
+  detailView,
+} from "./view-dom.test-support.ts";
 import {
   createLoadedWorkboardState,
   createWorkboardView,
@@ -86,7 +93,7 @@ describe("WorkboardView", () => {
         state.detailCardId = null;
         renderView();
         expect(handle.dispose).toHaveBeenCalledOnce();
-        expect(container.querySelector("[data-test-session-summary]")).toBeNull();
+        expectAbsent(container, "[data-test-session-summary]");
       } else {
         expectDefined(open, "resolved session action").click();
         expect(onOpenSession).toHaveBeenCalledWith(session);
@@ -118,14 +125,8 @@ describe("WorkboardView", () => {
     state.error = null;
     renderView({ pageError });
     await expectError(pageError);
-    const dialogToast = expectDefined(
-      container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])"),
-      "openclaw-workboard-toast:not([hidden])",
-    );
-    expectDefined(
-      dialogToast?.querySelector<HTMLButtonElement>('button[aria-label="Close"]'),
-      'button[aria-label="Close"]',
-    ).click();
+    const dialogToast = element<HTMLElement>(container, "openclaw-workboard-toast:not([hidden])");
+    element<HTMLButtonElement>(dialogToast, 'button[aria-label="Close"]').click();
     await waitForFast(() => {
       expect(dialogToast?.querySelector('[role="alert"]')).toBeNull();
     });
@@ -134,10 +135,7 @@ describe("WorkboardView", () => {
     state.draftOpen = false;
     state.draftDiscardOpen = false;
     renderView({ pageError });
-    const active = expectDefined(
-      container.querySelector<HTMLElement>("openclaw-workboard-toast:not([hidden])"),
-      "openclaw-workboard-toast:not([hidden])",
-    );
+    const active = element<HTMLElement>(container, "openclaw-workboard-toast:not([hidden])");
     flush();
     expect(active?.querySelector('[role="alert"]')).toBeNull();
     // Recovery makes a subsequent identical failure a new visible outcome.
@@ -187,7 +185,7 @@ describe("WorkboardView", () => {
         }),
       ];
       renderView();
-      expect(container.querySelector(".workboard-card__alert")).toBeNull();
+      expectAbsent(container, ".workboard-card__alert");
       expect(container.textContent).not.toContain("Obsolete run failure.");
     },
   );
@@ -236,10 +234,7 @@ describe("WorkboardView", () => {
     expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
       `${"x".repeat(158)}🚀tail`,
     );
-    const card = expectDefined(
-      container.querySelector<HTMLElement>(".workboard-card"),
-      ".workboard-card",
-    );
+    const card = element<HTMLElement>(container, ".workboard-card");
     const descriptionId = expectDefined(
       card.getAttribute("aria-describedby"),
       "alert description ID",
@@ -286,16 +281,13 @@ describe("WorkboardView", () => {
     ];
     renderView();
     expect(container.textContent).toContain("Bad timestamp card");
-    expect(container.querySelector(".workboard-card__updated")).toBeNull();
+    expectAbsent(container, ".workboard-card__updated");
     expect(container.textContent).not.toContain("Invalid Date");
     requireButton(openCardMenu(container), "View details").click();
     renderView();
     buttonByText(container.querySelector('[role="tablist"]')!, "Details")!.click();
     renderView();
-    const details = expectDefined(
-      container.querySelector<HTMLElement>("#workboard-detail-panel-details"),
-      "#workboard-detail-panel-details",
-    );
+    const details = element<HTMLElement>(container, "#workboard-detail-panel-details");
     expect(details.textContent).toContain("Attempt evidence survives invalid dates");
     expect(details.textContent).toContain("Proof evidence survives invalid dates");
     expect(details.textContent).not.toContain("Invalid Date");
@@ -325,24 +317,17 @@ describe("WorkboardView", () => {
       }),
     ];
     renderView();
-    const card = expectDefined(
-      container.querySelector<HTMLElement>(".workboard-card"),
-      ".workboard-card",
-    );
+    const card = element<HTMLElement>(container, ".workboard-card");
     expect(card.getAttribute("aria-pressed")).toBeNull();
     expect(card.getAttribute("aria-haspopup")).toBe("dialog");
     requireButton(openCardMenu(card), "Open session").click();
     expect(onOpenSession).toHaveBeenCalledWith({ sessionKey: "agent:main:dashboard:1" });
     expect(state.detailCardId).toBeNull();
-    expect(container.querySelector(".workboard-detail")).toBeNull();
+    expectAbsent(container, ".workboard-detail");
     onOpenSession.mockClear();
     card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
-    await waitForFast(() =>
-      expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-        "Inspect a running task",
-      ),
-    );
+    await waitForFast(() => expectText(container, ".workboard-detail", "Inspect a running task"));
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 
@@ -368,13 +353,8 @@ describe("WorkboardView", () => {
     for (const tab of ["Overview", "Session"]) {
       textButton(container.querySelector('[role="tablist"]')!, tab).click();
       renderView();
-      const panel = expectDefined(
-        container.querySelector<HTMLElement>(".workboard-detail__tabpanel:not([hidden])"),
-        ".workboard-detail__tabpanel:not([hidden])",
-      );
-      expect(panel.querySelector(".workboard-detail__session-name")?.textContent).toContain(
-        "Release review",
-      );
+      const panel = element<HTMLElement>(container, ".workboard-detail__tabpanel:not([hidden])");
+      expectText(panel, ".workboard-detail__session-name", "Release review");
       expect(panel.querySelector(".workboard-session-badge")?.textContent).toBe("Done");
       expect(panel.textContent).not.toContain("Run completed");
       requireButton(panel, "Open session").click();
@@ -397,27 +377,16 @@ describe("WorkboardView", () => {
     state.cards = [createWorkboardCard({ status: "todo", sessionKey: "agent:main:queued" })];
     const addListener = vi.spyOn(document, "addEventListener");
     renderView();
-    const status = expectDefined(
-      container.querySelector<HTMLElement>("openclaw-workboard-session-status"),
-      "openclaw-workboard-session-status",
-    );
+    const status = element<HTMLElement>(container, "openclaw-workboard-session-status");
     expect(status.textContent).toContain("Queued");
-    expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
-    expect(
-      container.querySelector(".workboard-card__session-marker .session-run-spinner"),
-    ).toBeNull();
+    expectAbsent(container, ".workboard-card__session-marker");
+    expectAbsent(container, ".workboard-card__session-marker .session-run-spinner");
     expect(container.querySelector(".workboard-card__session-name")?.textContent?.trim()).toBe(
       "Session",
     );
     flush();
-    const trigger = expectDefined(
-      status.querySelector<HTMLButtonElement>(".workboard-session-status__trigger"),
-      ".workboard-session-status__trigger",
-    );
-    const panel = expectDefined(
-      status.querySelector<HTMLElement>(".workboard-session-status__popover"),
-      ".workboard-session-status__popover",
-    );
+    const trigger = element<HTMLButtonElement>(status, ".workboard-session-status__trigger");
+    const panel = element<HTMLElement>(status, ".workboard-session-status__popover");
     if (typeof panel.showPopover !== "function") {
       Object.defineProperty(panel, "showPopover", { configurable: true, value: vi.fn() });
     }
@@ -476,11 +445,11 @@ describe("WorkboardView", () => {
       }),
     ];
     renderView();
-    expect(container.querySelector(".workboard-events")).toBeNull();
+    expectAbsent(container, ".workboard-events");
     requireButton(openCardMenu(container), "View details").click();
     renderView();
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Done");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Moved to Backlog");
+    expectText(container, ".workboard-detail", "Moved to Done");
+    expectText(container, ".workboard-detail", "Moved to Backlog");
   });
 
   it("renders card metadata badges and hides archived cards", () => {
@@ -535,13 +504,13 @@ describe("WorkboardView", () => {
     expect(
       container.querySelector('.workboard-card__counts [aria-label="7 proof"]'),
     ).not.toBeNull();
-    expect(container.querySelector(".workboard-card__alert")?.textContent).toContain("Stale");
+    expectText(container, ".workboard-card__alert", "Stale");
     expect(container.querySelector(".workboard-card__alert")?.getAttribute("title")).toContain(
       "No recent activity.",
     );
     expect(container.textContent).not.toContain("Archived task");
-    const archivedToggle = expectDefined(
-      container.querySelector<HTMLInputElement>('.workboard-filter-archived input[role="switch"]'),
+    const archivedToggle = element<HTMLInputElement>(
+      container,
       '.workboard-filter-archived input[role="switch"]',
     );
     archivedToggle.checked = true;
@@ -551,23 +520,17 @@ describe("WorkboardView", () => {
     expect(archivedToggle.checked).toBe(true);
     requireButton(openCardMenu(container), "View details").click();
     renderView();
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 1");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "https://example.com/proof-7",
-    );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Worker protocol");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Worker asked for owner input.",
-    );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Card automation");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("ops");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("review, test");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "worktree · /tmp/workboard · proof",
-    );
+    expectText(container, ".workboard-detail", "1 attempts");
+    expectText(container, ".workboard-detail", "1 links");
+    expectText(container, ".workboard-detail", "pnpm test 1");
+    expectText(container, ".workboard-detail", "pnpm test 7");
+    expectText(container, ".workboard-detail", "https://example.com/proof-7");
+    expectText(container, ".workboard-detail", "Worker protocol");
+    expectText(container, ".workboard-detail", "Worker asked for owner input.");
+    expectText(container, ".workboard-detail", "Card automation");
+    expectText(container, ".workboard-detail", "ops");
+    expectText(container, ".workboard-detail", "review, test");
+    expectText(container, ".workboard-detail", "worktree · /tmp/workboard · proof");
   });
 
   it("keeps visible archived cards inspectable and restorable without move or drag controls", async () => {
@@ -586,7 +549,7 @@ describe("WorkboardView", () => {
     expect(article).not.toBeNull();
     expect(article?.getAttribute("draggable")).toBe("false");
     const menu = openCardMenu(expectDefined(article, "archived card"));
-    expect(menu.querySelector(".workboard-card__move-select")).toBeNull();
+    expectAbsent(menu, ".workboard-card__move-select");
     expect(buttonByLabel(menu, "Restore from archive")).not.toBeNull();
     expect(
       article!.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true })),
@@ -601,10 +564,7 @@ describe("WorkboardView", () => {
     state.detailCardId = archivedCard.id;
     renderView();
     const drawer = container.querySelector<HTMLElement>(".workboard-detail");
-    expectDefined(
-      drawer?.querySelector<HTMLElement>("workboard-inline-text"),
-      "workboard-inline-text",
-    );
+    element<HTMLElement>(drawer, "workboard-inline-text");
     flush();
     expect(drawer?.textContent).toContain(archivedCard.title);
     expect(drawer?.querySelector(".workboard-card__move-select")).toBeNull();
@@ -639,18 +599,12 @@ describe("WorkboardView", () => {
         host,
       );
       renderView();
-      await vi.waitFor(() =>
-        expect(
-          container.querySelector(".workboard-session-status__trigger")?.textContent,
-        ).toContain("Stale"),
-      );
-      expect(container.querySelector(".workboard-session-status__detail")?.textContent).toContain(
-        "No recent session activity",
-      );
-      expect(container.querySelector(".workboard-card__session-marker")).toBeNull();
+      await vi.waitFor(() => expectText(container, ".workboard-session-status__trigger", "Stale"));
+      expectText(container, ".workboard-session-status__detail", "No recent session activity");
+      expectAbsent(container, ".workboard-card__session-marker");
       expect(container.textContent).not.toContain("codex autonomous");
-      expect(container.querySelector(".workboard-live")).toBeNull();
-      expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+      expectAbsent(container, ".workboard-live");
+      expectAbsent(container, 'button[aria-label="Stop session"]');
     } finally {
       nowSpy.mockRestore();
     }
@@ -666,7 +620,7 @@ describe("WorkboardView", () => {
     const request = vi.fn(async () => ({
       card: { ...card, title: "Renamed without unlinking", updatedAt: 2 },
     }));
-    const { state, container, renderView } = createWorkboardView({
+    const { state, container, renderView } = detailView(card, {
       client: { request } as unknown as GatewayBrowserClient,
       onRequestUpdate: () => undefined,
       sessions: [
@@ -679,8 +633,6 @@ describe("WorkboardView", () => {
         },
       ],
     });
-    state.cards = [card];
-    state.detailCardId = card.id;
     renderView();
     const editButton = buttonByLabel(container, "Edit card");
     expect(editButton).not.toBeNull();
@@ -690,8 +642,7 @@ describe("WorkboardView", () => {
     expect(sessionPicker(container).value).toBe(sessionKey);
     const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
     expect(title).not.toBeNull();
-    title!.value = "Renamed without unlinking";
-    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    enterText(title!, "Renamed without unlinking");
     container
       .querySelector<HTMLFormElement>(".workboard-draft")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -728,6 +679,6 @@ describe("WorkboardView", () => {
       id: card.id,
       archived: true,
     });
-    expect(container.querySelector(".workboard-detail")).toBeNull();
+    expectAbsent(container, ".workboard-detail");
   });
 });
