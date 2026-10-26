@@ -135,15 +135,11 @@ it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans 
   expect(inboundPath).toBe("/api/messages");
   expect(inboundAuthorization).toBe(`Bearer ${bootstrapConfig.botToken}`);
   const nativeThread = "19:qa-primary@thread.tacv2;messageid=thread-root";
+  const mention = "<at>openclaw</at>";
+  const mentioned = { id: "qa-msteams-app", name: "OpenClaw QA" };
   expect(inboundActivity).toMatchObject({
-    text: "<at>openclaw</at> qa ingress",
-    entities: [
-      {
-        type: "mention",
-        text: "<at>openclaw</at>",
-        mentioned: { id: "qa-msteams-app", name: "OpenClaw QA" },
-      },
-    ],
+    text: `${mention} qa ingress`,
+    entities: [{ type: "mention", text: mention, mentioned }],
     serviceUrl: "https://smba.trafficmanager.net/qa",
     replyToId: "quoted-parent",
     from: { id: "qa-msteams-driver", aadObjectId: "00000000-0000-4000-8000-000000000002" },
