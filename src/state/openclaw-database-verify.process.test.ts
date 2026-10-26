@@ -10,12 +10,6 @@ function failed(error: string, terminal = false) {
   return { path: target.path, ok: false, error, terminal };
 }
 
-function throwOnRead(failure: unknown) {
-  vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
-    throw failure;
-  });
-}
-
 it.each([
   {
     name: "wrapped I/O error without cause prose or metadata",
@@ -59,7 +53,9 @@ it.each([
     expected: "Error: source read failed (code=EIO, errcode=10)",
   })),
 ])("preserves $name", async ({ failure, expected }) => {
-  throwOnRead(failure);
+  vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+    throw failure;
+  });
   await expect(verifyOpenClawDatabase(target)).resolves.toEqual(failed(expected));
 });
 
@@ -83,9 +79,9 @@ it("bounds cyclic and deep causes without serializing their prose", async () => 
 });
 
 it.each([
-  { name: "original I/O failure before close failure", errcode: 10, terminal: false },
-  { name: "original corruption before close failure", errcode: 779, terminal: true },
-])("preserves $name and classification", async ({ errcode, terminal }) => {
+  [10, false],
+  [779, true],
+] as const)("preserves scan error %s over close error (%s)", async (errcode, terminal) => {
   const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
   vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
   vi.spyOn(database, "prepare").mockImplementationOnce(() => {
