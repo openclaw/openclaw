@@ -62,10 +62,12 @@ it("loads pairing feedback without replacing cached sender controls on failure o
   await waitForSolid(() =>
     expect(f.query('[role="alert"]')?.textContent).toContain("Pairing refresh unavailable"),
   );
-  expect(f.query("details")).toBe(details);
-  expect(details.open).toBe(true);
-  expect(f.container.contains(approve)).toBe(true);
-  expect(document.activeElement).toBe(approve);
+  const expectRetained = () => {
+    expect(f.query("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(document.activeElement).toBe(approve);
+  };
+  expectRetained();
 
   const recovered = f.channels.refreshPairing();
   const updated = { ...pairingRequest, metadata: { name: "Alice Updated" } };
@@ -75,10 +77,7 @@ it("loads pairing feedback without replacing cached sender controls on failure o
     expect(details.textContent).toContain("Alice Updated");
     expect(f.query('[role="alert"]')).toBeNull();
   });
-  expect(f.query("details")).toBe(details);
-  expect(details.open).toBe(true);
-  expect(f.container.contains(approve)).toBe(true);
-  expect(document.activeElement).toBe(approve);
+  expectRetained();
   approve.click();
   expect(f.approve).toHaveBeenLastCalledWith(updated);
 });

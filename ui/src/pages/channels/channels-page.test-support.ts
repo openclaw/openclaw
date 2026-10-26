@@ -10,6 +10,7 @@ import { createApplicationGatewaySnapshot } from "../../test-helpers/application
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { emptyPairingSnapshot } from "./pairing.test-support.ts";
+import { channelSnapshot as makeSnapshot } from "./view.test-support.ts";
 
 export async function choosePairingFilter(page: HTMLElement, index: number, value: string) {
   const settle = async () => {
@@ -32,15 +33,7 @@ export async function choosePairingFilter(page: HTMLElement, index: number, valu
 
 export const channelSnapshot = (
   overrides: Partial<ChannelsStatusSnapshot> = {},
-): ChannelsStatusSnapshot => ({
-  ts: 0,
-  channelOrder: [],
-  channelLabels: {},
-  channels: {},
-  channelAccounts: {},
-  channelDefaultAccountId: {},
-  ...overrides,
-});
+): ChannelsStatusSnapshot => makeSnapshot({}, { ts: 0, ...overrides });
 
 export function channelStatus(id: string, label: string, configured = false, description?: string) {
   return channelSnapshot({

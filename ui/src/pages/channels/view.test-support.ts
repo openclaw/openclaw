@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, flush } from "solid-js";
+import { createSignal, flush, merge } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
 import { createChannelCapability, type ChannelCapability } from "../../lib/channels/index.ts";
@@ -57,30 +57,16 @@ export function createChannelsState(
   pairingSnapshot: ChannelsPairingListResult | null,
   overrides: Partial<ChannelCapability["state"]> = {},
 ): ChannelCapability["state"] {
-  return {
-    client: null,
+  const channels = createChannelCapability(createApplicationGateway().gateway);
+  const state = {
+    ...channels.state,
     connected: true,
-    channelsLoading: false,
-    channelsLoadingProbe: null,
-    channelsRefreshSeq: 0,
     channelsSnapshot: snapshot,
-    channelsRead: null,
-    channelsError: null,
-    channelsLastSuccess: null,
-    pairingLoading: false,
-    pairingRefreshSeq: 0,
     pairingSnapshot,
-    pairingRead: null,
-    pairingError: null,
-    pairingLastSuccess: null,
-    pairingBusyRequestId: null,
-    whatsappLoginMessage: null,
-    whatsappLoginQrDataUrl: null,
-    whatsappLoginSessionKey: null,
-    whatsappLoginConnected: null,
-    whatsappBusy: false,
     ...overrides,
   };
+  channels.dispose();
+  return state;
 }
 
 export function createChannelsViewProps(
@@ -167,14 +153,8 @@ export function renderChannelView<T extends object>(
   }
   current?.dispose();
   const [read, write] = createSignal<object>(props, { equals: false });
-  // SAFETY: The proxy forwards property reads to the current T input; its empty target is never exposed.
-  const reactiveProps = new Proxy({} as T, {
-    get: (_target, key) => Reflect.get(read(), key),
-    has: (_target, key) => Reflect.has(read(), key),
-    ownKeys: () => Reflect.ownKeys(read()),
-    getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true }),
-  });
-  const { unmount: dispose } = mountSolid(() => component(reactiveProps), { container });
+  // The live view preserves the same generic props contract as the original proxy.
+  const { unmount: dispose } = mountSolid(() => component(merge(() => read() as T)), { container });
   mountedViews.set(container, { component, update: (next) => write(() => next), dispose });
   flush();
 }

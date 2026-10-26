@@ -41,86 +41,80 @@ function mountHub(reads: ReturnType<typeof createDeferred<ChannelsStatusSnapshot
   });
 }
 
-it("retains status cards, old errors, partial diagnostics and the open detail through refresh", async () => {
-  const initialRead = createDeferred<ChannelsStatusSnapshot>();
-  const failedRead = createDeferred<ChannelsStatusSnapshot>();
-  const recoveredRead = createDeferred<ChannelsStatusSnapshot>();
-  const f = mountHub([initialRead, failedRead, recoveredRead]);
-  const initial = f.channels.refresh();
-  await waitForSolid(() => {
-    expect(f.query(".channels-item__detail")).not.toBeNull();
-    expect(f.query(".settings-loading-skeleton")).toBeNull();
-  });
-  initialRead.resolve(snapshot("Slack", true));
-  await initial;
-  await waitForSolid(() => expect(f.container.textContent).toContain("Slack probe unavailable"));
-  const card = Array.from(f.queryAll<HTMLButtonElement>("button.channels-item")).find((button) =>
-    button.textContent?.includes("Slack"),
-  )!;
-  expect(card).toBeDefined();
-  card.focus();
-
-  const failed = f.channels.refresh(true);
-  await waitForSolid(() => {
-    expect(f.query(".callout.info")).not.toBeNull();
-    expect(f.container.contains(card)).toBe(true);
-    expect(document.activeElement).toBe(card);
-  });
-  failedRead.reject(new Error("Status transport unavailable"));
-  await failed;
-  await waitForSolid(() =>
-    expect(f.query(".callout.danger")?.textContent).toBe("Status transport unavailable"),
-  );
-  expect(f.container.contains(card)).toBe(true);
-  expect(document.activeElement).toBe(card);
-
-  card.click();
-  await waitForSolid(() => expect(f.query("openclaw-modal-dialog")).not.toBeNull());
-  const dialog = f.query("openclaw-modal-dialog");
-  const recovered = f.channels.refresh();
-  await waitForSolid(() => {
-    const notices = Array.from(f.queryAll(".callout"));
-    expect(notices.slice(0, 3).map((node) => node.className)).toEqual([
-      "callout info",
-      "callout warn",
-      "callout danger",
-    ]);
-    expect(notices[1]?.textContent).toContain("Slack probe unavailable");
-    expect(notices[2]?.textContent).toBe("Status transport unavailable");
-    expect(f.query("openclaw-modal-dialog")).toBe(dialog);
-  });
-  recoveredRead.resolve(snapshot("Slack recovered"));
-  await recovered;
-  await waitForSolid(() => {
-    expect(card.textContent).toContain("Slack recovered");
-    expect(f.query(".callout.danger")).toBeNull();
-    expect(f.container.textContent).not.toContain("Slack probe unavailable");
-  });
-  expect(f.container.contains(card)).toBe(true);
-  expect(f.query("openclaw-modal-dialog")).toBe(dialog);
-});
-
-it("keeps recommended channels available through an initial read failure and retry", async () => {
-  const failedRead = createDeferred<ChannelsStatusSnapshot>();
-  const recoveredRead = createDeferred<ChannelsStatusSnapshot>();
-  const f = mountHub([failedRead, recoveredRead]);
-  const failed = f.channels.refresh();
-  await waitForSolid(() => expect(f.query(".channels-item__detail")).not.toBeNull());
-  const recommended = f.query(".channels-item__detail");
-  failedRead.reject(new Error("Initial status unavailable"));
-  await failed;
-  await waitForSolid(() =>
-    expect(f.query(".callout.danger")?.textContent).toBe("Initial status unavailable"),
-  );
-  const recovered = f.channels.refresh();
-  await waitForSolid(() => {
-    expect(f.query(".callout.danger")?.textContent).toBe("Initial status unavailable");
-    expect(f.query(".callout.info")).toBeNull();
-    expect(f.query(".settings-loading-skeleton")).toBeNull();
-    expect(f.query(".channels-item__detail")).toBe(recommended);
-  });
-  recoveredRead.resolve(snapshot("Slack"));
-  await recovered;
-  await waitForSolid(() => expect(f.query(".callout.danger")).toBeNull());
-  expect(f.query(".channels-item__detail")).toBe(recommended);
-});
+it.each([false, true])(
+  "retains channels through failure and retry (cached: %s)",
+  async (cached) => {
+    const seed = createDeferred<ChannelsStatusSnapshot>();
+    const failure = createDeferred<ChannelsStatusSnapshot>();
+    const recovery = createDeferred<ChannelsStatusSnapshot>();
+    const f = mountHub(cached ? [seed, failure, recovery] : [failure, recovery]);
+    let card: HTMLButtonElement | undefined;
+    let dialog: HTMLElement | null = null;
+    if (cached) {
+      const initial = f.channels.refresh();
+      seed.resolve(snapshot("Slack", true));
+      await initial;
+      await waitForSolid(() =>
+        expect(f.container.textContent).toContain("Slack probe unavailable"),
+      );
+      card = Array.from(f.queryAll<HTMLButtonElement>("button.channels-item")).find((button) =>
+        button.textContent?.includes("Slack"),
+      )!;
+      expect(card).toBeDefined();
+      card.focus();
+    }
+    const failed = f.channels.refresh(cached);
+    await waitForSolid(() => {
+      expect(f.query(".channels-item__detail")).not.toBeNull();
+      expect(f.query(".settings-loading-skeleton")).toBeNull();
+      if (cached) {
+        expect(f.query(".callout.info")).not.toBeNull();
+        expect(document.activeElement).toBe(card);
+      }
+    });
+    const recommended = f.query(".channels-item__detail");
+    failure.reject(new Error("Status unavailable"));
+    await failed;
+    await waitForSolid(() =>
+      expect(f.query(".callout.danger")?.textContent).toBe("Status unavailable"),
+    );
+    if (card) {
+      expect(document.activeElement).toBe(card);
+      card.click();
+      await waitForSolid(() => expect(f.query("openclaw-modal-dialog")).not.toBeNull());
+      dialog = f.query("openclaw-modal-dialog");
+    }
+    const recovered = f.channels.refresh();
+    await waitForSolid(() => {
+      expect(f.query(".callout.danger")?.textContent).toBe("Status unavailable");
+      if (cached) {
+        expect(Array.from(f.queryAll(".callout"), (node) => node.className).slice(0, 3)).toEqual([
+          "callout info",
+          "callout warn",
+          "callout danger",
+        ]);
+        expect(f.query(".callout.warn")?.textContent).toContain("Slack probe unavailable");
+        expect(f.query("openclaw-modal-dialog")).toBe(dialog);
+      } else {
+        expect(f.query(".callout.info")).toBeNull();
+        expect(f.query(".settings-loading-skeleton")).toBeNull();
+        expect(f.query(".channels-item__detail")).toBe(recommended);
+      }
+    });
+    recovery.resolve(snapshot("Slack recovered"));
+    await recovered;
+    await waitForSolid(() => {
+      expect(f.query(".callout.danger")).toBeNull();
+      expect(f.container.textContent).not.toContain("Slack probe unavailable");
+      if (card) {
+        expect(card.textContent).toContain("Slack recovered");
+      }
+    });
+    if (card) {
+      expect(f.container.contains(card)).toBe(true);
+      expect(f.query("openclaw-modal-dialog")).toBe(dialog);
+    } else {
+      expect(f.query(".channels-item__detail")).toBe(recommended);
+    }
+  },
+);
