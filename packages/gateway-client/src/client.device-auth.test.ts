@@ -66,6 +66,22 @@ function storageGate() {
   return deferred;
 }
 
+function connectionAuthority() {
+  let current = true;
+  const failure = new Error("connection owner retired");
+  return {
+    failure,
+    retire: () => {
+      current = false;
+    },
+    assertCurrent() {
+      if (!current) {
+        throw failure;
+      }
+    },
+  };
+}
+
 async function reconnectSocket() {
   await vi.advanceTimersByTimeAsync(1_000);
   const socket = MockWebSocket.instances[1];
@@ -171,73 +187,51 @@ const hello = {
 
 describe("GatewayClient host token storage", () => {
   it("rejects connection authority retired by socket registration and cleans the registration", () => {
-    const failure = new Error("connection owner retired");
+    const authority = connectionAuthority();
     const onConnectError = vi.fn();
     const cleanup = vi.fn();
-    let current = true;
     const client = new GatewayClient({
       url: "wss://gateway.example.invalid",
       edgeAuthHeaders: { Authorization: "synthetic-edge-token" },
-      assertConnectionCurrent() {
-        if (!current) {
-          throw failure;
-        }
-      },
+      assertConnectionCurrent: authority.assertCurrent,
       onConnectError,
       hostDeps: {
         registerGatewayLoopbackBypass() {
-          current = false;
+          authority.retire();
           return cleanup;
         },
       },
     });
     clients.push(client);
-    expect(() => client.start()).toThrow(failure.message);
+    expect(() => client.start()).toThrow(authority.failure.message);
     expect(MockWebSocket.instances).toEqual([]);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: failure.message }),
+      expect.objectContaining({ message: authority.failure.message }),
     );
   });
 
   it("rejects connection authority retired during asynchronous token loading", async () => {
     const loaded = createDeferred<DeviceAuthTokenRecord | null>();
-    let current = true;
-    const failure = new Error("connection owner retired");
+    const authority = connectionAuthority();
     const { socket, onHelloOk, onConnectError } = connect(
       { loadDeviceAuthToken: () => loaded.promise },
-      {
-        assertConnectionCurrent() {
-          if (!current) {
-            throw failure;
-          }
-        },
-      },
+      { assertConnectionCurrent: authority.assertCurrent },
     );
     expect(socket.send).not.toHaveBeenCalled();
-    current = false;
+    authority.retire();
     loaded.resolve(storedToken);
     await vi.advanceTimersByTimeAsync(0);
     expect(socket.send).not.toHaveBeenCalled();
     expect(onHelloOk).not.toHaveBeenCalled();
     expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: String(failure) }),
+      expect.objectContaining({ message: String(authority.failure) }),
     );
   });
 
   it("rejects a correlated startup retry after connection authority retires", async () => {
-    let current = true;
-    const failure = new Error("connection owner retired");
-    const { client, socket } = connect(
-      {},
-      {
-        assertConnectionCurrent() {
-          if (!current) {
-            throw failure;
-          }
-        },
-      },
-    );
+    const authority = connectionAuthority();
+    const { client, socket } = connect({}, { assertConnectionCurrent: authority.assertCurrent });
     socket.respond({ type: "hello-ok", protocol: PROTOCOL_VERSION });
     await vi.advanceTimersByTimeAsync(0);
     const request = client.request("sessions.create", {}, { timeoutMs: 1_000 });
@@ -258,13 +252,13 @@ describe("GatewayClient host token storage", () => {
         details: { reason: "startup-sidecars", method: frame.method },
       },
     });
-    current = false;
+    authority.retire();
     await vi.advanceTimersByTimeAsync(250);
     expect(socket.send.mock.calls.map(([data]) => JSON.parse(data).method)).toEqual([
       "connect",
       "sessions.create",
     ]);
-    expect(await outcome).toBe(failure);
+    expect(await outcome).toBe(authority.failure);
   });
 
   it("settles pending token loading after stop", async () => {

@@ -54,52 +54,35 @@ describe("session projection identity conformance", () => {
   });
 
   it.each([
-    [
-      "persisted identity wins over conflicting Gateway envelope",
-      persistedUser("persisted-id", 3, { runId: "persisted-run" }),
-      {
-        clientRunId: "envelope-run",
-        messageId: "envelope-id",
-        messageSeq: 99,
-        runId: "conflicting-producer-run",
-      },
-      {
-        id: "persisted-id",
-        idempotencyKey: "persisted-run:user",
-        role: "user",
-        runId: "persisted-run",
-        sequence: 3,
-      },
-    ],
-    [
-      "producer-owned assistant run wins over its assistant idempotency suffix",
-      assistant("held partial", {
-        id: "aborted-assistant",
-        idempotencyKey: "producer-run:assistant",
+    ["user", "persisted-run", "conflicting-producer-run"],
+    ["assistant", "producer-run", "producer-run"],
+  ] as const)(
+    "keeps persisted %s identity and producer-owned run precedence",
+    (role, runId, envelopeRun) => {
+      const id = `${role}-row`;
+      const idempotencyKey = `${runId}:${role}`;
+      const message = (role === "user" ? user : assistant)("persisted", {
+        id,
+        idempotencyKey,
         seq: 3,
+      });
+      expect(
+        readSessionMessageIdentity(message, {
+          clientRunId: "conflicting-client-run",
+          messageId: "envelope-id",
+          messageSeq: 99,
+          runId: envelopeRun,
+        }),
+      ).toMatchObject({ id, idempotencyKey, role, runId, sequence: 3 });
+    },
+  );
+
+  it("falls back from an unsafe persisted sequence to the envelope", () => {
+    expect(
+      readSessionMessageIdentity(persistedUser("unsafe-sequence", Number.MAX_SAFE_INTEGER + 1), {
+        messageSeq: 5,
       }),
-      {
-        clientRunId: "conflicting-client-run",
-        messageId: "aborted-assistant",
-        messageSeq: 3,
-        runId: "producer-run",
-      },
-      {
-        id: "aborted-assistant",
-        idempotencyKey: "producer-run:assistant",
-        role: "assistant",
-        runId: "producer-run",
-        sequence: 3,
-      },
-    ],
-    [
-      "unsafe persisted sequence falls back to a valid envelope sequence",
-      persistedUser("unsafe-sequence", Number.MAX_SAFE_INTEGER + 1),
-      { messageSeq: 5 },
-      { id: "unsafe-sequence", role: "user", sequence: 5 },
-    ],
-  ] as const)("normalizes %s", (_name, message, envelope, expected) => {
-    expect(readSessionMessageIdentity(message, envelope)).toMatchObject(expected);
+    ).toMatchObject({ id: "unsafe-sequence", role: "user", sequence: 5 });
   });
 
   it("replays stale history, same-text sends, duplicates, gaps, and terminal events", () => {
