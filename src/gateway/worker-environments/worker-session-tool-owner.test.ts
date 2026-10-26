@@ -67,7 +67,7 @@ it.each([false, true])(
         if (!shared) {
           await setSession("main", { sessionKey: "global", sessionId: "unrelated-main-parent" });
         }
-        const delivered: Array<{ agentId: string; sessionKey: string }> = [];
+        const delivered: Array<[string, string]> = [];
         mocks.gatewayRequest.mockImplementation(async (request) => {
           if (request.method === "sessions.resolve") {
             const target = await realLookup.resolveGatewaySessionStoreTargetInWorker({
@@ -79,10 +79,7 @@ it.each([false, true])(
           }
           if (request.method === "agent") {
             request.sessionMutationCommitGuard?.();
-            delivered.push({
-              agentId: request.params.agentId,
-              sessionKey: request.params.sessionKey,
-            });
+            delivered.push([request.params.agentId, request.params.sessionKey]);
             return { runId: request.params.idempotencyKey, status: "accepted" };
           }
           throw new Error(`Unexpected Gateway method: ${request.method}`);
@@ -94,8 +91,8 @@ it.each([false, true])(
           });
         }
         expect(delivered).toEqual([
-          { agentId: "ops", sessionKey: "global" },
-          { agentId: "ops", sessionKey: sibling.sessionKey },
+          ["ops", "global"],
+          ["ops", sibling.sessionKey],
         ]);
       } finally {
         lookupSpy.mockRestore();

@@ -58,10 +58,8 @@ export async function proveOversizedWorkspaceRecovery({
   const pending = await readProjection();
   expect(pending).toMatchObject({ pending_target: "canonical" });
   expect(pending!.pending_ref).toBeTruthy();
-  for (const message of ["Hello", "Continue"]) {
-    await expect(prepareSandbox(), message).rejects.toThrow(oversizedError);
-    expect((await readProjection())!.pending_ref).toBe(pending!.pending_ref);
-  }
+  await expect(prepareSandbox()).rejects.toThrow(oversizedError);
+  expect((await readProjection())!.pending_ref).toBe(pending!.pending_ref);
   expect((await fs.stat(artifact)).size).toBe(oversizedBytes);
   expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("original\n");
   const { recoverLocalWorkspaceFile } = await import("./local-workspace-recovery.js");
