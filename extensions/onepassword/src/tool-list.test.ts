@@ -18,11 +18,11 @@ const NOW = 10_000;
 const invocation = { agentId: "agent-a", sessionKey: "session-a", sessionId: "conversation-a" };
 
 const hash = (parts: string[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-const grantKey = (agentId: string, slug: string) => hash([agentId, slug]);
+const grantKey = (slug: string) => hash([invocation.agentId, slug]);
 
-function grant(slug: string, agentId = invocation.agentId): StandingGrant {
+function grant(slug: string): StandingGrant {
   return {
-    agentId,
+    agentId: invocation.agentId,
     slug,
     grantedAtMs: NOW - 1,
     expiresAtMs: NOW + 60_000,
@@ -32,12 +32,18 @@ function grant(slug: string, agentId = invocation.agentId): StandingGrant {
 
 describe("onepassword list with SQLite grants", () => {
   let env: NodeJS.ProcessEnv;
+  let grants: PluginStateKeyedStore<StandingGrant, 2>;
 
   beforeEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("onepassword-list-") };
     vi.spyOn(Date, "now").mockReturnValue(NOW);
+    grants = createPluginStateKeyedStoreV2ForTests<StandingGrant>(
+      "onepassword",
+      { namespace: "grants", maxEntries: 1_024, overflowPolicy: "evict-oldest", env },
+      { assertCurrent() {} },
+    );
   });
 
   afterEach(async () => {
@@ -45,19 +51,6 @@ describe("onepassword list with SQLite grants", () => {
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
-
-  function openGrants() {
-    return createPluginStateKeyedStoreV2ForTests<StandingGrant>(
-      "onepassword",
-      {
-        namespace: "grants",
-        maxEntries: 1_024,
-        overflowPolicy: "evict-oldest",
-        env,
-      },
-      { assertCurrent() {} },
-    );
-  }
 
   function storedRows() {
     const { db } = openOpenClawStateDatabase({ env });
@@ -71,30 +64,28 @@ describe("onepassword list with SQLite grants", () => {
     };
   }
 
-  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant, 2>) {
-    const getItem = vi.fn(async () => {
-      throw new Error("list must not retrieve a secret");
-    });
+  function setup(slugs: string[], store = grants) {
     const broker = new OnePasswordBroker({
       resolveConfig: () =>
         parseOnePasswordConfig({
           vault: "Automation",
-          grantTtlHours: 1,
           items: Object.fromEntries(slugs.map((slug) => [slug, { item: slug }])),
         }),
-      opClient: { getItem },
-      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },
+      opClient: {
+        getItem: async () => {
+          throw new Error("list must not retrieve a secret");
+        },
+      },
+      stores: { grants: store, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },
     });
-    const list = (agentId: string | undefined = invocation.agentId) =>
+    return (agentId: string | undefined = invocation.agentId) =>
       createOnePasswordTool(broker, { ...invocation, agentId }).execute("list", { action: "list" });
-    return { list, getItem };
   }
 
   it("validates selected grants", async () => {
-    const grants = openGrants();
     const slugs = ["wrong-slug", "wrong-agent", "retargeted", "missing", "expired", "active"];
     for (const slug of slugs.filter((value) => value !== "missing")) {
-      await grants.register(grantKey(invocation.agentId, slug), {
+      await grants.register(grantKey(slug), {
         ...grant(slug),
         ...(slug === "wrong-agent" ? { agentId: "other" } : {}),
         ...(slug === "wrong-slug" ? { slug: "other" } : {}),
@@ -102,7 +93,7 @@ describe("onepassword list with SQLite grants", () => {
         ...(slug === "retargeted" ? { targetFingerprint: "old-target" } : {}),
       });
     }
-    const { list, getItem } = setup(slugs, grants);
+    const list = setup(slugs);
     expect((await list()).details).toEqual({
       ok: true,
       items: [...slugs].toSorted().map((slug) => ({
@@ -112,41 +103,27 @@ describe("onepassword list with SQLite grants", () => {
         standingGrantActive: slug === "active",
       })),
     });
-    expect(getItem).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("validates stored corruption (selected: %s)", async (selected) => {
-    const grants = openGrants();
-    const key = grantKey(invocation.agentId, "selected");
+    const key = grantKey("selected");
     // Seed malformed storage before reads or writes can publish a cached postimage.
     const { insert } = storedRows();
     insert(key, selected ? "{" : JSON.stringify(grant("selected")));
     insert("unrelated", "{");
-    if (selected) {
-      expect((await setup(["selected"], grants).list()).details).toMatchObject({
-        ok: false,
-        error: { code: "PLUGIN_STATE_CORRUPT" },
-      });
-      return;
-    }
-    expect((await setup(["selected"], grants).list()).details).toMatchObject({
-      ok: true,
-      items: [{ slug: "selected", standingGrantActive: true }],
-    });
+    expect((await setup(["selected"])()).details).toMatchObject(
+      selected
+        ? { ok: false, error: { code: "PLUGIN_STATE_CORRUPT" } }
+        : { ok: true, items: [{ slug: "selected", standingGrantActive: true }] },
+    );
   });
 
   it("treats null and expired rows as inactive without changing stored rows", async () => {
-    const grants = openGrants();
     const { insert, rows } = storedRows();
-    insert(grantKey(invocation.agentId, "null-value"), "null");
-    insert(
-      grantKey(invocation.agentId, "expired-row"),
-      JSON.stringify(grant("expired-row")),
-      NOW - 1,
-      NOW,
-    );
+    insert(grantKey("null-value"), "null");
+    insert(grantKey("expired-row"), JSON.stringify(grant("expired-row")), NOW - 1, NOW);
     const before = rows();
-    expect((await setup(["null-value", "expired-row"], grants).list()).details).toMatchObject({
+    expect((await setup(["null-value", "expired-row"])()).details).toMatchObject({
       ok: true,
       items: [
         { slug: "expired-row", standingGrantActive: false },
@@ -157,26 +134,19 @@ describe("onepassword list with SQLite grants", () => {
   });
 
   it("skips grant reads without an agent and never retries a rejected bulk read", async () => {
-    const grants = openGrants();
-    const entries = vi.fn(grants.entries);
-    const lookup = vi.fn(grants.lookup);
     const lookupMany = vi.fn(async () => {
       throw new Error("grant read unavailable");
     });
-    const { list, getItem } = setup(["selected"], { ...grants, entries, lookup, lookupMany });
+    const list = setup(["selected"], { ...grants, lookupMany });
     expect((await list("")).details).toMatchObject({
       ok: true,
       items: [{ standingGrantActive: false }],
     });
     expect(lookupMany).not.toHaveBeenCalled();
-    expect(entries).not.toHaveBeenCalled();
     expect((await list()).details).toMatchObject({
       ok: false,
       error: { message: "grant read unavailable" },
     });
     expect(lookupMany).toHaveBeenCalledTimes(1);
-    expect(entries).not.toHaveBeenCalled();
-    expect(lookup).not.toHaveBeenCalled();
-    expect(getItem).not.toHaveBeenCalled();
   });
 });

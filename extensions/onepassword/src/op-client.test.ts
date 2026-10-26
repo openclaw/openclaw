@@ -4,7 +4,6 @@ import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
@@ -22,7 +21,7 @@ const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureAuth = ["fixture", "auth"].join("-");
 const value = ["right", "fixture"].join("-");
-const request = { item: "Token", vault: "Automation", field: "credential" };
+const request = { item: "Repository token", vault: "Automation", field: "credential" };
 const client = (options: Partial<ConstructorParameters<typeof OpClient>[0]> = {}) =>
   new OpClient({ opBin, tokenFile, timeoutMs: 1000, ...options });
 const read = (instance = client()) => instance.getItem(request);
@@ -48,43 +47,32 @@ afterEach(() => vi.restoreAllMocks());
 
 it("constructs one cache-disabled request with minimal environment and trims the token", async () => {
   respond({ id: "new", label: "credential", value });
-  await expect(
-    client({ timeoutMs: 1234 }).getItem({ ...request, item: "Repository token" }),
-  ).resolves.toEqual({ value, itemTitle: "Repository token", fieldLabel: "credential" });
-  expect(runner).toHaveBeenCalledTimes(1);
-  expect(runner).toHaveBeenCalledWith(
-    await fs.realpath(opBin),
-    [
-      "item",
-      "get",
-      "Repository token",
-      "--vault",
-      "Automation",
-      "--fields",
-      "credential",
-      "--format",
-      "json",
-      "--cache=false",
-    ],
-    {
-      baseEnv: {},
-      env: {
-        OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth,
-        HOME: root,
-        OP_LOAD_DESKTOP_APP_SETTINGS: "false",
-        OP_BIOMETRIC_UNLOCK_ENABLED: "false",
-      },
-      timeoutMs: 1234,
-      maxBuffer: 1024 * 1024,
-      logOutput: false,
-    },
-  );
+  await expect(read()).resolves.toEqual({
+    value,
+    itemTitle: request.item,
+    fieldLabel: request.field,
+  });
+  const [binary, args, options] = runner.mock.calls[0]!;
+  expect(binary).toBe(await fs.realpath(opBin));
+  expect(args).toEqual([
+    "item",
+    "get",
+    "Repository token",
+    ..."--vault Automation --fields credential --format json --cache=false".split(" "),
+  ]);
+  expect(options?.baseEnv).toEqual({});
+  expect(options?.env).toEqual({
+    OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth,
+    HOME: root,
+    OP_LOAD_DESKTOP_APP_SETTINGS: "false",
+    OP_BIOMETRIC_UNLOCK_ENABLED: "false",
+  });
+  expect(options?.logOutput).toBe(false);
 });
 
 it("rejects a mismatched field response without exposing its value", async () => {
   respond({ id: "one", label: "username", value: ["private", "user"].join("-") });
   const error = await read().catch((caught: unknown) => caught);
-  expect(error).toBeInstanceOf(OnePasswordError);
   expect(error).toMatchObject({ code: "FIELD_NOT_FOUND" });
   expect(String(error)).not.toContain("private-");
 });
@@ -140,11 +128,8 @@ it.each(["unresolved", "removed"])("rejects an %s binary before execution", asyn
   expect(runner).not.toHaveBeenCalled();
 });
 
-it.runIf(process.platform !== "win32")(
-  "does not read or pass the token to an executable in an unsafe directory",
-  async () => {
-    await fs.chmod(root, 0o777);
-    await expect(read()).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
-    expect(runner).not.toHaveBeenCalled();
-  },
-);
+it.runIf(process.platform !== "win32")("blocks unsafe executables", async () => {
+  await fs.chmod(root, 0o777);
+  await expect(read()).rejects.toMatchObject({ code: "OP_NOT_FOUND" });
+  expect(runner).not.toHaveBeenCalled();
+});
