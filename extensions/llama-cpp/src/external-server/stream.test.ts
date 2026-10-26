@@ -33,6 +33,13 @@ function streamWithWait(streamFn: StreamFn, options: Parameters<StreamFn>[2]) {
   );
 }
 
+function afterPayload(result: ReturnType<StreamFn>): StreamFn {
+  return async (model, _context, options) => {
+    await options?.onPayload?.({}, model);
+    return result;
+  };
+}
+
 function applyPayload(
   payload: unknown,
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"] = "off",
@@ -71,24 +78,18 @@ it("does not force thinking on when OpenClaw selected another level", async () =
   await expect(applyPayload(payload, "high")).resolves.toBe(payload);
 });
 
-it("maps OpenAI nested JSON Schema to llama-server's direct schema field", async () => {
-  await expect(
-    applyPayload({
+it.each([
+  {
+    source: "nested OpenAI schema",
+    payload: {
       model: "model",
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: "openclaw_response", schema },
-      },
-    }),
-  ).resolves.toMatchObject({
-    response_format: { type: "json_object", schema },
-  });
-});
-
-it("injects a direct schema when the shared transport omits it", async () => {
-  await expect(
-    applyPayload({ model: "model" }, "off", { responseFormat: schema }),
-  ).resolves.toMatchObject({
+      response_format: { type: "json_schema", json_schema: { name: "openclaw_response", schema } },
+    },
+    options: {},
+  },
+  { source: "transport option", payload: { model: "model" }, options: { responseFormat: schema } },
+])("maps $source to llama-server's direct schema field", async ({ payload, options }) => {
+  await expect(applyPayload(payload, "off", options)).resolves.toMatchObject({
     response_format: { type: "json_object", schema },
   });
 });
@@ -98,13 +99,12 @@ it("reports a response wait without claiming a slot and clears on first event", 
   const notify = vi.fn();
   const source = createAssistantMessageEventStream();
   const stream = await streamWithWait(
-    async (model, _context, options) => {
-      await options?.onPayload?.({}, model);
-      return Object.freeze({
+    afterPayload(
+      Object.freeze({
         [Symbol.asyncIterator]: () => source[Symbol.asyncIterator](),
         result: () => source.result(),
-      });
-    },
+      }),
+    ),
     { onProviderWait: notify },
   );
   await vi.advanceTimersByTimeAsync(1_000);
@@ -124,13 +124,10 @@ it.each(["cancel", "failure"] as const)("clears a held request on %s", async (en
   const controller = new AbortController();
   const pending = Promise.withResolvers<ReturnType<typeof createAssistantMessageEventStream>>();
   const result = Promise.resolve(
-    streamWithWait(
-      async (model, _context, options) => {
-        await options?.onPayload?.({}, model);
-        return pending.promise;
-      },
-      { onProviderWait: notify, signal: controller.signal },
-    ),
+    streamWithWait(afterPayload(pending.promise), {
+      onProviderWait: notify,
+      signal: controller.signal,
+    }),
   ).catch((error: unknown) => error);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(notify.mock.calls).toEqual([["response"]]);

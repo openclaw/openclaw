@@ -1,103 +1,88 @@
+import type { IncomingMessage } from "node:http";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { discoverLlamaServer } from "./discovery.js";
 
-const discoverRowsMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-setup")>()),
-  discoverOpenAICompatibleLocalModels: discoverRowsMock,
-}));
-
-async function useRealDiscovery() {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-setup")>(
-    "openclaw/plugin-sdk/provider-setup",
-  );
-  discoverRowsMock.mockImplementation(actual.discoverOpenAICompatibleLocalModels);
+function withDiscovery(
+  reply: (request: IncomingMessage) => unknown,
+  run: (baseUrl: string) => Promise<void>,
+) {
+  return withServer((request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    const body = reply(request);
+    response.end(typeof body === "string" ? body : JSON.stringify(body));
+  }, run);
 }
 
-const endpoint = {
-  origin: "http://localhost:8080",
-  inferenceBaseUrl: "http://localhost:8080/v1",
-};
-
-beforeEach(() => {
-  discoverRowsMock.mockReset();
-});
+const result = (id: string) => ({ kind: "success", models: [{ config: { id } }] });
 
 it.each([
-  { caps: { supports_reasoning_effort: true }, reasoning: true },
-  { caps: { supports_reasoning_effort: false }, reasoning: false },
-  { caps: {}, reasoning: false },
-])("projects model rows with $caps", async ({ caps, reasoning }) => {
-  discoverRowsMock.mockResolvedValue({
-    kind: "success",
-    rows: [
-      {
-        model: { id: "qwen/model:Q4_K_M", object: "model", status: { value: "sleeping" } },
-        props: {
-          default_generation_settings: { n_ctx: 32_768 },
-          chat_template_caps: { ...caps, supports_tools: true, supports_tool_calls: true },
-        },
-      },
-    ],
-  });
-
-  await expect(discoverLlamaServer({ baseUrl: endpoint.inferenceBaseUrl })).resolves.toMatchObject({
-    kind: "success",
-    endpoint,
-    models: [
-      {
-        status: "sleeping",
-        config: {
-          id: "qwen/model:Q4_K_M",
-          reasoning,
-          contextWindow: 32_768,
-          compat: { supportsTools: true, supportsReasoningEffort: reasoning },
-        },
-      },
-    ],
-  });
+  {
+    body: "<!doctype html><html><body>Local model app</body></html>",
+    caps: { supports_reasoning_effort: true },
+    reasoning: true,
+  },
+  {
+    body: JSON.stringify({ app: "local-models" }),
+    caps: { supports_reasoning_effort: false },
+    reasoning: false,
+  },
+  { body: undefined, caps: {}, reasoning: false },
+])("discovers rows with $caps behind $body", async ({ body, caps, reasoning }) => {
+  const requests: string[] = [];
+  await withDiscovery(
+    ({ url }) => {
+      requests.push(url ?? "");
+      if (url === "/models" && body) {
+        return body;
+      }
+      if (url?.endsWith("/models")) {
+        return {
+          data: [{ id: "qwen/model:Q4_K_M", object: "model", status: { value: "sleeping" } }],
+        };
+      }
+      return url?.startsWith("/props")
+        ? {
+            default_generation_settings: { n_ctx: 32_768 },
+            chat_template_caps: { ...caps, supports_tools: true, supports_tool_calls: true },
+          }
+        : {};
+    },
+    async (baseUrl) => {
+      await expect(discoverLlamaServer({ baseUrl: `${baseUrl}/v1` })).resolves.toMatchObject({
+        kind: "success",
+        endpoint: { origin: baseUrl, inferenceBaseUrl: `${baseUrl}/v1` },
+        models: [
+          {
+            status: "sleeping",
+            config: {
+              id: "qwen/model:Q4_K_M",
+              reasoning,
+              contextWindow: 32_768,
+              compat: { supportsTools: true, supportsReasoningEffort: reasoning },
+            },
+          },
+        ],
+      });
+      expect(requests).toEqual([
+        "/health",
+        "/models",
+        ...(body ? ["/v1/models"] : []),
+        "/props?model=qwen%2Fmodel%3AQ4_K_M&autoload=false",
+      ]);
+    },
+  );
 });
 
 it("attaches the normalized endpoint to shared discovery failures", async () => {
-  discoverRowsMock.mockResolvedValue({
-    kind: "invalid-response",
-    path: "/models",
-    error: new Error("malformed"),
-  });
-
-  await expect(discoverLlamaServer({ baseUrl: "localhost:8080" })).resolves.toMatchObject({
-    kind: "invalid-response",
-    path: "/models",
-    endpoint,
-  });
-});
-
-it.each([
-  { name: "HTML app shell", body: "<!doctype html><html><body>Local model app</body></html>" },
-  { name: "non-model JSON", body: JSON.stringify({ app: "local-models" }) },
-])("discovers an existing server behind a root $name response", async ({ body }) => {
-  await useRealDiscovery();
-  const requests: string[] = [];
-  await withServer(
-    (request, response) => {
-      requests.push(request.url ?? "");
-      if (request.url === "/models") {
-        response.end(body);
-      } else if (request.url === "/v1/models") {
-        response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({ data: [{ id: "local-model", object: "model" }] }));
-      } else {
-        response.end("{}");
-      }
-    },
+  await withDiscovery(
+    () => ({}),
     async (baseUrl) => {
-      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject({
-        kind: "success",
-        models: [{ config: { id: "local-model" } }],
+      await expect(discoverLlamaServer({ baseUrl: `${baseUrl}/v1` })).resolves.toMatchObject({
+        kind: "invalid-response",
+        path: "/v1/models",
+        endpoint: { origin: baseUrl, inferenceBaseUrl: `${baseUrl}/v1` },
       });
-      expect(requests).toEqual(["/health", "/models", "/v1/models", "/props"]);
     },
   );
 });
@@ -105,23 +90,18 @@ it.each([
 it.each([
   { name: "API key", access: { apiKey: "endpoint-key" } },
   { name: "authorization header", access: { headers: { Authorization: "Bearer endpoint-key" } } },
-  { name: "anonymous access", access: {} },
 ])("fetches fresh discovery for $name and subsequent anonymous requests", async ({ access }) => {
-  await useRealDiscovery();
   let modelId = "anonymous-model";
   const modelRequests: Array<string | undefined> = [];
-  await withServer(
-    (request, response) => {
-      response.setHeader("Content-Type", "application/json");
+  await withDiscovery(
+    (request) => {
       if (request.url === "/models") {
         modelRequests.push(request.headers.authorization);
-        response.end(JSON.stringify({ data: [{ id: modelId, status: { value: "unloaded" } }] }));
-      } else {
-        response.end("{}");
+        return { data: [{ id: modelId, status: { value: "unloaded" } }] };
       }
+      return {};
     },
     async (baseUrl) => {
-      const result = (id: string) => ({ kind: "success", models: [{ config: { id } }] });
       await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(
         result("anonymous-model"),
       );
@@ -130,11 +110,7 @@ it.each([
         result("fresh-model"),
       );
       await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(result("fresh-model"));
-      expect(modelRequests).toEqual([
-        undefined,
-        "apiKey" in access || "headers" in access ? "Bearer endpoint-key" : undefined,
-        undefined,
-      ]);
+      expect(modelRequests).toEqual([undefined, "Bearer endpoint-key", undefined]);
     },
   );
 });

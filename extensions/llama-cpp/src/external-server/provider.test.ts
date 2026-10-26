@@ -26,19 +26,21 @@ function success(name = "org/model:Q4") {
   return successfulDiscovery(DISCOVERY_ORIGIN, { id: "org/model:Q4", name });
 }
 
-function catalogContext(provider?: Partial<ModelProviderConfig>): ProviderCatalogContext {
-  const config: ProviderCatalogContext["config"] = {};
-  if (provider) {
-    const configured = { baseUrl: LOCAL_BASE_URL, models: [], ...provider };
-    config.models = { providers: { "llama-cpp": configured } };
-  }
+function catalogContext(
+  provider?: Partial<ModelProviderConfig>,
+  auth: ReturnType<ProviderCatalogContext["resolveProviderApiKey"]> = { apiKey: undefined },
+): ProviderCatalogContext {
   return {
-    config,
+    config: provider
+      ? {
+          models: {
+            providers: { "llama-cpp": { baseUrl: LOCAL_BASE_URL, models: [], ...provider } },
+          },
+        }
+      : {},
     env: {},
-    resolveProviderApiKey: vi.fn(() => ({ apiKey: undefined })),
-    resolveProviderAuth: vi.fn(
-      () => ({ apiKey: undefined, mode: "none", source: "none" }) as const,
-    ),
+    resolveProviderApiKey: () => auth,
+    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
   };
 }
 
@@ -54,10 +56,7 @@ function dynamicContext(
     provider: "llama-cpp",
     modelId: "org/model:Q4",
     modelRegistry: {} as never,
-    providerConfig: {
-      baseUrl: LOCAL_BASE_URL,
-      api: "openai-completions",
-    },
+    providerConfig: { baseUrl: LOCAL_BASE_URL, api: "openai-completions" },
     ...overrides,
   };
 }
@@ -70,8 +69,7 @@ describe("llama-server provider discovery", () => {
 
   it("publishes live discovery with the profile that supplied its credential", async () => {
     discoverMock.mockResolvedValue(success());
-    const ctx = catalogContext();
-    ctx.resolveProviderApiKey = () => ({
+    const ctx = catalogContext(undefined, {
       apiKey: "LLAMA_SERVER_API_KEY",
       discoveryApiKey: "profile-key",
       profileId: "llama-cpp:default",
@@ -91,12 +89,14 @@ describe("llama-server provider discovery", () => {
   it("prefers configured Authorization over ambient API-key discovery auth", async () => {
     discoverMock.mockResolvedValue(success());
     const headers = { Authorization: "Bearer proxy-key" };
-    const ctx = catalogContext({ headers });
-    ctx.resolveProviderApiKey = vi.fn(() => ({
-      apiKey: "LLAMA_SERVER_API_KEY",
-      discoveryApiKey: "ambient-key",
-      profileId: "llama-cpp:ambient",
-    }));
+    const ctx = catalogContext(
+      { headers },
+      {
+        apiKey: "LLAMA_SERVER_API_KEY",
+        discoveryApiKey: "ambient-key",
+        profileId: "llama-cpp:ambient",
+      },
+    );
 
     const result = await discoverLlamaServerProvider(ctx);
     expect(result?.outcomes).toEqual([{ provider: "llama-cpp", status: "ready" }]);
@@ -129,8 +129,7 @@ describe("llama-server provider discovery", () => {
 
   it("keeps unconfigured probes quiet with a custom-local marker", async () => {
     discoverMock.mockResolvedValue({ kind: "unreachable", error: new Error("offline") });
-    const ctx = catalogContext();
-    ctx.resolveProviderApiKey = () => ({ apiKey: "custom-local" });
+    const ctx = catalogContext(undefined, { apiKey: "custom-local" });
     await expect(discoverLlamaServerProvider(ctx)).resolves.toBeNull();
   });
 
@@ -163,9 +162,7 @@ describe("llama-server provider discovery", () => {
     const headers = { Authorization: "Bearer endpoint-key" };
 
     await prepareLlamaServerDynamicModel(
-      dynamicContext({
-        providerConfig: { baseUrl: LOCAL_BASE_URL, headers },
-      }),
+      dynamicContext({ providerConfig: { baseUrl: LOCAL_BASE_URL, headers } }),
     );
 
     expectDiscovery({ apiKey: undefined, headers });
@@ -177,9 +174,7 @@ describe("llama-server provider discovery", () => {
       endpoint: success().endpoint,
       error: new Error("offline"),
     });
-    const ctx = dynamicContext({
-      agentRuntimeId: "failed-refresh-runtime",
-    });
+    const ctx = dynamicContext({ agentRuntimeId: "failed-refresh-runtime" });
 
     await expect(prepareLlamaServerDynamicModel(ctx)).resolves.toMatchObject({
       id: "org/model:Q4",
