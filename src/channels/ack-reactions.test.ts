@@ -83,36 +83,29 @@ describe("createAckReactionHandle", () => {
   });
 });
 
-describe("removeAckReactionAfterReply", () => {
-  it("skips removal when ack did not happen", async () => {
-    const remove = vi.fn().mockResolvedValue(undefined);
-    removeAckReactionAfterReply({
-      removeAfterReply: true,
-      ackReactionPromise: Promise.resolve(false),
-      ackReactionValue: "👀",
-      remove,
-    });
-    await Promise.resolve();
-    expect(remove).not.toHaveBeenCalled();
+it("skips removal when ack did not happen", async () => {
+  const remove = vi.fn().mockResolvedValue(undefined);
+  removeAckReactionAfterReply({
+    removeAfterReply: true,
+    ackReactionPromise: Promise.resolve(false),
+    ackReactionValue: "👀",
+    remove,
   });
+  await Promise.resolve();
+  expect(remove).not.toHaveBeenCalled();
 });
 
-describe("removeAckReactionHandleAfterReply", () => {
-  it("removes through an ack handle", async () => {
-    const remove = vi.fn().mockResolvedValue(undefined);
-    const onError = vi.fn();
-    removeAckReactionHandleAfterReply({
-      removeAfterReply: true,
-      onError,
-      ackReaction: {
-        ackReactionPromise: Promise.resolve(true),
-        ackReactionValue: "👀",
-        remove,
-      },
-    });
-
-    await Promise.resolve();
-    expect(remove).toHaveBeenCalledTimes(1);
-    expect(onError).not.toHaveBeenCalled();
+it("removes through an ack handle", async () => {
+  const { handle, remove } = makeAck();
+  const onError = vi.fn();
+  removeAckReactionHandleAfterReply({
+    removeAfterReply: true,
+    onError,
+    ackReaction: handle,
   });
+
+  await handle?.ackReactionPromise;
+  await Promise.resolve();
+  expect(remove).toHaveBeenCalledTimes(1);
+  expect(onError).not.toHaveBeenCalled();
 });

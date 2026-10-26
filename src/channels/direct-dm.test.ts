@@ -2,9 +2,10 @@ import { expect, it, vi } from "vitest";
 import { dispatchInboundDirectDm } from "./direct-dm.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import { resolveStableChannelIngressPolicy } from "./message-access/runtime.js";
+import type { ChannelTurnPlan } from "./turn/types.js";
 
 const mocks = vi.hoisted(() => ({
-  dispatchRoutedChannelTurn: vi.fn(async () => undefined),
+  dispatchRoutedChannelTurn: vi.fn<(plan: ChannelTurnPlan) => Promise<void>>(async () => undefined),
   onModelSelected: vi.fn(),
 }));
 
@@ -99,12 +100,10 @@ it("threads a durable ingress adoption lifecycle into the turn plan", async () =
     assertAuthority,
   });
 
-  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      assertAuthority,
-      replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
-    }),
-  );
+  expect(mocks.dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0]).toMatchObject({
+    assertAuthority,
+    replyOptions: { turnAdoptionLifecycle },
+  });
   expect(assertAuthority).not.toHaveBeenCalled();
   expect(contextParams()?.channelIngress).toBe("unsupported");
 });
@@ -114,8 +113,7 @@ it("resolves exact ingress provenance once after the final route is known", asyn
 
   await dispatchDm({ resolveChannelIngress });
 
-  expect(resolveChannelIngress).toHaveBeenCalledOnce();
-  expect(resolveChannelIngress).toHaveBeenCalledWith({
+  expect(resolveChannelIngress).toHaveBeenCalledExactlyOnceWith({
     agentId: "agent-1",
     sessionKey: "agent:agent-1:nostr:direct:peer-1",
     messageId: "event-1",

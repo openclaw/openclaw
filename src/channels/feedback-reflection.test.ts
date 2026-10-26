@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runChannelFeedbackReflection } from "./feedback-reflection.js";
 import {
   consumeChannelAdmissionEvidence,
@@ -19,7 +18,16 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
-const cfg = {} as OpenClawConfig;
+const cfg = {};
+const learning = "Answer the direct question first.";
+const complete = {
+  status: "complete",
+  learning,
+  storePath: "/state/main/sessions.json",
+  followUp: false,
+  userMessage: undefined,
+  responseLength: 33,
+};
 function reflectionParams(id: string) {
   return {
     cfg,
@@ -56,7 +64,7 @@ it("classifies internal reflection as explicitly unsupported provenance", async 
 it("runs reflection in the original session and enforces cooldown", async () => {
   deliverReflection(
     JSON.stringify({
-      learning: "Answer the direct question first.",
+      learning,
       followUp: true,
       userMessage: "Want a shorter version?",
     }),
@@ -69,9 +77,7 @@ it("runs reflection in the original session and enforces cooldown", async () => 
   };
 
   await expect(runChannelFeedbackReflection(params)).resolves.toEqual({
-    status: "complete",
-    learning: "Answer the direct question first.",
-    storePath: "/state/main/sessions.json",
+    ...complete,
     followUp: true,
     userMessage: "Want a shorter version?",
     responseLength: 104,
@@ -92,16 +98,8 @@ it("runs reflection in the original session and enforces cooldown", async () => 
 });
 
 it("preserves a plain-text reflection as internal learning", async () => {
-  deliverReflection("Answer the direct question first.");
-
-  await expect(runChannelFeedbackReflection(reflectionParams("plain"))).resolves.toEqual({
-    status: "complete",
-    learning: "Answer the direct question first.",
-    storePath: "/state/main/sessions.json",
-    followUp: false,
-    userMessage: undefined,
-    responseLength: 33,
-  });
+  deliverReflection(learning);
+  await expect(runChannelFeedbackReflection(reflectionParams("plain"))).resolves.toEqual(complete);
 });
 
 it("does not treat structured follow-up values as directives", async () => {
