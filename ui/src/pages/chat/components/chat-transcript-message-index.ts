@@ -64,7 +64,10 @@ type TranscriptIndex = Readonly<{
   liveItem?: StreamOwner;
 }>;
 
-type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems" | "live">;
+type TranscriptIndexSource = Pick<
+  TranscriptChain,
+  "searchActive" | "transcriptItems" | "continuations" | "live"
+>;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
 type StreamOwner = Extract<ChatRenderItem, { kind: "stream-run" | "agent-run-frame" }>;
@@ -265,13 +268,34 @@ export function projectTranscriptIndex(
     const transcriptMessageKeys = new Map<string, string>();
     const rows: TranscriptRow<ChatRenderItem>[] = [];
     const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
-      const messages = chatItemGroups(item).flatMap((group) =>
+      const groups = chatItemGroups(item);
+      const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+      if (
+        chain.continuations.has(item.key) ||
+        (item.kind === "agent-run-frame" && item.outcome.kind === "active") ||
+        groups.some((group) => group.isStreaming) ||
+        parts.some(
+          (part) =>
+            part.kind === "stream-run" ||
+            part.kind === "stream" ||
+            part.kind === "reading-indicator",
+        )
+      ) {
+        return { kind: "item", key, item };
+      }
+      const messages = groups.flatMap((group) =>
         group.messages.map(({ message }) => [
           nativeHistoryMessageIdentity(message) ?? message,
           props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
         ]),
       );
-      const content = JSON.stringify(messages.length ? messages : item);
+      const content = JSON.stringify(
+        item.kind === "agent-run-frame"
+          ? [item.outcome.kind, messages]
+          : messages.length
+            ? messages
+            : item,
+      );
       return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
     };
     for (const item of chain.transcriptItems) {
