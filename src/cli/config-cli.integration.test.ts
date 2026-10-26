@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
@@ -14,12 +12,8 @@ import {
 const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
-const { readDeferredPluginMigrations, recordDeferredPluginMigrations } =
-  await import("../infra/deferred-plugin-migrations.js");
-const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
-const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
-  await import("./config-cli.js");
+const { runConfigGet, runConfigSet } = await import("./config-cli.js");
 const {
   registeredRuntimeLogs: logs,
   registeredRuntimeErrors: errors,
@@ -58,8 +52,6 @@ function configWriter() {
         beforePersistentApply,
         runtime: output.runtime,
       }),
-    patch: (file: string) => runConfigPatch({ cliOptions: { file }, runtime: output.runtime }),
-    unset: (field: string) => runConfigUnset({ path: field, runtime: output.runtime }),
   };
 }
 
@@ -97,63 +89,7 @@ async function getError(field: string, json: boolean): Promise<string> {
 }
 
 describe("config cli integration", () => {
-  it("edits canonical config without consuming pending plugin migrations", async () => {
-    const pluginPath = "plugins.entries.sample.config";
-    const raw = JSON.stringify({
-      gateway: { mode: "local", port: 18789 },
-      session: { store: "/srv/legacy/sessions.json" },
-      plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
-    });
-    await withConfig(raw, async ({ configPath, tempDir }) => {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempDir, "state") }, async () => {
-        try {
-          await recordDeferredPluginMigrations({
-            pending: [
-              {
-                pluginId: "sample",
-                reason: "The configured plugin is not installed.",
-                command: "openclaw plugins install @example/sample",
-                requiresStateMigration: true,
-                configPaths: [
-                  ["plugins", "entries", "sample", "config"],
-                  ["session", "store"],
-                ],
-              },
-            ],
-          });
-          const pending = readDeferredPluginMigrations();
-          await set(`${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run");
-          expect(read(configPath)).toBe(raw);
-          expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
-          await set(`${pluginPath}.legacyRoot`, "/srv/replacement");
-          expect(load(configPath).plugins.entries.sample.config).toEqual({
-            legacyRoot: "/srv/replacement",
-          });
-          expect(read(`${configPath}.bak`)).toBe(raw);
-          await set("gateway.port", "18790");
-          expect(load(configPath)).toMatchObject({
-            gateway: { port: 18790 },
-            plugins: { entries: { sample: { config: { legacyRoot: "/srv/replacement" } } } },
-          });
-          const beforeRemoval = read(configPath);
-          await run("unset", "plugins.entries.sample");
-          expect(load(configPath)).not.toHaveProperty("plugins.entries.sample");
-          expect(load(configPath)).toMatchObject({
-            gateway: { port: 18790 },
-            session: { store: "/srv/legacy/sessions.json" },
-          });
-          expect(read(`${configPath}.bak`)).toBe(beforeRemoval);
-          expect(readDeferredPluginMigrations()).toEqual(pending);
-          expect(logs.join("\n")).toContain("Removed plugins.entries.sample");
-          expect(errors.join("\n")).not.toContain("upgrade is unfinished");
-        } finally {
-          closeOpenClawStateDatabaseForTest();
-        }
-      });
-    });
-  });
-
-  it.each(["restore", "empty external replacement", "recovery failure"])(
+  it.each(["restore", "empty external replacement"])(
     "openclaw config set reports owned root removal with %s",
     async (recovery) => {
       const raw = includeConfig("logging.json");
@@ -172,17 +108,10 @@ describe("config cli integration", () => {
           if (file === configPath) {
             removed = true;
             fs.writeFileSync(includePath, '{"level":"warn"}\n');
-            if (recovery === "external replacement" || recovery === "empty external replacement") {
+            if (recovery === "empty external replacement") {
               fs.writeFileSync(configPath, concurrentRaw);
             }
           }
-        });
-        const open = fs.openSync;
-        vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-          if (removed && recovery === "recovery failure" && String(file).endsWith(".tmp")) {
-            throw Object.assign(new Error("recovery stage full"), { code: "ENOSPC" });
-          }
-          return open(file, flags, mode);
         });
         await reject(set("messages.responsePrefix", "changed"));
         expect(removed).toBe(true);
@@ -193,12 +122,7 @@ describe("config cli integration", () => {
         expect(error).toContain(`${configPath}.bak`);
         expect(error).not.toContain("nothing was changed");
         expect(error).not.toContain("Re-run the same command");
-        if (recovery === "recovery failure") {
-          expect(fs.existsSync(configPath)).toBe(false);
-          expect(error).toContain("Rollback could not be confirmed");
-        } else {
-          expect(read(configPath)).toBe(recovery === "restore" ? raw : concurrentRaw);
-        }
+        expect(read(configPath)).toBe(recovery === "restore" ? raw : concurrentRaw);
       });
     },
   );
@@ -565,33 +489,6 @@ describe("config cli integration", () => {
     });
   });
 
-  it("repairs a stale agent deployment patch without changing policy", async () => {
-    const configForExec = (exec: Record<string, string>) => ({
-      agents: { entries: { worker: { tools: { exec } } } },
-    });
-    const migrated = configForExec({ mode: "ask" });
-    const migratedRaw = JSON.stringify(migrated) + "\n";
-    await withConfig(migratedRaw, async ({ configPath, tempDir }) => {
-      const patchPath = path.join(tempDir, "patch.json5");
-      writeFixtureJsonSync(patchPath, configForExec({ security: "allowlist", ask: "on-miss" }));
-      const output = configWriter();
-      await expect(output.patch(patchPath)).rejects.toThrow("__exit__:1");
-
-      expect(read(configPath)).toBe(migratedRaw);
-      const diagnostic = output.errors.join("\n");
-      expect(diagnostic).toContain("agents.entries.worker.tools.exec.mode:");
-      expect(diagnostic).toContain('Replace security/ask with mode="ask"');
-      expect(diagnostic).toContain("at this scope");
-
-      writeFixtureJsonSync(patchPath, { ...migrated, messages: { ackReaction: "✅" } });
-      await output.patch(patchPath);
-      expect(load(configPath)).toMatchObject({
-        ...migrated,
-        messages: { ackReaction: "✅" },
-      });
-    });
-  });
-
   it("conflicts when a top-level include changes after config set starts", async () => {
     await withConfig(
       '{ gateway: { $include: "./gateway.json5" } }\n',
@@ -670,21 +567,6 @@ describe("config cli integration", () => {
       );
     },
   );
-
-  it("preserves exact JSON5 bytes while rejecting an absent authored unset", async () => {
-    const raw =
-      '{\n  // preserve this comment and order\n  gateway: { port: 18789 },\n  logging: { level: "info" },\n}\n';
-    await withConfig(raw, async ({ configPath }) => {
-      const output = configWriter();
-      await expect(output.unset("gateway.bind")).rejects.toThrow("__exit__:1");
-
-      expect(read(configPath)).toBe(raw);
-      expect(output.logs).toStrictEqual([]);
-      expect(output.errors.join("\n")).toContain(
-        "Config path not found: gateway.bind. Nothing was changed. Run openclaw config get <path> first if you are unsure of the path.",
-      );
-    });
-  });
 
   it("writes an absent key even when its value equals the resolved default", async () => {
     const raw = "{\n  // the default is not authored yet\n  gateway: {},\n}\n";

@@ -9,7 +9,6 @@ import {
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
-import { analyzeCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
 import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
@@ -24,24 +23,11 @@ const callGateway = vi.hoisted(() => vi.fn());
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("../gateway/call.js", () => ({ callGateway }));
 
-vi.mock("../secrets/runtime-web-tools.js", () => ({
-  resolveRuntimeWebTools: vi.fn(async () => ({
-    metadata: {
-      search: { providerSource: "none", diagnostics: [] },
-      fetch: { providerSource: "none", diagnostics: [] },
-      diagnostics: [],
-    },
-    degradedOwners: [],
-  })),
-}));
-
-vi.mock("../secrets/command-config.js", { spy: true });
 vi.mock("../secrets/runtime-config-collectors.js", { spy: true });
 vi.mock("../secrets/target-registry-query.js", { spy: true });
 vi.mock("../plugins/plugin-registry-contributions.js", { spy: true });
 
 function resetCommandSecretMocks(): void {
-  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockReset();
   vi.mocked(collectRuntimeConfigAssignments).mockReset();
   vi.mocked(discoverConfigSecretTargetsByIds).mockReset();
   vi.mocked(resolveManifestContractOwnerPluginId).mockReset();
@@ -176,19 +162,6 @@ function setSingleSecretTargetDeps(params: {
 }): void {
   const pathSegments = params.path.split(".");
   const target = { path: params.path, pathSegments };
-  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
-    ({ inactiveRefPaths, resolvedConfig }) => {
-      const value = readPath(resolvedConfig, pathSegments);
-      const resolved = typeof value === "string" && value.length > 0;
-      const inactive = Boolean(inactiveRefPaths?.has(params.path));
-      return {
-        assignments: resolved ? [{ ...target, value }] : [],
-        diagnostics: [],
-        inactive: inactive ? [target] : [],
-        unresolved: resolved || inactive ? [] : [target],
-      } as never;
-    },
-  );
   vi.mocked(collectRuntimeConfigAssignments).mockImplementation(
     params.collectConfigAssignments ??
       (async ({ context }) => {
@@ -214,15 +187,6 @@ function setDiscordAccountTargetDeps(): void {
     value: secretRef(`DISCORD_${account.toUpperCase()}_TOKEN`),
     entry: { expectedResolvedValue: "string" },
   }));
-  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
-    () =>
-      ({
-        assignments: [assignment("channels.discord.accounts.ops.token", "ops-token")],
-        diagnostics: [],
-        inactive: [],
-        unresolved: [],
-      }) as never,
-  );
   vi.mocked(collectRuntimeConfigAssignments).mockImplementation(async ({ context }) => {
     context.assignments.push(...targets.map((target) => ({ path: target.path }) as never));
   });
