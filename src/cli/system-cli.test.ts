@@ -16,17 +16,9 @@ vi.mock("./gateway-rpc.js", () => ({
 vi.mock("../runtime.js", async () => ({
   ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
   defaultRuntime,
-  writeRuntimeJson: (runtime: { log: (...args: unknown[]) => void }, value: unknown, space = 2) =>
-    runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
 }));
 
 const { registerSystemCli } = await import("./system-cli.js");
-
-function expectGatewayCall(method: string, params: unknown) {
-  expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(method, expect.any(Object), params, {
-    expectFinal: false,
-  });
-}
 
 describe("system-cli", () => {
   async function runCli(args: string[]) {
@@ -82,23 +74,24 @@ describe("system-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("forwards --session-key on system event", async () => {
-    const sessionKey = "agent:main:telegram:dm:42";
-    await runCli(["system", "event", "--text", "ping", "--session-key", sessionKey]);
-
-    expectGatewayCall("wake", {
-      mode: "next-heartbeat",
-      text: "ping",
-      sessionKey,
+  it.each([
+    {
+      args: ["event", "--text", "ping", "--session-key", "agent:main:telegram:dm:42"],
+      method: "wake",
+      params: { mode: "next-heartbeat", text: "ping", sessionKey: "agent:main:telegram:dm:42" },
+      output: "ok",
+    },
+    {
+      args: ["presence"],
+      method: "system-presence",
+      params: undefined,
+      output: '{\n  "ok": true\n}',
+    },
+  ])("routes system $method to gateway", async ({ args, method, params, output }) => {
+    await runCli(["system", ...args]);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(method, expect.any(Object), params, {
+      expectFinal: false,
     });
-  });
-
-  it("routes system presence to gateway", async () => {
-    const method = "system-presence";
-    callGatewayFromCli.mockResolvedValueOnce({ method });
-
-    await runCli(["system", "presence"]);
-    expectGatewayCall(method, undefined);
-    expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
+    expect(runtimeLogs).toEqual([output]);
   });
 });
