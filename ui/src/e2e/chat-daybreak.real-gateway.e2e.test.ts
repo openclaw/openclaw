@@ -648,6 +648,7 @@ suite.define(() => {
             });
             await open();
             if (value === "standard") {
+              await expect.poll(() => toggle.isEnabled()).toBe(true);
               await toggle.press("ArrowLeft");
             } else {
               if (!(await toggle.isChecked())) {
