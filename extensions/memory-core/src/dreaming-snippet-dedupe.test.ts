@@ -1,5 +1,5 @@
 import * as stringCoerce from "openclaw/plugin-sdk/string-coerce-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dedupeEntries, prioritizeLightEntriesByDiaryCoverage } from "./dreaming-snippet-dedupe.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion.js";
 
@@ -11,16 +11,15 @@ vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
   };
 });
 
-// Every fixture snippet has tokens, so each preparation lowercases exactly once (token-less text lowercases twice).
-function tokenizationCount(): number {
-  return vi.mocked(stringCoerce.normalizeLowercaseStringOrEmpty).mock.calls.length;
-}
+// Token-bearing fixtures lowercase once per preparation.
+const tokenizations = vi.mocked(stringCoerce.normalizeLowercaseStringOrEmpty);
+beforeEach(() => tokenizations.mockClear());
 
-function resetCounts(): void {
-  vi.mocked(stringCoerce.normalizeLowercaseStringOrEmpty).mockClear();
-}
-
-function recallEntry(index: number, pathName: string, snippet: string): ShortTermRecallEntry {
+function recallEntry(
+  index: number,
+  pathName = `memory/2026-04-0${(index % 6) + 1}.md`,
+  snippet = `Note ${index} about topic${index * 7} and detail${index * 13} in cluster${index % 17}.`,
+): ShortTermRecallEntry {
   return {
     key: `memory:${pathName}:${index}:${index}`,
     path: pathName,
@@ -42,23 +41,14 @@ function recallEntry(index: number, pathName: string, snippet: string): ShortTer
 }
 
 function distinctEntries(count: number): ShortTermRecallEntry[] {
-  return Array.from({ length: count }, (_, index) =>
-    recallEntry(
-      index,
-      `memory/2026-04-0${(index % 6) + 1}.md`,
-      `Note ${index} about topic${index * 7} and detail${index * 13} in cluster${index % 17}.`,
-    ),
-  );
+  return Array.from({ length: count }, (_, index) => recallEntry(index));
 }
 
 describe("dedupeEntries", () => {
   it("tokenizes each candidate once instead of once per comparison", () => {
     const entries = distinctEntries(600);
-    resetCounts();
-
     expect(dedupeEntries(entries, 0.88)).toHaveLength(600);
-
-    expect(tokenizationCount()).toBeLessThanOrEqual(600);
+    expect(tokenizations.mock.calls.length).toBeLessThanOrEqual(600);
   });
 
   it("merges near-duplicate snippets only within the same path", () => {
@@ -96,12 +86,8 @@ describe("prioritizeLightEntriesByDiaryCoverage", () => {
     const diary = [1, 2, 3, 4].map(
       (day) => `Diary page ${day} reflects on routing, queues and a long quiet afternoon.`,
     );
-    resetCounts();
-
     prioritizeLightEntriesByDiaryCoverage(entries, diary);
-
-    // One preparation per candidate plus one per diary page.
-    expect(tokenizationCount()).toBeLessThanOrEqual(entries.length + diary.length);
+    expect(tokenizations.mock.calls.length).toBeLessThanOrEqual(entries.length + diary.length);
   });
 
   it("moves candidates covered by a diary page behind fresh ones", () => {

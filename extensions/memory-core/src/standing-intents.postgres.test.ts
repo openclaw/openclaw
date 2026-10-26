@@ -84,9 +84,7 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
     expect(cancelled).toMatchObject({ status: "cancelled" });
     expect(await match({ nowMs: 4_000 })).toEqual([]);
     const listed = await selected(() => list({ agentId: "main", nowMs: 4_000 }));
-    expect(listed.find((intent) => intent.description === "expired")).toMatchObject({
-      status: "expired",
-    });
+    expect(listed.find((intent) => intent.description === "expired")?.status).toBe("expired");
   });
 
   it("keeps exact keyword groups and injection bounds through the real matching API", async () => {
