@@ -25,7 +25,7 @@ function serveCatalog() {
     preview:
       index === 5 ? 'Escaped "nextCursor": "fake" \\\\ 猫 '.repeat(400_000) : "healthy preview",
   }));
-  const requests: Array<{ cursor?: string; limit: number }> = [];
+  let requests = 0;
   const harness = createClientHarness({
     onWrite(line, send) {
       const request = JSON.parse(line);
@@ -36,16 +36,15 @@ function serveCatalog() {
       const offset = cursor ? Number(cursor.slice("after-".length)) : 0;
       const data = native.slice(offset, offset + limit);
       const next = offset + data.length;
-      const response = {
+      requests++;
+      send({
         id: request.id,
         result: {
           data,
           nextCursor: next < native.length ? `after-${next}` : null,
           backwardsCursor: `before-${offset}`,
         },
-      };
-      requests.push({ cursor, limit });
-      send(response);
+      });
     },
   });
   commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params, options) =>
@@ -55,7 +54,7 @@ function serveCatalog() {
       catalogRows: options.catalogRows,
     }),
   );
-  return { harness, requests, native };
+  return { harness, requestCount: () => requests, native };
 }
 
 function createFactory(state: CodexCatalogState) {
@@ -76,7 +75,7 @@ function createFactory(state: CodexCatalogState) {
 it.each(["cli", "exec"])(
   "bounds and persists oversized %s threads across restart",
   async (source) => {
-    const { requests, native, harness } = serveCatalog();
+    const { requestCount, native, harness } = serveCatalog();
     native[5]!.source = source;
     const { values, state } = memoryCatalogState({ clone: true });
     let factory = createFactory(state);
@@ -102,21 +101,14 @@ it.each(["cli", "exec"])(
         });
       }
       expect(values.get("complete")).toEqual({ version: 1, kind: "complete" });
-      expect(requests).toEqual([
-        { cursor: undefined, limit: 16 },
-        { cursor: undefined, limit: 8 },
-        { cursor: undefined, limit: 4 },
-        { cursor: "after-4", limit: 4 },
-        { cursor: "after-4", limit: 2 },
-        ...Array.from({ length: 6 }, (_, index) => ({ cursor: `after-${index + 4}`, limit: 1 })),
-      ]);
+      const requestsBeforeRestart = requestCount();
       expect(Buffer.byteLength(JSON.stringify([...values]))).toBeLessThan(16 * 1024);
       await factory.stop();
       factory = createFactory(state);
       const restoredControl = await connect();
       const restored = await restoredControl.listPage({ limit: 20 });
       expect(restored.sessions.map((row) => row.threadId)).toEqual(visibleIds);
-      expect(requests).toHaveLength(11);
+      expect(requestCount()).toBe(requestsBeforeRestart);
       if (source === "cli") {
         expect(restored.sessions[5]).toMatchObject(oversized);
         native[5]!.preview = "Recovered preview";

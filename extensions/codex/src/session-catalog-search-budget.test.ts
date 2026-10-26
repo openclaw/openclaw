@@ -84,11 +84,7 @@ it("captures each query before asynchronous pinned setup without rediscovering n
       expect(page.sessions.map(({ threadId }) => threadId)).toEqual(
         positions.map((i) => native.rows[i]!.id),
       );
-      if (step < 2) {
-        expect(page.nextCursor).toBeTypeOf("string");
-      } else {
-        expect(page.nextCursor).toBeUndefined();
-      }
+      expect(page.nextCursor).toEqual(step < 2 ? expect.any(String) : undefined);
       if (step === 0) {
         await active.initialize();
         expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
@@ -105,16 +101,12 @@ it("bounds resident exclusion filling and continues without skipping the later v
   const matching = Array.from({ length: 21 }, (_, index) => index * 64 + 1);
   const f = await fixture(21 * 64, new Set(matching));
   await f.hide(matching.slice(0, 20));
-
   const first = await f.list();
-
   expect(first[0]?.sessions).toEqual([]);
   const cursor = first[0]?.nextCursor;
   expect(cursor).toBeTypeOf("string");
   expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-
   const second = await f.list(cursor);
-
   expect(second[0]?.sessions.map((session) => session.threadId)).toEqual([f.rows[1280]!.id]);
   expect(second[0]?.nextCursor).toBeUndefined();
   expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
