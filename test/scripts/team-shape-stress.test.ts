@@ -660,7 +660,7 @@ it("compares swapped pairs without mixing A/A controls or averaging tiny-base pe
   });
 });
 
-it("keeps partial worker evidence without comparing incomplete heap totals", () => {
+it.each([false, true])("keeps partial worker evidence (%s)", (worktreeToolChurn) => {
   const capture = (side: StressRun["side"], reason?: string) => {
     const resultDir = temporary.make("team-stress-worker-census-");
     const workerMemoryMissing = reason ? [{ script: "fixture-worker", threadId: 2, reason }] : [];
@@ -676,6 +676,7 @@ it("keeps partial worker evidence without comparing incomplete heap totals", () 
       path.join(resultDir, "result.json"),
       JSON.stringify({
         completedTurns: 1,
+        worktreeToolChurn,
         teamStress: { committedWrites: 1, prometheusScrapes: 1, rpcMinutes: [] },
         memorySamples: [{ collectedGarbage: false, resources: { workers } }],
         samples: [
@@ -688,7 +689,7 @@ it("keeps partial worker evidence without comparing incomplete heap totals", () 
                 "chat.history",
                 "chat.startup",
                 "sessions.diff",
-                "connect",
+                ...(worktreeToolChurn ? [] : ["connect"]),
                 "chat.inject",
               ].map((method) => [method, { latenciesMs: [1] }]),
             ),
