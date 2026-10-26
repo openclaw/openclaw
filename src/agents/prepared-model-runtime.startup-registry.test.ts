@@ -29,7 +29,9 @@ import {
   getActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
+import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   createPreparedInboundRegistryLoader,
   loadPreparedInboundPluginRegistry,
@@ -81,8 +83,15 @@ function startupFixture(
     },
   };
   const input = { config, workspaceDir, agentDir: workspaceDir, allowGatewaySubagentBinding: true };
-  const start = async (onlyPluginIds: string[], channelPluginLoadIntent?: "full") => {
-    const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
+  const start = async (
+    onlyPluginIds: string[],
+    channelPluginLoadIntent?: "full",
+    configWide = false,
+  ) => {
+    const metadata = loadPluginMetadataSnapshot({
+      config,
+      ...(configWide ? {} : { workspaceDir }),
+    });
     const root = await loadAndActivateRootPluginRegistry({
       config,
       workspaceDir,
@@ -311,3 +320,97 @@ it.each(["inbound", "selected", "inspection"] as const)(
     });
   },
 );
+
+it("keeps Gateway plugin ownership with config-wide metadata across workspace requests", async () => {
+  using fixture = startupFixture(
+    "workspace-probe",
+    "selected/original",
+    (event) => `const model = api.config.agents.defaults.model;
+      process.emit(${JSON.stringify(event)}, model);
+      api.on("before_prompt_build", () => ({ prependContext: model }));
+      api.registerTool((ctx) => ({
+        name: "workspace_probe", description: "Report captured and request context",
+        parameters: { type: "object", properties: {} },
+        async execute() { return { content: [{ type: "text", text: JSON.stringify({
+          requestWorkspace: ctx.workspaceDir
+        }) }] }; }
+      }), { names: ["workspace_probe"] });`,
+    true,
+  );
+  const { input, captures, plugin } = fixture;
+  fs.writeFileSync(
+    path.join(plugin.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: plugin.id,
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      contracts: { tools: ["workspace_probe"] },
+    }),
+  );
+  const siblingWorkspace = tempDirs.make("openclaw-prepared-sibling-");
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const { root, metadata } = await fixture.start([plugin.id], "full", true);
+    const gateway = createPluginRegistryOwner(root, input.workspaceDir);
+    try {
+      expect(metadata.workspaceDir).toBeUndefined();
+      const changedConfig = {
+        ...input.config,
+        agents: { defaults: { model: "selected/changed" } },
+      };
+      for (const [workspaceDir, config, model] of [
+        [input.workspaceDir, input.config, "selected/original"],
+        [siblingWorkspace, input.config, "selected/original"],
+        [input.workspaceDir, input.config, "selected/original"],
+        // Unrelated model changes preserve the plugin's registration-time config snapshot.
+        [siblingWorkspace, changedConfig, "selected/original"],
+        [input.workspaceDir, input.config, "selected/original"],
+      ] as const) {
+        await using resources = new PreparedModelRuntimeBuildResources(
+          retainPreparedPluginRegistry,
+        );
+        const registry = withPluginRuntimeRegistryScope(root, () => {
+          const loaded = loadPreparedInboundPluginRegistry(
+            { ...input, workspaceDir, config },
+            metadata,
+          );
+          resources.retainRegistry(loaded);
+          return loaded;
+        });
+        const tools = withPluginRuntimeRegistryScope(registry, () =>
+          resolveOpenClawPluginToolsForOptions({
+            options: {
+              config,
+              workspaceDir,
+              allowGatewaySubagentBinding: true,
+              pluginToolAllowlist: [plugin.id],
+            },
+            resolvedConfig: config,
+          }),
+        );
+        const tool = tools.find((candidate) => candidate.name === "workspace_probe");
+        if (!tool) {
+          throw new Error("Expected workspace probe");
+        }
+        const result = await tool.execute("probe", {});
+        expect(result).toEqual({
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                requestWorkspace: workspaceDir,
+              }),
+            },
+          ],
+        });
+        const hookResult = await createHookRunner(registry, {
+          catchErrors: false,
+        }).runBeforePromptBuild({ prompt: "probe", messages: [] }, {});
+        expect(hookResult?.prependContext).toBe(model);
+        expect(getPluginRuntimeLoadContext(root)?.workspaceDir).toBe(input.workspaceDir);
+      }
+      expect(captures).toEqual(["selected/original"]);
+    } finally {
+      await gateway.close();
+    }
+  });
+});

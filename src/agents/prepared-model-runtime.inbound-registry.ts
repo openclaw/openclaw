@@ -75,7 +75,8 @@ function resolveLendingGatewayRegistry(
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const registry = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
   return registry &&
-    getPluginRuntimeLoadContext(registry)?.workspaceDir === metadataSnapshot.workspaceDir
+    (metadataSnapshot.workspaceDir === undefined ||
+      getPluginRuntimeLoadContext(registry)?.workspaceDir === metadataSnapshot.workspaceDir)
     ? registry
     : undefined;
 }
@@ -95,7 +96,8 @@ export function loadPreparedInboundPluginRegistry(
     getReusablePluginRuntimeActivation(gatewayRegistry, {
       config: input.config,
       env: process.env,
-      workspaceDir: metadataSnapshot.workspaceDir,
+      workspaceDir:
+        metadataSnapshot.workspaceDir ?? getPluginRuntimeLoadContext(gatewayRegistry)?.workspaceDir,
       metadataSnapshot,
     }) &&
     listRuntimePluginIdsFromRegistry(gatewayRegistry).every(
