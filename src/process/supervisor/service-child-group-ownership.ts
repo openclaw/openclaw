@@ -16,14 +16,6 @@ export type ProcessCommand =
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
   | { argvUnavailable: true; uid?: never; owner: "different" };
 
-type GroupMember = {
-  pid: number;
-  ppid?: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-};
-
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
   if (process.platform !== "linux") {
@@ -101,7 +93,13 @@ export function* readProcessGroupMembers(
       owner: "same" | "different" | "unknown",
     ) => ProcessCommand | undefined;
   },
-): Generator<GroupMember> {
+): Generator<{
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+}> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;
@@ -147,7 +145,8 @@ export function* readProcessGroupMembers(
       }
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
-      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (\d+)(?:\s|$)/.exec(stat);
+      // A task reaped during do_task_stat can retain the kernel's pgid=-1 sentinel.
+      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
       if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
         throw new Error("Process group census is unavailable");
       }

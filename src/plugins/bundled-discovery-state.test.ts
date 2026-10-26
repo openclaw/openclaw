@@ -1,8 +1,7 @@
-// Covers memoized bundled-discovery mode reads across machine-state writes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -11,90 +10,66 @@ import {
 } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 
+const roots: string[] = [];
+let snapshot: ReturnType<typeof captureEnv>;
+async function createRoot(mode?: "compat") {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-discovery-")),
+  );
+  roots.push(root);
+  setTestEnvValue("OPENCLAW_STATE_DIR", root);
+  if (mode) {
+    writeConfigMachineState("plugins.bundledDiscovery", mode);
+  }
+  return root;
+}
+
 describe("readBundledDiscoveryModeMemoized", () => {
-  afterEach(() => {
+  beforeEach(() => {
+    snapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
+  afterEach(async () => {
+    snapshot.restore();
+    for (const root of roots.splice(0)) {
+      await removeBundledDiscoveryStateRoot(root);
+    }
     clearBundledDiscoveryModeMemo();
   });
 
   it("observes a machine-state write after the memo is cleared", async () => {
-    const stateDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-discovery-")),
-    );
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    try {
-      clearBundledDiscoveryModeMemo();
-      // Pre-migration read caches the absent mode.
-      expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
-      writeConfigMachineState("plugins.bundledDiscovery", "compat");
-      // Regression for the doctor same-process staleness: the memo must not
-      // outlive the write, or index rebuilds keep strict-gate decisions.
-      expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
-      clearBundledDiscoveryModeMemo();
-      expect(readBundledDiscoveryModeMemoized()).toBe("compat");
-    } finally {
-      envSnapshot.restore();
-      await removeBundledDiscoveryStateRoot(stateDir);
-    }
+    await createRoot();
+    clearBundledDiscoveryModeMemo();
+    expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
+    writeConfigMachineState("plugins.bundledDiscovery", "compat");
+    // Doctor must clear the pre-migration memo before rebuilding indexes.
+    expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
+    clearBundledDiscoveryModeMemo();
+    expect(readBundledDiscoveryModeMemoized()).toBe("compat");
   });
 
   it("does not leak one state root's cached mode into an interleaved scope", async () => {
-    // The memo is keyed by the resolved state-database path: isolated scopes
-    // (agent execution, doctor lint) alternating in one process must each see
-    // their own root's mode without explicit clears.
-    const compatRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bd-compat-")),
-    );
-    const plainRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bd-plain-")),
-    );
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    try {
-      setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
-      writeConfigMachineState("plugins.bundledDiscovery", "compat");
-      clearBundledDiscoveryModeMemo();
-      expect(readBundledDiscoveryModeMemoized()).toBe("compat");
+    const compatRoot = await createRoot("compat");
+    const plainRoot = await createRoot();
+    setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
+    clearBundledDiscoveryModeMemo();
+    expect(readBundledDiscoveryModeMemoized()).toBe("compat");
 
-      setTestEnvValue("OPENCLAW_STATE_DIR", plainRoot);
-      expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
+    setTestEnvValue("OPENCLAW_STATE_DIR", plainRoot);
+    expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
 
-      setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
-      expect(readBundledDiscoveryModeMemoized()).toBe("compat");
-    } finally {
-      envSnapshot.restore();
-      await removeBundledDiscoveryStateRoot(compatRoot);
-      await removeBundledDiscoveryStateRoot(plainRoot);
-    }
+    setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
+    expect(readBundledDiscoveryModeMemoized()).toBe("compat");
   });
 
   it("honors a caller-supplied env's state root over the process root", async () => {
-    // Two-root regression (#123416 review): provider and manifest-contract
-    // registry loads pass an explicit env; compat recorded in that env's root
-    // must be readable even when the process root has no mode, and the
-    // process-root read must stay strict.
-    const compatRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bd-caller-")),
-    );
-    const plainRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bd-process-")),
-    );
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    try {
-      setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
-      writeConfigMachineState("plugins.bundledDiscovery", "compat");
-      // Process root has no recorded mode.
-      setTestEnvValue("OPENCLAW_STATE_DIR", plainRoot);
-      clearBundledDiscoveryModeMemo();
+    // #123416: explicit caller roots must not inherit the process root's mode.
+    const compatRoot = await createRoot("compat");
+    await createRoot();
+    clearBundledDiscoveryModeMemo();
 
-      const callerEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
-      expect(readBundledDiscoveryModeMemoized(callerEnv)).toBe("compat");
-      expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
-      // Alternating scopes stay correct: the memo re-keys per resolved root.
-      expect(readBundledDiscoveryModeMemoized(callerEnv)).toBe("compat");
-    } finally {
-      envSnapshot.restore();
-      await removeBundledDiscoveryStateRoot(compatRoot);
-      await removeBundledDiscoveryStateRoot(plainRoot);
-    }
+    const callerEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
+    expect(readBundledDiscoveryModeMemoized(callerEnv)).toBe("compat");
+    expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
+    expect(readBundledDiscoveryModeMemoized(callerEnv)).toBe("compat");
   });
 });

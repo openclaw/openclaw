@@ -24,6 +24,7 @@ export type ChatAuthorAvatarProps = {
   class?: string;
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null };
   channelAvatar?: ChannelSenderAvatarSource;
+  hideTooltip?: boolean;
 };
 
 function InitialsAvatar(props: {
@@ -64,6 +65,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
                   sender={sender()}
                   label={label()!}
                   channelAvatar={props.channelAvatar}
+                  hideTooltip={props.hideTooltip}
                 />
               )}
             </IdentityAvatar>
@@ -74,7 +76,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
             class={props.class ?? "chat-author-avatar"}
             role="img"
             aria-label={label()!}
-            title={label()!}
+            title={props.hideTooltip ? undefined : label()!}
           >
             <AgentIdentityAvatar
               agent={{
@@ -96,6 +98,7 @@ function ProfileAuthorAvatar(props: {
   sender: IdentityAvatarInput;
   label: string;
   channelAvatar?: ChannelSenderAvatarSource;
+  hideTooltip?: boolean;
 }) {
   const gateway = useAvatarGatewayContext();
   const channelPhoto = createMemo(() =>
@@ -109,7 +112,7 @@ function ProfileAuthorAvatar(props: {
       class={["chat-author-avatar", channelPhoto() ? undefined : presentation.classes()]}
       role="img"
       aria-label={props.label}
-      title={props.label}
+      title={props.hideTooltip ? undefined : props.label}
     >
       <Show
         when={channelPhoto()}
@@ -152,14 +155,17 @@ export function UserAvatarSlot(props: {
         ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.label}
       >
         <IdentityAvatarImage
           view={props.view}
           onStateChange={presentation.onStateChange}
           class="chat-avatar user"
           alt={props.label}
+          ariaHidden
         />
-        <UserInitials view={props.view} label={props.label} />
+        <UserInitials view={props.view} />
       </span>
     </Show>
   );
@@ -167,7 +173,7 @@ export function UserAvatarSlot(props: {
 
 function UserInitials(props: {
   view: IdentityAvatarView;
-  label: string;
+  label?: string;
   elementRef?: (element: HTMLElement) => void;
 }) {
   return (
@@ -175,8 +181,9 @@ function UserInitials(props: {
       ref={(element) => props.elementRef?.(element)}
       class="chat-avatar user chat-avatar--sender-initials"
       style={{ background: `hsl(${props.view.fallback.colorSeed % 360} 48% 42%)` }}
-      role="img"
+      role={props.label ? "img" : undefined}
       aria-label={props.label}
+      aria-hidden={props.label ? undefined : "true"}
     >
       {props.view.fallback.initials}
     </div>

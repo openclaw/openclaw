@@ -6,7 +6,6 @@ import {
   type AgentAssistantSourceReceipt,
   bindAgentAssistantSource,
 } from "../infra/agent-events.js";
-import { recordEmbeddedSessionForkMessage } from "./embedded-agent-runner/session-fork.js";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -53,13 +52,18 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       return;
     }
 
-    const task = Promise.resolve(result)
-      .then(() => {}, onError)
-      .finally(() => {
+    const settle = async () => {
+      try {
+        await result;
+      } catch (err) {
+        onError(err);
+      } finally {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
         }
-      });
+      }
+    };
+    const task = settle();
     ctx.state.pendingEventChain = task;
     return task;
   };
@@ -79,17 +83,6 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     }
     // Model facts advance before persistence, independently of queued reply delivery.
     ctx.captureModelEvent(evt);
-    if (
-      evt.type === "message_end" &&
-      ctx.params.sessionId &&
-      !ctx.state.unsubscribed &&
-      (evt.message.role === "user" ||
-        evt.message.role === "toolResult" ||
-        (evt.message.role === "assistant" &&
-          !isSubscribeTranscriptOnlyOpenClawAssistantMessage(evt.message)))
-    ) {
-      recordEmbeddedSessionForkMessage(ctx.params.sessionId, ctx.params.runId, evt.message);
-    }
     // Capture tool facts before reply delivery can delay their lifecycle handlers.
     const readResult =
       evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;

@@ -51,10 +51,93 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 27      | Redundant ACP replay and skill-usage indexes removed; lease-owner index no longer includes the renewal timestamp                                                                                                                                                                                                                               | Unreleased          |
 | 28      | GitHub publication requests retain their explicit draft choice across execution and recovery                                                                                                                                                                                                                                                   | Unreleased          |
 | 29      | Client private identities, token caches, and native socket credentials move to a separately versioned local store                                                                                                                                                                                                                              | Unreleased          |
+| 30      | Ordinary automation execution and delivery policies; metadata-only downgrade fence                                                                                                                                                                                                                                                             | Unreleased          |
+| 31      | Local workspace baselines stored by path with subtree digests and recoverable checkpoint deltas                                                                                                                                                                                                                                                | Unreleased          |
+| 32      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                                                                                                                 | Unreleased          |
+| 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
+| 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 34
+
+Schema 34 records `cron.defaultStoreKey` in `config_machine_state`. Existing
+partition keys remain unchanged, including keys that spell an old absolute path.
+Fresh databases bind their initial default store path as an opaque identity. Moving an upgraded state directory
+or restoring its backup carries this binding with the jobs, scratch, receipts,
+and run history. Public plugin SDK path arguments continue to select the recorded
+default through the current default path; custom paths retain their own partitions.
+
+SQLite and PostgreSQL publish the binding and schema version in the same migration
+transaction. An older database whose original default cannot be established
+advances without guessing: the Gateway starts, cron reports the partition
+inventory, and `openclaw doctor --fix` offers an explicit interactive selection.
+Other partitions remain unchanged. Rollback restores the verified predecessor
+backup and its matching binary.
+
+### State schemas 32 and 33
+
+Schema 32 gives non-null PostgreSQL index keys native null ordering. Schema 33
+extends that rule to direct keys whose partial-index predicate proves they are
+non-null. The migrations rebuild only changed indexes on tables already present;
+they do not create unused feature fragments or rewrite retained rows. SQLite
+advances metadata only.
+
+With writers stopped, `openclaw doctor --fix` takes the existing exact backup and
+applies consecutive migrations. Direct PostgreSQL Gateway startup refuses older
+schemas. Rollback requires the verified pre-upgrade backup and matching build.
+See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations).
+
+### State schema 31
+
+Schema 31 moves local sandbox checkpoint baselines from complete manifest documents
+to `local_workspace_manifest_nodes`, owned by the existing local workspace
+projection. `checkpoint_json` retains the changed nodes, deletion tombstones,
+and previous and resulting roots needed to settle an interrupted checkpoint.
+Acceptance advances the affected nodes, root, and receipt in one shared-state
+transaction. The agent database version is unchanged.
+
+The backed-up schema migration preserves existing baseline bytes, pending result
+references, rollback journals, and paused-runtime records. It adds the checkpoint
+column and node table only when local projection storage already exists; unused
+installations retain first-use creation. Existing projections convert under their
+reconciliation owner, which clears `baseline_json` only when the corresponding
+node rows and root are durably installed. An interrupted conversion retains its
+legacy input for retry. Pending legacy receipts remain recoverable through the
+same owner until their conversion and settlement finish.
+
+Full baseline replacements build and encode their manifest trees in the existing
+workspace read worker. The Gateway forwards the prepared bytes to the writer,
+which decodes before the same acceptance transaction. Completed conversions do
+not rebuild on restart; new workspaces, base refreshes, and archive recovery can
+still request a full replacement.
+
+Archive and publication operations still materialize the complete manifest format.
+Fresh host Git-index admission remains per operation, and filesystem metadata
+discovery still enumerates additions and deletions. Watch events do not authorize
+skipping that discovery. Older binaries cannot safely advance these baselines;
+rollback requires the verified pre-upgrade backup and its matching build.
+
+### State schema 30
+
+Schema 30 fences ordinary automation policies from older schedulers that cannot
+honor `activeHours`, `idleOnly`, `payload.skipIfScratchEmpty`,
+`payload.includeReasoning`, or owner/direct-message delivery policy. It changes
+no table shape. The existing Cron job definitions remain authoritative, and
+setup/Doctor provisioning receipts use the existing shared config-state owner.
+
+Doctor converts supported heartbeat monitors and task jobs before removing their
+legacy inputs. Current-schema migrations also back up affected shared and agent
+databases through Doctor's existing recovery owner. The agent schema stays at
+31; this change does not remove the legacy `heartbeat_outcomes` source table.
+See [Heartbeat migration](/gateway/heartbeat) for conversion and recovery behavior.
+
+Older builds must refuse the newer shared schema even though the physical tables
+are compatible. Roll back only with the verified pre-upgrade backup and its
+matching build; never lower the schema marker to run an older scheduler against
+jobs whose policies it cannot enforce.
 
 ### State schema 29
 

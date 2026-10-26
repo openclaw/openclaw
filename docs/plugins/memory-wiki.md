@@ -138,6 +138,13 @@ and full producer frontmatter. Internal OKF links rewrite to the generated
 wiki concept pages and also emit structured `relationships` entries with
 `kind: okf-link`.
 
+Keep handwritten notes in the page's `## Notes` slot, between
+`<!-- openclaw:human:start -->` and `<!-- openclaw:human:end -->`. Re-import
+preserves that marked block exactly; text outside it is producer-owned and
+can be replaced. Legacy OKF pages without a marked block regenerate with an
+empty Notes slot. If a marker is missing from an existing block, restore it
+before retrying the import. Existing-page read failures leave that page unchanged.
+
 ## Structured claims and evidence
 
 Pages carry structured `claims` frontmatter, not just freeform text. Each
@@ -462,7 +469,6 @@ normalized agent id:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "support" },
       systemAgent: { agentId: "support" },
       authInheritance: { agentId: "support" },
     },

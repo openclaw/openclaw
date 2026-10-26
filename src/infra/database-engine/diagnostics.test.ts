@@ -8,6 +8,7 @@ import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-
 import { addPreCutoverClientCredentialTablesForTest } from "../../state/openclaw-state-schema.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
+import { writePortAnchor } from "./port-backup.test-support.js";
 import type { PortDescriptor } from "./port-types.js";
 import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 
@@ -34,6 +35,30 @@ function fixture(): DatabaseStoreInspection {
 function createStore(input: DatabaseStoreInspection, version: number) {
   using db = openNodeSqliteDatabase(input.path!);
   db.exec(`PRAGMA user_version = ${version}; CREATE TABLE entries (id TEXT PRIMARY KEY)`);
+}
+async function inspectUnchanged(input: DatabaseStoreInspection) {
+  const before = fs.readFileSync(input.path!);
+  const result = await inspectDatabaseStore(input);
+  expect(fs.readFileSync(input.path!)).toEqual(before);
+  return result;
+}
+async function stateStore(version: number) {
+  const input = {
+    ...fixture(),
+    family: "state" as const,
+    descriptor: await loadStatePortDescriptor(),
+  };
+  using db = openNodeSqliteDatabase(input.path!);
+  for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
+    db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
+  }
+  if (version === 25) {
+    addPreCutoverClientCredentialTablesForTest(db);
+  }
+  db.exec(`PRAGMA user_version = ${version};
+    INSERT INTO schema_meta VALUES ('primary', 'global', ${version}, NULL, NULL, 1, 1);
+    INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${version}', 1)`);
+  return input;
 }
 
 describe("physical store diagnostics", () => {
@@ -68,8 +93,7 @@ describe("physical store diagnostics", () => {
   it("reports the physical SQLite version and pending migration without changing its bytes", async () => {
     const input = fixture();
     createStore(input, 1);
-    const before = fs.readFileSync(input.path!);
-    const result = await inspectDatabaseStore(input);
+    const result = await inspectUnchanged(input);
     expect(result).toMatchObject({
       observed: "sqlite",
       mismatch: false,
@@ -80,7 +104,6 @@ describe("physical store diagnostics", () => {
       backup: null,
     });
     expect(result.nextSteps.join(" ")).toContain("doctor --fix");
-    expect(fs.readFileSync(input.path!)).toEqual(before);
   });
 
   it.each([
@@ -93,28 +116,8 @@ describe("physical store diagnostics", () => {
   ])(
     "preserves readable state schema $version when port admission refuses it",
     async ({ version, pending, issue }) => {
-      const input = fixture();
-      input.family = "state";
-      input.descriptor = await loadStatePortDescriptor();
-      {
-        using db = openNodeSqliteDatabase(input.path!);
-        const schemas = [input.descriptor, ...(input.descriptor.fragments ?? [])];
-        for (const schema of schemas) {
-          db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
-        }
-        if (version === 25) {
-          addPreCutoverClientCredentialTablesForTest(db);
-        }
-        db.exec(`PRAGMA user_version = ${version}`);
-        db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
-          version,
-        );
-        db.prepare(
-          "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-        ).run(String(version));
-      }
-      const before = fs.readFileSync(input.path!);
-      const result = await inspectDatabaseStore(input);
+      const input = await stateStore(version);
+      const result = await inspectUnchanged(input);
       expect(result.schema).toEqual({
         versioning: "versioned",
         version,
@@ -126,63 +129,34 @@ describe("physical store diagnostics", () => {
         "The SQLite schema could not be admitted by its store owner.",
       );
       expect(result.nextSteps.join(" ")).toContain("doctor --fix");
-      expect(fs.readFileSync(input.path!)).toEqual(before);
     },
   );
 
   it("admits retained legacy state without requiring first-use schema migrations", async () => {
-    const input = fixture();
-    input.family = "state";
-    input.descriptor = await loadStatePortDescriptor();
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
     {
       using db = openNodeSqliteDatabase(input.path!);
-      for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
-        db.exec(schema.sqlite);
-      }
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-      db.prepare(
-        "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-      ).run(String(OPENCLAW_STATE_SCHEMA_VERSION));
       // Published installs retain fleet rows after tenant-container retirement.
-      db.exec(`CREATE TABLE fleet_cells (
-          tenant_id TEXT NOT NULL PRIMARY KEY,
-          created_at_ms INTEGER NOT NULL,
-          image TEXT NOT NULL,
-          runtime TEXT NOT NULL,
-          host_port INTEGER NOT NULL,
-          container_name TEXT NOT NULL,
-          data_dir TEXT NOT NULL
-        ) STRICT;
-        INSERT INTO fleet_cells VALUES
-          ('retired', 17, 'legacy-image', 'docker', 18789, 'legacy-container', '/retired/data');
+      db.exec(`CREATE TABLE fleet_cells (tenant_id TEXT PRIMARY KEY) STRICT;
+        INSERT INTO fleet_cells VALUES ('retired');
         ALTER TABLE agent_deletion_journal DROP COLUMN phase;
         INSERT INTO agent_deletion_journal
           (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
         VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17)`);
     }
-    const before = fs.readFileSync(input.path!);
-    const result = await inspectDatabaseStore(input);
+    const result = await inspectUnchanged(input);
     expect(result.schema).toMatchObject({
       version: OPENCLAW_STATE_SCHEMA_VERSION,
       expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       pending: 0,
     });
     expect(result.issues).toEqual([]);
-    expect(fs.readFileSync(input.path!)).toEqual(before);
   });
 
   it("distinguishes a configured PostgreSQL engine from a physical SQLite store", async () => {
     const input = fixture();
     createStore(input, 2);
-    input.configured = {
-      default: "postgres",
-      override: null,
-      effective: "postgres",
-      fixedLocal: false,
-    };
+    input.configured = { ...input.configured, default: "postgres", effective: "postgres" };
     const result = await inspectDatabaseStore(input);
     expect(result).toMatchObject({ observed: "sqlite", mismatch: true, schema: { pending: 0 } });
     expect(result.nextSteps.join(" ")).toContain("database port");
@@ -207,13 +181,7 @@ describe("physical store diagnostics", () => {
   it("keeps a PostgreSQL anchor observable when its connection is missing or unreachable", async () => {
     const input = fixture();
     input.configured.effective = "postgres";
-    using db = openNodeSqliteDatabase(input.path!);
-    db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
-      "fixture-store",
-      "postgres",
-      "fixture_namespace",
-    );
+    writePortAnchor(input.path!, "fixture-store", "fixture_namespace");
     const unresolved = await inspectDatabaseStore(input);
     expect(unresolved).toMatchObject({
       observed: "postgres",

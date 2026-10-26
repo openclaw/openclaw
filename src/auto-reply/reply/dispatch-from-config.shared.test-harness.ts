@@ -1,5 +1,7 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
-import { afterEach, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
 import type { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -155,6 +157,11 @@ export function mockPluginBinding(params: Parameters<typeof createPluginBindingR
 const pluginConversationBindingMocks = vi.hoisted(() => ({
   shownFallbackNoticeBindingIds: new Set<string>(),
 }));
+// Unmocked capability reads open the sibling SQLite database, so each file owns its store.
+export const mockSessionStorePath = path.join(
+  useAutoCleanupTempDirTracker(afterAll).make("openclaw-dispatch-sessions-"),
+  "mock-sessions.json",
+);
 const sessionStoreMocks = vi.hoisted(() => ({
   databaseEntryLoader: undefined as
     | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryForAdmission
@@ -163,7 +170,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => mockSessionStorePath),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -629,7 +636,8 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
-vi.mock("../../tts/tts-config.js", () => ({
+vi.mock("../../tts/tts-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-config.js")>()),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
   resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},

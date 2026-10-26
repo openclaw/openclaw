@@ -55,11 +55,13 @@ export function resolveInstalledPluginIndexPolicyHash(
           .flatMap(([pluginId, entry]) =>
             typeof entry.enabled === "boolean" ? [[pluginId, entry.enabled] as const] : [],
           )
-          .toSorted(([left], [right]) => left.localeCompare(right)),
+          // oxlint-disable-next-line unicorn/no-array-sort -- flatMap creates a private array.
+          .sort(([left], [right]) => left.localeCompare(right)),
       ),
     },
     channels: Object.fromEntries(
-      Object.entries(channelPolicy).toSorted(([left], [right]) => left.localeCompare(right)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
+      Object.entries(channelPolicy).sort(([left], [right]) => left.localeCompare(right)),
     ),
   });
 }

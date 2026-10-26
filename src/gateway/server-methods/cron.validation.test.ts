@@ -1,7 +1,6 @@
+import { performance } from "node:perf_hooks";
 // Cron validation tests cover channel target validation against plugin
 // prefixes/aliases and runtime config for cron delivery destinations.
-
-import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,6 +8,7 @@ import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
@@ -59,6 +59,7 @@ import {
   createCronTestInvoker,
   createCronCallerClient as callerClient,
   createCronJob,
+  cronAccountPolicy,
   setCronValidationTestRegistry,
   pluginEntries,
   telegramConfig,
@@ -206,7 +207,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
@@ -345,12 +345,7 @@ describe("cron method validation", () => {
           sessionKey: "agent:telegram-agent:telegram:dm:42",
           accountId: "telegram",
         },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:telegram-agent:telegram:dm:42",
-          ownerAccountId: "telegram",
-        },
+        scheduledToolPolicy: cronAccountPolicy("agent:telegram-agent:telegram:dm:42", "telegram"),
       });
       if (trusted) {
         job.scheduledToolPolicy = { version: 1, mode: "trusted" };
@@ -953,12 +948,9 @@ describe("cron method validation", () => {
 
   it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
     let authorityActive = true;
-    let releasePreparation: (() => void) | undefined;
-    const held = new Promise<undefined>((resolve) => {
-      releasePreparation = () => resolve(undefined);
-    });
+    const held = createDeferred<undefined>();
     const context = createCronContext();
-    context.cron.prepareWake.mockImplementationOnce(async () => await held);
+    context.cron.prepareWake.mockImplementationOnce(async () => await held.promise);
     context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
 
     const invocation = invokeCron(
@@ -968,7 +960,7 @@ describe("cron method validation", () => {
     );
     await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
     authorityActive = false;
-    releasePreparation?.();
+    held.resolve(undefined);
     const { respond } = await invocation;
 
     expect(context.cron.wake).toHaveBeenCalledOnce();
@@ -1042,12 +1034,7 @@ describe("cron method validation", () => {
       const currentJob = createCronJob({
         agentId: "ops",
         owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:ops:main",
-          ownerAccountId: "default",
-        },
+        scheduledToolPolicy: cronAccountPolicy("agent:ops:main", "default"),
       });
       const context = createCronContext(method === "update" ? currentJob : undefined);
       context.validateAgentRuntimeApprovalAuthority = () => true;
@@ -1114,12 +1101,7 @@ describe("cron method validation", () => {
           : createCronJob({
               agentId: "ops",
               owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-              scheduledToolPolicy: {
-                version: 1,
-                mode: "account",
-                ownerSessionKey: "agent:ops:main",
-                ownerAccountId: "default",
-              },
+              scheduledToolPolicy: cronAccountPolicy("agent:ops:main", "default"),
             }),
       );
       const params =
@@ -1250,7 +1232,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     await cron.start();
@@ -1362,12 +1343,7 @@ describe("cron method validation", () => {
       const job = createCronJob({
         agentId: "ops",
         owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey,
-          ownerAccountId: "work",
-        },
+        scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
       });
       const context = createCronContext(job);
       const client = callerClient(
@@ -1472,12 +1448,7 @@ describe("cron method validation", () => {
     const ownerSessionKey = "agent:ops:discord:work:group:creator";
     const accountJob = createCronJob({
       owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
-      scheduledToolPolicy: {
-        version: 1,
-        mode: "account",
-        ownerSessionKey,
-        ownerAccountId: "work",
-      },
+      scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
     });
     const context = createCronContext(accountJob);
 
@@ -1531,12 +1502,7 @@ describe("cron method validation", () => {
     const accountJob = createCronJob({
       agentId: "ops",
       owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
-      scheduledToolPolicy: {
-        version: 1,
-        mode: "account",
-        ownerSessionKey,
-        ownerAccountId: "work",
-      },
+      scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
     });
     const siblingJob = createCronJob({
       id: "cron-2",
@@ -1842,10 +1808,10 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
@@ -1935,10 +1901,10 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
@@ -2264,15 +2230,13 @@ describe("cron method validation", () => {
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com",
             apiKey: "synthetic-unused-model-key",
-            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
-              id,
-              name: `Synthetic ${id}`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 200_000,
-              maxTokens: 8192,
-            })),
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) =>
+              modelDefinition(id, {
+                name: `Synthetic ${id}`,
+                reasoning: false,
+                contextWindow: 200_000,
+              }),
+            ),
           },
         },
       },

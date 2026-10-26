@@ -107,6 +107,16 @@
   padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
+.content-header.hub-page-header--untabbed {
+  grid-template-areas: "title actions";
+}
+
+/* Full-width page bodies start at the content edge; the header follows them. */
+.content-header.hub-page-header--wide {
+  max-width: none;
+  padding-inline: 0;
+}
+
 .content-header.hub-page-header--stacked .hub-page-header__title {
   grid-area: title;
   justify-self: start;
@@ -126,7 +136,8 @@
   grid-area: actions;
 }
 
-.hub-page-header--stacked + .settings-workspace {
+/* Keep the stacked-header gap independent of lazy stylesheet order. */
+.content-header.hub-page-header--stacked + .settings-workspace {
   margin-top: 0;
 }
 
@@ -198,6 +209,12 @@
     justify-items: stretch;
   }
 
+  .content-header.hub-page-header--untabbed {
+    grid-template-areas:
+      "title"
+      "actions";
+  }
+
   .content-header.hub-page-header--stacked .hub-page-header__title {
     grid-area: title;
   }
@@ -208,5 +225,20 @@
 
   .content-header.hub-page-header--stacked .page-title {
     font-size: 22px;
+  }
+}
+
+/* The shared page header owns its shell's mobile inset, including on pages that do
+   not load the settings stylesheet. */
+@media (max-width: 640px) {
+  .content.content--hub-header {
+    --content-inline-padding: var(--space-3);
+    --settings-header-inline-padding: 0;
+    padding: var(--space-3) var(--space-3) var(--space-4);
+  }
+
+  /* Outranks the settings-page header column inset regardless of stylesheet order. */
+  .content.content--hub-header .content-header.hub-page-header {
+    padding-inline: 0;
   }
 }

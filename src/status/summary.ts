@@ -1,17 +1,17 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -20,13 +20,17 @@ import {
   type SessionEntry,
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { GatewayPluginReloadStatus } from "../gateway/server-plugin-reload-status.types.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
-import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
-import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import {
+  projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
+  readHeartbeatSummarySnapshot,
+} from "../infra/heartbeat-summary-snapshot.js";
+import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -47,7 +51,7 @@ import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { buildStatusCliProjection } from "./cli-projection.js";
+import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 import {
   prepareStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
@@ -112,7 +116,6 @@ async function prepareSessionStatusDetails(
     resolveSessionRuntime,
     readSessionRuntimeMetadata,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
@@ -160,25 +163,26 @@ async function prepareSessionStatusDetails(
       const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
       const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
       const model = resolvedModel.model ?? configuredSessionModel;
-      const lookupModel =
-        resolveStatusModelLookupRef({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        }) ?? resolvedModel;
-      const lookupModelId = lookupModel.model ?? model;
-      const selectedModelLabel =
-        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-      const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        model: configuredSessionModel,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+      const selectedLookupModel = resolveStatusModelLookupRef({
         provider: resolvedModel.provider,
         model,
         defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
       });
+      const lookupModel = selectedLookupModel ?? resolvedModel;
+      const lookupModelId = lookupModel.model ?? model;
+      const selectedModelLabel =
+        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      const configuredLookupModel = resolveStatusModelLookupRef({
+        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        model: configuredSessionModel,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const configuredSessionModelComparisonLabel = configuredLookupModel
+        ? `${configuredLookupModel.provider}/${configuredLookupModel.model}`
+        : null;
+      const selectedModelComparisonLabel = selectedLookupModel
+        ? `${selectedLookupModel.provider}/${selectedLookupModel.model}`
+        : null;
       const runtimeMatchesConfiguredModel =
         selectedModelComparisonLabel != null &&
         configuredSessionModelComparisonLabel != null &&
@@ -332,22 +336,20 @@ export async function prepareStatusSummary(
         )
     : null;
   const agentList = await listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent route inputs:
-  // outside it every resolveAgentConfig re-walks the roster and
-  // a large fleet stalls the loop for the whole projection (#137570).
+  // Receipts list the primary job first; retain it when converted siblings share an agent.
+  const heartbeat = await readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg));
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
+  // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
-    const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
-      cfg,
-      agentList.agents.map((agent) => agent.id),
-    );
-    return agentList.agents.map((agent, index) => {
-      const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
+    return agentList.agents.map((agent) => {
+      const job = heartbeatJobs.get(agent.id);
+      const summary = projectHeartbeatSummary(job, heartbeat.selectionWarning);
       let routeTarget:
         | {
             storePath: string;
             sessionKey: string;
             target: "last" | "owner";
-            heartbeat: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0]["heartbeat"];
+            policy: Parameters<typeof hasResolvableProactiveOwnerRoute>[0]["policy"];
           }
         | undefined;
       if (
@@ -355,21 +357,17 @@ export async function prepareStatusSummary(
         !agent.admissionRefusal &&
         (summary.target === "last" || summary.target === "owner")
       ) {
-        const heartbeatSession = resolveHeartbeatSessionKey(
-          cfg,
-          agent.id,
-          summary.session === undefined ? undefined : { session: summary.session },
-        );
-        // Only these enabled targets consume the session route. Keep the probe
-        // read-only so status cannot create, register, or migrate an absent store.
+        // A literal global row belongs to the job's selected agent store.
+        const sessionKey =
+          (job && resolveCronDeliverySessionKey(job)) ??
+          (cfg.session?.scope === "global"
+            ? "global"
+            : resolveAgentMainSessionKey({ cfg, agentId: agent.id }));
         routeTarget = {
-          storePath: heartbeatSession.storePath,
-          sessionKey: heartbeatSession.sessionKey,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
+          sessionKey,
           target: summary.target,
-          heartbeat: {
-            ...cfg.agents?.defaults?.heartbeat,
-            ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-          },
+          policy: job?.delivery,
         };
       }
       const status: HeartbeatStatus = {
@@ -429,11 +427,11 @@ export async function prepareStatusSummary(
         const route = deliveryContextFromSession(entry);
         status.waitingForRoute = !(route?.channel && route.to);
       } else {
-        status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute({
+        status.waitingForRoute = !(await hasResolvableProactiveOwnerRoute({
           cfg,
           agentId: status.agentId,
           entry,
-          heartbeat: routeTarget.heartbeat,
+          policy: routeTarget.policy,
         }));
       }
     }
@@ -528,7 +526,22 @@ export async function prepareStatusSummary(
               }
             : {}),
           ...(options.includeCliProjection
-            ? { cliProjection: buildStatusCliProjection(cfg, publishedAgentList) }
+            ? {
+                cliProjection: {
+                  agents: {
+                    defaultId: publishedAgentList.selectionRequired
+                      ? null
+                      : (publishedAgentList.defaultId ?? null),
+                    ownership: publishedAgentList.ownership,
+                    selectionRequired: publishedAgentList.selectionRequired,
+                    rows: publishedAgentList.agents.map(({ id, name }) =>
+                      name ? { id, name } : { id },
+                    ),
+                  },
+                  updateChannel: cfg.update?.channel ?? null,
+                  memoryPlugin: resolveMemoryPluginStatus(cfg),
+                },
+              }
             : {}),
           sqliteWal:
             sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
@@ -547,7 +560,10 @@ export async function prepareStatusSummary(
           },
           channelSummary,
           queuedSystemEvents,
-          startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
+          startupMigrationWarning:
+            [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
+              .filter(Boolean)
+              .join("\n") || undefined,
           startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
           modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,

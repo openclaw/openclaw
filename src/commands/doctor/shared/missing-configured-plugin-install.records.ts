@@ -2,13 +2,16 @@ import path from "node:path";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
+import { formatSourceBundledPluginNotice } from "../../../plugins/dev-source-root.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
   resolvePluginNpmPackageDir,
 } from "../../../plugins/install-paths.js";
+import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
+import type { resolveConfiguredPluginInstallContext } from "./missing-configured-plugin-install.candidates.js";
 
 export function forceNpmInstallRecordRepair(record: PluginInstallRecord): PluginInstallRecord {
   if (record.source !== "npm") {
@@ -115,10 +118,51 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
     : null;
 }
 
-export function recordMatchesBundledPackage(
+function recordMatchesBundledPackage(
   record: PluginInstallRecord,
   bundled: { packageName?: string },
 ): boolean {
   const packageName = bundled.packageName?.trim();
   return Boolean(packageName && collectInstalledRecordPackageNames(record).has(packageName));
+}
+
+/** Share record-removal planning between read-only no-op admission and leased repair. */
+export function planBundledInstallRecordRepair(
+  context: Pick<
+    Awaited<ReturnType<typeof resolveConfiguredPluginInstallContext>>,
+    "records" | "bundledPluginsById" | "operatorManagedPluginIds"
+  >,
+) {
+  const { records, bundledPluginsById, operatorManagedPluginIds } = context;
+  let nextRecords = records;
+  const changes: string[] = [];
+  const notices: string[] = [];
+  const sourceOutcomes: PluginUpdateOutcome[] = [];
+  for (const [pluginId, record] of Object.entries(records)) {
+    const bundled = bundledPluginsById.get(pluginId);
+    if (
+      operatorManagedPluginIds.has(pluginId) ||
+      !bundled ||
+      !recordMatchesBundledPackage(record, bundled)
+    ) {
+      continue;
+    }
+    if (bundled.preserveExternalInstallRecord) {
+      const message = formatSourceBundledPluginNotice(pluginId);
+      notices.push(message);
+      sourceOutcomes.push({
+        pluginId,
+        status: "unchanged",
+        code: "source-bundled-plugin",
+        message,
+      });
+      continue;
+    }
+    if (nextRecords === records) {
+      nextRecords = { ...records };
+    }
+    delete nextRecords[pluginId];
+    changes.push(`Removed stale managed install record for bundled plugin "${pluginId}".`);
+  }
+  return { nextRecords, changes, notices, sourceOutcomes };
 }

@@ -5,17 +5,18 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   desktopSourceForEnvironment,
   loadDesktopEnvironments,
+  resolveChatPaneDesktopTarget,
 } from "../../components/desktop/desktop-source.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import type {
   SessionCapability,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  isSidebarNewTabActive,
   openSlot,
   sidebarActivePanel,
   sidebarMainPanel,
@@ -24,6 +25,10 @@ import {
 } from "./sidebar-layout.ts";
 
 type ResourceSlot = "desktop";
+type ResourceLayoutChange = Pick<
+  NonNullable<Parameters<ChatPageHost["updateSidebarLayout"]>[1]>,
+  "automaticResource" | "retireAutomaticResource"
+>;
 export type ActiveResourceOwner = {
   client: GatewayBrowserClient;
   sessions: Pick<SessionCapability, "describe">;
@@ -37,7 +42,7 @@ export type ActiveResourceOwner = {
   execNode?: GatewaySessionRow["execNode"];
   archived?: boolean;
   layout: () => SidebarLayout;
-  commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
+  commit: (layout: SidebarLayout, options: ResourceLayoutChange) => void;
   isCurrent: () => boolean;
 };
 
@@ -106,7 +111,7 @@ export class ChatPaneActiveResources {
     gateway: ApplicationGatewaySnapshot;
     isConnected: () => boolean;
     isPresented: () => boolean;
-    commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
+    commit: (layout: SidebarLayout, options: ResourceLayoutChange) => void;
   }): void {
     const state = view.state();
     const client = state?.client;
@@ -141,7 +146,7 @@ export class ChatPaneActiveResources {
             layout: () => state.sidebarLayout,
             // Discovery is not a saved layout preference. Reload must validate again
             // before mounting a resource; explicit UI actions still persist normally.
-            commit: (layout, resource) => view.commit(layout, resource),
+            commit: view.commit,
             isCurrent: () =>
               view.isConnected() &&
               view.state() === state &&
@@ -337,6 +342,8 @@ export class ChatPaneActiveResources {
     };
     if (source !== null) {
       this.reveal(owner, "desktop");
+    } else if (existing) {
+      owner.commit(owner.layout(), { retireAutomaticResource: "desktop" });
     }
     if (changed) {
       this.render?.();
@@ -354,7 +361,7 @@ export class ChatPaneActiveResources {
     }
     const next = openSlot(layout, slot);
     // Add to the same dock without stealing an already-visible selection or expanding chat.
-    if (layout.open && sidebarActivePanel(layout)) {
+    if (layout.open && (sidebarActivePanel(layout) || isSidebarNewTabActive(layout))) {
       next.columns[0]!.activePanelId = layout.columns[0]!.activePanelId;
     }
     if (
@@ -365,7 +372,7 @@ export class ChatPaneActiveResources {
     }
     next.expanded = layout.expanded;
     next.expandedSide = layout.expandedSide;
-    owner.commit(next, slot);
+    owner.commit(next, { automaticResource: slot });
   }
 
   private async discoverDesktop(owner: ActiveResourceOwner, current: () => boolean): Promise<void> {

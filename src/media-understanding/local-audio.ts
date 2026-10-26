@@ -27,16 +27,6 @@ type LocalAudioSelection = {
   selected?: LocalAudioCandidate;
 };
 
-type InspectionOptions = {
-  language?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  arch?: string;
-  resolveBinary?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
-  inspectLinkedLibraries?: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
-  listDirectory?: (dirPath: string) => Promise<string[]>;
-};
-
 const WHISPER_CPP_MODEL_DIRS = [
   "/opt/homebrew/share/whisper-cpp",
   "/usr/local/share/whisper-cpp",
@@ -56,11 +46,9 @@ async function listDirectoryEntries(dirPath: string): Promise<string[]> {
  * Larger models transcribe better, so prefer non-tiny when several exist;
  * WHISPER_CPP_MODEL remains the explicit override.
  */
-async function discoverWhisperCppModel(
-  listDirectory: (dirPath: string) => Promise<string[]>,
-): Promise<string | null> {
+async function discoverWhisperCppModel(): Promise<string | null> {
   for (const dir of WHISPER_CPP_MODEL_DIRS) {
-    const models = (await listDirectory(dir))
+    const models = (await listDirectoryEntries(dir))
       .filter((name) => name.startsWith("ggml-") && name.endsWith(".bin"))
       .toSorted((a, b) => {
         const tinyA = a.includes("tiny") ? 1 : 0;
@@ -181,9 +169,8 @@ async function inspectWhisperBackend(params: {
   command: string;
   platform: NodeJS.Platform;
   arch: string;
-  libraries: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
 }): Promise<Pick<LocalAudioCandidate, "capableBackend" | "evidence">> {
-  const libraries = await params.libraries(params.command, params.platform);
+  const libraries = await inspectLinkedLibraries(params.command, params.platform);
   if (/(?:ggml[-_]?cuda|libcuda|libcudart)/i.test(libraries ?? "")) {
     return {
       capableBackend: "cuda",
@@ -223,30 +210,27 @@ function rank(candidate: LocalAudioCandidate): number {
   return candidate.id === "parakeet-mlx" ? 3 : 4;
 }
 
-export async function inspectLocalAudioSelection(
-  options: InspectionOptions = {},
-): Promise<LocalAudioSelection> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
+export async function inspectLocalAudioSelection(language?: string): Promise<LocalAudioSelection> {
+  const env = process.env;
+  const platform = process.platform;
+  const arch = process.arch;
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   const pathEntries = (resolveEnvironmentValue(env, "PATH") ?? "")
     .split(delimiter)
     .map((entry) => expandHomeDir(entry, env));
-  const resolveBinary = async (name: string) =>
-    options.resolveBinary
-      ? await options.resolveBinary(name, env)
-      : (resolveExecutableFromPathEnv(name, pathEntries, env) ?? null);
-  const [parakeetCommand, whisperCommand, sherpaCommand, pythonCommand] = await Promise.all(
-    ["parakeet-mlx", "whisper-cli", "sherpa-onnx-offline", "whisper"].map(resolveBinary),
-  );
+  const [parakeetCommand, whisperCommand, sherpaCommand, pythonCommand] = [
+    "parakeet-mlx",
+    "whisper-cli",
+    "sherpa-onnx-offline",
+    "whisper",
+  ].map((name) => resolveExecutableFromPathEnv(name, pathEntries, env) ?? null);
 
   const envModel = env.WHISPER_CPP_MODEL?.trim();
   const whisperModel =
     whisperCommand !== null
       ? envModel && (await pathExists(envModel))
         ? envModel
-        : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries)
+        : await discoverWhisperCppModel()
       : null;
   const whisperReady = whisperCommand !== null && Boolean(whisperModel);
   const whisperBackend = whisperCommand
@@ -254,7 +238,6 @@ export async function inspectLocalAudioSelection(
         command: whisperCommand,
         platform,
         arch,
-        libraries: options.inspectLinkedLibraries ?? inspectLinkedLibraries,
       })
     : {
         evidence: "whisper-cli command not found",
@@ -281,7 +264,7 @@ export async function inspectLocalAudioSelection(
     "{filename}",
   ];
   // Both Whisper CLIs take bare language codes and reject region tags such as "pt-BR".
-  const languageCode = options.language?.trim().split(/[-_]/, 1)[0];
+  const languageCode = language?.trim().split(/[-_]/, 1)[0];
   const languageArgs = languageCode ? ["--language", languageCode] : [];
   const whisperArgs = [
     "-m",

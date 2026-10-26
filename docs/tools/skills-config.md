@@ -80,7 +80,7 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4.3+
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4.4+
   with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
   `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
   `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
@@ -283,8 +283,8 @@ process.stdin.on("end", () => {
 
 <ParamField path="skills.allowBundled" type="string[]">
   Optional allowlist for **bundled** skills only. When set, only bundled
-  skills in the list are eligible. Managed, agent-level, and workspace
-  skills are unaffected.
+  skills in the list are eligible; an empty list disables all bundled skills.
+  Managed, agent-level, and workspace skills are unaffected.
 </ParamField>
 
 ## Per-skill entries (`skills.entries`)
@@ -325,7 +325,6 @@ different visible skill set per agent.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },
@@ -368,8 +367,9 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
   after substantial work, and learned skills unused for 30 days are archived.
-  Review changes appear as a **Learned** row in the Control UI chat, and every
-  change can be undone. `off` disables the background review and unused-skill cleanup.
+  Review changes appear as a **Learned** row in the Control UI chat, separately
+  from the assistant’s answer and collapsed **Worked** activity. Older plain-text
+  review notices also stay separate. Every change can be undone. `off` disables the background review and unused-skill cleanup.
   User-prompted skill creation, `/learn`, and manual learning sessions work in
   both modes.
 </ParamField>

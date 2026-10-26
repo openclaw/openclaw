@@ -117,6 +117,25 @@ function expectArtifactError(result: Awaited<ReturnType<typeof invoke>>, type: s
   expect(result).toMatchObject({ ok: false, error: { details: { type } } });
 }
 
+function transcriptImage(title: string, sizeBytes: number) {
+  return {
+    id: expect.stringMatching(/^artifact_transcript_image_/),
+    type: "image",
+    title,
+    mimeType: "image/png",
+    sizeBytes,
+    source: "session-transcript",
+    download: { mode: "bytes" },
+  };
+}
+
+async function updateSession(
+  target: typeof scope,
+  changes: Omit<Parameters<typeof upsertSessionEntryCore>[1], "sessionId">,
+) {
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, ...changes });
+}
+
 function expectArtifacts(
   result: Awaited<ReturnType<typeof invoke>>,
   artifacts: unknown[],
@@ -246,13 +265,7 @@ describe("bounded Activity image discovery", () => {
         "data:image/png;base64,aGVsbG8=",
       ]);
       expect(second.artifacts[2]).toMatchObject({
-        id: expect.stringMatching(/^artifact_transcript_image_/),
-        type: "image",
-        title: "inline",
-        mimeType: "image/png",
-        sizeBytes: 5,
-        source: "session-transcript",
-        download: { mode: "bytes" },
+        ...transcriptImage("inline", 5),
         image: { url: "data:image/png;base64,aGVsbG8=" },
       });
       expect(second.nextCursor).toBeUndefined();
@@ -284,15 +297,7 @@ describe("bounded Activity image discovery", () => {
         expect(await list({ type: undefined, limit: 2 })).toMatchObject({ ok: false });
         if (data) {
           const image = expectDefined(second.artifacts[0], "inline image reference");
-          expect(image).toMatchObject({
-            id: expect.stringMatching(/^artifact_transcript_image_/),
-            type: "image",
-            title: "Screenshot",
-            mimeType: "image/png",
-            sizeBytes: 1.5 * 1024 * 1024,
-            source: "session-transcript",
-            download: { mode: "bytes" },
-          });
+          expect(image).toMatchObject(transcriptImage("Screenshot", 1.5 * 1024 * 1024));
           expect(image).not.toHaveProperty("image");
           expect(second).not.toHaveProperty("omittedOversized");
           expect(Buffer.byteLength(JSON.stringify(second))).toBeLessThan(2 * 1024);
@@ -368,17 +373,9 @@ describe("bounded Activity image discovery", () => {
         await list({ cursor, sessionKey: other.sessionKey }, client),
         "artifact_cursor_invalid",
       );
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 2,
-        incognito: true,
-      });
+      await updateSession(scope, { updatedAt: 2, incognito: true });
       expect(await list({ cursor }, client)).toMatchObject({ ok: false });
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 3,
-        incognito: undefined,
-      });
+      await updateSession(scope, { updatedAt: 3, incognito: undefined });
       await appendTranscriptEvent(scope, {
         type: "reset",
         id: "reset-image-window",
@@ -442,11 +439,7 @@ it("keeps an admitted run on its stored main row when the public alias becomes g
           { title: "stored-main.txt", sessionKey: stored.sessionKey, runId },
         ]);
       }
-      await upsertSessionEntryCore(stored, {
-        sessionId: stored.sessionId,
-        updatedAt: Date.now(),
-        visibility: "draft",
-      });
+      await updateSession(stored, { updatedAt: Date.now(), visibility: "draft" });
       expectArtifactError(
         await query({ sessionKey: undefined, runId }),
         "artifact_scope_not_found",
@@ -517,6 +510,15 @@ describe("persisted chat image artifact recovery", () => {
     return invoke(method, params, client, context, transcriptScope.sessionKey);
   }
 
+  function download(
+    artifactId: string,
+    params: Record<string, unknown> = {},
+    client: GatewayClient | null = null,
+    context?: GatewayRequestContext,
+  ) {
+    return transcriptRpc("artifacts.download", { artifactId, ...params }, client, context);
+  }
+
   function imageIds(message: unknown): string[] {
     const content = asOptionalRecord(message)?.content;
     return Array.isArray(content)
@@ -544,7 +546,7 @@ describe("persisted chat image artifact recovery", () => {
   }
 
   async function expectDownload(artifactId: string, data: string) {
-    expect(await transcriptRpc("artifacts.download", { artifactId })).toMatchObject({
+    expect(await download(artifactId)).toMatchObject({
       ok: true,
       payload: { encoding: "base64", data },
     });
@@ -638,10 +640,7 @@ describe("persisted chat image artifact recovery", () => {
         });
         await expectDownload(artifactId, expectDefined(images[index], "image bytes"));
         expectArtifactError(
-          await transcriptRpc("artifacts.download", {
-            artifactId,
-            messageRole: "assistant",
-          }),
+          await download(artifactId, { messageRole: "assistant" }),
           "artifact_not_found",
         );
       }
@@ -659,21 +658,15 @@ describe("persisted chat image artifact recovery", () => {
       const other = sessionScope("other-images");
       await seedMessage(other, message, "shared-message-id");
       expectArtifactError(
-        await transcriptRpc("artifacts.download", {
-          sessionKey: other.sessionKey,
-          artifactId,
-        }),
+        await download(artifactId, { sessionKey: other.sessionKey }),
         "artifact_not_found",
       );
       const replacement = { ...transcriptScope, sessionId: "replacement-images" };
       await seedMessage(replacement, message, "shared-message-id", 2);
-      expectArtifactError(
-        await transcriptRpc("artifacts.download", { artifactId }),
-        "artifact_not_found",
-      );
+      expectArtifactError(await download(artifactId), "artifact_not_found");
       const currentId = await imageReference(replacement, "shared-message-id");
       expect(currentId).not.toBe(artifactId);
-      expect(await transcriptRpc("artifacts.download", { artifactId: currentId })).toMatchObject({
+      expect(await download(currentId)).toMatchObject({
         ok: true,
         payload: { data: "b3JpZ2luYWw=" },
       });
@@ -703,11 +696,7 @@ describe("persisted chat image artifact recovery", () => {
       });
       const artifactId = await imageReference(transcriptScope, appended.messageId);
       const client = sharingPolicyClient({ user: viewer.id, scopes: ["operator.read"] });
-      expect(
-        await transcriptRpc("artifacts.download", { artifactId }, client, context),
-      ).toMatchObject({
-        ok: true,
-      });
+      expect(await download(artifactId, {}, client, context)).toMatchObject({ ok: true });
       const read = transcriptReaders.readSessionArtifacts;
       const lookup = transcriptImageArtifacts.findTranscriptImageArtifact;
       const revoke = async () => {
@@ -745,7 +734,7 @@ describe("persisted chat image artifact recovery", () => {
                 return result;
               });
       try {
-        const denied = await transcriptRpc("artifacts.download", { artifactId }, client, context);
+        const denied = await download(artifactId, {}, client, context);
         expect(denied).toMatchObject({ ok: false, payload: undefined });
       } finally {
         spy.mockRestore();

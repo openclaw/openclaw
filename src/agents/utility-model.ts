@@ -34,8 +34,8 @@ export function resolveConfiguredPrimaryModelForAgent(params: {
 export function resolveConfiguredSetupModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  /** An explicit utility selection is used only to verify that configuration role. */
-  modelTarget?: "utility";
+  /** An explicit selection verifies only that configuration role. */
+  modelTarget?: "primary" | "utility";
 }): { modelRef: string; modelTarget?: "utility"; implicitPrimary?: true } | undefined {
   const primary = resolveConfiguredPrimaryModelForAgent(params);
   if (primary && params.modelTarget !== "utility") {
@@ -45,6 +45,9 @@ export function resolveConfiguredSetupModelForAgent(params: {
         ? { implicitPrimary: true as const }
         : {}),
     };
+  }
+  if (params.modelTarget === "primary") {
+    return undefined;
   }
   const utility = readUtilityModelSetting(params.cfg, params.agentId);
   return utility.kind === "explicit"

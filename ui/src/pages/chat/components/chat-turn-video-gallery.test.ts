@@ -2,7 +2,9 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import * as turnBoundary from "../chat-turn-boundary.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
@@ -118,11 +120,7 @@ it("keeps duplicate video slots and each sibling message's source authority, but
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   const source = `/tmp/openclaw/${crypto.randomUUID()}-repeated.mp4`;
   const fetchMock = vi.fn<typeof fetch>(async () =>
-    Response.json({
-      available: true,
-      mediaTicket: "gallery-ticket",
-      mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-    }),
+    Response.json(mediaTicketPayload("gallery-ticket", 300_000)),
   );
   vi.stubGlobal("fetch", fetchMock);
   const clip = (label: string) => createAttachmentBlock(source, "video", label, "video/mp4");
@@ -160,7 +158,9 @@ it("keeps duplicate video slots and each sibling message's source authority, but
       opened = item;
     },
   });
-  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(container.querySelectorAll("openclaw-chat-video-player")).toHaveLength(2),
+  );
   const players = [...container.querySelectorAll("openclaw-chat-video-player")];
   expect(players).toHaveLength(2);
   await Promise.all(players.map((player) => player.updateComplete));

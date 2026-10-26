@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { createDeferred, nextEventLoopTurn } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
@@ -8,24 +9,20 @@ import {
   streamOpenAICodexResponses,
 } from "../providers/openai-chatgpt-responses.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { AssistantMessageEventStreamLike, Context, Model, StreamFn } from "../types.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
-const openAIModel = {
-  id: "gpt-5.6-luna",
+const openAIModel = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "Responses hook lifecycle",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4_096,
-} satisfies Model<"openai-responses">;
+});
 
 const azureModel = {
   ...openAIModel,
@@ -314,21 +311,14 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
     it("awaits response metadata before exposing the first stream event", async () => {
       installResponse();
       const order: string[] = [];
-      let continueHook!: () => void;
-      const hookCompleted = new Promise<void>((resolve) => {
-        continueHook = resolve;
-      });
+      const hookCompleted = createDeferred();
       const onResponse = vi.fn(async () => {
         order.push("hook:start");
-        await hookCompleted;
+        await hookCompleted.promise;
         order.push("hook:end");
       });
       const stream = createStream({ onResponse });
-      const consume = (async () => {
-        for await (const event of stream) {
-          order.push(event.type);
-        }
-      })();
+      const consume = collectEventTypes(stream, order);
 
       await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
       expect(order).toEqual(["hook:start"]);
@@ -344,7 +334,7 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
         model,
       );
 
-      continueHook();
+      hookCompleted.resolve();
       await consume;
       expect((await stream.result()).stopReason).toBe("stop");
       expect(order.slice(0, 3)).toEqual(["hook:start", "hook:end", "start"]);
@@ -363,11 +353,7 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
       onResponse,
     });
     const eventTypes: string[] = [];
-    const consume = (async () => {
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-    })();
+    const consume = collectEventTypes(stream, eventTypes);
     const result = await settleWithin(stream.result());
     await consume;
 
@@ -391,24 +377,11 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
       async (settlement) => {
         const lifecycle = installResponse();
         const controller = new AbortController();
-        let settleHook!: () => void;
-        const pendingHook = new Promise<void>((resolve, reject) => {
-          settleHook = () => {
-            if (settlement === "resolve") {
-              resolve();
-            } else {
-              reject(new Error("late response hook rejection"));
-            }
-          };
-        });
-        const onResponse = vi.fn(() => pendingHook);
+        const pendingHook = createDeferred();
+        const onResponse = vi.fn(() => pendingHook.promise);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
-        const consume = (async () => {
-          for await (const event of stream) {
-            eventTypes.push(event.type);
-          }
-        })();
+        const consume = collectEventTypes(stream, eventTypes);
 
         await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
         const abortReason = Object.assign(new Error("caller canceled the provider response"), {
@@ -425,10 +398,12 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         expect(eventTypes).toEqual(["error"]);
         expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
-        settleHook();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        if (settlement === "resolve") {
+          pendingHook.resolve();
+        } else {
+          pendingHook.reject(new Error("late response hook rejection"));
+        }
+        await nextEventLoopTurn();
         expect(eventTypes).toEqual(["error"]);
         lifecycle.assertListenersRemoved();
       },

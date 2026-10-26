@@ -63,6 +63,7 @@ it.each(["commit", "retirement"])(
     });
     const scope = { client, epoch: 0 };
     const sessions = createSessionScopedOperations({
+      gateway: gateway.gateway,
       connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
       reconcileMutation: async () => ({ status: "stale" }),
       notifyCreated: () => {},

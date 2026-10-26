@@ -1,52 +1,32 @@
-/** Prompt fixture for interactive Doctor service repair. */
 import { expect, it, vi, type Mock } from "vitest";
+import { runtimeFixture } from "../cli/update-cli/update-command-fixtures.test-support.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
+import { createRuntimeProbeResult } from "../wizard/setup.finalize.test-support.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 export function mockDoctorRuntimeFacts(runExec: Mock<typeof import("../process/exec.js").runExec>) {
-  runExec.mockReset().mockImplementation(async (executable: string) => ({
-    stdout: JSON.stringify({
-      nodeVersion: "26.8.1",
-      bunVersion: /(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.3" : null,
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-    }),
-    stderr: "",
-  }));
+  runExec
+    .mockReset()
+    .mockImplementation(async (executable: string) =>
+      createRuntimeProbeResult(/(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.4" : null),
+    );
   vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue("/opt/available/bin/node");
 }
 
 export function createPrompter(confirmImpl: (message: string) => boolean) {
   return {
-    confirm: vi.fn(),
-    confirmAutoFix: vi.fn(),
-    confirmAggressiveAutoFix: vi.fn(),
+    ...makePrompter(false, true),
     confirmRuntimeRepair: vi.fn(async ({ message }: { message: string }) => confirmImpl(message)),
     select: vi.fn(),
-    shouldRepair: false,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair: false,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
   };
 }
 
 export function setPlatform(platform: NodeJS.Platform) {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+  Object.defineProperty(process, "platform", { value: platform });
 }
 
 export function mockGatewayInstall(
@@ -73,17 +53,13 @@ export function registerRunningBunFallbackTest({
 }) {
   it("uses running Bun for the non-interactive runtime fallback on a Bun-only host", async () => {
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
-    const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "1.4.3",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
-    });
+    const probeBun = vi
+      .spyOn(runtimePaths, "resolveBunRuntimeInfo")
+      .mockResolvedValue(runtimeFixture("1.4.4", "3.53.4"));
     setPlatform("linux");
     mockGatewayInstall(service);
     // Service-install consent is separate from Doctor's --fix --non-interactive runtime selection.

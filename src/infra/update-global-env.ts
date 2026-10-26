@@ -46,7 +46,7 @@ export async function createGlobalInstallEnv(
   const pnpmHome = options.manager === "pnpm" ? resolvePnpmHome(options.globalRoot) : null;
   if (pnpmHome) {
     merged.PNPM_HOME = pnpmHome;
-    applyPathPrepend(merged, [path.join(pnpmHome, "bin")]);
+    applyPathPrepend(merged, [path.join(pnpmHome, "bin"), pnpmHome]);
   }
   if (process.platform === "win32") {
     merged.NPM_CONFIG_UPDATE_NOTIFIER = "false";

@@ -12,6 +12,7 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { classifyOpenClawAgentDatabaseReadError } from "../../state/openclaw-agent-db-read-error.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -24,6 +25,7 @@ import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -42,6 +44,32 @@ import {
 const SLICE_BYTES = 64 * 1024;
 const CHUNK_BYTES = 1024 * 1024;
 const CHUNK_FRAMES = 128;
+
+/** Read the compaction owner's session facts inside the transcript's own read snapshot. */
+export function readSessionCompactionPreparation(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  request: Pick<
+    Extract<SessionHistoryWorkerInput, { kind: "transcript-hydration" }>,
+    "database" | "resolvedScope" | "target"
+  >,
+): SessionCompactionPreparation {
+  const requestedKey = request.target.sessionKey ?? "";
+  const sessionKey =
+    readSessionKeyBySessionIdInDatabase(database, request.resolvedScope.sessionId) ?? requestedKey;
+  const sessionTarget = {
+    agentId: request.resolvedScope.agentId,
+    sessionId: request.resolvedScope.sessionId,
+    sessionKey,
+    storePath: request.database.path,
+  };
+  const entry = readSessionEntryRow(database, requestedKey)?.entry;
+  const runtimeEntry =
+    requestedKey === sessionKey ? entry : readSessionEntryRow(database, sessionKey)?.entry;
+  const [primaryConversation] = selectConversationRowsFromDatabase(database, {
+    primarySession: { sessionId: sessionTarget.sessionId, sessionKey: requestedKey },
+  });
+  return { sessionTarget, entry, runtimeEntry, primaryConversation };
+}
 
 /** One task owns its snapshot through every acknowledged frame and native cleanup. */
 export async function streamSessionTranscriptHydration(
@@ -72,29 +100,6 @@ export async function streamSessionTranscriptHydration(
       if (coldArchive) {
         throw new SessionTranscriptColdError(request.resolvedScope.sessionId);
       }
-      const compaction = request.compaction
-        ? (() => {
-            const requestedKey = request.target.sessionKey ?? "";
-            const sessionKey =
-              readSessionKeyBySessionIdInDatabase(database, request.resolvedScope.sessionId) ??
-              requestedKey;
-            const sessionTarget = {
-              agentId: request.resolvedScope.agentId,
-              sessionId: request.resolvedScope.sessionId,
-              sessionKey,
-              storePath: request.database.path,
-            };
-            const entry = readSessionEntryRow(database, requestedKey)?.entry;
-            const runtimeEntry =
-              requestedKey === sessionKey
-                ? entry
-                : readSessionEntryRow(database, sessionKey)?.entry;
-            const [primaryConversation] = selectConversationRowsFromDatabase(database, {
-              primarySession: { sessionId: sessionTarget.sessionId, sessionKey: requestedKey },
-            });
-            return { sessionTarget, entry, runtimeEntry, primaryConversation };
-          })()
-        : undefined;
       const encoding = readTranscriptStorageEncoding(database.db);
       const source = prepareTranscriptEventReadQuery(database, request.resolvedScope.sessionId, {
         ...request.target,
@@ -293,7 +298,7 @@ export async function streamSessionTranscriptHydration(
       await flush();
       control.throwIfCancelled();
       outcome = {
-        value: { kind: "full", version, eventCount, ...(compaction ? { compaction } : {}) },
+        value: { kind: "full", version, eventCount },
       };
     } catch (error) {
       outcome = {

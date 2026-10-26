@@ -157,7 +157,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         },
         "sessions.delete": { ok: true, deleted: true },
         "sessions.reclaim": { ok: true },
-        "sessions.send": { runId: "run-cloud-e2e", status: "started" },
+        "chat.send": { runId: "run-cloud-e2e", status: "started" },
       },
     });
     const profileRequestCount = async () => (await gateway.getRequests("environments.list")).length;
@@ -403,7 +403,6 @@ export function defineSessionPlacementModuleBoundaryTests(
           ...buildGatewaySessionSnapshot({
             sessionRow: session,
             agentId: "cloud",
-            includeSession: true,
           }),
           placement,
           placementMove: null,
@@ -418,7 +417,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       ] as const;
       for (const [state, generation, label] of transitions) {
         await publishPlacement(state, generation, label);
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       }
       await gateway.resolveDeferred("sessions.describe", undefined, {
         match: { key: sessionKey },
@@ -451,19 +450,19 @@ export function defineSessionPlacementModuleBoundaryTests(
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
-      const send = await gateway.waitForRequest("sessions.send");
+      const send = await gateway.waitForRequest("chat.send");
       expect(send.params).toMatchObject({
-        key: sessionKey,
+        sessionKey,
+        sessionId: "session-cloud-e2e",
+        expectedLeafEntryId: null,
         agentId: "cloud",
         message,
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       const orderedMethods = (await gateway.getRequests())
         .map((request) => request.method)
-        .filter((method) =>
-          ["sessions.create", "sessions.dispatch", "sessions.send"].includes(method),
-        );
-      expect(orderedMethods).toEqual(["sessions.create", "sessions.dispatch", "sessions.send"]);
+        .filter((method) => ["sessions.create", "sessions.dispatch", "chat.send"].includes(method));
+      expect(orderedMethods).toEqual(["sessions.create", "sessions.dispatch", "chat.send"]);
       const promptBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: message });
       await pollCount(promptBubbles).toBe(1);
 

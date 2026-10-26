@@ -19,36 +19,33 @@ function resolve(
   });
 }
 
-function installPlugin(
-  id: string,
-  hooks: Pick<ChannelPlugin, "messaging" | "conversationBindings">,
-  chatTypes: ("group" | "channel")[] = ["group"],
-) {
-  const plugin = {
-    ...createChannelTestPluginBase({ id, label: id, capabilities: { chatTypes } }),
-    ...hooks,
-  };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
-}
-
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createSessionConversationTestRegistry());
 });
 
-it("passes channel kind to plugin-owned parent fallback resolution", () => {
-  installPlugin(
-    "channel-kind",
-    {
-      messaging: {
-        resolveSessionConversation: ({ kind, rawId }) => ({
-          id: rawId,
-          parentConversationCandidates: kind === "channel" ? ["thread-parent"] : [],
-        }),
-      },
+it("uses channel-kind and parent-session plugin candidates", () => {
+  const id = "channel-kind";
+  const plugin = {
+    ...createChannelTestPluginBase({
+      id,
+      label: id,
+      capabilities: { chatTypes: ["group", "channel"] },
+    }),
+    messaging: {
+      resolveSessionConversation: ({ kind, rawId }) => ({
+        id: rawId,
+        parentConversationCandidates: kind === "channel" ? ["thread-parent"] : [],
+      }),
     },
-    ["group", "channel"],
-  );
+    conversationBindings: {
+      buildModelOverrideParentCandidates: ({ parentConversationId }) =>
+        parentConversationId === "room:topic:thread:sender:user"
+          ? ["room:topic:thread", "room"]
+          : [],
+    },
+  } satisfies ChannelPlugin;
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
 
   const resolved = resolve(
     "channel-kind",
@@ -57,28 +54,16 @@ it("passes channel kind to plugin-owned parent fallback resolution", () => {
   );
 
   expect(resolved).toMatchObject({ model: "demo/channel", matchKey: "thread-parent" });
-});
-
-it("uses plugin-owned parent fallback candidates", () => {
-  installPlugin("scoped-chat", {
-    conversationBindings: {
-      buildModelOverrideParentCandidates: ({ parentConversationId }) =>
-        parentConversationId === "room:topic:thread:sender:user"
-          ? ["room:topic:thread", "room"]
-          : [],
-    },
-  });
-
-  const resolved = resolve(
-    "scoped-chat",
+  const parentMatch = resolve(
+    "channel-kind",
     { "room:topic:thread": "demo/scoped" },
     {
       groupId: "unrelated",
-      parentSessionKey: "agent:main:scoped-chat:group:room:topic:thread:sender:user",
+      parentSessionKey: "agent:main:channel-kind:group:room:topic:thread:sender:user",
     },
   );
 
-  expect(resolved).toMatchObject({ model: "demo/scoped", matchKey: "room:topic:thread" });
+  expect(parentMatch).toMatchObject({ model: "demo/scoped", matchKey: "room:topic:thread" });
 });
 
 it.each<[string, string, Record<string, string>, Parameters<typeof resolve>[2], Match]>([

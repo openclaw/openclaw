@@ -26,15 +26,11 @@ import {
   type ReplyOperation,
   waitForReplyOperationOwnerSettlement,
 } from "../../sessions/session-controller.js";
-import {
-  waitForCapturedSessionNativeAttemptEnd,
-  waitForSessionNativeAttemptEnd,
-} from "../../sessions/session-controller.native-runtime.js";
+import { waitForCapturedSessionNativeAttemptEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
   assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
-  getSessionControllerOperation,
   markReplyOperationExecutionStarted,
   readSessionControllerOperationState,
   resolveReplyRunForCurrentSessionId,
@@ -179,13 +175,10 @@ export function markActiveEmbeddedRunAbandoned(params: {
 }
 
 export function resolveEmbeddedRunAbandonment(
-  params: AbandonmentQuery,
+  params: Omit<AbandonmentQuery, "sessionFile">,
 ): AbandonedEmbeddedRun["reason"] | undefined {
-  const query = { ...params, sessionFile: normalizeSessionFileRegistryKey(params.sessionFile) };
-  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(
-    ([owner, abandoned]) =>
-      (!query.sessionFile || abandoned.sessionFile === query.sessionFile) &&
-      matchesAbandonment(owner, abandoned, query),
+  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(([owner, abandoned]) =>
+    matchesAbandonment(owner, abandoned, params),
   );
   return matches.length === 1 ? matches[0]![1].reason : undefined;
 }
@@ -380,29 +373,6 @@ export function abortEmbeddedAgentRun(
   return replyAborted || aborted;
 }
 
-type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
-
-export async function preemptAndDrainEmbeddedHeartbeatRun(
-  sessionId: string,
-  timeoutMs: number,
-): Promise<EmbeddedHeartbeatPreemptionResult> {
-  const handle = getActiveNativeAttempt(sessionId);
-  if (!handle?.preemptByVisibleTurn) {
-    return "not-heartbeat";
-  }
-  const drainPromise = waitForSessionNativeAttemptEnd(sessionId, timeoutMs, handle);
-  try {
-    if (!handle.preemptByVisibleTurn()) {
-      return "not-heartbeat";
-    }
-  } catch (err) {
-    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
-  } finally {
-    notifyGatewayWorkMetricsChanged();
-  }
-  return (await drainPromise) ? "drained" : "timed-out";
-}
-
 export function prepareEmbeddedAgentRunCompletionClaim(
   sessionId: string,
   runId: string,
@@ -430,10 +400,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   revokeCompletionClaim(sessionId, undefined, target);
   EMBEDDED_RUN_COMPLETION_CLAIMS.add(claim);
   const consume = (allowUnregistered: boolean): boolean => {
-    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim)) {
+    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim)) {
       return false;
     }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     if (!claim.promoted) {
       claim.settleRegistration(undefined);
     }
@@ -499,20 +468,6 @@ export function prepareEmbeddedAgentRunCompletionClaim(
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return Boolean(getActiveNativeAttempt(sessionId));
-}
-
-/** @internal Exposed for unit tests only. */
-export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  // Logical aliases outlive turns; native lookup follows the exact registration key.
-  const operation = getSessionControllerOperation(normalizedSessionKey);
-  const registration = operation && getControllerEmbeddedAttachment(operation);
-  return registration?.sessionKey?.trim() === normalizedSessionKey
-    ? registration.sessionId
-    : undefined;
 }
 
 export type ActiveEmbeddedRunOwner = {

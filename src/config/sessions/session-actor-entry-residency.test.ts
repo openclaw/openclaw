@@ -1,7 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import { buildCreatedSessionGoal } from "./goals-transitions.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -27,12 +31,17 @@ import {
   type Fixture,
   type Mutation,
 } from "./session-actor-worker.test-support.js";
-import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import type {
+  SessionEntryPatchCommitted,
+  SessionEntryPatchGuard,
+} from "./session-entry-patch.types.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
+import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -43,6 +52,11 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 it("persists run adoption and its reducers once, then skips an unchanged hydrated row", async () => {
   await withActor(async (f) => {
+    const entry = f.nativeEntry()!;
+    f.writeEntry({
+      ...entry,
+      goal: buildCreatedSessionGoal(entry, { objective: "single adoption" }, 1),
+    });
     const initial = f.read();
     const command: Mutation = {
       type: "session.actor.adoptRun",
@@ -55,7 +69,10 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
         expectedState: buildRestartRecoveryExpectedState(initial.entry!),
         runId: "current-run",
         lifecycle: { startedAt: 2 },
-        reducers: [{ kind: "activity", updatedAt: 20 }],
+        reducers: [
+          { kind: "activity", updatedAt: 20 },
+          { kind: "goal-continuation", goalId: initial.entry!.goal!.id },
+        ],
       },
     };
     await f.prepare(command);
@@ -67,10 +84,18 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
       expect(f.mutate(command)).toMatchObject({
         kind: "committed",
         receipt: {
-          postimage: { entry: { activeWriterRunId: "current-run", startedAt: 2, updatedAt: 20 } },
+          postimage: {
+            entry: {
+              activeWriterRunId: "current-run",
+              startedAt: 2,
+              updatedAt: 20,
+              goal: { continuationTurns: 1 },
+            },
+          },
         },
       });
       expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
+      expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);
       writes.counts.nodes = 0;
       writes.counts.windows = 0;
       f.restartActor();
@@ -79,6 +104,7 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
         activeWriterRunId: "current-run",
         startedAt: 2,
         updatedAt: 20,
+        goal: { continuationTurns: 1 },
       });
       expect(
         f.mutate({
@@ -334,17 +360,28 @@ it("keeps transcript residency across entry patches without losing either owner'
           timestamp: "2026-01-01T00:00:00Z",
           cwd: "/synthetic",
         },
-        {
-          type: "message",
-          id: "before-patch",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: { role: "user", content: "retain this input" },
-        },
+        timedMessageEvent("before-patch", null, "2026-01-01T00:00:01Z", {
+          role: "user",
+          content: "retain this input",
+        }),
       ]),
     );
     f.writeEntry({
       ...f.nativeEntry()!,
+      skillsSnapshot: {
+        prompt: "synthetic snapshot",
+        skills: Array.from({ length: 256 }, (_, index) => ({
+          name: `fixture-${index}`,
+          requiredEnv: [`SYNTHETIC_${index}`],
+        })),
+      },
+      systemPromptReport: promptReport(10, 100, 80),
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId: f.scope.sessionId,
+        root: "/synthetic",
+        files: [{ path: "README.md", fingerprint: "initial" }],
+      },
       activitySummary: {
         version: 1,
         text: "Retained input",
@@ -378,17 +415,43 @@ it("keeps transcript residency across entry patches without losing either owner'
         preserveActivity: true,
         shouldCommitIf,
       });
-    const reads = trackSqliteStatementExecutions(f.database.db, ["select", "watermark"], (sql) =>
-      sql.startsWith("select coalesce(") &&
-      sql.includes('as "max_seq"') &&
-      sql.includes('"session_transcript_cold_archives"')
-        ? "watermark"
-        : /^select\b/iu.test(sql)
-          ? "select"
-          : null,
+    const reads = trackSqliteStatementExecutions(
+      f.database.db,
+      ["select", "watermark", "snapshotWrite"],
+      (sql) =>
+        /^(?:insert into|update|delete from) "session_entry_snapshots"/iu.test(sql)
+          ? "snapshotWrite"
+          : sql.startsWith("select coalesce(") &&
+              sql.includes('as "max_seq"') &&
+              sql.includes('"session_transcript_cold_archives"')
+            ? "watermark"
+            : /^select\b/iu.test(sql)
+              ? "select"
+              : null,
     );
     try {
+      let candidate: SessionEntryPatchCommitted | undefined;
+      const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
+        // The real patch kernel owns this candidate; the collector decodes its wire bytes.
+        candidate = value as SessionEntryPatchCommitted;
+      });
+      f.hooks.admit = (_stage, facts) => {
+        if (isRecord(facts) && facts.transfer) {
+          transfer.accept(facts.transfer);
+        }
+      };
       entryPatch({ label: "entry owner committed", model: "updated-model" });
+      delete f.hooks.admit;
+      assert(transfer.completed && candidate?.entry?.skillsSnapshot);
+      // The mutable caller result and retained publication each need one snapshot copy.
+      expect(serialize(candidate).byteLength).toBeLessThan(
+        serialize(candidate.entry).byteLength * 2.5,
+      );
+      candidate.entry.skillsSnapshot.prompt = "caller-owned edit";
+      expect(
+        candidate.publication?.fullEntries?.get(f.target.sessionKey)?.skillsSnapshot?.prompt,
+      ).toBe("synthetic snapshot");
+      expect(f.read().entry?.skillsSnapshot?.prompt).toBe("synthetic snapshot");
       expect(reads.counts.watermark).toBe(0);
       expect(reads.counts.select).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>
@@ -401,6 +464,8 @@ it("keeps transcript residency across entry patches without losing either owner'
       const after = f.read();
       expect(after.entry?.label).toBe("entry owner committed");
       expect(after.entry?.model).toBe("updated-model");
+      expect(after.entry?.systemPromptReport).toEqual(before.entry?.systemPromptReport);
+      expect(after.entry?.sessionDiffBaseline).toEqual(before.entry?.sessionDiffBaseline);
       expect(after.hasBoard).toBe(true);
       expect(after.participants).toMatchObject([
         { identity: { id: "peer" }, contributionCount: 1 },
@@ -456,6 +521,7 @@ it("keeps transcript residency across entry patches without losing either owner'
       expect(f.read().entry?.label).toBe("entry owner committed");
       entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
       expect(reads.counts.watermark).toBe(0);
+      expect(reads.counts.snapshotWrite).toBe(0);
     } finally {
       reads.restore();
     }
@@ -484,6 +550,10 @@ it("keeps transcript residency across entry patches without losing either owner'
     expect(replaced.entry?.lifecycleRevision).toBe("new-lifecycle");
     expect(replaced.entry?.model).toBe("updated-model");
     expect(replaced.hasBoard).toBe(true);
+    f.restartActor();
+    await f.reopenDatabase();
+    expect(f.read().entry).toEqual(replaced.entry);
+    expect(f.nativeEntry()).toEqual(replaced.entry);
   });
 });
 
@@ -570,18 +640,8 @@ it.each(["entry", "target"] as const)(
   },
 );
 
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  message: { role: "user", content: "A question about 🦞" },
-};
-const answer = {
-  type: "message",
-  id: "answer",
-  parentId: "question",
-  message: { role: "assistant", content: "An answer" },
-};
+const question = messageEvent("question", null, { role: "user", content: "A question about 🦞" });
+const answer = messageEvent("answer", "question", { role: "assistant", content: "An answer" });
 
 const storedBytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
 
@@ -752,12 +812,12 @@ it.each(["reset", "compaction", "leaf"] as const)(
 
 it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", async () => {
   await withActor(async (f) => {
-    const events = Array.from({ length: 600 }, (_, index) => ({
-      type: "message",
-      id: `message-${index}`,
-      parentId: index === 0 ? null : `message-${index - 1}`,
-      message: { role: "user", content: "x" },
-    }));
+    const events = Array.from({ length: 600 }, (_, index) =>
+      messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, {
+        role: "user",
+        content: "x",
+      }),
+    );
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, events, {
         scheduleProjectionReconcile: false,
@@ -836,10 +896,14 @@ it("retains one oversized actor across competing small actors and replaces it wi
     const other = { ...f.target, sessionKey: "agent:main:byte-budget-other" };
     const companion = { ...f.target, sessionKey: "agent:main:byte-budget-companion" };
     runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
+      const entry = {
         sessionId: f.scope.sessionId,
         updatedAt: 1,
         label: largeLabel,
+      };
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...entry,
+        goal: buildCreatedSessionGoal(entry, { objective: "oversized adoption" }, 1),
       });
       writeSessionEntry(f.database, other.sessionKey, {
         sessionId: "byte-budget-other",
@@ -857,13 +921,20 @@ it("retains one oversized actor across competing small actors and replaces it wi
 
     const initial = f.read();
     const command: Mutation = {
-      type: "session.actor.patch",
+      type: "session.actor.adoptRun",
       input: {
         target: initial.target,
         expected: initial.version,
         commandId: "oversized-activity",
         phaseId: "terminal-accounting",
-        reducers: [{ kind: "activity", updatedAt: 2 }],
+        sessionId: f.scope.sessionId,
+        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        runId: "oversized-run",
+        lifecycle: {},
+        reducers: [
+          { kind: "activity", updatedAt: 2 },
+          { kind: "goal-continuation", goalId: initial.entry!.goal!.id },
+        ],
       },
     };
     await f.prepare(command);
@@ -872,6 +943,8 @@ it("retains one oversized actor across competing small actors and replaces it wi
       throw new Error("Expected the oversized sole actor to commit without rehydration");
     }
     expect(committed.failure).toBeUndefined();
+    expect(committed.receipt.postimage.entry?.goal?.continuationTurns).toBe(1);
+    expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);
     expect(f.reply()).toEqual({ kind: "committed" });
     expect(committed.receipt.afterVersion).toEqual({
       epoch: initial.version.epoch,
@@ -881,6 +954,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(current.version).toEqual(committed.receipt.afterVersion);
     expect(current.entry?.updatedAt).toBe(2);
     expect(current.entry?.label === largeLabel).toBe(true);
+    expect(current.entry?.goal?.continuationTurns).toBe(1);
 
     const competing = f.read(other);
     expect(f.read().version).toEqual(current.version);
@@ -891,10 +965,20 @@ it("retains one oversized actor across competing small actors and replaces it wi
 
     expect(
       f.mutate({
-        ...command,
-        input: { ...command.input, expected: current.version, commandId: "competing-activity" },
+        type: "session.actor.patch",
+        input: {
+          target: f.target,
+          expected: current.version,
+          commandId: "competing-activity",
+          phaseId: "terminal-accounting",
+          reducers: [
+            { kind: "activity", updatedAt: 2 },
+            { kind: "goal-continuation", goalId: current.entry!.goal!.id },
+          ],
+        },
       }).kind,
     ).toBe("committed");
+    expect(f.nativeEntry()?.goal?.continuationTurns).toBe(2);
 
     f.writeEntry(
       { sessionId: "byte-budget-companion", updatedAt: 2, label: largeLabel },
@@ -907,6 +991,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(rehydrated.version.epoch).not.toBe(current.version.epoch);
     expect(rehydrated.entry?.updatedAt).toBe(2);
     expect(rehydrated.entry?.label === largeLabel).toBe(true);
+    expect(rehydrated.entry?.goal?.continuationTurns).toBe(2);
     expect(f.read(other).version).toEqual(competing.version);
     expect(f.read(companion).version.epoch).not.toBe(secondOversized.version.epoch);
 
@@ -949,5 +1034,44 @@ it("evicts ordinary actors under byte pressure while keeping the oversized worki
     expect(f.read().version).toEqual(oversizedVersion);
     expect(f.read(ordinary).version.epoch).not.toBe(ordinaryVersion.epoch);
     expect(f.read().version).toEqual(oversizedVersion);
+  });
+});
+
+it("keeps decoded snapshot working sets resident across hydration and committed replacements", async () => {
+  await withActor((f) => {
+    const targets = Array.from({ length: 3 }, (_, index) => ({
+      ...f.target,
+      sessionKey: `agent:main:snapshot-resident-${index}`,
+    }));
+    const skillsSnapshot = { prompt: "s".repeat(1536 * 1024), skills: [] };
+    for (const target of targets) {
+      f.writeEntry(
+        { sessionId: target.sessionKey, updatedAt: 1, skillsSnapshot },
+        target.sessionKey,
+      );
+    }
+    const cold = targets.map((target) => f.read(target));
+    // The decoded working set fits in 8 MiB; retaining its raw JSON a second time does not.
+    for (const [index, target] of targets.entries()) {
+      expect(f.read(target).version).toEqual(cold[index]!.version);
+    }
+    const replacement = { ...skillsSnapshot, prompt: "r".repeat(1536 * 1024) };
+    const committed = [];
+    for (const target of targets) {
+      f.patchEntry({
+        selection: { kind: "entry", sessionKey: target.sessionKey, exact: true },
+        sessionKey: target.sessionKey,
+        operation: { kind: "fields", patch: { skillsSnapshot: replacement } },
+        operationLabel: "session-entry.patch",
+        validateCanonicalKeys: false,
+        preserveActivity: true,
+      });
+      committed.push(f.read(target).version);
+    }
+    for (const [index, target] of targets.entries()) {
+      const current = f.read(target);
+      expect(current.version).toEqual(committed[index]);
+      expect(current.entry?.skillsSnapshot?.prompt === replacement.prompt).toBe(true);
+    }
   });
 });

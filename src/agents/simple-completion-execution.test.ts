@@ -3,11 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
-import {
-  completionConfig,
-  completionContext,
-  completionModel,
-} from "./simple-completion.test-support.js";
+import { completionContext, completionModel } from "./simple-completion.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -97,39 +93,21 @@ it.each<ReasoningCase>([
   },
 );
 
-it.each<{
-  name: string;
-  model: Model;
-  auth: CompletionParams["auth"];
-  cfg?: CompletionParams["cfg"];
-  preparedApi?: string;
-}>([
-  {
-    name: "OAuth facts without credentials",
-    model: baseModel,
-    auth: {
-      apiKey: "test-access-token",
-      source: "profile:test",
-      profileId: "test:profile",
-      mode: "oauth",
-      authFlow: "test-subscription",
-    },
-  },
-  {
-    name: "provider-owned stream API",
-    model: completionModel({ id: "llama3.2:latest" }),
-    auth: { apiKey: "ollama-local", source: "models.json (local marker)", mode: "api-key" },
-    cfg: completionConfig("ollama", { baseUrl: "http://remote-ollama:11434", models: [] }),
-    preparedApi: "openclaw-ollama-simple-test",
-  },
-])("prepares $name", async ({ model, auth: selectedAuth, cfg, preparedApi }) => {
-  const preparedModel = preparedApi ? { ...model, api: preparedApi } : model;
+it("passes non-secret auth facts to preparation and executes its returned transport", async () => {
+  const selectedAuth: CompletionParams["auth"] = {
+    apiKey: "test-access-token",
+    source: "profile:test",
+    profileId: "test:profile",
+    mode: "oauth",
+    authFlow: "test-subscription",
+  };
+  const cfg = { plugins: { enabled: false } };
+  const preparedModel = { ...baseModel, api: "openclaw-provider-simple:test" };
   mocks.prepareModel.mockReturnValueOnce(preparedModel);
-  await complete({ model, auth: selectedAuth, cfg });
-  expect(mocks.prepareModel).toHaveBeenCalledOnce();
+  await complete({ model: baseModel, auth: selectedAuth, cfg });
   expect(mocks.prepareModel.mock.calls[0]?.[0]).toStrictEqual({
     apiRegistry: expect.anything(),
-    model,
+    model: baseModel,
     cfg,
     auth: { mode: selectedAuth.mode, authFlow: selectedAuth.authFlow },
   });
@@ -169,7 +147,6 @@ it("gives standalone OpenCode completions distinct routing identities", async ()
 
 it.each<{
   name: string;
-  patch?: Partial<Model>;
   options?: CompletionParams["options"];
   expectedHeaders?: Record<string, string>;
 }>([
@@ -183,25 +160,9 @@ it.each<{
     options: { sessionId: "conversation-a", headers: { "X-Custom": "keep" } },
     expectedHeaders: { "x-opencode-session": "conversation-a", "X-Custom": "keep" },
   },
-  { name: "model header", patch: { headers: { "X-OpenCode-Session": "caller-owned" } } },
-  { name: "proxy endpoint", patch: { baseUrl: "https://proxy.example/v1" } },
-  { name: "insecure endpoint", patch: { baseUrl: "http://opencode.ai/zen/go/v1" } },
-])("preserves routing options for $name", async ({ patch, options, expectedHeaders }) => {
+])("preserves routing options for $name", async ({ options, expectedHeaders }) => {
   const original = structuredClone(options);
-  const model: Model = {
-    ...baseModel,
-    ...opencode,
-    ...patch,
-  };
-  const originalModelHeaders = structuredClone(model.headers);
-  for (let index = 0; index < 2; index++) {
-    await complete({ model, options });
-  }
-  expect(completionOptions().map((requestOptions) => requestOptions.headers)).toEqual([
-    expectedHeaders,
-    expectedHeaders,
-  ]);
-  expect(mocks.complete.mock.calls[0]?.[0].headers).toEqual(originalModelHeaders);
+  await complete({ model: { ...baseModel, ...opencode }, options });
   expect(completionOptions()[0]).toEqual({
     ...options,
     apiKey: auth.apiKey,

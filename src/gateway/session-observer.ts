@@ -12,7 +12,6 @@ import {
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -64,8 +63,6 @@ const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 export function createSessionObserver(deps: SessionObserverDeps): SessionObserverService {
-  const prepareModel = deps.prepareModel ?? defaultPrepareModel;
-  const completeModel = deps.completeModel ?? defaultCompleteModel;
   const resolveStorePath = (agentId: string) =>
     resolveSessionStorePathCore(deps.getConfig().session?.store, { agentId });
   const readSession: NonNullable<SessionObserverDeps["readSession"]> =
@@ -221,10 +218,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     (work.disposed || supersededRuns.has(state.runId) ? lifecycle.dropState : suspendState)(state);
 
   const demoteUtilityModel = (state: SessionObserverState): void => {
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = undefined;
-    }
+    clearTimeout(state.timer);
+    state.timer = undefined;
     state.activeController?.abort();
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
@@ -261,8 +256,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const requestModelDigest = createSessionObserverCompletion({
     getConfig: deps.getConfig,
-    prepareModel,
-    completeModel,
+    prepareModel: defaultPrepareModel,
+    completeModel: defaultCompleteModel,
     isCurrent: modelStateIsCurrent,
   });
 
@@ -325,10 +320,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       schedule(state);
       return;
     }
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = undefined;
-    }
+    clearTimeout(state.timer);
+    state.timer = undefined;
     if (!modelSlots.reserve(state)) {
       state.finalPending ||= final;
       return;
@@ -462,7 +455,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     capturedReader?: SessionObserverRead,
   ): SessionObserverEventSteps {
     let reader = capturedReader;
-    if (work.disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
+    if (work.disposed) {
       return;
     }
     const lifecyclePhase = event.stream === "lifecycle" ? event.data.phase : undefined;

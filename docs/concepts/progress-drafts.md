@@ -296,6 +296,10 @@ With the commentary lane enabled, preambles render only as those interleaved
 💬 lines; the status headline below stays out of the way so the lane keeps its
 documented shape.
 
+Send-denied turns cannot forward visible progress callbacks, even when automatic
+source delivery is enabled. Message-tool-only reply ownership can permit temporary
+progress without an automatic final answer, but it never overrides a send denial.
+
 ### Status headline
 
 On Discord and Telegram in progress mode, the model's typed pre-tool preamble
@@ -388,8 +392,8 @@ too; approval requests remain visible.
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
-characters; prose cuts at a word boundary, while long details such as paths or
-raw commands are shortened with a middle ellipsis so the suffix stays visible.
+Unicode code points; prose keeps complete words that fit, while long details such
+as paths or raw commands are shortened with a middle ellipsis so the suffix stays visible.
 The same budget applies to prepared tool titles, including paths embedded in a
 Read title, rather than only to separate tool details.
 On Telegram, the budget includes the tool icon, label, and status as well as the

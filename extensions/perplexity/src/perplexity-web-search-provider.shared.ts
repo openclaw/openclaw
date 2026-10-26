@@ -1,5 +1,4 @@
 import {
-  createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   type WebSearchProviderPlugin,
@@ -14,9 +13,6 @@ const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 
-const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
-const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
-
 export type PerplexityTransport = "search_api" | "chat_completions";
 export type PerplexityConfig = {
   apiKey?: string;
@@ -27,27 +23,6 @@ export type PerplexityAuth = {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
 };
-
-export function createPerplexityWebSearchProviderBase() {
-  return {
-    id: "perplexity",
-    label: "Perplexity Search",
-    hint: "Requires Perplexity API key or OpenRouter API key · structured results",
-    onboardingScopes: [...PERPLEXITY_ONBOARDING_SCOPES],
-    credentialLabel: "Perplexity API key",
-    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-    placeholder: "pplx-...",
-    signupUrl: "https://www.perplexity.ai/settings/api",
-    docsUrl: "https://docs.openclaw.ai/perplexity",
-    autoDetectOrder: 50,
-    credentialPath: PERPLEXITY_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: PERPLEXITY_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "perplexity" },
-      configuredCredential: { pluginId: "perplexity" },
-    }),
-  };
-}
 
 export function resolvePerplexityWebSearchRuntimeMetadata(
   ctx: Parameters<NonNullable<WebSearchProviderPlugin["resolveRuntimeMetadata"]>>[0],

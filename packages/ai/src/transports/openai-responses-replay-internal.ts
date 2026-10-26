@@ -1,7 +1,8 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { APIError } from "openai";
 import { Stream } from "openai/core/streaming";
-import type { ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
@@ -20,6 +21,7 @@ import {
   nextResponsesServiceTier,
 } from "./openai-responses-service-tier.js";
 import { log } from "./openai-transport-shared.js";
+import { iterateSseFrames } from "./transport-stream-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
 
@@ -146,7 +148,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 >(
   attempt: ResponsesEncryptedContentAttempt<TRequest>,
   error: unknown,
-  options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
+  options: { buildFullHistoryRequest: () => TRequest | Promise<TRequest> },
 ): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
   const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
   if (
@@ -170,9 +172,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   }
   // Filtering the already-pruned checkpoint request would leave a context-blind
   // suffix. Rebuild full history lazily, then preserve any earlier reasoning strip.
-  let compactionStripped = options?.buildFullHistoryRequest
-    ? await options.buildFullHistoryRequest()
-    : locallyStripped;
+  let compactionStripped = await options.buildFullHistoryRequest();
   compactionStripped = stripResponsesRequestCompaction(compactionStripped);
   if (attempt.kind === "reasoning-stripped") {
     compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
@@ -182,6 +182,46 @@ export async function resolveNextResponsesEncryptedContentAttempt<
     request: compactionStripped,
     rejectedCompaction: readOpenAIResponsesCompactionRejection(attempt.request),
   };
+}
+
+function* decodeResponsesSseFrame(
+  frame: string,
+  firstFrame: boolean,
+): Generator<{ event: string | null; data: string }> {
+  let event: string | null = null;
+  let data: string | undefined;
+  let start = 0;
+  let cr = frame.indexOf("\r");
+  let lf = frame.indexOf("\n");
+  while (start < frame.length) {
+    const end = cr < 0 ? (lf < 0 ? frame.length : lf) : lf < 0 ? cr : Math.min(cr, lf);
+    // The SDK strips one BOM per line; the streaming decoder already handled the first.
+    const bom = !(firstFrame && start === 0) && frame.charCodeAt(start) === 0xfeff;
+    const line = frame.slice(bom ? start + 1 : start, end);
+    start = end + (frame[end] === "\r" && frame[end + 1] === "\n" ? 2 : 1);
+    if (cr >= 0 && cr < start) {
+      cr = frame.indexOf("\r", start);
+    }
+    if (lf >= 0 && lf < start) {
+      lf = frame.indexOf("\n", start);
+    }
+    if (!line && (event || data !== undefined)) {
+      yield { event, data: data ?? "" };
+      event = null;
+      data = undefined;
+    }
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + (line[colon + 1] === " " ? 2 : 1));
+    if (field === "event") {
+      event = value;
+    } else if (field === "data") {
+      data = data === undefined ? value : `${data}\n${value}`;
+    }
+  }
+  if (event || data !== undefined) {
+    yield { event, data: data ?? "" };
+  }
 }
 
 export async function createResponsesStreamWithRecovery(params: {
@@ -201,7 +241,7 @@ export async function createResponsesStreamWithRecovery(params: {
     response: Response;
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
   }) => AsyncIterable<unknown>;
-  buildFullHistoryRequest?: () =>
+  buildFullHistoryRequest: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
@@ -210,30 +250,48 @@ export async function createResponsesStreamWithRecovery(params: {
   async function* streamWithTerminalDrain(response: Response, body: ReadableStream<Uint8Array>) {
     const reader = body.getReader();
     let terminal = false;
+    let firstFrame = true;
     try {
-      // Decoder cancellation must leave the request reader available for the bounded drain.
-      const forwarded = new ReadableStream<Uint8Array>(
-        {
-          async pull(controller) {
-            const { done, value } = await reader.read();
-            if (done) {
-              controller.close();
-            } else {
-              controller.enqueue(value);
-            }
-          },
-          cancel() {},
-        },
-        { highWaterMark: 0 },
-      );
-      const stream = Stream.fromSSEResponse<ResponseStreamEvent>(
-        new Response(forwarded, response),
-        new AbortController(),
-        params.client,
-      );
-      for await (const event of stream) {
-        terminal ||= event?.type === "response.completed" || event?.type === "response.incomplete";
-        yield event;
+      // This owner keeps the reader for terminal draining; framing only borrows reads.
+      frames: for await (const { frame } of iterateSseFrames(() => reader.read())) {
+        const messages = decodeResponsesSseFrame(frame, firstFrame);
+        firstFrame = false;
+        for (const message of messages) {
+          if (message.data === "[DONE]") {
+            break frames;
+          }
+          let event: unknown;
+          try {
+            event = JSON.parse(message.data);
+          } catch {
+            throw new SyntaxError("Error reading response: malformed server-sent event JSON.");
+          }
+          if (message.event?.startsWith("thread.")) {
+            event = { event: message.event, data: event };
+          } else if (message.event === "error" || (isRecord(event) && event.error)) {
+            throw new APIError(
+              undefined,
+              // @ts-expect-error SDK SSE also passes arbitrary JSON; preserve scalar/null error payloads.
+              isRecord(event) ? (event.error ?? event) : event,
+              undefined,
+              response.headers,
+            );
+          }
+          terminal ||=
+            isRecord(event) &&
+            (event.type === "response.completed" || event.type === "response.incomplete");
+          yield event;
+        }
+      }
+    } catch (error) {
+      // Match SDK transport cancellation without swallowing provider API errors.
+      if (
+        error instanceof APIError ||
+        !isRecord(error) ||
+        (error.name !== "AbortError" &&
+          !String(error.message).includes("FetchRequestCanceledException"))
+      ) {
+        throw error;
       }
     } finally {
       if (!terminal) {
@@ -364,9 +422,7 @@ export async function createResponsesStreamWithRecovery(params: {
           isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
         ) {
           const request = {
-            ...(params.buildFullHistoryRequest
-              ? await params.buildFullHistoryRequest()
-              : attempt.request),
+            ...(await params.buildFullHistoryRequest()),
           };
           delete request.previous_response_id;
           nextAttempt = { kind: "continuation-rejected", request };

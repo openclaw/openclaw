@@ -6,7 +6,10 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
 import { captureSqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
-import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  inspectDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -72,6 +75,7 @@ function isInspection(value: unknown): value is PersistedAuthProfileStoreInspect
 /** Captured read authority survives all awaits until the runtime composition releases it. */
 export function prepareAgentAuthProfileRowsRead(options: {
   databasePath: string;
+  databaseIdentity?: DatabasePathIdentity;
   agentId: string;
   env: NodeJS.ProcessEnv;
   source?: "runtime" | "canonical";
@@ -100,13 +104,18 @@ export function prepareAgentAuthProfileRowsRead(options: {
       return { ok: false, error };
     }
   })();
+  // Discovered candidates pin the read to their captured physical file.
   const uncached =
-    isArtifactPreservingStateRead() || (captured.ok && Boolean(captured.value.maintenanceScope));
+    options.databaseIdentity !== undefined ||
+    isArtifactPreservingStateRead() ||
+    (captured.ok && Boolean(captured.value.maintenanceScope));
   let fileState: ReturnType<typeof captureAuthProfileFileIdentity> | undefined;
   let identity: ReturnType<typeof inspectDatabasePathIdentitySync>;
   try {
     fileState = uncached ? undefined : captureAuthProfileFileIdentity(databasePath);
-    identity = fileState ? fileState.identity : inspectDatabasePathIdentitySync(databasePath);
+    identity =
+      options.databaseIdentity ??
+      (fileState ? fileState.identity : inspectDatabasePathIdentitySync(databasePath));
   } catch {
     identity = undefined;
   }
@@ -295,12 +304,13 @@ async function readAgentAuthProfileRows(
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
             binding.authorize(request);
             assertCurrent();
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
             if (
               request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              request.facts.kind === "auth-store-read"
+              isRecord(publication) &&
+              publication.kind === "auth-store-read"
             ) {
-              rows = receiveAuthProfileReadRows(request.facts.port, rows);
+              rows = receiveAuthProfileReadRows(publication.port, rows);
             }
             if (!grant()) {
               throw new Error("Auth profile read authority expired");

@@ -2,6 +2,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
 } from "./gateway-active-work.js";
+import type { RestartEmitHooks } from "./restart-request.js";
 import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR2
@@ -65,15 +66,18 @@ export function createSafeGatewayRestartPreflight() {
 export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
-    delayMs?: number;
     skipDeferral?: boolean;
+    sessionKey?: string;
+    emitHooks?: RestartEmitHooks;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight();
   const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewayRestart({
-    delayMs: opts.delayMs ?? 0,
+    delayMs: 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+    ...(opts.emitHooks ? { emitHooks: opts.emitHooks } : {}),
     ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });
   const status = restart.coalesced

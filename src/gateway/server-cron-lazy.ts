@@ -3,12 +3,12 @@ import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type {
-  buildGatewayCronService,
+  GatewayCronServiceContract,
   GatewayCronExitWatcherHandoff,
   GatewayCronState,
-} from "./server-cron.js";
+} from "./server-cron-contract.js";
+import type { buildGatewayCronService } from "./server-cron.js";
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(
@@ -22,6 +22,7 @@ export function createLazyGatewayCronState(
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
   let loaded: GatewayCronState | null = null;
   let stopped = false;
+  let lifecycleGeneration = 0;
   let exitWatcherHandoff: GatewayCronExitWatcherHandoff | undefined;
   let exitWatcherHandoffStop: Promise<void> | undefined;
   let schedulingPaused = false;
@@ -72,6 +73,7 @@ export function createLazyGatewayCronState(
 
   const stopLoadedCronAndDrain = async (handoff?: GatewayCronExitWatcherHandoff): Promise<void> => {
     stopped = true;
+    lifecycleGeneration += 1;
     exitWatcherHandoff ??= handoff;
     const loading = cronStateLoader.peek();
     const resolved = loaded ?? (loading ? await loading : null);
@@ -90,6 +92,7 @@ export function createLazyGatewayCronState(
     },
     stop() {
       stopped = true;
+      lifecycleGeneration += 1;
       if (loaded) {
         loaded.cron.stop();
         return;
@@ -143,8 +146,18 @@ export function createLazyGatewayCronState(
     waitForManualRun: bindCron((state) => state.cron.waitForManualRun.bind(state.cron)),
     readEventSources: bindCron((state) => state.cron.readEventSources.bind(state.cron)),
     runEvent: bindCron((state) => state.cron.runEvent.bind(state.cron)),
+    getStoreKey() {
+      const storeKey = loaded?.cron.getStoreKey?.();
+      if (!storeKey) {
+        throw new Error("Cron store is not prepared; read cron jobs first");
+      }
+      return storeKey;
+    },
     getJob(id) {
       return loaded?.cron.getJob(id);
+    },
+    getLoadedJobs() {
+      return loaded?.cron.getLoadedJobs();
     },
     readJob: bindCron((state) => state.cron.readJob.bind(state.cron)),
     async readScratch(id, options) {
@@ -173,6 +186,26 @@ export function createLazyGatewayCronState(
 
   return {
     cron,
+    get readHeartbeatSummary() {
+      return loaded?.readHeartbeatSummary;
+    },
+    deferHookWake: async (opts) => {
+      const generation = lifecycleGeneration;
+      const commitGuard = () => {
+        opts.commitGuard();
+        if (stopped || lifecycleGeneration !== generation) {
+          throw new Error("Scheduled Hook wake owner changed; retry the request");
+        }
+      };
+      commitGuard();
+      const current = await load();
+      commitGuard();
+      const defer = current.deferHookWake;
+      if (!defer) {
+        throw new Error("Scheduled Hook wake admission is unavailable; restart the Gateway");
+      }
+      return await defer({ ...opts, commitGuard });
+    },
     storePath,
     cronEnabled,
     prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {
@@ -189,15 +222,12 @@ export function createLazyGatewayCronState(
         },
       };
     },
-    // Reload rules invoke these hooks on whatever cronState is live; the lazy
-    // proxy must forward every GatewayCronState member or hot reloads silently
-    // no-op until a gateway restart (system-owned cron cadence changes never applied).
+    // Reload hooks follow the serving lazy owner.
     reconcileExitWatchers: bindCron((state) => state.reconcileExitWatchers.bind(state)),
     reconcileStreamWatchers: bindCron((state) => state.reconcileStreamWatchers.bind(state)),
     async stopStreamWatchers() {
       // Nothing to stop before the heavy cron service is built.
       await loaded?.stopStreamWatchers();
     },
-    reconcileSystemJobs: bindCron((state) => state.reconcileSystemJobs.bind(state)),
   };
 }

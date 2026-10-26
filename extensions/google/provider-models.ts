@@ -73,10 +73,6 @@ function isGoogleGeminiCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === GOOGLE_GEMINI_CLI_PROVIDER_ID;
 }
 
-function isGoogleAntigravityProvider(providerId: string): boolean {
-  return normalizeOptionalLowercaseString(providerId) === GOOGLE_ANTIGRAVITY_PROVIDER_ID;
-}
-
 function templateIdsForProvider(
   templateProviderId: string,
   family: GoogleForwardCompatFamily,
@@ -84,29 +80,10 @@ function templateIdsForProvider(
   if (isGoogleGeminiCliProvider(templateProviderId)) {
     return family[1];
   }
-  if (isGoogleAntigravityProvider(templateProviderId)) {
+  if (normalizeOptionalLowercaseString(templateProviderId) === GOOGLE_ANTIGRAVITY_PROVIDER_ID) {
     return family[2] ?? family[0];
   }
   return family[0];
-}
-
-function buildGoogleTemplateSources(params: {
-  providerId: string;
-  family: GoogleForwardCompatFamily;
-}) {
-  const defaultTemplateProviderId = isGoogleGeminiCliProvider(params.providerId)
-    ? "google"
-    : GOOGLE_GEMINI_CLI_PROVIDER_ID;
-  const preferredExternalFirst =
-    isGoogleGeminiCliProvider(params.providerId) && params.family[3] === true;
-  const orderedTemplateProviderIds = preferredExternalFirst
-    ? [defaultTemplateProviderId, params.providerId]
-    : [params.providerId, defaultTemplateProviderId];
-
-  return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
-    providerId,
-    templateIds: templateIdsForProvider(providerId, params.family),
-  }));
 }
 
 type FamilyForwardCompatCase = Parameters<
@@ -221,10 +198,19 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     cases: GOOGLE_FORWARD_COMPAT_CASES.map(({ family, match, patch }) => ({
       match,
       get templateSources() {
-        return buildGoogleTemplateSources({
-          providerId: params.providerId,
-          family,
-        });
+        const selectedProviderId = params.providerId;
+        const defaultTemplateProviderId = isGoogleGeminiCliProvider(selectedProviderId)
+          ? "google"
+          : GOOGLE_GEMINI_CLI_PROVIDER_ID;
+        const preferredExternalFirst =
+          isGoogleGeminiCliProvider(selectedProviderId) && family[3] === true;
+        const orderedTemplateProviderIds = preferredExternalFirst
+          ? [defaultTemplateProviderId, selectedProviderId]
+          : [selectedProviderId, defaultTemplateProviderId];
+        return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
+          providerId,
+          templateIds: templateIdsForProvider(providerId, family),
+        }));
       },
       patch,
     })),

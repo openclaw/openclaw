@@ -22,7 +22,7 @@ type MSTeamsPollVote = {
   selections: string[];
 };
 
-type MSTeamsPoll = {
+type StoredMSTeamsPoll = {
   id: string;
   question: string;
   options: string[];
@@ -31,11 +31,10 @@ type MSTeamsPoll = {
   updatedAt?: string;
   conversationId?: string;
   messageId?: string;
-  votes: Record<string, string[]>;
 };
 
 export type MSTeamsPollStore = {
-  createPoll: (poll: MSTeamsPoll) => Promise<void>;
+  createPoll: (poll: StoredMSTeamsPoll) => Promise<void>;
   getPoll: (pollId: string) => Promise<StoredMSTeamsPoll | null>;
   recordVote: (params: {
     pollId: string;
@@ -48,8 +47,6 @@ type MSTeamsPollCard = {
   pollId: string;
   card: Record<string, unknown>;
 };
-
-type StoredMSTeamsPoll = Omit<MSTeamsPoll, "votes">;
 
 type StoredMSTeamsPollVoteBucket = {
   pollId: string;
@@ -272,53 +269,6 @@ export function createMSTeamsPollStoreState(params?: {
     }
   };
 
-  const registerPollVotes = async (
-    pollId: string,
-    votes: Record<string, string[]>,
-    updatedAt: string,
-  ): Promise<void> => {
-    const buckets = new Map<string, Record<string, string[]>>();
-    for (const [voterId, selections] of Object.entries(votes)) {
-      const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
-      const bucketVotes = buckets.get(bucket) ?? {};
-      bucketVotes[voterId] = selections;
-      buckets.set(bucket, bucketVotes);
-    }
-    for (const [bucket, bucketVotes] of buckets) {
-      const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
-      const existing = await voteBucketStore.lookup(key);
-      await voteBucketStore.register(
-        key,
-        toPluginJsonValue({
-          pollId,
-          bucket,
-          votes: { ...bucketVotes, ...existing?.votes },
-          updatedAt,
-        }),
-      );
-    }
-  };
-
-  const registerPollVote = async (
-    pollId: string,
-    voterId: string,
-    selections: string[],
-    updatedAt: string,
-  ): Promise<void> => {
-    const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
-    const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
-    const existing = await voteBucketStore.lookup(key);
-    await voteBucketStore.register(
-      key,
-      toPluginJsonValue({
-        pollId,
-        bucket,
-        votes: { ...existing?.votes, [voterId]: selections },
-        updatedAt,
-      }),
-    );
-  };
-
   const prunePollStoreToLimit = async (): Promise<void> => {
     let voteRows: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>> | undefined;
     const deletePrunedPollVotes = async (pollId: string) => {
@@ -349,12 +299,10 @@ export function createMSTeamsPollStoreState(params?: {
     }
   };
 
-  const createPoll = async (poll: MSTeamsPoll) => {
+  const createPoll = async (poll: StoredMSTeamsPoll) => {
     await withMSTeamsSqliteMutationLock(namespace, async () => {
-      const { votes, ...metadata } = poll;
-      await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(metadata));
+      await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(poll));
       await deletePollVotes(poll.id);
-      await registerPollVotes(poll.id, votes, poll.updatedAt ?? poll.createdAt);
       await prunePollStoreToLimit();
     });
   };
@@ -385,8 +333,18 @@ export function createMSTeamsPollStoreState(params?: {
       const normalized = normalizeMSTeamsPollSelections(poll, vote.selections);
       const updatedAt = new Date().toISOString();
       poll.updatedAt = updatedAt;
-      await pollStore.register(pollKey, toPluginJsonValue(poll));
-      await registerPollVote(vote.pollId, vote.voterId, normalized, updatedAt);
+      await pollStore.register(pollKey, poll);
+      const pollId = vote.pollId;
+      const voterId = vote.voterId;
+      const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
+      const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
+      const existing = await voteBucketStore.lookup(key);
+      await voteBucketStore.register(key, {
+        pollId,
+        bucket,
+        votes: { ...existing?.votes, [voterId]: normalized },
+        updatedAt,
+      });
       await prunePollStoreToLimit();
       return true;
     });

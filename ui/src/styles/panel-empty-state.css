@@ -22,6 +22,7 @@ openclaw-panel-empty-state {
     transform: translateY(-10px);
   }
 
+  .empty-state__body,
   .empty-state__icon {
     display: contents;
   }
@@ -32,7 +33,7 @@ openclaw-panel-empty-state {
     width: 32px;
     height: 32px;
     margin-bottom: 18px;
-    color: var(--muted);
+    color: var(--icon-decorative, var(--muted));
 
     stroke-width: 1.5px;
   }
@@ -61,5 +62,87 @@ openclaw-panel-empty-state {
   .empty-state > [slot="action"] {
     grid-area: 4 / 1;
     margin-top: 16px;
+  }
+}
+
+/* Session content starts below its controls; each present group owns one gap. */
+openclaw-panel-empty-state:has(> .empty-state[data-presentation]) {
+  flex-direction: column;
+  overflow: auto;
+}
+
+openclaw-panel-empty-state:has(> .empty-state[data-presentation="desktop"]) {
+  padding: var(--space-3);
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation] {
+  display: flex;
+  min-height: min-content;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-7) var(--space-6);
+  transform: none;
+
+  &::before {
+    content: none;
+  }
+
+  .empty-state__icon {
+    display: flex;
+  }
+
+  .empty-state__icon > :not([slot="action"]) {
+    margin: 0;
+  }
+
+  .empty-state__body {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    overflow-wrap: anywhere;
+  }
+
+  .empty-state__description {
+    margin: 0;
+  }
+
+  > [slot="action"] {
+    order: 1;
+    margin: 0;
+  }
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation="desktop"] {
+  padding-top: calc(4 * var(--space-7));
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation="mobile"] {
+  padding-top: calc(2 * var(--space-7));
+
+  .empty-state__icon > :not([slot="action"]) {
+    width: 36px;
+    height: 36px;
+    opacity: 0.8;
+  }
+
+  .empty-state__title {
+    font-size: calc(20px * var(--control-ui-text-scale, 1));
+    line-height: 1.3;
+  }
+
+  .empty-state__description {
+    max-width: 340px;
+    font-size: calc(14px * var(--control-ui-text-scale, 1));
+    line-height: 1.4286;
+  }
+
+  > [slot="action"] {
+    width: 100%;
+    max-width: 440px;
   }
 }

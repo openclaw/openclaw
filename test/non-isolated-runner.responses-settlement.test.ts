@@ -2,14 +2,27 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
-import { withRunnerFixture } from "./non-isolated-runner.fixture-support.ts";
+import {
+  createRunnerFixtureEnv,
+  withRunnerFixture,
+} from "./non-isolated-runner.fixture-support.ts";
 import { responsesProducerFixtureFiles } from "./non-isolated-runner.responses-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+// Cold compilation is preparation, outside the Responses settlement deadline.
+const workers = createVitestWorkerRun(createRunnerFixtureEnv());
+afterAll(() => workers.dispose());
+try {
+  await workers.prepare();
+} catch (error) {
+  await workers.dispose();
+  throw error;
+}
+
 it("settles a real Responses producer before the next non-isolated file loads", (context) => {
   const run = withRunnerFixture("non-isolated-runner-responses", async ({ root, args, env }) => {
     const files = responsesProducerFixtureFiles(repoRoot);
@@ -40,24 +53,18 @@ export default defineConfig({
       await fs.writeFile(path.join(root, name), contents, "utf8");
     }
     let child!: ChildProcess;
-    const workers = createVitestWorkerRun(env);
-    let result: Awaited<ReturnType<typeof runVitestShutdownCommand>>;
-    try {
-      result = await runVitestShutdownCommand({
-        bin: resolveTestNodeExecPath(),
-        args,
-        cwd: repoRoot,
-        env,
-        workerRun: workers,
-        maxBytes: 4 * 1024 * 1024,
-        signal: context.signal,
-        onReady(owned) {
-          child = owned;
-        },
-      });
-    } finally {
-      await workers.dispose();
-    }
+    const result = await runVitestShutdownCommand({
+      bin: resolveTestNodeExecPath(),
+      args,
+      cwd: repoRoot,
+      env,
+      workerRun: workers,
+      maxBytes: 4 * 1024 * 1024,
+      signal: context.signal,
+      onReady(owned) {
+        child = owned;
+      },
+    });
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.code, output).toBe(0);
     expect(child, output).toMatchObject({ exitCode: 0, signalCode: null });

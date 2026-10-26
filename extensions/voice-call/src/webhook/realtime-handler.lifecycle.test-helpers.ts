@@ -1,3 +1,4 @@
+import http from "node:http";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
@@ -5,42 +6,31 @@ import type {
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { onTestFinished, vi } from "vitest";
 import type { CallManager } from "../manager.js";
-import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import { connectWs, startUpgradeWsServer } from "../websocket-test-support.js";
-import { makeBridge, makeCall } from "./realtime-call-control.test-helpers.js";
-import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
-import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
-
-export const updateCallMetadata: CallManager["updateCallMetadata"] = async (call, update) => {
-  call.metadata = update(call.metadata);
-};
-
-export const createRealtimeConfig = () => ({
-  ...createVoiceCallBaseConfig().realtime,
-  enabled: true,
-  instructions: "Be helpful.",
-});
-
+import {
+  createRealtimeConfig,
+  makeBridge,
+  makeCall,
+  makeRealtimeProvider,
+  managedHandler,
+  updateCallMetadata,
+} from "./realtime-call-control.test-helpers.js";
+import type { RealtimeCallHandler, ResolveRealtimeCallRegistration } from "./realtime-handler.js";
+import type { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
+export { createRealtimeConfig, makeRealtimeProvider, updateCallMetadata };
+export function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
+  const req = new http.IncomingMessage(null as never);
+  req.url = url;
+  req.method = "POST";
+  req.headers = host ? { host } : {};
+  return req;
+}
 export function createBridge(
   close: RealtimeVoiceBridge["close"],
   overrides: Partial<RealtimeVoiceBridge> = {},
 ): RealtimeVoiceBridge {
   return makeBridge({ submitToolResult: () => {}, close, ...overrides });
 }
-
-export function makeRealtimeProvider(
-  createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
-  overrides: Partial<RealtimeVoiceProviderPlugin> = {},
-): RealtimeVoiceProviderPlugin {
-  return {
-    id: "openai",
-    label: "OpenAI",
-    isConfigured: () => true,
-    createBridge: createBridgeForCall,
-    ...overrides,
-  };
-}
-
 export function createCarrierLifecycleHarness(
   createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
   options: {
@@ -48,7 +38,7 @@ export function createCarrierLifecycleHarness(
     initialMessage?: string;
     toolPolicy?: ReturnType<typeof createRealtimeConfig>["toolPolicy"];
     resolveCallRegistration?: ResolveRealtimeCallRegistration;
-    streamDisconnectLifecycle?: StreamDisconnectLifecycle;
+    streamDisconnectLifecycle?: StreamDisconnectGrace;
   } = {},
 ) {
   const realtimeProvider = makeRealtimeProvider(createBridgeForCall);
@@ -78,7 +68,7 @@ export function createCarrierLifecycleHarness(
         }
       }),
   );
-  const handler = new RealtimeCallHandler(
+  const handler = managedHandler(
     {
       ...createRealtimeConfig(),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
@@ -96,12 +86,10 @@ export function createCarrierLifecycleHarness(
         provider: realtimeProvider,
         providerConfig: { apiKey: "test-key" },
       })),
-    "/voice/webhook",
-    options.streamDisconnectLifecycle ?? { connect() {}, disconnect() {}, retire() {} },
+    options.streamDisconnectLifecycle,
   );
   return { call, endCall, handler, processEvent };
 }
-
 export async function connectCarrierStream(handler: RealtimeCallHandler) {
   const { streamUrl } = handler.issueStreamSession();
   const server = await startUpgradeWsServer({
@@ -116,7 +104,6 @@ export async function connectCarrierStream(handler: RealtimeCallHandler) {
   });
   return { server, ws };
 }
-
 export function sendCarrierStart(ws: WebSocket, streamSid: string, callSid: string | undefined) {
   ws.send(JSON.stringify({ event: "start", start: { streamSid, callSid } }));
 }

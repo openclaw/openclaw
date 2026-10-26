@@ -2,7 +2,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ExecMode } from "../infra/exec-approvals.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -27,6 +26,10 @@ import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factor
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Session-owned declaration used only for tool listing, never invocation authority. */
+  listingClientCaps?: string[];
+  /** Creator policy retained by the scheduled session owner. */
+  scheduledToolPolicy?: import("./scheduled-tool-policy.js").ScheduledToolPolicyContext;
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
@@ -91,7 +94,7 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
-  /** Host-enabled Gateway publication request surface; the broker checks target and credentials. */
+  /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -103,10 +106,6 @@ export type OpenClawSharedToolsOptions = {
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** Offer the heartbeat tool definition without accepting responses outside heartbeat runs. */
-  offerHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
@@ -130,6 +129,9 @@ export type OpenClawToolsOptions = {
   sessionPortalTarget?: import("./tools/session-portal-target.js").SessionPortalToolTarget;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
+  /** Host-prepared local exec parity for this run's managed browser requests. */
+  allowLocalBrowserLoopback?: boolean;
+  assertLocalBrowserLoopbackCurrent?: () => void;
   agentSessionKey?: string;
   agentChannel?: string;
   /** Prepared active-conversation support for structured human questions. */
@@ -140,7 +142,7 @@ export type OpenClawToolsOptions = {
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
-  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  execOverrides?: ExecPolicyOverrides;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */
@@ -150,6 +152,8 @@ export type OpenClawToolsOptions = {
   gatewayCallerLocal?: boolean;
   /** True only for a validated scheduled tool policy. */
   gatewayCallerScheduled?: boolean;
+  /** Sessions a scheduled run's board, widget and media tools act on, from its execution context. */
+  scheduledToolTargets?: import("../cron/execution-context-registry.js").ScheduledToolTargets;
   /** Delivery target for topic/thread routing. */
   agentTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */

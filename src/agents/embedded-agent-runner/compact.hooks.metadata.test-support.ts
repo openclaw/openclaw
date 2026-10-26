@@ -5,18 +5,19 @@ import {
 } from "../../plugins/plugin-instance-invocation.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
 } from "../prepared-model-runtime.types.js";
+import type { AuthStorage } from "../sessions/auth-storage.js";
 
 export type CompactHooksQueuedCompaction = (
   params: Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[0],
   host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
 ) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
 
-export const emptyPluginMetadataSnapshot: PluginMetadataSnapshot =
-  createEmptyPluginMetadataSnapshot();
+const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 
 export const getCurrentPluginMetadataSnapshotMock: Mock<
   typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
@@ -48,43 +49,15 @@ export function mockCompactHooksContextEngine(resolveContextEngine: () => Promis
     resolveContextEngine,
     resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
     resolveLogicalTurnContextEngines: async () => {
-      const engine = await resolveContextEngine();
-      const ref = { engine, registeredId: "legacy" };
+      const ref = { engine: await resolveContextEngine(), registeredId: "legacy" };
       return { configured: ref, configuredId: "legacy", fallback: ref };
     },
   }));
 }
 
-export async function acquireCompactHooksPreparedModelRuntime(
-  input: PreparedModelRuntimeInput,
-  _options?: PreparedModelRuntimeLeaseOptions,
-) {
+function withEmptyRuntimeStores<T extends object>(identity: T) {
   return {
-    snapshot: {
-      isCurrent: () => true,
-      agentId: input.agentId,
-      agentDir: input.agentDir,
-      config: input.config,
-      workspaceDir: input.workspaceDir,
-      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-    },
-    [Symbol.asyncDispose]: vi.fn(async () => {}),
-  };
-}
-
-export function createCompactHooksPreparedModelRuntime(input: {
-  agentId: string;
-  agentDir: string;
-  config: PreparedModelRuntimeInput["config"];
-  workspaceDir: string;
-  metadataSnapshot: PluginMetadataSnapshot;
-}) {
-  return {
-    ...input,
+    ...identity,
     configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
@@ -92,31 +65,54 @@ export function createCompactHooksPreparedModelRuntime(input: {
   };
 }
 
-function createCompactHooksAuthStorage() {
-  const runtimeKeys = new Map<string, string>();
+export async function acquireCompactHooksPreparedModelRuntime(
+  input: PreparedModelRuntimeInput,
+  _options?: PreparedModelRuntimeLeaseOptions,
+) {
   return {
-    setRuntimeApiKey: vi.fn((provider: string, apiKey: string) => {
-      runtimeKeys.set(provider, apiKey);
+    snapshot: withEmptyRuntimeStores({
+      isCurrent: () => true,
+      agentId: input.agentId,
+      agentDir: input.agentDir,
+      config: input.config,
+      workspaceDir: input.workspaceDir,
+      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
     }),
-    getApiKey: vi.fn(async (provider: string) => runtimeKeys.get(provider)),
-  } satisfies MockResolvedModel["authStorage"];
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
+  };
+}
+
+export function createCompactHooksPreparedModelRuntime(
+  input: Required<
+    Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir">
+  > & {
+    metadataSnapshot: PluginMetadataSnapshot;
+  },
+) {
+  return withEmptyRuntimeStores(input);
 }
 
 export function createCompactHooksResolvedModel(
-  provider?: string,
-  modelId?: string,
+  provider = "openai",
+  modelId = "fake",
 ): MockResolvedModel {
+  const runtimeKeys = new Map<string, string>();
   return {
-    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
+    logicalRef: { provider, model: modelId },
     model: {
-      provider: provider ?? "openai",
+      provider,
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      id: modelId ?? "fake",
+      id: modelId,
       input: [],
     },
     error: null,
-    authStorage: createCompactHooksAuthStorage(),
+    authStorage: {
+      setRuntimeApiKey: vi.fn((providerKey: string, apiKey: string) => {
+        runtimeKeys.set(providerKey, apiKey);
+      }),
+      getApiKey: vi.fn(async (providerKey: string) => runtimeKeys.get(providerKey)),
+    },
     modelRegistry: {},
   };
 }
@@ -130,19 +126,14 @@ export const resolveCompactHooksApiKeyMock = vi.fn<
 
 export type MockResolvedModel = {
   logicalRef: { provider: string; model: string };
-  model: {
-    provider: string;
-    api: string;
+  model: Pick<
+    ProviderRuntimeModel,
+    "provider" | "api" | "id" | "contextWindow" | "requestTimeoutMs"
+  > & {
     baseUrl?: string;
-    id: string;
     input: unknown[];
-    contextWindow?: number;
-    requestTimeoutMs?: number;
   };
   error: null;
-  authStorage: Pick<
-    import("../sessions/auth-storage.js").AuthStorage,
-    "setRuntimeApiKey" | "getApiKey"
-  >;
+  authStorage: Pick<AuthStorage, "setRuntimeApiKey" | "getApiKey">;
   modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
 };

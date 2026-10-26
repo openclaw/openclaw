@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 
@@ -38,16 +39,27 @@ suite.define(() => {
         content: ".sidebar-shell__body { scrollbar-width: auto; scrollbar-color: auto; }",
       });
       if (width === 390) {
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
+        await navigationDrawerToggle(page).click();
         // Navigation skips the closed drawer; geometry needs its full roster after opening.
         await waitForControlUiInitialRoster(page);
       }
       if (overflow) {
         await page.getByRole("button", { name: "Show more", exact: true }).click();
-        await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(20);
+        const body = page.locator(".sidebar-shell__body");
+        const last = page.locator(
+          '.sidebar-recent-session[data-session-key="agent:main:dashboard:session-19"]',
+        );
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
+        await body.evaluate((element) => {
+          element.scrollTop = 0;
+        });
       }
       const active = page.locator(
         `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,
@@ -93,7 +105,8 @@ suite.define(() => {
       expect(geometry.rightInset, JSON.stringify(geometry)).toBeCloseTo(geometry.leftInset, 1);
       expect(geometry.rowLeft).toBeCloseTo(geometry.listLeft, 1);
       expect(geometry.rowRight).toBeCloseTo(geometry.listRight, 1);
-      expect(geometry.clearance).toBeGreaterThanOrEqual(8);
+      // The mobile rail reserves 6px gutters to preserve session title space.
+      expect(geometry.clearance).toBeGreaterThanOrEqual(width === 390 ? 6 : 8);
       if (overflow) {
         expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
         expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");

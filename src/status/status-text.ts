@@ -13,7 +13,7 @@ import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-sel
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
-import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import { createModelCatalogView } from "../agents/model-catalog-view.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -509,23 +509,30 @@ export async function buildStatusReplyParts(
     model: selectedLookupModel,
   });
   const catalog = owner ? (owner.isCurrent() ? owner.modelCatalog : undefined) : undefined;
-  const contextCatalog = catalog
-    ? catalog.entries.map(
-        (entry) =>
-          selectModelCatalogRuntimeEntry({
-            entry,
-            routeVariants: catalog.routeVariants,
-            runtimeId: effectiveHarness ?? "openclaw",
-            allowApiFallback: false,
-          }).entry,
-      )
-    : owner
-      ? []
-      : (thinkingCatalog ?? []).filter((entry) =>
-          entry.nativeRuntime
-            ? entry.nativeRuntime === effectiveHarness
-            : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
-        );
+  const catalogView =
+    catalog &&
+    createModelCatalogView({
+      cfg,
+      catalog: catalog.entries,
+      routeVariants: catalog.routeVariants,
+    });
+  const contextCatalog =
+    catalog && catalogView
+      ? catalog.entries.map(
+          (entry) =>
+            catalogView.selectRuntimeEntry({
+              entry,
+              runtimeId: effectiveHarness ?? "openclaw",
+              allowApiFallback: false,
+            }).entry,
+        )
+      : owner
+        ? []
+        : (thinkingCatalog ?? []).filter((entry) =>
+            entry.nativeRuntime
+              ? entry.nativeRuntime === effectiveHarness
+              : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
+          );
   const selectedCatalogEntry = findModelInCatalog(
     contextCatalog,
     selectedLookupProvider,
@@ -632,7 +639,7 @@ export async function buildStatusReplyParts(
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       thinkingDefault: configuredThinkingDefault,
-      verboseDefault: agentDefaults.verboseDefault,
+      verboseDefault: agentConfig?.verboseDefault ?? agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },

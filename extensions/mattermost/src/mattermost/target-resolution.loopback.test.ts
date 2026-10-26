@@ -1,4 +1,3 @@
-// Prove authoritative Mattermost channel kinds over the real Bot API transport.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveMattermostOutboundSessionRoute } from "../session-route.js";
@@ -7,6 +6,10 @@ import { resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 const PUBLIC_CHANNEL_ID = "abcdefghijklmnopqrstuvwxyz";
 const PRIVATE_CHANNEL_ID = "bcdefghijklmnopqrstuvwxyza";
+const cases = [
+  { id: PUBLIC_CHANNEL_ID, kind: "channel", type: "O" },
+  { id: PRIVATE_CHANNEL_ID, kind: "group", type: "P" },
+] as const;
 
 describe("Mattermost opaque channel resolution over real HTTP", () => {
   it("preserves real public and private channel identities in outbound thread routes", async () => {
@@ -22,26 +25,19 @@ describe("Mattermost opaque channel resolution over real HTTP", () => {
         });
         response.setHeader("content-type", "application/json");
 
-        if (path.startsWith("/api/v4/users/")) {
-          response.writeHead(404);
-          response.end(JSON.stringify({ message: "user not found" }));
-          return;
-        }
-
-        if (path === `/api/v4/channels/${PUBLIC_CHANNEL_ID}`) {
-          response.writeHead(200);
-          response.end(JSON.stringify({ id: PUBLIC_CHANNEL_ID, type: "O" }));
-          return;
-        }
-
-        if (path === `/api/v4/channels/${PRIVATE_CHANNEL_ID}`) {
-          response.writeHead(200);
-          response.end(JSON.stringify({ id: PRIVATE_CHANNEL_ID, type: "P" }));
-          return;
-        }
-
-        response.writeHead(404);
-        response.end(JSON.stringify({ message: "unexpected loopback path" }));
+        const channel = cases.find(({ id }) => path === `/api/v4/channels/${id}`);
+        response.writeHead(channel ? 200 : 404);
+        response.end(
+          JSON.stringify(
+            channel
+              ? { id: channel.id, type: channel.type }
+              : {
+                  message: path.startsWith("/api/v4/users/")
+                    ? "user not found"
+                    : "unexpected loopback path",
+                },
+          ),
+        );
       },
       async (baseUrl) => {
         const cfg = {
@@ -54,66 +50,40 @@ describe("Mattermost opaque channel resolution over real HTTP", () => {
           },
         } as OpenClawConfig;
 
-        const cases = [
-          { id: PUBLIC_CHANNEL_ID, kind: "channel" },
-          { id: PRIVATE_CHANNEL_ID, kind: "group" },
-        ] as const;
-
-        for (const testCase of cases) {
+        for (const { id, kind } of cases) {
           const resolved = await resolveMattermostOpaqueTarget({
-            input: testCase.id,
+            input: id,
             cfg,
             accountId: "default",
           });
-          expect(resolved).toEqual({
-            kind: testCase.kind,
-            id: testCase.id,
-            to: `channel:${testCase.id}`,
-          });
+          expect(resolved).toEqual({ kind, to: `channel:${id}` });
 
           const route = resolveMattermostOutboundSessionRoute({
             cfg,
             agentId: "main",
             accountId: "default",
-            target: `channel:${testCase.id}`,
-            resolvedTarget: {
-              to: `channel:${testCase.id}`,
-              kind: testCase.kind,
-              source: "directory",
-            },
+            target: `channel:${id}`,
+            resolvedTarget: { to: `channel:${id}`, kind, source: "directory" },
             threadId: "loopback-thread",
           });
           expect(route).toMatchObject({
-            peer: { kind: testCase.kind, id: testCase.id },
-            chatType: testCase.kind,
-            from: `mattermost:${testCase.kind}:${testCase.id}`,
-            to: `channel:${testCase.id}`,
-            sessionKey: `agent:main:mattermost:${testCase.kind}:${testCase.id}:thread:loopback-thread`,
+            peer: { kind, id },
+            chatType: kind,
+            from: `mattermost:${kind}:${id}`,
+            to: `channel:${id}`,
+            sessionKey: `agent:main:mattermost:${kind}:${id}:thread:loopback-thread`,
           });
         }
 
-        expect(requests).toEqual([
-          {
-            method: "GET",
-            path: `/api/v4/users/${PUBLIC_CHANNEL_ID}`,
-            authorization: "Bearer mattermost-loopback-fixture",
-          },
-          {
-            method: "GET",
-            path: `/api/v4/channels/${PUBLIC_CHANNEL_ID}`,
-            authorization: "Bearer mattermost-loopback-fixture",
-          },
-          {
-            method: "GET",
-            path: `/api/v4/users/${PRIVATE_CHANNEL_ID}`,
-            authorization: "Bearer mattermost-loopback-fixture",
-          },
-          {
-            method: "GET",
-            path: `/api/v4/channels/${PRIVATE_CHANNEL_ID}`,
-            authorization: "Bearer mattermost-loopback-fixture",
-          },
-        ]);
+        expect(requests).toEqual(
+          cases.flatMap(({ id }) =>
+            ["users", "channels"].map((resource) => ({
+              method: "GET",
+              path: `/api/v4/${resource}/${id}`,
+              authorization: "Bearer mattermost-loopback-fixture",
+            })),
+          ),
+        );
       },
     );
   });

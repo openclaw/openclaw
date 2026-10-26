@@ -134,13 +134,15 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { stall: "script", paused: true, metrics: true },
-    { stall: "native", paused: false, metrics: true },
-    { stall: "unavailable metrics", paused: true, metrics: false },
+    { stall: "passive", captureStack: false, paused: false, metrics: true },
+    { stall: "script", captureStack: true, paused: true, metrics: true },
+    { stall: "native", captureStack: true, paused: false, metrics: true },
+    { stall: "unavailable metrics", captureStack: true, paused: true, metrics: false },
   ])(
     "publishes $stall renderer stall evidence without page origins",
-    async ({ paused, metrics }) => {
+    async ({ captureStack, paused, metrics }) => {
       const { parent } = diagnosticFixture();
+      vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", captureStack ? "1" : "0");
       const sent: string[] = [];
       let samples = 0;
       const session = Object.assign(new EventEmitter(), {
@@ -231,8 +233,14 @@ describe("shared proof capture", () => {
         },
       });
       expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid|private-session/u);
-      expect(sent).toContain("Debugger.pause");
-      expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      if (captureStack) {
+        expect(sent).toContain("Debugger.pause");
+        expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      } else {
+        expect(sent).not.toContain("Debugger.enable");
+        expect(sent).not.toContain("Debugger.pause");
+        expect(sent.at(-1)).toBe("detach");
+      }
       expect(session.listenerCount("Debugger.scriptParsed")).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
       stalled.resolve(null);
@@ -407,6 +415,9 @@ describe("shared proof capture", () => {
         <openclaw-app></openclaw-app>
         <div class="agent-chat__composer-combobox"><textarea ${storageFailed ? "disabled" : ""}>${storageFailed ? "" : "private-draft"}</textarea></div>
         <button class="chat-send-btn--send" aria-label="${sendLabel}" aria-busy="${storageFailed}" ${sendDisabled ? "disabled" : ""}></button>
+        <div class="agent-chat__input"><button class="chat-send-btn--stop" aria-label="private-stop">private-stop-text</button></div>
+        <openclaw-tooltip open content="private-open-tooltip">private-open-content</openclaw-tooltip>
+        <openclaw-tooltip content="private-closed-tooltip">private-closed-content</openclaw-tooltip>
         <div class="model-providers__head"><span class="settings-status">${badgeText}</span></div>
         <openclaw-agents-page>${screenshotFailed ? "" : `<textarea class="agent-file-textarea" ${storageFailed ? "disabled" : ""}>${fileText}</textarea>`}</openclaw-agents-page>
         <openclaw-canvas-widget-view doc-id="private-document"><div class="skeleton">private-widget-content</div></openclaw-canvas-widget-view>
@@ -420,6 +431,10 @@ describe("shared proof capture", () => {
         agentFilesList: { agentId: "private-agent", workspace: "private-path" },
       });
       document.body.append(...dom.childNodes);
+      const stop = document.querySelector<HTMLButtonElement>(".chat-send-btn--stop")!;
+      Object.assign(document.querySelector("openclaw-tooltip[open]")!, { anchor: stop });
+      stop.focus();
+      await vi.runOnlyPendingTimersAsync();
       const snapshot =
         catalogSource === "snapshot"
           ? {
@@ -635,12 +650,34 @@ describe("shared proof capture", () => {
                     draftLength: failure === "storage" ? 0 : 13,
                     nonempty: failure !== "storage",
                     disabled: failure === "storage",
+                    stop: { visible: true, disabled: false, focused: true },
                     send: {
                       label: sendLabel === "private-label" ? "unknown" : sendLabel,
                       labelLength: sendLabel.length,
                       disabled: failure !== "none" || sendLabel === "Loading chat",
                       busy: failure === "storage",
                     },
+                  },
+                  activeElement: {
+                    kind: "button",
+                    inComposer: true,
+                    isStop: true,
+                    isSend: false,
+                  },
+                  tooltips: {
+                    openCount: 1,
+                    entries: [
+                      {
+                        trigger: {
+                          kind: "button",
+                          inComposer: true,
+                          isStop: true,
+                          isSend: false,
+                        },
+                        hovered: false,
+                        containsFocus: true,
+                      },
+                    ],
                   },
                 },
           models: {

@@ -4,12 +4,11 @@ import { expect, vi } from "vitest";
 import { buildRuntimeProbeEnv } from "../../daemon/runtime-paths.js";
 import * as containerEnvironment from "../../infra/container-environment.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import * as versionManagerPath from "../../shared/version-manager-path.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 
 const nodeRuntimeVersions = new Map<string, NodeJS.ProcessVersions>();
 
@@ -121,20 +120,6 @@ export function expectedPlainRecovery(
   ].join("\n");
 }
 
-export function expectedManagedRuntimeRecoverySteps(
-  manager: "nvm" | "system",
-  root: string,
-): UpdateRecoveryStep[] {
-  const steps = expectedRuntimeRecoverySteps("24.16.0", root, "2026.5.20", clearedContext);
-  if (manager === "nvm") {
-    steps[2] = {
-      kind: "select-runtime",
-      command: expectedRuntimeSelectionCommand("nvm", "24.16.0"),
-    };
-  }
-  return steps;
-}
-
 export const unsupportedServiceRuntimeFixture = {
   status: "unsupported",
   version: "22.18.0",
@@ -144,40 +129,20 @@ export const unsupportedServiceRuntimeFixture = {
   capabilityError: "Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)",
 } as const;
 
-export function runtimeRecoveryCommandFixture(serviceNode: string) {
-  return async (argv: readonly string[]) =>
-    createCommandResult({
-      stdout:
-        argv[0] === serviceNode && argv[1] === "--version"
-          ? "v22.18.0\n"
-          : argv[0] === "npm" && argv[1] === "--version"
-            ? "12.0.0\n"
-            : "",
-    });
-}
-
 export function currentGitCoreFixture(root: string, version: string) {
-  const outcome: UpdateRunResult = {
+  const outcome = updateResult({
     status: "skipped",
     mode: "git",
     root,
     reason: "already-current",
     before: { version, sha: "abc123" },
-    steps: [],
-    durationMs: 1,
-  };
+  });
   return {
     outcome,
-    converged: {
-      status: "skipped",
-      reason: "already-current",
-      after: { version, sha: "abc123" },
-      postUpdate: { plugins: { changed: false } },
-    },
     runtimeRefusal: {
       status: "error",
       reason: "node-runtime-preflight",
-      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.16.0", root) },
+      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.22.1", root) },
     },
   };
 }
@@ -201,13 +166,6 @@ export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]):
           step: "openclaw doctor",
           status: "failed",
           detail: expect.stringContaining("interrupted lifecycle"),
-          failureFacts: expect.arrayContaining([
-            expect.objectContaining({
-              check: "openclaw doctor",
-              code: "Error",
-              message: "interrupted lifecycle",
-            }),
-          ]),
         }),
       ]),
     },

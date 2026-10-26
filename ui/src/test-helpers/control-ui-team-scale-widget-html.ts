@@ -1,5 +1,42 @@
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 
+export function mcpResourceHtml() {
+  return `<!doctype html><style>body{margin:0;padding:12px;font:14px system-ui}</style>
+    <button onclick="this.nextElementSibling.textContent=String(++window.clicks)">Count</button><output>0</output>
+    <script>
+      window.clicks=0;
+      const send=(message)=>parent.postMessage({jsonrpc:"2.0",...message},"*");
+      const context=(value)=>{
+        if(value?.containerDimensions){
+          document.documentElement.dataset.hostWidth=String(value.containerDimensions.width);
+          document.documentElement.dataset.hostHeight=String(value.containerDimensions.height);
+        }
+      };
+      addEventListener("message",({source,data})=>{
+        if(source!==parent)return;
+        if(data.id===1&&data.result){
+          context(data.result.hostContext);
+          send({method:"ui/notifications/initialized"});
+        }else if(data.method==="ui/notifications/host-context-changed"){
+          context(data.params);
+        }else if(data.method==="ui/resource-teardown"){
+          send({id:data.id,result:{}});
+        }
+      });
+      send({id:1,method:"ui/initialize",params:{
+        appInfo:{name:"Resource fixture",version:"1.0.0"},appCapabilities:{},
+        protocolVersion:${JSON.stringify(LATEST_PROTOCOL_VERSION)}
+      }});
+    </script>`;
+}
+
+export function dashboardPaintMarkerHtml(html: string): string {
+  return html.replace(
+    "</head>",
+    "<style>html,body{background:transparent!important;color:CanvasText!important}:root{color-scheme:light dark}section{background:Canvas;border-color:GrayText}.chart i{background:rgb(239,18,205)}svg{color:rgb(239,18,205)}</style></head>",
+  );
+}
+
 export function dashboardMcpAppHtml(stylesheetUrl: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Team dashboard</title>
 <link rel="stylesheet" href="${stylesheetUrl}"></head><body>

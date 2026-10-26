@@ -27,10 +27,10 @@ import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
@@ -41,6 +41,25 @@ async function createScope(name: string, sessionId = name) {
   const scope = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId };
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return scope;
+}
+
+function queueSource(
+  scope: Awaited<ReturnType<typeof createScope>>,
+  runId: string,
+  overrides: Partial<Parameters<typeof createRpcSourceForTest>[1]> = {},
+) {
+  const source = createRpcSourceForTest(
+    {},
+    {
+      ...scope,
+      runId,
+      storeScope: captureRpcTargetForTest(scope).storeScope,
+      phase: "waiting",
+      ...overrides,
+    },
+  );
+  rpcSourceTesting.set(runId, source);
+  return source;
 }
 
 function pendingInputs(scope: Parameters<typeof stageSessionPendingInput>[0]) {
@@ -77,22 +96,7 @@ async function read(
   params: Record<string, unknown>,
   method: "chat.history" | "chat.startup" | "chat.message.get" = "chat.history",
 ) {
-  const handler =
-    method === "chat.message.get" ? chatMessageGetHandlers[method] : chatHistoryHandlers[method];
-  let result: unknown;
-  const handle = expectDefined(handler, "read handler");
-  await handle({
-    params,
-    context,
-    respond: (ok, payload, error) => {
-      expect([ok, error]).toEqual([true, undefined]);
-      result = payload;
-    },
-    req: { type: "req", id: "history", method },
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return expectDefined(asOptionalRecord(result), "read response");
+  return historyPayload(await historyRpc(context, "")(method, params));
 }
 
 describe("pending input read boundary", () => {
@@ -101,17 +105,11 @@ describe("pending input read boundary", () => {
       const scope = await createScope("warm-metadata");
       await upsertSessionEntryCore(scope, {
         displayName: "Synthetic warm conversation",
-        goal: {
-          schemaVersion: 1,
-          id: "warm-goal",
-          objective: "Review the synthetic project and its pending followups. ".repeat(30),
-          status: "complete",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
+        goal: createSessionGoalFixture(
+          "warm-goal",
+          "Review the synthetic project and its pending followups. ".repeat(30),
+          { status: "complete" },
+        ),
       });
       await appendTranscriptMessages(scope, {
         messages: Array.from({ length: 820 }, (_, index) => ({
@@ -141,13 +139,7 @@ describe("pending input read boundary", () => {
       await using inputs = pendingInputs(scope);
       for (const runId of [
         "followup",
-        "steer",
-        "review",
-        "build",
-        "docs",
-        "tests",
-        "assets",
-        "verify",
+        ...Array.from({ length: 7 }, (_, index) => `queued-${index}`),
       ]) {
         await inputs.stage(runId, {
           content: "Synthetic pending project instructions. ".repeat(780),
@@ -167,8 +159,7 @@ describe("pending input read boundary", () => {
         messages: [],
         stateRevision: first.stateRevision,
       });
-      expect(warm.pendingInputs).toBeUndefined();
-      expect(warm.sessionInfo).toBeUndefined();
+      expect([warm.pendingInputs, warm.sessionInfo]).toEqual([undefined, undefined]);
       expect(warm.sessionInfoSnapshotAt).toBeTypeOf("number");
       expect(asOptionalRecord(warm.metadata)?.commands).toBeUndefined();
       expect(Buffer.byteLength(JSON.stringify(warm))).toBeLessThan(2_500);
@@ -183,16 +174,7 @@ describe("pending input read boundary", () => {
       expect(refreshed.metadata).toMatchObject({ commands: [{ name: "replacement_skill" }] });
       expect(refreshed.stateRevision).not.toEqual(warm.stateRevision);
 
-      const source = createRpcSourceForTest(
-        {},
-        {
-          ...scope,
-          runId: "followup",
-          storeScope: captureRpcTargetForTest(scope).storeScope,
-          phase: "waiting",
-        },
-      );
-      rpcSourceTesting.set("followup", source);
+      const source = queueSource(scope, "followup");
       const queued = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
       expect(queued.pendingInputs).toMatchObject({
         queuedCount: 1,
@@ -333,17 +315,7 @@ describe("pending input read boundary", () => {
           {},
         ].entries()) {
           const runId = index === 5 ? "external-run-".repeat(30) : `pending-display-run-${index}`;
-          const ref = createRpcSourceForTest(
-            {},
-            {
-              runId,
-              storeScope: captureRpcTargetForTest(scope).storeScope,
-              phase: "waiting",
-              ...scope,
-              ...overrides,
-            },
-          );
-          rpcSourceTesting.set(runId, ref);
+          const ref = queueSource(scope, runId, overrides);
           if (index === 3) {
             retireSessionControllerSourceCancellation(ref.input);
           } else if (index === 4) {
@@ -362,26 +334,26 @@ describe("pending input read boundary", () => {
         expect(initial.filter((item) => item.queued).map((item) => item.runId)).toEqual([
           "pending-display-run-0",
         ]);
-        expect(initial).toEqual(
+        expect(initial).toMatchObject(
           receipts.map((receipt, index) => {
             const acceptedAt = expectDefined(
               acceptanceTimes.get(receipt.inputId),
               "stored acceptance time",
             );
             expect(acceptedAt).not.toBe(1_000 + index);
-            return expect.objectContaining({
+            return {
               id: receipt.inputId,
               acceptedAt,
-              message: expect.objectContaining({
+              message: {
                 content: `Pending input ${index}`,
                 timestamp: acceptedAt,
-                __openclaw: expect.objectContaining({
+                __openclaw: {
                   senderIdentity: { type: "profile", id: profile.id },
                   senderName: "Historical sender",
                   senderProfileAvatarUrl: expect.stringContaining(profile.id),
-                }),
-              }),
-            });
+                },
+              },
+            };
           }),
         );
         const initialBytes = JSON.stringify(initial);
@@ -393,21 +365,15 @@ describe("pending input read boundary", () => {
             ?.senderProfileAvatarUrl;
         const updatedAvatar = avatar(updated);
         expect(updatedAvatar).not.toBe(avatar(initial));
-        expect(updated).toEqual(
-          initial.map((item) => {
-            const message = expectDefined(asOptionalRecord(item.message), "pending message");
-            return {
-              ...item,
-              message: {
-                ...message,
-                __openclaw: {
-                  ...asOptionalRecord(message["__openclaw"]),
-                  senderProfileAvatarUrl: updatedAvatar,
-                },
-              },
-            };
-          }),
-        );
+        const expected = structuredClone(initial);
+        for (const item of expected) {
+          const metadata = expectDefined(
+            asOptionalRecord(asOptionalRecord(item.message)?.["__openclaw"]),
+            "sender metadata",
+          );
+          metadata.senderProfileAvatarUrl = updatedAvatar;
+        }
+        expect(updated).toEqual(expected);
         expect(JSON.stringify(initial)).toBe(initialBytes);
       } finally {
         readDisplay.mockRestore();
@@ -526,16 +492,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       for (let index = 0; index < 21; index += 1) {
         retained.push(await inputs.stage(`retained-${index}`, { timestamp: index + 3 }));
       }
-      const retainedSource = createRpcSourceForTest(
-        {},
-        {
-          runId: "retained-0",
-          storeScope: captureRpcTargetForTest(scope).storeScope,
-          phase: "waiting",
-          ...scope,
-        },
-      );
-      rpcSourceTesting.set("retained-0", retainedSource);
+      const retainedSource = queueSource(scope, "retained-0");
       const retainedPage = await call({ inputRunIds: ["retained-0", "retained-1"], limit: 1 });
       expect([retainedPage.inputReceipts, retainedPage.inputConsumptions]).toEqual([
         [

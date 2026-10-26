@@ -1,7 +1,6 @@
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
@@ -12,7 +11,6 @@ import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
-  type SystemAgentCommandDeps,
   type SystemAgentOperation,
 } from "./operations.js";
 import { formatSystemAgentOverview, loadSystemAgentOverview } from "./overview.js";
@@ -20,11 +18,6 @@ import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
-
-type SystemAgentInteractiveRunner = (
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-) => Promise<void>;
 
 export type RunSystemAgentOptions = {
   message?: string;
@@ -37,12 +30,8 @@ export type RunSystemAgentOptions = {
   setupWorkspace?: string;
   setupAgentName?: string;
   onReady?: () => void;
-  deps?: SystemAgentCommandDeps;
-  loadOverview?: typeof loadSystemAgentOverview;
-  planWithAssistant?: SystemAgentAssistantPlanner;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
-  runInteractiveTui?: SystemAgentInteractiveRunner;
   /** Exact live-tested route supplied by the inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
@@ -75,13 +64,6 @@ async function runOneShot(
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,
-    deps:
-      opts.deps || opts.loadOverview
-        ? {
-            ...opts.deps,
-            ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
-          }
-        : undefined,
   });
 }
 
@@ -103,13 +85,13 @@ export async function runSystemAgent(
   }
   const { resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
   const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
-  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
   const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
   const { withPluginRuntimeRegistryScope } =
     await import("../plugins/runtime/gateway-request-scope.js");
   await using cache = createPluginCache();
   const { readConfigFileSnapshot } = await import("../config/config.js");
-  const registry = await withPluginLifecycleLease({}, async (lease) => {
+  const registry = await withPluginLifecycleLeaseAsync({}, async (lease) => {
     const snapshot = await readConfigFileSnapshot();
     const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, snapshot);
     if (!currentArtifacts) {
@@ -119,7 +101,7 @@ export async function runSystemAgent(
     const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
     // Validate and import under the same lifecycle lease. Frozen probe config could
     // otherwise re-enable a revoked owner or another configured harness during loading.
-    lease.assertOwned();
+    await lease.assertOwned();
     return withPluginCache(cache, () =>
       loadAgentRuntimePluginRegistryHandle({
         basePluginIds: [],
@@ -147,7 +129,7 @@ async function runBoundSystemAgent(
 ): Promise<void> {
   await requireSystemAgentInferenceRoute(boundOpts.verifiedInference, "conversation");
   if (boundOpts.json) {
-    const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
+    const overview = await loadSystemAgentOverview();
     writeRuntimeJson(runtime, overview);
     return;
   }
@@ -167,7 +149,7 @@ async function runBoundSystemAgent(
         delayMs: 0,
         fallback: "none",
       },
-      async () => await (boundOpts.loadOverview ?? loadSystemAgentOverview)(),
+      async () => await loadSystemAgentOverview(),
     );
     runtime.log(formatSystemAgentOverview(overview));
     runtime.log("");
@@ -180,7 +162,7 @@ async function runBoundSystemAgent(
   }
 
   if (boundOpts.interactive === false) {
-    const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
+    const overview = await loadSystemAgentOverview();
     runtime.log(formatSystemAgentOverview(overview));
     return;
   }
@@ -196,8 +178,7 @@ async function runBoundSystemAgent(
     return;
   }
 
-  const runInteractiveTui =
-    boundOpts.runInteractiveTui ?? (await import("./tui-backend.js")).runSystemAgentTui;
+  const { runSystemAgentTui } = await import("./tui-backend.js");
   boundOpts.onReady?.();
-  await runInteractiveTui(boundOpts, runtime);
+  await runSystemAgentTui(boundOpts, runtime);
 }

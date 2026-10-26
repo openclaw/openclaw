@@ -43,8 +43,29 @@ empty execution-environment selection. In that direct, unsandboxed case,
 OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
 fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
+`tools.gatewayPolicy` adds a required allowlist for Gateway-supplied tools and
+their actions. The adapter applies it after tool additions and exclusions, to
+both declarations and executable callbacks. It does not restrict Codex-native
+coding tools or subagents. Existing ordinary restrictions and
+`codexDynamicToolsExclude` can narrow access further.
+
+Callbacks check the deployment policy captured when their tools are constructed,
+including calls from restored threads. Policy changes require a Gateway restart
+or replacement after affected old work ends. Reconstructed callbacks use the new
+policy; saved native declarations retain their fingerprint, so a previously
+advertised tool can return a policy denial. Direct human Gateway administration
+keeps its existing permissions.
+
+While native children protect a managed parent thread, OpenClaw retains the
+declarations accepted by that thread. Each turn still uses fresh executable
+bindings and current authority; removed tools and changed definitions remain
+unavailable until the thread can accept new declarations. Conversation context
+travels through the existing parent-local inference relay on each request, while
+configured policy stays in the native thread. Connections without that relay
+retain their existing creation-policy checks.
+
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
+browser, nodes, gateway, and `web_search`, are available
 through Codex tool search under that namespace. This keeps the initial model
 context smaller. A small set of tools stay directly callable regardless of
 `codexDynamicToolsLoading`, because Codex tool search can be unavailable or

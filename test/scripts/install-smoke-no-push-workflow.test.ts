@@ -642,7 +642,7 @@ verify-upload`);
   });
   expect(step(bunConsumer, "Setup trusted release harness for Bun smoke")).toMatchObject({
     uses: "./.release-harness/.github/actions/setup-release-harness",
-    with: { "node-version": "24.x" },
+    with: { "node-version": "24.22.1" },
   });
   const bunVerify = step(bunConsumer, "Verify candidate payload contents");
   expect(bunVerify.env).toMatchObject({
@@ -653,7 +653,7 @@ verify-upload`);
   assertText(bunVerify.run).contains(`install-smoke-candidate-payload.mts verify
 --run-id "$PRODUCER_RUN_ID"
 --run-attempt "$PRODUCER_RUN_ATTEMPT"`);
-  expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.3");
+  expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.4.4");
   expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
     "working-directory": ".release-harness",
     env: {

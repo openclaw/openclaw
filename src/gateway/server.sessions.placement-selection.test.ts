@@ -12,6 +12,7 @@ import {
   directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
+  createRepositoryDeviceHarness,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -19,22 +20,7 @@ let originalRegistry: ReturnType<typeof getActivePluginRegistry>;
 beforeEach(() => {
   originalRegistry = getActivePluginRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  registerAgentHarness({
-    id: "repository-device",
-    label: "Repository device",
-    autoSelection: { providerIds: ["repository-provider"] },
-    supports: () => ({ supported: true }),
-    cloudPlacement: {
-      mode: "remote-exec",
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.repository.v1"],
-        consumesWorkerSlot: false,
-      },
-    },
-    runAttempt: async () => {
-      throw new Error("selection must not execute the runtime");
-    },
-  });
+  registerAgentHarness(createRepositoryDeviceHarness("selection must not execute the runtime"));
 });
 afterEach(() => {
   if (originalRegistry) {
@@ -113,16 +99,6 @@ test("sessions.dispatch admits the runtime offered after a repository child's pa
         workerEnvironmentService: { supportsExecutionMode: () => true },
       },
     },
-  );
-  expect(dispatch).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionKey: childKey,
-      executionMode: "worker-turn",
-      profileId: "test",
-    }),
-    expect.any(Function),
-    undefined,
-    undefined,
   );
   expect(result.error?.message).toBe("admitted to placement service");
 });

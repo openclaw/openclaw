@@ -170,14 +170,14 @@ describe("check-workflows", () => {
 
   it.each<[string, number, string[]]>([
     ["bootstrap", 0, []],
-    ["old-python", 1, ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"]],
+    ["old-python", 1, ["python3 is 3.9.6", "pre-commit 4.7.0 requires Python >=3.10"]],
     [
       "missing-venv",
       1,
       [
         "python venv unavailable",
         "missing pre-commit runtime for actionlint",
-        "Python venv support for pre-commit 4.6.2",
+        "Python venv support for pre-commit 4.7.0",
       ],
     ],
     ["hook-failure", 13, ["hook failed"]],
@@ -222,7 +222,7 @@ describe("check-workflows", () => {
       const pythonArgs = readFileSync(markerPath, "utf8");
       expectContains(
         pythonArgs,
-        "-m pip install --disable-pip-version-check pre-commit==4.6.2",
+        "-m pip install --disable-pip-version-check pre-commit==4.7.0",
         "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
         "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
       );
@@ -337,7 +337,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -388,7 +388,7 @@ describe("check-workflows", () => {
     const { workflow, probe, native } = readWindowsProbe();
     expect(workflow.on.workflow_dispatch.inputs).toMatchObject({
       installed_startup_package: { default: "", type: "string" },
-      startup_node_version: { default: "26.9.0" },
+      startup_node_version: { default: "26.12.1" },
       installed_startup_cpu_diagnostic: { default: false, type: "boolean" },
     });
     const validation = findStep(probe, "startup_input", "id");

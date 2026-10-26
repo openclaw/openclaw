@@ -1,27 +1,58 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createMessageCliProgram, messageCliMocks } from "./command.test-support.js";
 
+type Options = Record<string, string>;
 type AdminCase = [
   command: string,
   action: string,
-  required: Record<string, string>,
-  optional?: Record<string, string>,
+  required: Options,
+  optional?: Options,
+  defaults?: Record<string, unknown>,
 ];
 
+const guild = { guildId: "guild-1" };
+const member = { ...guild, userId: "user-1" };
 const cases: AdminCase[] = [
-  ["role info", "role-info", { guildId: "guild-1" }],
-  ["role add", "role-add", { guildId: "guild-1", userId: "user-1", roleId: "role-1" }],
-  ["role remove", "role-remove", { guildId: "guild-1", userId: "user-1", roleId: "role-1" }],
-  ["channel info", "channel-info", { target: "channel:123" }],
-  ["channel list", "channel-list", { guildId: "guild-1" }],
   [
-    "member info",
-    "member-info",
-    { userId: "user-1" },
-    { guildId: "guild-1", channelId: "channel-1" },
+    "edit",
+    "edit",
+    { messageId: "message-1", message: "updated", target: "channel:123" },
+    { threadId: "thread-1" },
   ],
-  ["voice status", "voice-status", { guildId: "guild-1", userId: "user-1" }],
-  ["event list", "event-list", { guildId: "guild-1" }],
+  ["delete", "delete", { messageId: "message-1", target: "channel:123" }],
+  ["thread list", "thread-list", guild, { channelId: "channel-1" }, { includeArchived: false }],
+  [
+    "thread reply",
+    "thread-reply",
+    { message: "reply", target: "thread-1" },
+    { media: "https://example.com/image.png", replyTo: "message-1" },
+  ],
+  [
+    "emoji upload",
+    "emoji-upload",
+    { ...guild, emojiName: "party", media: "https://example.com/emoji.png" },
+    {},
+    { roleIds: [] },
+  ],
+  [
+    "sticker upload",
+    "sticker-upload",
+    {
+      ...guild,
+      stickerName: "party",
+      stickerDesc: "Party sticker",
+      stickerTags: "party",
+      media: "https://example.com/sticker.png",
+    },
+  ],
+  ["role info", "role-info", guild],
+  ["role add", "role-add", { ...member, roleId: "role-1" }],
+  ["role remove", "role-remove", { ...member, roleId: "role-1" }],
+  ["channel info", "channel-info", { target: "channel:123" }],
+  ["channel list", "channel-list", guild],
+  ["member info", "member-info", { userId: "user-1" }, { ...guild, channelId: "channel-1" }],
+  ["voice status", "voice-status", member],
+  ["event list", "event-list", guild],
   [
     "event create",
     "event-create",
@@ -38,53 +69,52 @@ const cases: AdminCase[] = [
   [
     "timeout",
     "timeout",
-    { guildId: "guild-1", userId: "user-1" },
+    member,
     { durationMin: "0", until: "2026-09-11T13:00:00Z", reason: "QA reason" },
   ],
-  ["kick", "kick", { guildId: "guild-1", userId: "user-1" }, { reason: "QA reason" }],
-  [
-    "ban",
-    "ban",
-    { guildId: "guild-1", userId: "user-1" },
-    { reason: "QA reason", deleteDays: "0" },
-  ],
+  ["kick", "kick", member, { reason: "QA reason" }],
+  ["ban", "ban", member, { reason: "QA reason", deleteDays: "0" }],
 ];
 
 function flag(key: string) {
   return "--" + key.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase());
 }
 
-function argumentsFor(options: Record<string, string>) {
+function argumentsFor(options: Options) {
   return Object.entries(options).flatMap(([key, value]) => [flag(key), value]);
 }
 
-function setup() {
+function run(path: string, options: Options) {
   messageCliMocks.command.mockClear();
-  return { command: createMessageCliProgram(), runMessageAction: messageCliMocks.command };
+  return createMessageCliProgram().parseAsync(
+    ["message", ...path.split(" "), ...argumentsFor(options)],
+    { from: "user" },
+  );
 }
 
-describe("Discord-admin message registration", () => {
-  beforeEach(() => messageCliMocks.command.mockClear());
+function expectAction(action: string, options: Options, defaults: Record<string, unknown> = {}) {
+  expect(messageCliMocks.command).toHaveBeenCalledExactlyOnceWith(
+    {
+      json: false,
+      dryRun: false,
+      verbose: false,
+      ...defaults,
+      ...options,
+      accountId: undefined,
+      action,
+    },
+    expect.anything(),
+    expect.anything(),
+  );
+}
+
+describe("message action registration", () => {
   it.each(cases)(
     "%s forwards the exact action, defaults and options",
-    async (path, action, required, optional = {}) => {
-      const { command, runMessageAction } = setup();
+    async (path, action, required, optional = {}, defaults = {}) => {
       const options = { ...required, ...optional, channel: "discord" };
-      await command.parseAsync(["message", ...path.split(" "), ...argumentsFor(options)], {
-        from: "user",
-      });
-      expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(
-        {
-          json: false,
-          dryRun: false,
-          verbose: false,
-          ...options,
-          accountId: undefined,
-          action,
-        },
-        expect.anything(),
-        expect.anything(),
-      );
+      await run(path, options);
+      expectAction(action, options, defaults);
     },
   );
 
@@ -92,36 +122,19 @@ describe("Discord-admin message registration", () => {
     "%s rejects every missing mandatory identifier before dispatch",
     async (path, _action, required) => {
       for (const missing of Object.keys(required)) {
-        const { command, runMessageAction } = setup();
         const remaining = Object.fromEntries(
           Object.entries(required).filter(([key]) => key !== missing),
         );
-        await expect(
-          command.parseAsync(["message", ...path.split(" "), ...argumentsFor(remaining)], {
-            from: "user",
-          }),
-        ).rejects.toMatchObject({ code: "commander.missingMandatoryOptionValue" });
-        expect(runMessageAction).not.toHaveBeenCalled();
+        await expect(run(path, remaining)).rejects.toMatchObject({
+          code: "commander.missingMandatoryOptionValue",
+        });
+        expect(messageCliMocks.command).not.toHaveBeenCalled();
       }
     },
   );
 
   it("keeps guild and conversation optional for member info", async () => {
-    const { command, runMessageAction } = setup();
-    await command.parseAsync(["message", "member", "info", "--user-id", "user-1"], {
-      from: "user",
-    });
-    expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(
-      {
-        json: false,
-        dryRun: false,
-        verbose: false,
-        userId: "user-1",
-        accountId: undefined,
-        action: "member-info",
-      },
-      expect.anything(),
-      expect.anything(),
-    );
+    await run("member info", { userId: "user-1" });
+    expectAction("member-info", { userId: "user-1" });
   });
 });

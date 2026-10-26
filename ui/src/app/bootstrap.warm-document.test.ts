@@ -1,11 +1,12 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../api/gateway.ts";
+import * as browserGateway from "../api/gateway.ts";
+import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords } from "./boot-record.ts";
 import { makeBootRecord } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import * as gatewayStore from "./gateway-store.ts";
+import { captureGatewayClients } from "./gateway-store.test-support.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 const originalUrl = window.location.href;
@@ -20,20 +21,11 @@ const mainRecord = () =>
     groups: [{ name: "Main private group", position: 0 }],
     sectionOrder: ["Main private group"],
   });
-
 const replies = new Map<string, () => unknown>([
   ["agents.list", () => mainRecord().agents],
   ["sessions.groups.list", () => ({ groups: [], sectionOrder: [] })],
   ["sessions.groups.defaults", () => ({ defaults: {} })],
 ]);
-
-function createTestClient(opts: GatewayBrowserClientOptions) {
-  connections.push(opts);
-  const client = new GatewayBrowserClient(opts);
-  vi.spyOn(client, "start").mockImplementation(() => {});
-  vi.spyOn(client, "request").mockImplementation(async (method) => replies.get(method)?.() ?? {});
-  return client;
-}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -49,11 +41,12 @@ beforeEach(() => {
   bytes = JSON.stringify(record);
   localStorage.setItem(key, bytes);
   connections = [];
-  const createGateway = gatewayStore.createApplicationGateway;
-  vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation(
-    (settings, password, bootstrap, _factory, options) =>
-      createGateway(settings, password, bootstrap, createTestClient, options),
+  const NativeClient = browserGateway.GatewayBrowserClient;
+  vi.spyOn(NativeClient.prototype, "start").mockImplementation(() => {});
+  vi.spyOn(NativeClient.prototype, "request").mockImplementation(
+    async (method) => replies.get(method)?.() ?? {},
   );
+  captureGatewayClients((_client, options) => connections.push(options));
 });
 afterEach(async () => {
   runtimes.splice(0).forEach((runtime) => runtime.stop());
@@ -64,7 +57,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 function open(path: string) {
   window.history.replaceState({}, "", path);
   const runtime = bootstrapApplication();

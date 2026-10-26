@@ -31,6 +31,7 @@ import {
   captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.message-injection.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createTestUserTurnTranscriptTarget,
@@ -39,12 +40,20 @@ import {
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+  readRunOperatorAuthority,
+} from "../admitted-run-context.js";
+import { createDeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import {
   bindWorkerToolPreparation,
   prepareReplyToolAuthorityCallerRead,
 } from "../harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../harness/tool-authority-preparation.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { closePluginTestAdmissions, createExecution } from "./execute-plugin.test-support.js";
+import { captureCliRunToolAuthority } from "./tool-authority.js";
 
 const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
   buildAnthropicCliBackend: () => CliBackendPlugin;
@@ -272,7 +281,7 @@ it("steers configured, session and explicit inputs through current authority int
             sessionCtx: {},
             sessionKey,
             touchActiveSessionEntry: async () => {},
-            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+            typingSignals: createTypingSignaler({ typing, mode: "never" }),
           }),
         ).resolves.toBe("handled");
         expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });
@@ -323,7 +332,7 @@ it("steers configured, session and explicit inputs through current authority int
       const refusal = await refused.outcome;
       expect(revoked, JSON.stringify(refusal)).toBe(true);
       // Changed execution policy leaves unconsumed input eligible for a fresh followup.
-      expect(refusal).toMatchObject({ status: "rejected", reason: "runtime_rejected" });
+      expect(refusal).toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
       vi.restoreAllMocks();
       rejectSourceCleanup = true;
@@ -359,6 +368,160 @@ it("steers configured, session and explicit inputs through current authority int
       await settled;
       operation.complete();
       clearFollowupQueue(sessionKey);
+      await prepared?.cleanup?.();
+    }
+  });
+});
+
+it("steers a spawned Claude child for its requester and refuses other sources", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const root = state.workspaceDir;
+    const requesterKey = "agent:main:dashboard:coordinator";
+    const childKey = "agent:main:subagent:claude-child";
+    const config: OpenClawConfig = { tools: { exec: { security: "full", ask: "off" } } };
+    const { context } = await createExecution({ config, timeoutMs: 30_000 });
+    const { params } = context;
+    const { sessionId } = params;
+    let revoked = false;
+    // Spawn admits the child with the requester's operator source and origin.
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "owner",
+      scopes: ["operator.read", "operator.write"],
+      gatewayAccessGrant: null,
+      assertCurrent: () => {
+        if (revoked) {
+          throw new Error("operator source revoked");
+        }
+      },
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      config,
+      params.runId,
+      "main",
+      "spawned-child",
+      undefined,
+      operatorAuthority,
+    );
+    const requesterOrigin = expectDefined(
+      captureRequesterOrigin({
+        sessionKey: requesterKey,
+        operatorProfileId: "owner",
+        messageProvider: "webchat",
+      }),
+      "requester origin",
+    );
+    const operation = createReplyOperation({
+      sessionKey: childKey,
+      sessionId,
+      resetTriggered: false,
+      turnKind: "direct",
+    });
+    Object.assign(params, {
+      admittedRunContext: await admission.admit("plugin-harness"),
+      sessionKey: childKey,
+      spawnedBy: requesterKey,
+      requesterOrigin,
+      workspaceDir: root,
+      cwd: root,
+      replyOperation: operation,
+    });
+    context.workspaceDir = root;
+    context.cwd = root;
+    // Same binding CLI preparation gives a direct child turn.
+    using callerAuthority = captureCliRunToolAuthority(params, {
+      agentId: "main",
+      workspaceDir: root,
+      cwd: root,
+    });
+    const { fingerprint } = await callerAuthority.bindQuestions(
+      { provider: params.provider, model: context.modelId },
+      () => readRunOperatorAuthority(params),
+    );
+    params.toolAuthorityFingerprint = fingerprint;
+    operation.setPhase("running");
+    // Session lanes hand the turn to the CLI through a placeholder native owner.
+    const lifecycle = createDeferredEmbeddedRunLifecycleManager({
+      runId: params.runId,
+      sessionId,
+      sessionKey: childKey,
+      replyOperation: operation,
+    });
+    lifecycle.handoffToCli();
+    const fixture = path.join(root, "claude-child.mjs");
+    await writeFile(fixture, CLI);
+    const prepared = await buildAnthropicCliBackend().prepareExecution?.({
+      workspaceDir: root,
+      provider: "claude-cli",
+      modelId: context.normalizedModel,
+      executionMode: "agent",
+      config,
+    });
+    const execute = expectDefined(prepared?.execute, "Claude native transport");
+    const ready = createDeferred();
+    const run = executePluginOwnedProcess({
+      context,
+      execute,
+      executionCommand: process.execPath,
+      executionArgs: [fixture],
+      env: { PATH: process.env.PATH ?? "", HOME: root, CLAUDE_CONFIG_DIR: root },
+      prompt: "initial",
+      useResume: false,
+      noOutputTimeoutMs: 30_000,
+      consumeStdout: (chunk) => {
+        if (JSON.parse(chunk).text === "initial") {
+          ready.resolve();
+        }
+      },
+    });
+    const settled = run.catch((error: unknown) => error);
+    const readInputs = async () =>
+      (await readFile(path.join(root, "received.ndjson"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+    // The sessions_send steering request, as its delivery owner builds it.
+    const steer = (
+      text: string,
+      origin: typeof requesterOrigin = requesterOrigin,
+      requesterConfig = config,
+    ) =>
+      steerSessionControllerOperation({
+        operation,
+        text,
+        abortOnUnconfirmedTranscript: false,
+        options: {
+          requesterToolAuthority: { requesterOrigin: origin, config: requesterConfig },
+          steeringMode: "all",
+          debounceMs: 0,
+          waitForTranscriptCommit: true,
+          userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+            input: { text, requesterOrigin: origin, idempotencyKey: text },
+            target: createTestUserTurnTranscriptTarget({ sessionKey: childKey, sessionId }),
+          }),
+        },
+      });
+    try {
+      await ready.promise;
+      await expect(steer("guidance")).resolves.toMatchObject({ status: "accepted" });
+      expect(await readInputs()).toEqual(["initial", "guidance"]);
+      await expect(
+        steer("other human", { ...requesterOrigin, operatorProfileId: "guest" }),
+      ).resolves.toMatchObject({ status: "rejected", reason: "requester_origin_mismatch" });
+      await expect(
+        steer("other policy", requesterOrigin, {
+          ...config,
+          tools: { ...config.tools, deny: ["read"] },
+        }),
+      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      revoked = true;
+      await expect(steer("revoked source")).resolves.toMatchObject({ status: "rejected" });
+      expect(await readInputs()).toEqual(["initial", "guidance"]);
+    } finally {
+      operation.abortByUser();
+      await settled;
+      await lifecycle.complete();
+      operation.complete();
+      admission.close();
       await prepared?.cleanup?.();
     }
   });

@@ -26,7 +26,10 @@ import {
   type NativeSubmissionCallDependencies,
   type NativeSubagentSubmissionCall as SubmissionCall,
 } from "./native-subagent-submission-call.js";
-import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
+import type {
+  CodexNativeSubagentSubmission,
+  CodexNativeSubagentSubmissionAcknowledgement,
+} from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type CodexServerNotification } from "./protocol.js";
 
 type SubmissionCustody = {
@@ -60,7 +63,6 @@ type SubmissionDependencies = NativeSubmissionCallDependencies & {
     nativeParentThreadId: string,
   ) => void;
   onSettled: (state: ParentState) => void;
-  recoveryPollDelaysMs?: readonly number[];
 };
 
 /** Captures successful native submissions before their turn notifications arrive. */
@@ -68,12 +70,10 @@ export class CodexNativeSubagentSubmissionOwner {
   private readonly calls = new Map<ParentState, Map<string, SubmissionCall>>();
   private readonly pending = new Map<ParentState, Map<string, SubmissionCustody>>();
   private readonly writes = new Map<ParentState, Set<Promise<void>>>();
-  private readonly pollDelays: readonly number[];
   readonly modelInputs: ReturnType<typeof createNativeSubagentSubmissionCalls>;
   private disposed = false;
 
   constructor(private readonly dependencies: SubmissionDependencies) {
-    this.pollDelays = dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
     this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, this);
   }
 
@@ -111,6 +111,32 @@ export class CodexNativeSubagentSubmissionOwner {
       return false;
     }
     return true;
+  }
+
+  observeHookAcknowledgement(
+    state: ParentState,
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    owner: ParentOwner,
+  ): void {
+    this.modelInputs.observeCall(state, receipt.parentTurnId, {
+      id: receipt.callId,
+      receiverThreadIds: [receipt.childThreadId],
+    });
+    const call = this.calls.get(state)?.get(`${receipt.parentTurnId}\0${receipt.callId}`);
+    if (!call || call.closed) {
+      return;
+    }
+    if (
+      (call.owner && call.owner !== owner) ||
+      (!call.targets.some((target) => target.childThreadId === receipt.childThreadId) &&
+        call.modelInput?.threadId !== receipt.childThreadId)
+    ) {
+      throw new Error("Codex native submission receipt does not match its admitted call");
+    }
+    // Before turn binding, only this registration may later accept the receipt.
+    call.owner ??= owner;
+    call.submissionId = receipt.submissionId;
+    this.modelInputs.acceptNativeSubmission(state, call);
   }
 
   observeOutput(state: ParentState, turnId: string | undefined, item: JsonObject): void {
@@ -349,8 +375,8 @@ export class CodexNativeSubagentSubmissionOwner {
     }
     custody.phase = "promoting";
     clearTimeout(custody.timer);
-    // Native history owns execution. Keep its existing submission receipt until
-    // the result is acknowledged; there is no task row to take restart custody.
+    // The monitor owns execution; retain receipt and completion custody until acknowledgment.
+    custody.release();
   }
 
   settleChild(state: ParentState, child: ChildState): void {
@@ -475,7 +501,7 @@ export class CodexNativeSubagentSubmissionOwner {
         error: formatErrorMessage(error),
       });
     }
-    if (!this.isObserving(state, custody) || !this.pollDelays.length) {
+    if (!this.isObserving(state, custody)) {
       return;
     }
     custody.timer = setTimeout(
@@ -483,7 +509,7 @@ export class CodexNativeSubagentSubmissionOwner {
         custody.timer = undefined;
         void this.reconcile(state, custody);
       },
-      delayForAttempt(this.pollDelays, custody.attempt++),
+      delayForAttempt(DEFAULT_RECOVERY_POLL_DELAYS_MS, custody.attempt++),
     );
     custody.timer.unref();
   }

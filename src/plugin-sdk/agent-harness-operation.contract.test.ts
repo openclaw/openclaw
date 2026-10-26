@@ -29,9 +29,7 @@ describe("released harness operation observations", () => {
       | "failed"
       | "aborted"
     >();
-    expectTypeOf<ReleasedOperation["turnKind"]>().toEqualTypeOf<
-      "visible" | "heartbeat" | "queued_followup"
-    >();
+    expectTypeOf<ReleasedOperation["turnKind"]>().toEqualTypeOf<"visible" | "queued_followup">();
     expectTypeOf<ReturnType<typeof describeResult>>().toEqualTypeOf<string>();
   });
 });

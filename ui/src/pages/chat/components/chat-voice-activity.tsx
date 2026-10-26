@@ -1,12 +1,14 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Repeat, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import { MicrophoneMeterCanvas } from "../talk/microphone-meter-canvas.tsx";
+import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 
-const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
@@ -29,34 +31,49 @@ type MicrophoneActivityProps = {
   inputLevel?: RealtimeTalkLevelSignal;
 };
 
-// Levels stay with the talk owner; its subscription updates only decorative bars.
+// Levels stay with the Talk owner; only status/source changes replace the canvas.
 export function MicrophoneActivity(props: MicrophoneActivityProps) {
-  const inputLevel = createMemo(() => {
-    const source = props.inputLevel;
-    return source && projectOwner(source, (owner) => owner.value, Object.is);
-  });
-  const level = () => inputLevel()?.read() ?? 0;
+  const canvasLifetime = createMemo(
+    (): { status: MicrophoneMeterStatus; source: RealtimeTalkLevelSignal | undefined } => ({
+      status:
+        props.status === "connecting" || props.status === "thinking" ? props.status : "listening",
+      source: props.inputLevel,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.status === next.status && previous.source === next.source,
+    },
+  );
+  let host: HTMLElement | undefined;
+  const bars: HTMLElement[] = [];
   return (
     <openclaw-microphone-activity
+      ref={(element) => (host = element)}
       class="agent-chat__voice-activity"
-      data-level={String(level())}
-      data-status={
-        props.status === "connecting" || props.status === "thinking" ? props.status : "listening"
-      }
+      data-level="0"
+      data-status={canvasLifetime().status}
       data-source="microphone"
       aria-hidden="true"
     >
-      <For each={BAR_GAINS}>
-        {(gain, index) => (
+      <Repeat count={7}>
+        {(index) => (
           <span
+            ref={(element) => (bars[index] = element)}
             class="agent-chat__voice-activity-bar"
-            style={{
-              "--talk-bar-delay": `${index() * -70}ms`,
-              "--talk-bar-scale": String(0.18 + level() * gain * 0.82),
-            }}
+            style={{ "--talk-bar-delay": `${index * -70}ms` }}
           />
         )}
-      </For>
+      </Repeat>
+      <Show when={canvasLifetime()} keyed>
+        {(initial) => (
+          <MicrophoneMeterCanvas
+            initialStatus={initial.status}
+            initialSource={initial.source}
+            readHost={() => host}
+            readBars={() => bars}
+          />
+        )}
+      </Show>
     </openclaw-microphone-activity>
   );
 }

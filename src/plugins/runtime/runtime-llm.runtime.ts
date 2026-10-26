@@ -46,19 +46,16 @@ export type { RuntimeLlmAuthority } from "./runtime-model-policy.js";
 export type CreateRuntimeLlmOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   authority?: RuntimeLlmAuthority;
-  logger?: RuntimeLogger;
 };
 
 const defaultLogger = getChildLogger({ capability: "runtime.llm" });
 
-function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
-  return {
-    debug: (message, meta) => writeRuntimeLog(logger, "debug", message, meta),
-    info: (message, meta) => writeRuntimeLog(logger, "info", message, meta),
-    warn: (message, meta) => writeRuntimeLog(logger, "warn", message, meta),
-    error: (message, meta) => writeRuntimeLog(logger, "error", message, meta),
-  };
-}
+const logger: RuntimeLogger = {
+  debug: (message, meta) => writeRuntimeLog(defaultLogger, "debug", message, meta),
+  info: (message, meta) => writeRuntimeLog(defaultLogger, "info", message, meta),
+  warn: (message, meta) => writeRuntimeLog(defaultLogger, "warn", message, meta),
+  error: (message, meta) => writeRuntimeLog(defaultLogger, "error", message, meta),
+};
 
 function resolveRuntimeConfig(options: CreateRuntimeLlmOptions): OpenClawConfig {
   const cfg = options.getConfig?.();
@@ -126,10 +123,8 @@ export function finalizePluginLlmCompletion(params: {
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
-  logger?: RuntimeLogger;
   result: Omit<LlmCompleteResult, "usage">;
 }): LlmCompleteResult {
-  const logger = params.logger ?? toRuntimeLogger(defaultLogger);
   const usage = finalizePluginModelUsage({
     cfg: params.cfg,
     hostPluginId: params.hostPluginId,
@@ -161,7 +156,6 @@ export function finalizePluginLlmCompletion(params: {
 export function createRuntimeLlm(
   options: CreateRuntimeLlmOptions = {},
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
-  const logger = options.logger ?? toRuntimeLogger(defaultLogger);
   const llm: Pick<PluginRuntimeCore["llm"], "complete"> = {
     complete: bindLlmOperatorAuthority(options.authority?.caller, async (params, source) => {
       const caller = resolveTrustedCaller(options.authority);
@@ -283,7 +277,6 @@ export function createRuntimeLlm(
           cfg,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
-          logger,
           result: {
             text: result.text,
             provider: result.provider,
@@ -428,7 +421,6 @@ export function createRuntimeLlm(
                 suppressUsage:
                   !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
                 rawUsage: result.usage,
-                logger,
                 result: {
                   text,
                   provider: prepared.selection.provider,

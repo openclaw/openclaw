@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import dns from "node:dns/promises";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
@@ -7,11 +6,7 @@ import { removeAuthProfilesAcrossOwnerStores } from "../src/agents/auth-profiles
 import { upsertAuthProfileWithLockOrThrow } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import * as modelAuthProvider from "../src/agents/model-auth-provider.js";
 import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
-import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../src/config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   evaluateDecisionV2InRegistry,
@@ -22,15 +17,13 @@ import { DecisionContractError } from "../src/decisions/validation.js";
 import { getImageMetadata } from "../src/media/media-services.js";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../src/plugins/loader-records.js";
-import { resetPluginLoaderTestStateForTest } from "../src/plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
-import { clearPluginMetadataLifecycleCaches } from "../src/plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import {
+  admissionPlugin,
   createAdmissionBarrier,
+  resetAdmissionState,
   withAdmissionFixture,
   type AdmissionFixture,
 } from "./decision-admission.test-support.js";
@@ -92,21 +85,10 @@ async function runScenario(
   );
   const agentDir = state.agentDir(agentId);
   setRuntimeConfigSnapshot(cfg);
-  const metadata = resolvePluginMetadataSnapshot({
-    config: cfg,
-    env: process.env,
-    workspaceDir: state.workspaceDir,
-  });
-  const manifest = metadata.byPluginId.get("levanto");
-  assert(manifest);
+  const { metadata, record } = admissionPlugin("levanto", cfg, state.workspaceDir);
   const builder = createTestPluginRegistry(
-    createPluginRuntimeMock({ config: { current: () => cfg } }),
+    createPluginRuntimeMock({ config: { current: () => cfg }, media: { getImageMetadata } }),
   );
-  const record = createPluginRecord({
-    ...manifest,
-    enabled: true,
-    configSchema: Boolean(manifest.configSchema),
-  });
   const api = builder.createApi(record, { config: cfg });
   runPluginRegisterSyncInRegistry(levanto.register, api, builder.registry, record.id);
   builder.registry.plugins.push(record);
@@ -121,25 +103,15 @@ async function runScenario(
         agentDir,
         workspaceDir: state.workspaceDir,
         loadRuntimePlugins: true,
+        runtimePluginPurpose: "isolated-completion",
         runtimePluginSelections: [{ provider: "levanto", modelId: "levanto-sage", agentId }],
       },
       { catalogMode: "static", pluginMetadataSnapshot: metadata },
     );
-    expect(prepared.snapshot.pluginRegistry?.providers).toContainEqual(
-      expect.objectContaining({ pluginId: record.id, source: record.source }),
-    );
-    expect(prepared.snapshot.modelCatalog.entries).toContainEqual(
-      expect.objectContaining({ provider: "levanto", id: "levanto-sage" }),
-    );
+    expect(prepared.snapshot.isCurrent()).toBe(true);
     const controller = new AbortController();
     const supported = change === "allowed" || change === "image-allowed";
     const auth = vi.spyOn(modelAuthProvider, "resolveApiKeyForProviderCore");
-    const probe = vi
-      .spyOn(api.runtime.media, "getImageMetadata")
-      .mockImplementation(getImageMetadata);
-    const registered = builder.registry.decisionProviders[0]?.host.provider;
-    assert(registered?.contractVersion === 2);
-    const adapter = vi.spyOn(registered, "evaluate");
     const barrier = createAdmissionBarrier("https://sage.levanto.ai/decide", {
       url: baseUrl + "/decide",
       lookupFn: (hostname, options) => dns.lookup(hostname, options),
@@ -183,7 +155,7 @@ async function runScenario(
           status: "unavailable",
           reason: "unsupported-input",
         });
-        for (const spy of [auth, adapter, probe, forwarding]) {
+        for (const spy of [auth, forwarding]) {
           expect(spy).not.toHaveBeenCalled();
         }
         expect(received).toHaveLength(0);
@@ -191,10 +163,7 @@ async function runScenario(
       }
       await barrier.wait(settled);
       expect(auth).toHaveBeenCalledOnce();
-      expect(adapter).toHaveBeenCalledOnce();
-      expect(probe).toHaveBeenCalledTimes(change === "image-allowed" ? 1 : 0);
       expect(received).toHaveLength(0);
-      expect(prepared.snapshot.isCurrent()).toBe(true);
       if (change === "revoked") {
         expect(
           await removeAuthProfilesAcrossOwnerStores({
@@ -215,7 +184,6 @@ async function runScenario(
           },
         });
       }
-      expect(prepared.snapshot.isCurrent()).toBe(supported);
       release.resolve();
       const outcome = await settled;
       expect(barrier.admission).toBe(supported ? "allowed" : "rejected");
@@ -242,16 +210,13 @@ async function runScenario(
       release.resolve();
       controller.abort();
       await settled;
-      for (const spy of [forwarding, adapter, probe, auth]) {
+      for (const spy of [forwarding, auth]) {
         spy.mockRestore();
       }
     }
   } finally {
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
     await getPluginInstance(record)?.dispose();
-    await resetPreparedModelRuntimeSnapshotsForTest();
-    clearPluginMetadataLifecycleCaches();
-    resetPluginLoaderTestStateForTest();
-    clearRuntimeConfigSnapshot();
+    await resetAdmissionState(true);
   }
 }

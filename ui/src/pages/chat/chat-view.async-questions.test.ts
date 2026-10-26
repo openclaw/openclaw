@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createRoot } from "solid-js";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -14,12 +15,13 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
-import { createChatViewFrame } from "./chat-view-frame.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -43,6 +45,13 @@ const other = (element = container) =>
 const dock = (element = container) => element.querySelector(".agent-chat__question-dock");
 const summaryText = (element = container) =>
   element.querySelector(".chat-question-summary")?.textContent;
+const failedAnswer = (id: string, text: string): ChatQueueItem => ({
+  id,
+  asyncQuestionItemId: "audience",
+  text: `> Which audience?\n\n${text}`,
+  createdAt: 1,
+  sendState: "failed",
+});
 const terminal = (runId: string) => ({
   role: "assistant",
   runId,
@@ -131,23 +140,20 @@ it("selects a reopened historical question ahead of another pending request", as
   props.messages = [old, terminal("old-run"), latest, terminal("latest-run")];
   draw();
   await vi.waitFor(() => expect(dock()?.textContent).toContain("Which format?"));
-  const summary = [...container.querySelectorAll<HTMLElement>(".chat-question-summary")].find(
-    (element) => element.textContent?.includes("Which audience?"),
-  )!;
-  expect(summary.textContent).toContain("No longer pending");
+  const summary = await waitForSolid(() => {
+    const element = [...container.querySelectorAll<HTMLElement>(".chat-question-summary")].find(
+      (candidate) => candidate.textContent?.includes("Which audience?"),
+    );
+    expect(element?.textContent).toContain("No longer pending");
+    return element!;
+  });
   summary.querySelector<HTMLButtonElement>("button")!.click();
   await vi.waitFor(() => expect(dock()?.textContent).toContain("Which audience?"));
   expect(other()?.value).toBe("");
 });
 
 it("reads confirmed discard from the outbox before the next queue frame arrives", () => {
-  const row: ChatQueueItem = {
-    id: "discarded-answer",
-    asyncQuestionItemId: "audience",
-    text: "> Which audience?\n\nEngineers",
-    createdAt: 1,
-    sendState: "failed",
-  };
+  const row = failedAnswer("discarded-answer", "Engineers");
   let queue = [row];
   const props = {
     ...chatProps({
@@ -161,11 +167,17 @@ it("reads confirmed discard from the outbox before the next queue frame arrives"
     }),
     getQueue: () => queue,
   };
-  const before = createChatViewFrame(props, () => undefined);
+  const questions = createRoot((dispose) => {
+    onTestFinished(dispose);
+    return createComposerQuestions(props.paneId, () => props);
+  });
+  flush();
+  const before = questions.source()!;
   expect(before.asyncQuestions.pending).toEqual([]);
   queue = [];
   before.asyncQuestions.discard(row);
-  const after = createChatViewFrame(props, () => undefined);
+  flush();
+  const after = questions.source()!;
   expect(after.asyncQuestions.pending.map((question) => question.itemId)).toEqual(["audience"]);
   expect(after.asyncQuestions.delivery.size).toBe(0);
   expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();
@@ -179,28 +191,23 @@ it("refreshes a mounted question summary when a canonical answer appears or is r
     __openclaw: { id: "audience-answer", seq: 2 },
   };
   const props = chatProps({ messages: [question] });
-  const draw = () => renderChatPropsInto(container, props);
-  const summary = summaryText;
-  draw();
-  await waitForSolid(() => expect(summary()).toContain("Answer above"));
-  props.messages = [question, answer];
-  draw();
-  await waitForSolid(() => {
-    expect(summary()).toContain("Everyone");
-    expect(summary()).not.toContain("Answer above");
-  });
-  props.messages = [question, { ...answer, content: "> Which audience?\n\nEngineers" }];
-  draw();
-  await waitForSolid(() => {
-    expect(summary()).toContain("Engineers");
-    expect(summary()).not.toContain("Everyone");
-  });
-  props.messages = [question];
-  draw();
-  await waitForSolid(() => {
-    expect(summary()).toContain("Answer above");
-    expect(summary()).not.toContain("Engineers");
-  });
+  for (const [text, previous] of [
+    [null, null],
+    ["Everyone", "Answer above"],
+    ["Engineers", "Everyone"],
+    [null, "Engineers"],
+  ]) {
+    props.messages = text
+      ? [question, { ...answer, content: `> Which audience?\n\n${text}` }]
+      : [question];
+    renderChatPropsInto(container, props);
+    await waitForSolid(() => {
+      expect(summaryText()).toContain(text ?? "Answer above");
+      if (previous) {
+        expect(summaryText()).not.toContain(previous);
+      }
+    });
+  }
 });
 
 it.each(["discard", "consumed"] as const)(
@@ -215,13 +222,9 @@ it.each(["discard", "consumed"] as const)(
       __openclaw: { id: "audience-question", seq: 1 },
     };
     const row: ChatQueueItem = {
-      id: "failed-answer",
+      ...failedAnswer("failed-answer", "New contributors"),
       sendRunId: "answer-run",
       sendAttempts: 1,
-      asyncQuestionItemId: "audience",
-      text: "> Which audience?\n\nNew contributors",
-      createdAt: 1,
-      sendState: "failed",
       sendError: "Synthetic rejection",
     };
     const panes = ["first", "second"].map((paneId) => {
@@ -275,6 +278,7 @@ it.each(["discard", "consumed"] as const)(
         host.chatMessages = [question, ...["question-run", "later-run"].map(terminal)];
         refresh();
       }
+      await flushDeferredRowPrune();
       const discard = () =>
         first.element.querySelector<HTMLButtonElement>(".chat-send-status__discard")!;
       expect(discard()).not.toBeNull();

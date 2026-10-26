@@ -1,8 +1,10 @@
 // Real-browser proof of frozen goal timing on the chat composer.
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI goal elapsed time" });
@@ -29,12 +31,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           sessionKey: "agent:main:main",
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Deployment checks are ready." }],
-            },
-          ],
+          historyMessages: [chatMessage("assistant", "Deployment checks are ready.")],
           methodResponses: {
             "sessions.list": {
               ts: 61_000,
@@ -47,18 +44,13 @@ suite.define(() => {
                   kind: "direct",
                   displayName: "Deployment checks",
                   updatedAt: 61_000,
-                  goal: {
-                    schemaVersion: 1,
-                    id: "goal-timing",
-                    objective: "Verify the deployment",
+                  goal: createSessionGoalFixture("goal-timing", "Verify the deployment", {
                     status: "paused",
                     createdAt: 1_000,
                     updatedAt: 61_000,
                     pausedAt: 61_000,
-                    tokenStart: 0,
                     tokensUsed: 100,
-                    continuationTurns: 0,
-                  },
+                  }),
                 },
               ],
             },

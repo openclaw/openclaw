@@ -196,7 +196,11 @@ export function createComputerTool(options?: {
     1,
     Math.min(COMPUTER_REF_WIDTH, configuredLimits.maxDimensionPx ?? DEFAULT_IMAGE_MAX_DIMENSION_PX),
   );
-  const targetScope = options?.transport ? "session" : "paired";
+  const targetScope = options?.transport
+    ? "session"
+    : options?.pairedNodeComputerUse?.gateway?.configured === false
+      ? "node"
+      : "paired";
   // Harnesses serialize the schema before execution; a prepared desktop must
   // advertise its full action surface before the first observation.
   const initialCapabilities =

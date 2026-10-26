@@ -18,8 +18,8 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { chatHistoryActivityBytes } from "../chat-history-budget.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
-import { chatHistoryActivityBytes } from "./chat-history-budget.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
@@ -111,7 +111,6 @@ const sessionKey = "agent:main:delta-budget";
 const sessionId = "delta-budget-session";
 const sessionSnapshot = buildGatewaySessionSnapshot({
   agentId: "main",
-  includeSession: true,
   sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 42 },
 });
 
@@ -427,20 +426,6 @@ function readTail(scope: TranscriptScope, offset?: number, max = 20) {
   });
 }
 
-async function reconcile(
-  scope: TranscriptScope,
-  cursor: string,
-  expectedIds: readonly string[],
-  rawCursor = cursor,
-) {
-  const saved = readTranscriptDisplayDelta(scope, { cursor: rawCursor });
-  expect(await readResponse(scope, cursor)).toEqual({ kind: "reset" });
-  const page = await readTail(scope);
-  expect(page.messages).toMatchObject(historyIds(...expectedIds));
-  expect(readTranscriptDisplayDelta(scope, { cursor: rawCursor })).toEqual(saved);
-  return page;
-}
-
 it("delivers committed failure notices once across cursor refresh", async () => {
   const { scope } = await createTranscript();
   await appendMessage(scope, { role: "user", content: "Please help." }, "question");
@@ -561,57 +546,46 @@ it("enriches reply previews on refresh, then resumes the cursor", async () => {
   assert(page.deltaCursor, "Reply page must resume incremental history");
   expect(await readDelta(scope, page.deltaCursor)).toMatchObject({ messages: [] });
 });
-it.each([true, false])("reconciles mirrors (cursor before answer: %s)", async (beforeAnswer) => {
-  const { scope, cursor } = await createTranscript();
-  const answer = {
-    role: "assistant",
-    content: [
-      { type: "thinking", thinking: "Check the opening hours." },
-      { type: "text", text: mirrorText },
-    ],
-  };
-  await appendMessage(scope, answer, "answer-1");
-  const firstAnswer = await readDelta(scope, cursor);
-  await appendMessage(scope, mirror("answer-1"), "mirror-1");
-  const refreshed = await reconcile(
-    scope,
-    beforeAnswer ? cursor : firstAnswer.deltaCursor,
-    ["answer-1"],
-    cursor,
-  );
-  assert(refreshed.deltaCursor, "Reconciled mirrors must resume incremental history");
-
-  await appendMessage(scope, answer, "answer-2");
-  await appendMessage(scope, mirror("answer-2"), "mirror-2");
-  expect(await readResponse(scope, refreshed.deltaCursor)).toEqual({ kind: "reset" });
-  const reconciled = await readTail(scope);
-  expect(reconciled.messages).toMatchObject(historyIds("answer-1", "answer-2"));
-  expect(reconciled.deltaCursor).toEqual(expect.any(String));
-});
 it.each([
-  ["legacy identity", true, false, ["source"]],
-  ["fieldless history", false, false, ["source", "mirror"]],
-  ["media reply", false, true, ["source", "mirror"]],
+  ["before answer", true, false, false, true, ["source"]],
+  ["after answer", false, false, false, true, ["source"]],
+  ["legacy identity", true, true, false, false, ["source"]],
+  ["fieldless history", true, false, false, false, ["source", "mirror"]],
+  ["media reply", true, false, true, true, ["source", "mirror"]],
 ] as const)(
-  "preserves %s through full reconciliation",
-  async (_name, legacyIdentity, media, expectedIds) => {
+  "reconciles mirrors: %s",
+  async (_name, beforeAnswer, legacyIdentity, media, linked, expectedIds) => {
     const { scope, cursor } = await createTranscript();
-    await appendMessage(
-      scope,
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: mirrorText },
-          ...(media
-            ? [{ type: "image", source: { type: "url", url: "https://example.test/chart.png" } }]
-            : []),
-        ],
-        ...(legacyIdentity ? { __openclaw: { mirrorIdentity: "legacy-answer" } } : {}),
-      },
-      "source",
-    );
-    await appendMessage(scope, mirror(media ? "source" : undefined), "mirror");
-    await reconcile(scope, cursor, expectedIds);
+    const answer = {
+      role: "assistant",
+      content: [
+        ...(linked && !media ? [{ type: "thinking", thinking: "Check the opening hours." }] : []),
+        { type: "text", text: mirrorText },
+        ...(media
+          ? [{ type: "image", source: { type: "url", url: "https://example.test/chart.png" } }]
+          : []),
+      ],
+      ...(legacyIdentity ? { __openclaw: { mirrorIdentity: "legacy-answer" } } : {}),
+    };
+    await appendMessage(scope, answer, "source");
+    const firstAnswer = linked && !media ? await readDelta(scope, cursor) : undefined;
+    await appendMessage(scope, mirror(linked ? "source" : undefined), "mirror");
+    const saved = readTranscriptDisplayDelta(scope, { cursor });
+    expect(await readResponse(scope, beforeAnswer ? cursor : firstAnswer!.deltaCursor)).toEqual({
+      kind: "reset",
+    });
+    const refreshed = await readTail(scope);
+    expect(refreshed.messages).toMatchObject(historyIds(...expectedIds));
+    expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
+    if (linked && !media) {
+      assert(refreshed.deltaCursor, "Reconciled mirrors must resume incremental history");
+      await appendMessage(scope, answer, "answer-2");
+      await appendMessage(scope, mirror("answer-2"), "mirror-2");
+      expect(await readResponse(scope, refreshed.deltaCursor)).toEqual({ kind: "reset" });
+      const reconciled = await readTail(scope);
+      expect(reconciled.messages).toMatchObject(historyIds("source", "answer-2"));
+      expect(reconciled.deltaCursor).toEqual(expect.any(String));
+    }
   },
 );
 it.each([undefined, 0])("keeps recovery refreshes authoritative (offset=%s)", async (offset) => {

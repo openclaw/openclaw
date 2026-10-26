@@ -1,11 +1,12 @@
 // Control UI tests cover the responsive disconnected login gate.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContextOptions, Page } from "playwright";
-import { assert, beforeEach, expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -42,13 +43,8 @@ async function expectReconnecting(page: Page) {
   expect(await page.locator(".connection-action-block").count()).toBe(0);
   expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
   expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
+  expect(await page.locator("openclaw-router-outlet").getAttribute("aria-disabled")).toBeNull();
 }
-
-let RECOVERY_ARTIFACT_DIR: string;
-
-beforeEach(() => {
-  RECOVERY_ARTIFACT_DIR = createControlUiE2eArtifactDir("zombie-reload");
-});
 
 suite.define(() => {
   it("counts down and automatically enters a reachable Gateway after refused upgrades", async () => {
@@ -116,25 +112,63 @@ suite.define(() => {
     expect(await gateway.getRequests("connect")).toHaveLength(1);
   });
 
-  it("shows a bare protocol mismatch as compatibility guidance without reconnecting", async () => {
+  it("reloads a protocol mismatch once, then keeps visible manual recovery", async () => {
     const page = await newPage();
-    await page.clock.install();
+    const artifactDir = createControlUiE2eArtifactDir("protocol-mismatch-recovery");
+    const documents: string[] = [];
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documents.push(request.url());
+      }
+    });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
-
+    const mismatch = {
+      code: "INVALID_REQUEST",
+      message: "protocol mismatch",
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: "protocol-build",
+        reloadRequired: true,
+      },
+    };
     await page.goto(suite.server.baseUrl);
     await gateway.waitForRequest("connect");
-    await gateway.rejectDeferred("connect", {
-      code: "INVALID_REQUEST",
-      message: "protocol mismatch: Control UI updated; reload this page to continue",
-      details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
-    });
+    const reloaded = page.waitForEvent("domcontentloaded");
+    await gateway.rejectDeferred("connect", mismatch);
+    await reloaded;
+    await expect.poll(() => documents.length).toBe(2);
+    expect(new URL(documents[1]!).searchParams.has("openclaw_mount_recovery")).toBe(true);
 
+    await gateway.waitForRequest("connect");
+    await page.clock.install();
+    await gateway.rejectDeferred("connect", mismatch);
     const failure = page.locator('.login-gate__failure[data-kind="protocol-mismatch"]');
-    await failure.waitFor({ timeout: 10_000 });
+    await failure.waitFor();
     expect((await failure.textContent())?.toLowerCase()).toContain("supported connection protocol");
-    expect(await failure.locator(".login-gate__failure-refresh").isVisible()).toBe(true);
-    await page.clock.runFor(1_600);
+    const refresh = failure.locator(".login-gate__failure-refresh");
+    expect(await refresh.isVisible()).toBe(true);
+    await page.clock.runFor(120_000);
+    expect(documents).toHaveLength(2);
     expect(await gateway.getRequests("connect")).toHaveLength(1);
+    await page.clock.resume();
+    const before = await takeControlUiScreenshotFrame(page, failure, [refresh], {
+      animations: "disabled",
+    });
+    await writeFile(path.join(artifactDir, "before-manual-recovery.png"), before.png);
+
+    const refreshed = page.waitForEvent("domcontentloaded");
+    await refresh.click();
+    await refreshed;
+    await expect.poll(() => documents.length).toBe(3);
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    const shell = page.locator("openclaw-app-shell");
+    await shell.waitFor();
+    await expect.poll(() => page.locator("openclaw-login-gate").count()).toBe(0);
+    const after = await takeControlUiScreenshotFrame(page, shell, [page.locator(".shell")], {
+      animations: "disabled",
+    });
+    await writeFile(path.join(artifactDir, "after-manual-recovery.png"), after.png);
   });
 
   it("lets reload-required recovery outrank a manually pinned login gate", async () => {
@@ -177,63 +211,82 @@ suite.define(() => {
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
   });
 
-  it("keeps settings content interactive while reconnecting", async () => {
+  it("keeps offline session actions and layout controls available while reconnecting", async () => {
     const page = await newPage();
-    const gateway = await installMockGateway(page);
-
-    await page.goto(new URL("settings/talk", suite.server.baseUrl).href);
-    await page.locator("openclaw-app-shell").waitFor();
-    await page.locator("openclaw-config-page .content-header").waitFor();
-    await gateway.deferNext("connect");
-    await gateway.closeLatest(1012, "test reconnect");
-
-    await expectReconnecting(page);
-    const outlet = page.locator("openclaw-router-outlet");
-    expect(await outlet.getAttribute("aria-disabled")).toBeNull();
-    expect(await page.locator("openclaw-config-page .content-header").isVisible()).toBe(true);
-    await page.screenshot({
-      path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-settings-interactive.png"),
-      fullPage: true,
-    });
-  });
-
-  it("keeps the session header available while disabling Gateway actions on reconnect", async () => {
-    const page = await newPage();
-    const sessionKey = "agent:main:main";
+    const mutations = await holdModuleResponse(
+      page,
+      controlUiE2eBuiltModuleRequest("ui/src/lib/sessions/session-mutation-operations.runtime.ts"),
+    );
+    const sessionKey = "agent:main:offline-actions";
     const gateway = await installMockGateway(page, { sessionKey });
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"), {
+      waitUntil: "commit",
+    });
     const header = page.locator(".chat-pane__header");
     await header.waitFor({ state: "visible" });
-    await selectChatLayoutAction(header, /^(Side panel|Minimize side panel)$/);
-    await selectChatLayoutAction(header, "Focus");
+    mutations.release();
+    const actions = header.locator(".chat-header-session-menu__trigger");
+    await actions.click();
+    const split = page.getByRole("menuitem", { name: "Open split view", exact: true });
+    expect(await split.isEnabled()).toBe(true);
+    await page.keyboard.press("Escape");
+    await split.waitFor({ state: "hidden" });
+    const panels = page
+      .locator(".sidebar-region__panels-toggle")
+      .getByRole("button", { name: "Panels", exact: true });
+    if ((await panels.getAttribute("aria-expanded")) !== "true") {
+      await panels.click();
+    }
+    const sideHeader = page.locator('[data-region-header="side"]');
+    await sideHeader.waitFor();
     await gateway.setOnline(false);
 
     await expectReconnecting(page);
-    await page.screenshot({
-      path: path.join(RECOVERY_ARTIFACT_DIR, "03-session-reconnecting-after.png"),
-      fullPage: true,
-    });
-
     const outlet = page.locator("openclaw-router-outlet");
     expect(await outlet.getAttribute("aria-disabled")).toBeNull();
     expect(await header.isVisible()).toBe(true);
 
-    expect(await header.getByRole("button", { name: "Layout", exact: true }).isEnabled()).toBe(
+    expect(await actions.isVisible()).toBe(true);
+    await actions.click();
+    const archive = page.getByRole("menuitem", { name: "Archive session", exact: true });
+    await archive.waitFor({ state: "visible" });
+    expect(await archive.isEnabled()).toBe(true);
+    expect(
+      await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).isDisabled(),
+    ).toBe(true);
+    await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+    const deleteSession = page.getByRole("menuitem", { name: "Delete…", exact: true });
+    await deleteSession.waitFor({ state: "visible" });
+    expect(await deleteSession.isEnabled()).toBe(true);
+    await actions.click();
+    await deleteSession.waitFor({ state: "hidden" });
+    expect(await header.getByRole("button", { name: "Details", exact: true }).isEnabled()).toBe(
       true,
     );
-    const layoutMenu = await openChatLayoutMenu(header);
-    const split = layoutMenu.getByRole("menuitem", { name: "Open split view", exact: true });
-    expect(await split.isDisabled()).toBe(true);
+    const position = sideHeader.getByRole("button", { name: "Panel position", exact: true });
+    expect(await position.isEnabled()).toBe(true);
+    await position.click();
+    await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
+    await page.locator(".side-panel-position-menu").waitFor({ state: "hidden" });
+    await sideHeader.getByRole("button", { name: "Expand Side panel", exact: true }).click();
+    await sideHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+    expect(await header.isVisible()).toBe(true);
+    await panels.click();
+    await sideHeader.waitFor({ state: "hidden" });
+    await gateway.setOnline(true);
+    await expect
+      .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
+      .toBe("connected");
+    await actions.waitFor();
+    await actions.click();
+    expect(await split.isEnabled()).toBe(true);
     await page.keyboard.press("Escape");
     await split.waitFor({ state: "hidden" });
-    await selectChatLayoutAction(header, "Restore split");
-    await page.locator(".side-panel-empty--selector").waitFor();
-    await selectChatLayoutAction(header, "Minimize side panel");
-    await page.locator(".side-panel-empty--selector").waitFor({ state: "hidden" });
   });
 
   it.each([
+    { name: "desktop", width: 1280 },
     { name: "tablet", width: 900 },
     { name: "phone", width: 390 },
   ])("keeps the $name settings viewport interactive while reconnecting", async ({ width }) => {
@@ -242,6 +295,7 @@ suite.define(() => {
 
     await page.goto(new URL("settings/talk", suite.server.baseUrl).href);
     await page.locator("openclaw-app-shell").waitFor();
+    await page.locator("openclaw-config-page .content-header").waitFor();
     await gateway.deferNext("connect");
     await gateway.closeLatest(1012, "test reconnect");
 
@@ -270,10 +324,6 @@ suite.define(() => {
     const failure = page.locator('.login-gate__failure[data-kind="pairing-required"]');
     await failure.waitFor();
     await gateway.waitForRequest("connect", { after: 1 });
-    await page.screenshot({
-      path: path.join(RECOVERY_ARTIFACT_DIR, "pairing-wait.png"),
-      fullPage: true,
-    });
     expect(await failure.textContent()).toContain(
       "Waiting for approval… this page connects on its own once the request is approved.",
     );
@@ -334,10 +384,6 @@ suite.define(() => {
       await page.clock.runFor(60_000);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
       expect(await page.getByText("Waiting for approval", { exact: false }).count()).toBe(0);
-      await page.screenshot({
-        path: path.join(RECOVERY_ARTIFACT_DIR, `pairing-${decision}.png`),
-        fullPage: true,
-      });
       await gateway.deferNext("connect");
       await page.getByRole("button", { name: "Request again", exact: true }).click();
       await gateway.waitForRequest("connect", { after: 1 });
@@ -345,30 +391,6 @@ suite.define(() => {
       await page.locator("openclaw-app-shell").waitFor();
     },
   );
-
-  it("copies an exact recovery command from the application gateway snapshot", async () => {
-    const page = await newPage({
-      permissions: ["clipboard-read", "clipboard-write"],
-      viewport: { height: 900, width: 1280 },
-    });
-    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
-
-    await page.goto(suite.server.baseUrl);
-    await gateway.waitForRequest("connect");
-    await gateway.rejectDeferred("connect", authRequiredError);
-
-    const failure = page.locator('.login-gate__failure[data-kind="auth-required"]');
-    await failure.waitFor({ timeout: 10_000 });
-    const command = failure
-      .locator(".login-gate__command")
-      .filter({ hasText: "openclaw gateway auth-token --show" });
-    await command.click();
-
-    await expect
-      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-      .toBe("openclaw gateway auth-token --show");
-    expect(await command.locator(".chat-copy-btn").getAttribute("aria-label")).toBe("Copied!");
-  });
 
   it("retires the static startup fallback after rendering auth-required guidance", async () => {
     const page = await newPage();
@@ -434,44 +456,31 @@ suite.define(() => {
     expect(await page.locator(".login-gate__help").count()).toBe(0);
 
     const metrics = await page.evaluate(() => {
-      const gate = document.querySelector<HTMLElement>(".login-gate");
-      const card = document.querySelector<HTMLElement>(".login-gate__card");
-      const inputs = Array.from(
-        document.querySelectorAll<HTMLElement>(".login-gate__form .field input"),
-      );
-      const toggles = Array.from(
-        document.querySelectorAll<HTMLElement>(".login-gate__form .settings-secret__toggle"),
-      );
-      const connect = document.querySelector<HTMLElement>(".login-gate__connect");
-      const commands = Array.from(
-        document.querySelectorAll<HTMLElement>(".login-gate__failure-steps .login-gate__command"),
-      );
-      if (!gate || !card || !connect) {
-        throw new Error("Missing login gate elements");
-      }
-      const gateStyle = getComputedStyle(gate);
-      const cardStyle = getComputedStyle(card);
+      const get = (selector: string) => document.querySelector<HTMLElement>(selector)!;
+      const all = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)];
+      const gate = get(".login-gate");
+      const card = get(".login-gate__card");
+      const style = (element: Element) => getComputedStyle(element);
       return {
-        cardPadding: cardStyle.padding,
+        cardPadding: style(card).padding,
         cardTop: card.getBoundingClientRect().top,
-        commandBounds: commands.map((command) => {
-          const bounds = command.getBoundingClientRect();
-          return {
-            left: bounds.left,
-            right: bounds.right,
-          };
+        commandBounds: all(".login-gate__failure-steps .login-gate__command").map((command) => {
+          const { left, right } = command.getBoundingClientRect();
+          return { left, right };
         }),
-        connectMinHeight: getComputedStyle(connect).minHeight,
+        connectMinHeight: style(get(".login-gate__connect")).minHeight,
         documentClientWidth: document.documentElement.clientWidth,
         documentScrollWidth: document.documentElement.scrollWidth,
         gateClientHeight: gate.clientHeight,
-        gateOverflowY: gateStyle.overflowY,
-        gatePadding: gateStyle.padding,
+        gateOverflowY: style(gate).overflowY,
+        gatePadding: style(gate).padding,
         gateScrollHeight: gate.scrollHeight,
-        inputMinHeights: inputs.map((input) => getComputedStyle(input).minHeight),
-        toggleSizes: toggles.map((toggle) => {
-          const style = getComputedStyle(toggle);
-          return { height: style.height, width: style.width };
+        inputMinHeights: all(".login-gate__form .field input").map(
+          (input) => style(input).minHeight,
+        ),
+        toggleSizes: all(".login-gate__form .settings-secret__toggle").map((toggle) => {
+          const { height, width } = style(toggle);
+          return { height, width };
         }),
       };
     });

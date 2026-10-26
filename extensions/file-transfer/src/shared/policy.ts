@@ -7,7 +7,11 @@ import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  asOptionalRecord,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
@@ -45,7 +49,6 @@ type FilePolicyDecision =
   | {
       ok: true;
       reason: "ask-always";
-      askMode: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks: boolean;
       pendingReapprovalSelector?: string;
@@ -55,7 +58,6 @@ type FilePolicyDecision =
       code: "NO_POLICY" | "POLICY_DENIED" | "POLICY_MIGRATION_REQUIRED";
       reason: string;
       askable: boolean;
-      askMode?: FilePolicyAskMode;
       maxBytes?: number;
       followSymlinks?: boolean;
       pendingReapprovalSelector?: string;
@@ -185,15 +187,6 @@ function expandTilde(p: string): string {
   return p;
 }
 
-function normalizeGlobs(patterns: string[] | undefined): string[] {
-  if (!Array.isArray(patterns)) {
-    return [];
-  }
-  return patterns
-    .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
-    .map((p) => expandTilde(p.trim()));
-}
-
 function matchesAny(target: string, patterns: string[]): boolean {
   const normalizedTarget = target.replace(/\\/gu, "/");
   for (const pattern of patterns) {
@@ -311,14 +304,13 @@ function evaluateFilePolicyInternal(
   const followSymlinks = nodeConfig.followSymlinks === true;
 
   // Deny patterns also constrain standing grants and interactive approvals.
-  const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
+  const denyPatterns = normalizeTrimmedStringList(nodeConfig.denyPaths).map(expandTilde);
   if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
       ok: false,
       code: "POLICY_DENIED",
       reason: "path matches a denyPaths pattern",
       askable: false,
-      askMode,
       maxBytes,
       followSymlinks,
     };
@@ -339,7 +331,6 @@ function evaluateFilePolicyInternal(
     return {
       ok: true,
       reason: "ask-always",
-      askMode,
       maxBytes,
       followSymlinks,
       pendingReapprovalSelector: pendingReapproval?.selector,
@@ -348,8 +339,8 @@ function evaluateFilePolicyInternal(
 
   const allowPatterns =
     input.kind === "read"
-      ? normalizeGlobs(nodeConfig.allowReadPaths)
-      : normalizeGlobs(nodeConfig.allowWritePaths);
+      ? normalizeTrimmedStringList(nodeConfig.allowReadPaths).map(expandTilde)
+      : normalizeTrimmedStringList(nodeConfig.allowWritePaths).map(expandTilde);
 
   if (allowPatterns.length > 0 && matchesAny(input.path, allowPatterns)) {
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
@@ -385,7 +376,6 @@ function evaluateFilePolicyInternal(
       code: "POLICY_DENIED",
       reason: "path requires exact reapproval",
       askable: true,
-      askMode,
       maxBytes,
       followSymlinks,
       pendingReapprovalSelector: pendingReapproval.selector,
@@ -400,7 +390,6 @@ function evaluateFilePolicyInternal(
         ? `no allow${input.kind === "read" ? "Read" : "Write"}Paths configured`
         : `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
     askable: askMode === "on-miss",
-    askMode,
     maxBytes,
     followSymlinks,
   };
@@ -426,8 +415,8 @@ export function snapshotNodeFileReadPolicy(input: {
       nodes: {
         [input.nodeId]: {
           ask,
-          allowReadPaths: normalizeGlobs(allowReadPaths),
-          denyPaths: normalizeGlobs(denyPaths),
+          allowReadPaths: normalizeTrimmedStringList(allowReadPaths).map(expandTilde),
+          denyPaths: normalizeTrimmedStringList(denyPaths).map(expandTilde),
           maxBytes,
           followSymlinks,
         },

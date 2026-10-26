@@ -1,112 +1,82 @@
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SpeechProviderConfig } from "openclaw/plugin-sdk/speech-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult as spawnResult } from "../test-support/command-result.test-support.js";
 
-const { runCommandBufferedMock, runFfmpegMock } = vi.hoisted(() => ({
-  runCommandBufferedMock: vi.fn(),
-  runFfmpegMock: vi.fn<(args: string[]) => Promise<void>>(),
-}));
+const runCommandBufferedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandBuffered: runCommandBufferedMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  runFfmpeg: runFfmpegMock,
-}));
-
 import { buildCliSpeechProvider } from "./speech-provider.js";
 
-const TEST_CFG: OpenClawConfig = {};
 const MIB = 1024 * 1024;
-const PCM_AUDIO = Buffer.from([0, 1, 2, 3]);
 const WAV_AUDIO = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVEaudio")]);
 
 function commandResult(overrides: Record<string, unknown> = {}) {
   return {
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
+    ...spawnResult(),
     stdout: WAV_AUDIO,
     stderr: Buffer.alloc(0),
     ...overrides,
   };
 }
 
-async function synthesize(args = ["--voice", "test"]) {
-  return await buildCliSpeechProvider().synthesize({
+async function synthesize(
+  providerConfig: SpeechProviderConfig = {},
+  timeoutMs = 2_500,
+  method: "synthesize" | "synthesizeTelephony" = "synthesize",
+) {
+  return await buildCliSpeechProvider()[method]!({
     text: "hello",
-    cfg: TEST_CFG,
+    cfg: {},
     providerConfig: {
       command: "/fake/tts",
-      args,
+      args: ["--voice", "test"],
       cwd: "/fake/workdir",
       env: { TTS_VOICE: "test" },
       outputFormat: "wav",
       timeoutMs: 2_500,
+      ...providerConfig,
     },
     providerOverrides: {},
-    timeoutMs: 2_500,
+    timeoutMs,
     target: "audio-file",
   });
 }
 
 describe("CLI TTS process wrapper", () => {
   beforeEach(() => {
-    runFfmpegMock.mockReset();
-    runFfmpegMock.mockImplementation(async (args) => {
-      writeFileSync(args.at(-1)!, PCM_AUDIO);
-    });
     runCommandBufferedMock.mockReset();
     runCommandBufferedMock.mockResolvedValue(commandResult());
   });
 
   it.each([
-    { method: "synthesize", providerTimeoutMs: undefined },
-    { method: "synthesizeTelephony", providerTimeoutMs: undefined },
-    { method: "synthesize", providerTimeoutMs: 8_000 },
-  ] as const)(
-    "$method honors timeout precedence with provider timeout $providerTimeoutMs",
-    async ({ method, providerTimeoutMs }) => {
-      runCommandBufferedMock.mockImplementationOnce(async (argv: string[]) => {
-        if (providerTimeoutMs === undefined) {
-          return commandResult({ code: null, termination: "timeout" });
-        }
-        writeFileSync(argv[1]!, WAV_AUDIO);
-        return commandResult();
-      });
-      const provider = buildCliSpeechProvider();
-      const pending = provider[method]!({
-        text: "timeout contract",
-        cfg: TEST_CFG,
-        providerConfig: {
-          command: "/fake/tts",
-          args: ["{{OutputPath}}"],
-          outputFormat: "wav",
-          ...(providerTimeoutMs === undefined ? {} : { timeoutMs: providerTimeoutMs }),
-        },
-        providerOverrides: {},
-        timeoutMs: 1_000,
-        target: "audio-file",
-      });
-
-      if (providerTimeoutMs === undefined) {
-        await expect(pending).rejects.toThrow("CLI TTS timed out after 1000ms");
-      } else {
-        await expect(pending).resolves.toMatchObject({
-          audioBuffer: WAV_AUDIO,
-        });
+    { method: "synthesize", timeoutMs: undefined },
+    { method: "synthesizeTelephony", timeoutMs: undefined },
+    { method: "synthesize", timeoutMs: 8_000 },
+  ] as const)("$method honors provider timeout $timeoutMs", async ({ method, timeoutMs }) => {
+    runCommandBufferedMock.mockImplementationOnce(async (argv: string[]) => {
+      if (timeoutMs === undefined) {
+        return commandResult({ code: null, termination: "timeout" });
       }
-      expect(runCommandBufferedMock).toHaveBeenCalledExactlyOnceWith(
-        ["/fake/tts", expect.any(String)],
-        expect.objectContaining({ timeoutMs: providerTimeoutMs ?? 1_000 }),
-      );
-      const outputPath = runCommandBufferedMock.mock.calls[0]![0][1];
-      expect(existsSync(path.dirname(outputPath))).toBe(false);
-    },
-  );
+      writeFileSync(argv[1]!, WAV_AUDIO);
+      return commandResult();
+    });
+    const pending = synthesize({ args: ["{{OutputPath}}"], timeoutMs }, 1_000, method);
+    if (timeoutMs === undefined) {
+      await expect(pending).rejects.toThrow("CLI TTS timed out after 1000ms");
+    } else {
+      await expect(pending).resolves.toMatchObject({ audioBuffer: WAV_AUDIO });
+    }
+    expect(runCommandBufferedMock).toHaveBeenCalledExactlyOnceWith(
+      ["/fake/tts", expect.any(String)],
+      expect.objectContaining({ timeoutMs: timeoutMs ?? 1_000 }),
+    );
+    expect(existsSync(path.dirname(runCommandBufferedMock.mock.calls[0]![0][1]))).toBe(false);
+  });
 
   it("uses Execa input, timeout, escalation, and asymmetric byte caps", async () => {
     await expect(synthesize()).resolves.toMatchObject({ audioBuffer: WAV_AUDIO });
@@ -125,11 +95,7 @@ describe("CLI TTS process wrapper", () => {
 
   it("rejects stderr output beyond its byte cap", async () => {
     runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({
-        code: 0,
-        termination: "output-limit",
-        outputLimitStream: "stderr",
-      }),
+      commandResult({ termination: "output-limit", outputLimitStream: "stderr" }),
     );
     await expect(synthesize()).rejects.toThrow(`CLI TTS stderr exceeded ${MIB} bytes`);
   });
@@ -143,42 +109,28 @@ describe("CLI TTS process wrapper", () => {
   });
 
   it("rejects errored stdout but keeps a generated audio file authoritative", async () => {
-    const streamError = new Error("stdout stream failed");
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({
-        code: null,
-        error: streamError,
-        errorStream: "stdout",
-        stdout: Buffer.from("partial"),
-        termination: "error",
-      }),
-    );
+    const failure = commandResult({
+      error: new Error("stdout stream failed"),
+      stdout: Buffer.from("partial"),
+      termination: "error",
+    });
+    runCommandBufferedMock.mockResolvedValueOnce({ ...failure, code: null, errorStream: "stdout" });
     await expect(synthesize()).rejects.toThrow("CLI TTS failed: stdout stream failed");
 
     runCommandBufferedMock.mockImplementationOnce(async (argv: string[]) => {
       writeFileSync(argv[1]!, WAV_AUDIO);
-      return commandResult({
-        code: 0,
-        error: streamError,
-        stdout: Buffer.from("partial"),
-        termination: "error",
-      });
+      return failure;
     });
-    await expect(synthesize(["{{OutputPath}}"])).resolves.toMatchObject({
+    await expect(synthesize({ args: ["{{OutputPath}}"] })).resolves.toMatchObject({
       audioBuffer: WAV_AUDIO,
     });
 
-    runCommandBufferedMock.mockResolvedValueOnce(
-      commandResult({
-        code: 0,
-        error: new Error("stderr stream failed"),
-        errorStream: "stderr",
-        stdout: WAV_AUDIO,
-        termination: "error",
-      }),
-    );
-    await expect(synthesize()).resolves.toMatchObject({
-      audioBuffer: WAV_AUDIO,
+    runCommandBufferedMock.mockResolvedValueOnce({
+      ...failure,
+      error: new Error("stderr stream failed"),
+      errorStream: "stderr",
+      stdout: WAV_AUDIO,
     });
+    await expect(synthesize()).resolves.toMatchObject({ audioBuffer: WAV_AUDIO });
   });
 });

@@ -11,13 +11,6 @@ import type { ThinkingLevelMap } from "../llm/types.js";
  */
 export type ProviderThinkingPolicyContext = ModelCatalogRef;
 
-type ProviderThinkingModelCompat = {
-  thinkingFormat?: string;
-  supportsReasoningEffort?: boolean;
-  supportedReasoningEfforts?: readonly string[] | null;
-  reasoningEffortMap?: Record<string, string>;
-};
-
 /**
  * Provider-owned default thinking policy input.
  *
@@ -40,7 +33,12 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   /** Thinking-to-wire mapping from the selected model route. */
   thinkingLevelMap?: ThinkingLevelMap;
   params?: Record<string, unknown>;
-  compat?: ProviderThinkingModelCompat | null;
+  compat?: {
+    thinkingFormat?: string;
+    supportsReasoningEffort?: boolean;
+    supportedReasoningEfforts?: readonly string[] | null;
+    reasoningEffortMap?: Record<string, string>;
+  } | null;
 };
 
 type ProviderThinkingLevelId = ThinkLevel;

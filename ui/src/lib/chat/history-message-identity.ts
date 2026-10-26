@@ -1,24 +1,19 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatInputReceipts } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 
-/** Exact custody is independent of display pagination, but stays physical-session scoped. */
-export function readChatInputReceipt(
-  history: {
-    inputReceipts?: ChatInputReceipts;
-    sessionInfo?: { sessionId?: string };
-    sessionId?: string;
-  },
-  item: { sendRunId?: string; sessionId?: string },
-) {
-  if (
-    !item.sendRunId ||
-    (item.sessionId && item.sessionId !== (history.sessionInfo?.sessionId ?? history.sessionId))
-  ) {
-    return undefined;
-  }
-  const receipt = history.inputReceipts?.find((input) => input.runId === item.sendRunId);
-  return receipt?.state === "pending" && receipt.cancelled ? "cancelled" : receipt?.state;
+export function readChatThreadMessageIdentity(message: unknown) {
+  const record = asNullableRecord(message);
+  const surfaceId =
+    typeof record?.messageId === "string" && record.messageId.trim()
+      ? record.messageId
+      : record?.id;
+  return readSessionMessageIdentity(message, { messageId: surfaceId });
+}
+
+/** Causal boundaries follow execution ownership, which can differ from the submit key. */
+export function userTurnRunId(message: unknown): string | null {
+  const identity = readChatThreadMessageIdentity(message);
+  return identity?.role === "user" ? identity.runId : null;
 }
 
 /** Submission proof uses the recorded key, never execution correlation. */

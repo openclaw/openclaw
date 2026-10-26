@@ -116,6 +116,7 @@ it.each([
   { backend: "aws", executionMode: "worker-turn" },
   { backend: "hetzner", executionMode: "remote-exec" },
 ] as const)("classless $backend/$executionMode lifecycle", async ({ backend, executionMode }) => {
+  vi.spyOn(performance, "now").mockReturnValue(0);
   const runCommand = commandMock().mockImplementation(async (argv) => {
     if (argv[1] === "config") {
       return jsonResult({ aws: { instanceProfile: "" } });

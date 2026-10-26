@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createStandardCloudProfile } from "../test-helpers/session-placement.ts";
 import {
   WORKSPACE,
   captureUiProof,
@@ -27,17 +28,7 @@ suite.define(() => {
           },
           "environments.list": {
             environments: [],
-            profiles: [
-              {
-                id: "aws",
-                providerId: "crabbox",
-                machines: [
-                  { id: "standard", label: "Standard", default: true },
-                  { id: "fast", label: "Fast" },
-                ],
-              },
-              { id: "machine0", providerId: "crabbox" },
-            ],
+            profiles: [createStandardCloudProfile(), { id: "machine0", providerId: "crabbox" }],
           },
           "worktrees.branches": {
             branches: [{ kind: "local", name: "main" }],

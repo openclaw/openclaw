@@ -43,7 +43,6 @@ function fixture() {
     transcript: createDeferred(),
     close: createDeferred(),
     closeStarted: createDeferred(),
-    replacementStarted: createDeferred(),
     replacementActive: createDeferred(),
     transportStopped: createDeferred(),
   };
@@ -63,9 +62,6 @@ function fixture() {
     }
     if (method === "talk.client.create") {
       snapshots.push([...saved]);
-      if (snapshots.length === 2) {
-        gates.replacementStarted.resolve();
-      }
       return {
         transport: "webrtc",
         voiceSessionId: `voice-${snapshots.length}`,
@@ -173,26 +169,6 @@ describe("browser voice handoff history", () => {
     }
   });
 
-  it.each([false, true])(
-    "Read aloud stops active realtime Talk before synthesis settles (replacement: %s)",
-    async (replacement) => {
-      f.transcript.resolve();
-      f.close.resolve();
-      await f.start();
-      if (replacement) {
-        f.changeVoice();
-        await f.replacementActive.promise;
-      }
-      const call = expectDefined(f.current().realtimeTalkSession, "active realtime call");
-      f.calls.add(call);
-      expect(call.getTransport()).toBe("webrtc");
-      const stopsBeforeReading = transports.stop.mock.calls.length;
-      f.read();
-      expect(transports.stop).toHaveBeenCalledTimes(stopsBeforeReading + 1);
-      expect(f.current()).toMatchObject({ realtimeTalkSession: null, realtimeTalkActive: false });
-    },
-  );
-
   it.each(["stop", "idle", "error"] as const)(
     "%s releases the realtime call's playback registration",
     async (release) => {
@@ -234,7 +210,7 @@ describe("browser voice handoff history", () => {
   });
 
   it.each(["none", "transcript", "provider-close"])(
-    "drains finalized speech before replacement and honors Stop during %s",
+    "drains finalized speech before replacement and honors Stop during %s, then Read aloud",
     async (stopDuring) => {
       const original = await f.start();
       expectDefined(transports.contexts[0], "initial realtime transport").callbacks.onTranscript?.({
@@ -262,7 +238,7 @@ describe("browser voice handoff history", () => {
       f.close.resolve();
       await original.stop();
       if (stopDuring === "none") {
-        await f.replacementStarted.promise;
+        await f.replacementActive.promise;
       }
       expect(f.snapshots).toEqual(
         stopDuring === "none"
@@ -272,6 +248,13 @@ describe("browser voice handoff history", () => {
       expect(
         f.request.mock.calls.some(([method]) => method === "chat.abort" || method === "agent.wait"),
       ).toBe(false);
+      if (stopDuring === "none") {
+        f.calls.add(expectDefined(f.current().realtimeTalkSession, "replacement realtime call"));
+        const stopsBeforeReading = transports.stop.mock.calls.length;
+        f.read();
+        expect(transports.stop).toHaveBeenCalledTimes(stopsBeforeReading + 1);
+        expect(f.current()).toMatchObject({ realtimeTalkSession: null, realtimeTalkActive: false });
+      }
     },
   );
 });

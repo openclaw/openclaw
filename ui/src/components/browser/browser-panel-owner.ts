@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import type { BrowserRequestClient } from "./browser-client.ts";
@@ -30,6 +31,8 @@ import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
+registerBrowserEnglish();
+
 export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
 /** Synchronous browser navigation, capture and input authority; the view owns its lifetime. */
@@ -45,6 +48,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     view: null,
     loading: false,
     errorText: null,
+    errorRetry: null,
     noticeText: null,
     mode: "interact",
     strokes: [],
@@ -85,6 +89,10 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     },
 
     setState<Key extends keyof BrowserPanelState>(key: Key, value: BrowserPanelState[Key]): void {
+      // Recovery belongs to the displayed failure, not to the next operation.
+      if (key === "errorText" && value === null) {
+        panel.errorRetry = null;
+      }
       if (Object.is(panel[key], value)) {
         return;
       }
@@ -160,11 +168,25 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("evaluateUnavailable", false);
     },
 
-    reportError(error: unknown): void {
+    reportError(error: unknown, retry: (() => Promise<unknown>) | null = null): void {
       const detail = isBrowserNavigationBlockedError(error)
         ? t("browser.navigationBlocked")
         : formatUiError(error);
+      panel.setState("errorRetry", retry);
       panel.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
+    },
+
+    async retryEmptyError(): Promise<void> {
+      if (!panel.errorText || !host.available || !host.isConnected || !host.browserPanelIsOpen()) {
+        return;
+      }
+      if (panel.errorRetry) {
+        await panel.errorRetry();
+      } else if (panel.running === false && !host.fixedTab) {
+        await panel.startBrowserNow();
+      } else {
+        await panel.refreshAll();
+      }
     },
 
     async refreshAll(): Promise<void> {

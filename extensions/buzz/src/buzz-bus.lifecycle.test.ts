@@ -1,4 +1,4 @@
-import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
+import { getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,7 +145,6 @@ describe("Buzz bus lifecycle", () => {
         acknowledgment.resolve("");
         await sending;
         capture.mockRestore();
-        await bus?.close();
       }
     },
   );
@@ -173,7 +172,6 @@ describe("Buzz bus lifecycle", () => {
       expect(relayMocks.publish).toHaveBeenCalledOnce();
     } finally {
       publication.resolve("");
-      await bus.close();
     }
   });
 
@@ -242,7 +240,7 @@ describe("Buzz bus lifecycle", () => {
   it.for(["all", "off"] as const)(
     "signs %s-mode replies and typing without changing inbound threads",
     async (replyToMode, { signal }) => {
-      const { runtime, onMessage } = inboundFixture(
+      const { runtime, onMessage, receive } = inboundFixture(
         {
           groupPolicy: "open",
           replyToMode,
@@ -250,74 +248,45 @@ describe("Buzz bus lifecycle", () => {
         },
         "OpenClaw",
       );
-      const handled = new Map<string, ReturnType<typeof createDeferred<void>>>();
-      const failPending = (error: unknown) => {
-        for (const completion of handled.values()) {
-          completion.reject(error);
-        }
-      };
-      const onAbort = () => failPending(signal.reason);
-      const bus = await startTestBus({
-        onMessage: async (...args) => {
-          await onMessage(...args);
-          handled.get(args[0].id)?.resolve();
-        },
-        onMessageError: failPending,
-      });
-
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        const rootId = "a".repeat(64);
-        const messageSubscription = findSubscription(9);
-        for (const [index, parentId] of ["b".repeat(64), undefined].entries()) {
-          const inbound = senderMessage(`follow-up ${index + 1}`, {
-            created_at: 1_700_000_000 + index,
-            tags: [
-              ["h", CHANNEL_ID],
-              ...(parentId
-                ? [
-                    ["e", rootId, "", "root"],
-                    ["e", parentId, "", "reply"],
-                  ]
-                : []),
-            ],
-          });
-          signal.throwIfAborted();
-          const completion = createDeferred<void>();
-          handled.set(inbound.id, completion);
-          messageSubscription?.handlers.onevent(inbound);
-          try {
-            await completion.promise;
-          } finally {
-            handled.delete(inbound.id);
-          }
-          expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1);
-          const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[index]?.[0];
-          expect(dispatch?.ctxPayload.MessageThreadId).toBe(parentId ? rootId : undefined);
-          await dispatch?.delivery.deliver({ text: `reply ${index + 1}` }, { kind: "final" });
-          await dispatch?.replyPipeline?.typing?.start();
-
-          const published = relayMocks.publish.mock.calls.find(
-            ([event]) => event.kind === 9 && event.content === `reply ${index + 1}`,
-          )?.[0];
-          const typing = relayMocks.send.mock.calls
-            .map(([frame]) => JSON.parse(frame) as [string, Event])
-            .filter(
-              ([frameType, event]) =>
-                frameType === "EVENT" && event.kind === BUZZ_TYPING_INDICATOR_KIND,
-            )[index]?.[1];
-          const expectedTags = [
+      await startTestBus({ onMessage });
+      const rootId = "a".repeat(64);
+      for (const [index, parentId] of ["b".repeat(64), undefined].entries()) {
+        const inbound = senderMessage(`follow-up ${index + 1}`, {
+          created_at: 1_700_000_000 + index,
+          tags: [
             ["h", CHANNEL_ID],
-            ...(replyToMode === "all" ? [["e", parentId ? rootId : inbound.id, "", "reply"]] : []),
-          ];
-          expect(published?.tags).toEqual(expectedTags);
-          expect(typing?.tags).toEqual(expectedTags);
-          expect(published && verifyEvent(published)).toBe(true);
-          expect(typing && verifyEvent(typing)).toBe(true);
-        }
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-        await bus.close();
+            ...(parentId
+              ? [
+                  ["e", rootId, "", "root"],
+                  ["e", parentId, "", "reply"],
+                ]
+              : []),
+          ],
+        });
+        await receive(inbound, signal);
+        expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1);
+        const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[index]?.[0];
+        expect(dispatch?.ctxPayload.MessageThreadId).toBe(parentId ? rootId : undefined);
+        await dispatch?.delivery.deliver({ text: `reply ${index + 1}` }, { kind: "final" });
+        await dispatch?.replyPipeline?.typing?.start();
+
+        const published = relayMocks.publish.mock.calls.find(
+          ([event]) => event.kind === 9 && event.content === `reply ${index + 1}`,
+        )?.[0];
+        const typing = relayMocks.send.mock.calls
+          .map(([frame]) => JSON.parse(frame) as [string, Event])
+          .filter(
+            ([frameType, event]) =>
+              frameType === "EVENT" && event.kind === BUZZ_TYPING_INDICATOR_KIND,
+          )[index]?.[1];
+        const expectedTags = [
+          ["h", CHANNEL_ID],
+          ...(replyToMode === "all" ? [["e", parentId ? rootId : inbound.id, "", "reply"]] : []),
+        ];
+        expect(published?.tags).toEqual(expectedTags);
+        expect(typing?.tags).toEqual(expectedTags);
+        expect(published && verifyEvent(published)).toBe(true);
+        expect(typing && verifyEvent(typing)).toBe(true);
       }
     },
   );
@@ -343,8 +312,7 @@ describe("Buzz bus lifecycle", () => {
       (entry) => entry.filter["#h"]?.[0] === SECOND_CHANNEL_ID,
     );
     stalledSubscription?.handlers.oneose?.();
-    const bus = await start;
-    await bus.close();
+    await start;
   });
 
   it("bounds replay dispatch when a relay ignores the historical limit", async () => {
@@ -378,7 +346,7 @@ describe("Buzz bus lifecycle", () => {
       const running = createDeferred<void>();
       const handled: string[] = [];
       const onMessageError = vi.fn();
-      const bus = await startTestBus({
+      await startTestBus({
         onMessage: async (message) => {
           handled.push(message.text);
           if (message.text.startsWith("running-")) {
@@ -414,15 +382,7 @@ describe("Buzz bus lifecycle", () => {
           removeSender();
         }
         subscription?.handlers.onevent(
-          finalizeEvent(
-            {
-              kind: 9,
-              created_at: 1_700_000_012,
-              content: "remaining-member",
-              tags: [["h", CHANNEL_ID]],
-            },
-            remainingSecret,
-          ),
+          senderMessage("remaining-member", { created_at: 1_700_000_012 }, remainingSecret),
         );
         running.resolve();
         await vi.waitFor(() => expect(handled).toContain("remaining-member"));
@@ -430,7 +390,6 @@ describe("Buzz bus lifecycle", () => {
         expectError(onMessageError, expect.stringContaining("no longer a room member"));
       } finally {
         running.resolve();
-        await bus.close();
       }
     },
   );
@@ -475,7 +434,6 @@ describe("Buzz bus lifecycle", () => {
         await vi.waitFor(() => expect(bus.directory.listGroups({})[0]?.name).toBe("Platform"));
         expect(onRoomDirectoryChanged).toHaveBeenCalledOnce();
       }
-      await bus.close();
     },
   );
 });

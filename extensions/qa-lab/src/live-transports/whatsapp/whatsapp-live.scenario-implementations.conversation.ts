@@ -3,7 +3,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { toQaError } from "../../errors.js";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
 import {
-  resolveWhatsAppQaNoReplyTarget,
   waitForDistinctWhatsAppSutMessages,
   waitForNoWhatsAppReply,
 } from "./whatsapp-live.driver.js";
@@ -112,7 +111,6 @@ export const whatsappConversationScenarios = {
               (message) => message.text.includes(secondMarker),
             ],
             observedAfter: context.requestStartedAt,
-            timeoutMs: 60_000,
           });
           return "broadcast fanout produced main and qa-second replies";
         },
@@ -187,10 +185,8 @@ export const whatsappConversationScenarios = {
             observedAfter: quietStartedAt,
             sutPhoneE164: context.sutPhoneE164,
             windowMs: 5_000,
-            ...resolveWhatsAppQaNoReplyTarget({
-              groupJid: context.target,
-              target: "group",
-            }),
+            groupJid: context.target,
+            target: "group",
           });
           return "activation always replied to an unmentioned group message and mention mode was restored";
         },

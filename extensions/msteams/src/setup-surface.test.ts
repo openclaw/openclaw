@@ -5,6 +5,7 @@ import {
   msteamsSetupAdapter,
   msteamsSetupContract,
 } from "./setup-core.js";
+import { createMSTeamsSetupPrompter, createMSTeamsTestConfig } from "./setup.test-support.js";
 
 const hasConfiguredMSTeamsCredentials = vi.hoisted(() => vi.fn());
 const resolveMSTeamsCredentials = vi.hoisted(() => vi.fn());
@@ -34,13 +35,9 @@ describe("msteams setup surface", () => {
   it("enables the msteams channel and promotes existing default identity", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({
-        cfg: {
-          channels: {
-            msteams: {
-              appId: "existing-app",
-            },
-          },
-        },
+        cfg: createMSTeamsTestConfig({
+          appId: "existing-app",
+        }),
         accountId: DEFAULT_ACCOUNT_ID,
         input: {},
       }),
@@ -61,22 +58,18 @@ describe("msteams setup surface", () => {
 
   it("updates an existing display-style account key in place", () => {
     const result = msteamsSetupAdapter.applyAccountConfig?.({
-      cfg: {
-        channels: {
-          msteams: {
-            accounts: {
-              "Support Bot": {
-                name: "Support Bot",
-                enabled: false,
-                appId: "old-app",
-                appPassword: "old-secret",
-                tenantId: "old-tenant",
-                webhook: { path: "/hooks/3979" },
-              },
-            },
+      cfg: createMSTeamsTestConfig({
+        accounts: {
+          "Support Bot": {
+            name: "Support Bot",
+            enabled: false,
+            appId: "old-app",
+            appPassword: "old-secret",
+            tenantId: "old-tenant",
+            webhook: { path: "/hooks/3979" },
           },
         },
-      },
+      }),
       accountId: "support-bot",
       input: {
         appId: "support-app",
@@ -108,21 +101,17 @@ describe("msteams setup surface", () => {
 
   it("switches federated accounts to secret auth when noninteractive setup writes a password", () => {
     const result = msteamsSetupAdapter.applyAccountConfig?.({
-      cfg: {
-        channels: {
-          msteams: {
-            tenantId: "tenant-id",
-            accounts: {
-              support: {
-                authType: "federated",
-                appId: "old-app",
-                certificatePath: "/secure/support.pem",
-                webhook: { path: "/hooks/3979" },
-              },
-            },
+      cfg: createMSTeamsTestConfig({
+        tenantId: "tenant-id",
+        accounts: {
+          support: {
+            authType: "federated",
+            appId: "old-app",
+            certificatePath: "/secure/support.pem",
+            webhook: { path: "/hooks/3979" },
           },
         },
-      },
+      }),
       accountId: "support",
       input: {
         appId: "new-app",
@@ -142,20 +131,16 @@ describe("msteams setup surface", () => {
 
   it("updates a display-style default alias without creating a duplicate key", () => {
     const result = msteamsSetupAdapter.applyAccountConfig?.({
-      cfg: {
-        channels: {
-          msteams: {
-            tenantId: "tenant-id",
-            accounts: {
-              Default: {
-                appId: "old-app",
-                appPassword: "old-secret",
-                webhook: { path: "/hooks/3978" },
-              },
-            },
+      cfg: createMSTeamsTestConfig({
+        tenantId: "tenant-id",
+        accounts: {
+          Default: {
+            appId: "old-app",
+            appPassword: "old-secret",
+            webhook: { path: "/hooks/3978" },
           },
         },
-      },
+      }),
       accountId: "default",
       input: {
         appId: "new-app",
@@ -179,21 +164,17 @@ describe("msteams setup surface", () => {
 
   it("updates an explicit default account webhook path without changing the shared root", () => {
     const result = msteamsSetupAdapter.applyAccountConfig?.({
-      cfg: {
-        channels: {
-          msteams: {
-            webhook: { path: "/root/messages" },
-            accounts: {
-              Default: {
-                appId: "default-app",
-                appPassword: "default-secret",
-                tenantId: "tenant-id",
-                webhook: { path: "/default/messages" },
-              },
-            },
+      cfg: createMSTeamsTestConfig({
+        webhook: { path: "/root/messages" },
+        accounts: {
+          Default: {
+            appId: "default-app",
+            appPassword: "default-secret",
+            tenantId: "tenant-id",
+            webhook: { path: "/default/messages" },
           },
         },
-      },
+      }),
       accountId: "default",
       input: { webhookPath: "/hooks/4978" },
     });
@@ -223,7 +204,7 @@ describe("msteams setup surface", () => {
     expect(msteamsSetupContract.parseInput(input)).toEqual({ ok: true, value: input });
     expect(
       msteamsSetupContract.validateInput?.({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
         accountId: "support",
         input,
       }),
@@ -233,7 +214,7 @@ describe("msteams setup surface", () => {
   it("rejects whitespace-only noninteractive credentials", () => {
     expect(
       msteamsSetupContract.validateInput?.({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
         accountId: "default",
         input: { appId: " ", appPassword: "\t", tenantId: "\n" },
       }),
@@ -251,14 +232,14 @@ describe("msteams setup surface", () => {
     };
     expect(
       msteamsSetupContract.validateInput?.({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
         accountId: "support",
         input,
       }),
     ).toBeNull();
     expect(
       msteamsSetupContract.applyAccountConfig({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
         accountId: "support",
         input,
       }).channels?.msteams?.accounts?.support,
@@ -273,15 +254,11 @@ describe("msteams setup surface", () => {
   });
 
   it("accepts new named-account credentials with an inherited root tenant", () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          tenantId: "shared-tenant",
-          authType: "federated" as const,
-          certificatePath: "/secure/shared.pem",
-        },
-      },
-    };
+    const cfg = createMSTeamsTestConfig({
+      tenantId: "shared-tenant",
+      authType: "federated" as const,
+      certificatePath: "/secure/shared.pem",
+    });
     const input = {
       appId: "support-app",
       appPassword: "support-secret",
@@ -324,20 +301,16 @@ describe("msteams setup surface", () => {
   });
 
   it("allows partial noninteractive updates for an already configured named account", () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          accounts: {
-            support: {
-              appId: "support-app",
-              appPassword: "support-secret",
-              tenantId: "tenant-id",
-              webhook: { path: "/support/messages" },
-            },
-          },
+    const cfg = createMSTeamsTestConfig({
+      accounts: {
+        support: {
+          appId: "support-app",
+          appPassword: "support-secret",
+          tenantId: "tenant-id",
+          webhook: { path: "/support/messages" },
         },
       },
-    };
+    });
     resolveMSTeamsCredentials.mockReturnValue({
       type: "secret",
       appId: "support-app",
@@ -373,21 +346,17 @@ describe("msteams setup surface", () => {
   });
 
   it("preserves federated auth during a partial noninteractive update", () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          accounts: {
-            support: {
-              authType: "federated" as const,
-              appId: "support-app",
-              tenantId: "tenant-id",
-              certificatePath: "/secure/support.pem",
-              webhook: { path: "/hooks/3979" },
-            },
-          },
+    const cfg = createMSTeamsTestConfig({
+      accounts: {
+        support: {
+          authType: "federated" as const,
+          appId: "support-app",
+          tenantId: "tenant-id",
+          certificatePath: "/secure/support.pem",
+          webhook: { path: "/hooks/3979" },
         },
       },
-    };
+    });
     resolveMSTeamsCredentials.mockReturnValue({
       type: "federated",
       appId: "support-app",
@@ -422,18 +391,14 @@ describe("msteams setup surface", () => {
   it("re-enables a disabled named account when setup configures it", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({
-        cfg: {
-          channels: {
-            msteams: {
-              accounts: {
-                support: {
-                  enabled: false,
-                  appId: "old-app",
-                },
-              },
+        cfg: createMSTeamsTestConfig({
+          accounts: {
+            support: {
+              enabled: false,
+              appId: "old-app",
             },
           },
-        },
+        }),
         accountId: "support",
         input: {
           appId: "support-app",
@@ -467,7 +432,7 @@ describe("msteams setup surface", () => {
 
     expect(
       msteamsSetupWizard.status.resolveConfigured({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
       } as never),
     ).toBe(true);
   });
@@ -478,7 +443,7 @@ describe("msteams setup surface", () => {
 
     expect(
       msteamsSetupWizard.status.resolveConfigured({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
       } as never),
     ).toBe(true);
 
@@ -486,7 +451,7 @@ describe("msteams setup surface", () => {
     expect(msteamsSetupWizard.status.resolveStatusLines).toBeTypeOf("function");
     await expect(
       msteamsSetupWizard.status.resolveStatusLines?.({
-        cfg: { channels: { msteams: {} } },
+        cfg: createMSTeamsTestConfig({}),
       } as never),
     ).resolves.toEqual(["MS Teams: needs app credentials"]);
   });
@@ -503,15 +468,12 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/env.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const confirm = vi.fn(async () => true);
+    const prompter = createMSTeamsSetupPrompter();
+    const { confirm } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: { channels: { msteams: {} } },
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text: vi.fn(),
-      },
+      cfg: createMSTeamsTestConfig({}),
+      prompter,
     } as never);
 
     expect(confirm).toHaveBeenCalledWith({
@@ -535,15 +497,12 @@ describe("msteams setup surface", () => {
       tenantId: "env-tenant",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const confirm = vi.fn(async () => true);
+    const prompter = createMSTeamsSetupPrompter();
+    const { confirm } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: { existing: true } } },
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text: vi.fn(),
-      },
+      prompter,
     } as never);
 
     expect(confirm).toHaveBeenCalledWith({
@@ -576,24 +535,12 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/env.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "new-app";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "new-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "new-tenant";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["new-app", "new-password", "new-tenant"]);
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: { channels: { msteams: {} } },
+      cfg: createMSTeamsTestConfig({}),
       accountId: "default",
-      prompter: { confirm, note: vi.fn(async () => {}), text },
+      prompter,
     } as never);
 
     expect(result?.cfg?.channels?.msteams?.accounts?.default).toMatchObject({
@@ -612,31 +559,23 @@ describe("msteams setup surface", () => {
       tenantId: "tenant-id",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const confirm = vi.fn(async () => true);
+    const prompter = createMSTeamsSetupPrompter();
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: {
-        channels: {
-          msteams: {
-            tenantId: "tenant-id",
-            accounts: {
-              Default: {
-                enabled: false,
-                appId: "default-app",
-                appPassword: "default-secret",
-                webhook: { path: "/hooks/3978" },
-              },
-            },
-            defaultAccount: "Default",
+      cfg: createMSTeamsTestConfig({
+        tenantId: "tenant-id",
+        accounts: {
+          Default: {
+            enabled: false,
+            appId: "default-app",
+            appPassword: "default-secret",
+            webhook: { path: "/hooks/3978" },
           },
         },
-      },
+        defaultAccount: "Default",
+      }),
       accountId: "default",
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text: vi.fn(),
-      },
+      prompter,
     } as never);
 
     if (!result?.cfg) {
@@ -687,12 +626,12 @@ describe("msteams setup surface", () => {
       }
       resolveMSTeamsCredentials.mockReturnValue(credentials);
       hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-      const confirm = vi.fn(async () => true);
-      const text = vi.fn();
+      const prompter = createMSTeamsSetupPrompter();
+      const { confirm, text } = prompter;
 
       const result = await msteamsSetupWizard.finalize?.({
         cfg: { channels: { msteams } },
-        prompter: { confirm, note: vi.fn(async () => {}), text },
+        prompter,
       } as never);
 
       expect(confirm).toHaveBeenCalledWith({
@@ -725,28 +664,12 @@ describe("msteams setup surface", () => {
   it("finalize prompts for manual credentials when env/config creds are unavailable", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const note = vi.fn(async () => {});
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "app-id";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "app-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "tenant-id";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["app-id", "app-password", "tenant-id"]);
+    const { note } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: { channels: { msteams: {} } },
-      prompter: {
-        confirm,
-        note,
-        text,
-      },
+      cfg: createMSTeamsTestConfig({}),
+      prompter,
     } as never);
 
     expect(note).toHaveBeenCalled();
@@ -774,38 +697,17 @@ describe("msteams setup surface", () => {
   it("finalize configures named accounts with credentials without requiring a listener", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const note = vi.fn(async () => {});
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "support-app";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "support-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "tenant-id";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["support-app", "support-password", "tenant-id"]);
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: {
-        channels: {
-          msteams: {
-            tenantId: "shared-tenant",
-            webhook: { path: "/api/messages" },
-            dmPolicy: "allowlist",
-            allowFrom: ["user-1"],
-          },
-        },
-      },
+      cfg: createMSTeamsTestConfig({
+        tenantId: "shared-tenant",
+        webhook: { path: "/api/messages" },
+        dmPolicy: "allowlist",
+        allowFrom: ["user-1"],
+      }),
       accountId: "support",
-      prompter: {
-        confirm,
-        note,
-        text,
-      },
+      prompter,
     } as never);
 
     expect(result).toEqual({
@@ -841,31 +743,23 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/support.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const confirm = vi.fn(async () => true);
-    const text = vi.fn();
+    const prompter = createMSTeamsSetupPrompter();
+    const { confirm, text } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: {
-        channels: {
-          msteams: {
-            accounts: {
-              support: {
-                authType: "federated",
-                appId: "support-app",
-                tenantId: "tenant-id",
-                certificatePath: "/secure/support.pem",
-                webhook: { path: "/hooks/3979" },
-              },
-            },
+      cfg: createMSTeamsTestConfig({
+        accounts: {
+          support: {
+            authType: "federated",
+            appId: "support-app",
+            tenantId: "tenant-id",
+            certificatePath: "/secure/support.pem",
+            webhook: { path: "/hooks/3979" },
           },
         },
-      },
+      }),
       accountId: "support",
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text,
-      },
+      prompter,
     } as never);
 
     expect(result).toEqual({
@@ -903,38 +797,22 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/support.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "new-app";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "new-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "tenant-id";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["new-app", "new-password", "tenant-id"]);
 
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: {
-        channels: {
-          msteams: {
-            accounts: {
-              support: {
-                authType: "federated",
-                appId: "support-app",
-                tenantId: "tenant-id",
-                certificatePath: "/secure/support.pem",
-                webhook: { path: "/hooks/3979" },
-              },
-            },
+      cfg: createMSTeamsTestConfig({
+        accounts: {
+          support: {
+            authType: "federated",
+            appId: "support-app",
+            tenantId: "tenant-id",
+            certificatePath: "/secure/support.pem",
+            webhook: { path: "/hooks/3979" },
           },
         },
-      },
+      }),
       accountId: "support",
-      prompter: { confirm, note: vi.fn(async () => {}), text },
+      prompter,
     } as never);
 
     if (!result?.cfg) {

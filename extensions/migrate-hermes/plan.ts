@@ -1,8 +1,11 @@
 import path from "node:path";
 import {
+  createMigrationConfigPatchItem,
   createMigrationItem,
   createMigrationManualItem,
+  hasMigrationConfigPatchConflict,
   markMigrationItemConflict,
+  mergeMigrationConfigValue,
   MIGRATION_REASON_TARGET_EXISTS,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
@@ -12,10 +15,23 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  filterStringRecord,
+  isRecord,
+  normalizeOptionalString,
+  normalizeSingleOrTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parse as parseYaml } from "yaml";
 import { buildAuthItems } from "./auth.js";
-import { buildConfigItems } from "./config.js";
-import { exists, parseEnv, parseHermesConfig, readText } from "./helpers.js";
+import { planHermesMcpServer } from "./config-mcp.js";
+import { providerConfig } from "./config-provider-contract.js";
+import {
+  addSelectedModelToProvider,
+  collectHermesProviders,
+  providerManualItems,
+} from "./config-providers.js";
+import { exists, parseEnv, parseHermesConfig, readUtf8Text, sanitizeName } from "./helpers.js";
 import {
   createHermesModelItem,
   findHermesModelProviderDependency,
@@ -31,6 +47,34 @@ import { buildSecretItems } from "./secrets.js";
 import { buildSkillItems } from "./skills.js";
 import { discoverHermesSource, hasHermesSource } from "./source.js";
 
+function mapSkillEntries(config: Record<string, unknown>): Record<string, unknown> {
+  const skills = asNonArrayRecord(config.skills);
+  const entries = new Map<string, { config?: Record<string, unknown>; enabled?: false }>();
+  for (const [skillKey, value] of Object.entries(asNonArrayRecord(skills.config))) {
+    if (isRecord(value)) {
+      entries.set(skillKey, { config: value });
+    }
+  }
+  let disabled = skills.disabled;
+  // Hermes config commands also persist JSON/Python array strings. YAML accepts
+  // both list forms without evaluating source code; malformed strings stay names.
+  if (typeof disabled === "string" && disabled.trimStart().startsWith("[")) {
+    try {
+      disabled = parseYaml(disabled);
+    } catch {
+      // Hermes treats a malformed list string as a single skill name.
+    }
+  }
+  for (const skillKey of normalizeSingleOrTrimmedStringList(disabled)) {
+    // Hermes always keeps its operating manual active, even in skills.disabled.
+    if (skillKey !== "hermes-agent") {
+      entries.set(skillKey, { ...entries.get(skillKey), enabled: false });
+    }
+  }
+  // Apply the shared untrusted-key policy before skill names become path segments.
+  return asNonArrayRecord(mergeMigrationConfigValue({}, Object.fromEntries(entries)));
+}
+
 export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<MigrationPlan> {
   const source = await discoverHermesSource(ctx.source);
   if (isMemoryOnlyMigration(ctx)) {
@@ -44,14 +88,14 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   const targets = resolvePlannedMigrationTargets(ctx);
   let config: Record<string, unknown>;
   try {
-    config = parseHermesConfig(await readText(source.configPath));
+    config = parseHermesConfig(await readUtf8Text(source.configPath));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to parse Hermes config at ${source.configPath}: ${reason}`, {
       cause: err,
     });
   }
-  const env = parseEnv(await readText(source.envPath));
+  const env = parseEnv(await readUtf8Text(source.envPath));
   const modelRef = resolveHermesModelRef(config, env);
   const runtimeEnv = filterStringRecord(process.env) ?? {};
   const items: MigrationItem[] = [];
@@ -69,14 +113,133 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
       }),
     );
   }
-  const configItems = buildConfigItems({
-    ctx,
-    config,
-    env,
-    runtimeEnv,
-    modelRef,
-    hasMemoryFiles: Boolean(source.memoryPath || source.userPath),
-  });
+  const hasMemoryFiles = Boolean(source.memoryPath || source.userPath);
+  const configItems: MigrationItem[] = [];
+  const addConfigPatch = (patch: Parameters<typeof createMigrationConfigPatchItem>[0]) => {
+    configItems.push(
+      createMigrationConfigPatchItem({
+        ...patch,
+        conflict:
+          !ctx.overwrite && hasMigrationConfigPatchConflict(ctx.config, patch.path, patch.value),
+      }),
+    );
+  };
+  const memory = asNonArrayRecord(config.memory);
+  const memoryProvider = normalizeOptionalString(memory.provider);
+
+  if (hasMemoryFiles || memoryProvider) {
+    addConfigPatch({
+      id: "config:memory-plugin-slot",
+      target: "plugins.slots",
+      path: ["plugins", "slots"],
+      value: { memory: "memory-core" },
+      message: "Select the default OpenClaw memory plugin for imported file memory.",
+    });
+  }
+
+  if (memoryProvider === "honcho") {
+    const value = {
+      honcho: {
+        enabled: true,
+        config: asNonArrayRecord(memory.honcho),
+      },
+    };
+    addConfigPatch({
+      id: "config:memory-plugin:honcho",
+      target: "plugins.entries.honcho",
+      path: ["plugins", "entries"],
+      value,
+      message: "Preserve Hermes Honcho memory settings as a plugin entry for manual activation.",
+    });
+    configItems.push(
+      createMigrationManualItem({
+        id: "manual:memory-provider:honcho",
+        source: "config.yaml:memory.provider",
+        message:
+          "Hermes used Honcho memory. OpenClaw keeps built-in memory selected until the matching plugin is installed and reviewed.",
+        recommendation:
+          "Install or review the Honcho memory plugin before selecting it for plugins.slots.memory.",
+      }),
+    );
+  } else if (memoryProvider && !["builtin", "file", "files"].includes(memoryProvider)) {
+    configItems.push(
+      createMigrationManualItem({
+        id: `manual:memory-provider:${memoryProvider}`,
+        source: "config.yaml:memory.provider",
+        message: `Hermes memory provider "${memoryProvider}" does not have a known OpenClaw mapping.`,
+        recommendation: "Install or configure an equivalent OpenClaw memory plugin manually.",
+      }),
+    );
+  }
+
+  const providers = collectHermesProviders(config, env, Boolean(ctx.includeSecrets));
+  addSelectedModelToProvider(providers, modelRef);
+  for (const provider of providers) {
+    const value = { [provider.id]: providerConfig(provider) };
+    addConfigPatch({
+      id: `config:model-provider:${sanitizeName(provider.id)}`,
+      target: `models.providers.${provider.id}`,
+      path: ["models", "providers"],
+      value,
+      message: `Import Hermes provider and custom endpoint config for "${provider.id}".`,
+      sensitive: provider.sensitive,
+    });
+  }
+  configItems.push(...providerManualItems(config, env ?? {}, Boolean(ctx.includeSecrets)));
+
+  const mcpConfig = config.mcp;
+  const rawMcpServers =
+    config.mcp_servers ??
+    (isRecord(mcpConfig) && isRecord(mcpConfig.servers) ? mcpConfig.servers : mcpConfig);
+  const rawMcpSource =
+    config.mcp_servers !== undefined
+      ? "config.yaml:mcp_servers"
+      : isRecord(mcpConfig) && isRecord(mcpConfig.servers)
+        ? "config.yaml:mcp.servers"
+        : "config.yaml:mcp";
+  if (isRecord(rawMcpServers)) {
+    // Hermes loads process env first, then lets its source .env override those values.
+    const mcpEnv = { ...runtimeEnv, ...env };
+    for (const [name, rawServer] of Object.entries(rawMcpServers)) {
+      if (!isRecord(rawServer)) {
+        continue;
+      }
+      const {
+        server,
+        sensitive,
+        items: manualItems,
+      } = planHermesMcpServer({
+        name,
+        raw: rawServer,
+        includeSecrets: Boolean(ctx.includeSecrets),
+        env: mcpEnv,
+        source: `${rawMcpSource}.${name}`,
+      });
+      if (Object.keys(server).length > 0) {
+        const value = { [name]: server };
+        addConfigPatch({
+          id: `config:mcp-server:${sanitizeName(name)}`,
+          target: `mcp.servers.${name}`,
+          path: ["mcp", "servers"],
+          value,
+          message: `Import Hermes MCP server definition "${name}".`,
+          sensitive,
+        });
+      }
+      configItems.push(...manualItems);
+    }
+  }
+
+  for (const [skillKey, value] of Object.entries(mapSkillEntries(config))) {
+    const configPath = ["skills", "entries", skillKey];
+    addConfigPatch({
+      id: `config:skill-entry:${sanitizeName(skillKey)}`,
+      target: configPath.join("."),
+      path: configPath,
+      value,
+      message: "Import Hermes skill config values and global disabled state.",
+    });
+  }
   if (modelRef && modelItemIndex !== undefined) {
     const modelItem = items[modelItemIndex];
     const dependency = findHermesModelProviderDependency(configItems, modelRef);

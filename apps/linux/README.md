@@ -54,6 +54,8 @@ Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
 they cannot run the published AppImage. Extraction does not bypass this
 requirement.
 
+The AppImage keeps its bundled libraries for the companion and WebKit helpers. Host CLI tools and SSH ProxyCommand programs use the host libraries; non-AppImage launches preserve the user's library path.
+
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
@@ -408,6 +410,11 @@ opens or focuses an existing Gateway window without reloading its current page;
 selection is remembered across app restarts. Removing a selected Gateway returns
 the main window to Primary and closes that Gateway's other windows.
 
+Each saved Gateway keeps its own dashboard storage, so an approved device pairing
+survives switching and restarts. Removing a saved Gateway retires that storage:
+saving the same address again starts a new dashboard session that pairs again,
+and the old storage is deleted the next time the app starts.
+
 If a saved Gateway cannot load, its window returns to the local connection editor
 so you can correct the address or credentials. An edited endpoint becomes the
 remembered selection only after its dashboard loads successfully.
@@ -498,6 +505,9 @@ CLI launchers without a managed marker for the rollback selection.
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. Windows uses the regular `windows-stable` channel, downloads the update first, and runs its installer only after **Restart to update**. The macOS test build uses the separate opt-in desktop-test channel and self-updates like the AppImage build.
 
+All desktop platforms offer numbered correction releases such as `2026.9.3-1`
+as updates to `2026.9.3`.
+
 If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
 
 While a newer Gateway release waits for its Linux app, the latest release keeps
@@ -554,6 +564,12 @@ you can still uncheck it without retrying the unavailable power service. A new
 enable request is saved only after the native request succeeds.
 Turning it off or quitting releases the request. Closing the dashboard to the
 tray does not release it.
+
+If the shared Saved Gateways credential store cannot be read at startup, the
+connection UI reports that problem once and Keep computer awake stays off for
+this run. The saved preference is preserved. An explicit toggle that cannot save
+its preference reports **Saved Gateways**; native power-service errors report
+**Keep computer awake**.
 
 Linux uses GNOME’s native session inhibitor when available, or another desktop’s
 xdg-desktop-portal idle inhibitor, such as KDE’s backend. A working session or

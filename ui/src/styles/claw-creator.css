@@ -12,7 +12,6 @@
 }
 
 .claw-creator__intro,
-.claw-creator__publisher,
 .claw-creator__section > p,
 .claw-creator__status {
   color: var(--muted);

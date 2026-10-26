@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.test-support.js";
 
 describe("imported Claude history merge", () => {

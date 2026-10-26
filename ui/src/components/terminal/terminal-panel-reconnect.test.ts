@@ -8,9 +8,10 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { mountPanel as mount } from "./terminal-panel-lifecycle.test-support.ts";
 import {
   createTerminalController,
-  createTestTerminalPanel,
+  createTerminalGatewayClient,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -58,23 +59,15 @@ describe("OpenClawTerminalPanel reconnect", () => {
     );
     createGhosttyTerminalMock.mockImplementation(async () => createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return (
           method === "terminal.open" ? terminalOpenResult("upgraded-session") : { ok: true }
         ) as T;
       },
-      addEventListener: () => () => {},
-    };
-    const mountPanel = () => {
-      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-      panel.client = client;
-      panel.available = true;
-      document.body.append(panel);
-      return panel;
-    };
+    );
+    const mountPanel = () => mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     const panel = mountPanel();
     await panel.updateComplete;
     await vi.dynamicImportSettled();
@@ -140,10 +133,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         };
       },
     };
-    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
+    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     panel.toggle();
     await waitForFast(() =>
       expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]'),
@@ -219,6 +209,125 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(panel.querySelector(".tp-upload-card")).toBeNull();
   });
 
+  it("retains the composed command and attachments until failed recovery is retried", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminalController();
+    terminal.setReadOnly.mockImplementation((readOnly: boolean) => {
+      terminal.readOnly = readOnly;
+    });
+    createGhosttyTerminalMock.mockImplementation(async (options) => {
+      // The emulator emits bytes; the real startup-input owner admits or rejects them.
+      terminal.terminal.paste.mockImplementation((text: string) => {
+        options.onData?.(new TextEncoder().encode(text));
+      });
+      terminal.terminal.input.mockImplementation((text: string, wasUserInput: boolean) => {
+        if (wasUserInput) {
+          options.onData?.(new TextEncoder().encode(text));
+        }
+      });
+      return terminal;
+    });
+    const recovered = { ...terminalOpenResult("retained"), buffer: "", seq: 0 };
+    const recovery = createDeferred<typeof recovered>();
+    let attachAttempts = 0;
+    let opened = false;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "terminal.open") {
+        opened = true;
+        return terminalOpenResult("retained");
+      }
+      if (method === "terminal.attach") {
+        return attachAttempts++ === 0 ? recovery.promise : recovered;
+      }
+      if (method === "terminal.list") {
+        return {
+          sessions: opened
+            ? [{ ...terminalOpenResult("retained"), attached: true, createdAtMs: 1 }]
+            : [],
+        };
+      }
+      if (method === "terminal.upload") {
+        return { path: "/tmp/notes.txt", size: 4 };
+      }
+      return { ok: true };
+    });
+    const client: TerminalGatewayClient = {
+      forceReconnect: vi.fn(),
+      // SAFETY: This Gateway fixture returns the response selected by the requested method.
+      request: <T>(method: string, params?: unknown) => request(method, params) as Promise<T>,
+      addEventListener: () => () => {},
+    };
+    const panel = mount(
+      TERMINAL_PANEL_ELEMENT_NAME,
+      { embedded: true, client, available: true },
+      false,
+    );
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
+    await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+    panel.selectHostedTab(panel.activeHostedTabId!);
+    await panel.updateComplete;
+    const input = panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!;
+    input.value = "cat";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const file = new File(["test"], "notes.txt");
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new TextEncoder().encode("test").buffer,
+    });
+    const fileInput = panel.querySelector<HTMLInputElement>(".tp-file-input")!;
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fileInput.dispatchEvent(new Event("change"));
+    await waitForFast(() =>
+      expect(panel.querySelector(".tp-attachment")?.textContent).toContain("notes.txt"),
+    );
+
+    panel.gatewayConnected = false;
+    await panel.updateComplete;
+    await waitForFast(() => expect(terminal.readOnly).toBe(true));
+    panel.gatewayConnected = true;
+    await panel.updateComplete;
+    await waitForFast(() => expect(attachAttempts).toBe(1));
+    const send = () =>
+      panel.querySelector<HTMLButtonElement>('[aria-label="Send terminal input"]')!.click();
+    const expectRetainedDraft = () => {
+      expect(panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe(
+        "cat",
+      );
+      expect(panel.querySelector(".tp-attachment")?.textContent).toContain("notes.txt");
+      expect(request.mock.calls.filter(([method]) => method === "terminal.input")).toEqual([]);
+    };
+    send();
+    await panel.updateComplete;
+    expectRetainedDraft();
+
+    recovery.reject(new Error("temporary attach failure"));
+    await waitForFast(() =>
+      expect(panel.querySelector(".tp-error")?.textContent).toContain(
+        "Could not attach terminal session",
+      ),
+    );
+    expect(panel.hostedTabs[0]?.className).toBe("is-live");
+    expect(terminal.readOnly).toBe(true);
+    send();
+    await panel.updateComplete;
+    expectRetainedDraft();
+    expect(panel.querySelector(".tp-error")?.textContent).toContain(
+      "Could not attach terminal session",
+    );
+
+    panel.querySelector<HTMLButtonElement>(".tp-error .btn")!.click();
+    await waitForFast(() => expect(terminal.readOnly).toBe(false));
+    expectRetainedDraft();
+    send();
+    await panel.updateComplete;
+    expect(request.mock.calls.filter(([method]) => method === "terminal.input")).toEqual([
+      ["terminal.input", { sessionId: "retained", data: "cat /tmp/notes.txt" }],
+      ["terminal.input", { sessionId: "retained", data: "\r" }],
+    ]);
+    expect(panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe("");
+    expect(panel.querySelector(".tp-attachment")).toBeNull();
+  });
+
   it.each([
     ["input", false],
     ["resize", false],
@@ -245,10 +354,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       const recoveryScope = vi.spyOn(client, "recoveryScope", "get").mockReturnValue("account-a");
       vi.spyOn(client, "forceReconnect").mockImplementation(() => {});
       vi.spyOn(client, "addEventListener").mockReturnValue(() => {});
-      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-      panel.client = client;
-      panel.available = true;
-      document.body.append(panel);
+      const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
       panel.toggle();
       await waitForFast(() =>
         expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["interrupted"]'),
@@ -307,9 +413,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
         .mockResolvedValueOnce(controllers[0])
         .mockResolvedValueOnce(controllers[1]);
       const requests: Array<{ method: string; params: unknown }> = [];
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: async <T>(method: string, params?: unknown) => {
+      const client: TerminalGatewayClient = createTerminalGatewayClient(
+        async <T>(method: string, params?: unknown) => {
           requests.push({ method, params });
           if (method === "terminal.open") {
             return terminalOpenResult("current-1") as T;
@@ -355,12 +460,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
           }
           return { ok: true } as T;
         },
-        addEventListener: () => () => {},
-      };
-      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-      panel.client = client;
-      panel.available = true;
-      document.body.append(panel);
+      );
+      const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
       panel.toggle();
       await panel.updateComplete;
       await vi.dynamicImportSettled();
@@ -429,9 +530,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
     const recoveredReplay = `${replay}?gap`;
     const attachReplays = [replay, recoveredReplay] as const;
     let attachCount = 0;
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
           return terminalOpenResult("surviving-session") as T;
@@ -456,7 +556,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         }
         return { ok: true } as T;
       },
-      addEventListener: (nextListener) => {
+      (nextListener) => {
         listener = nextListener;
         return () => {
           if (listener === nextListener) {
@@ -464,11 +564,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
           }
         };
       },
-    };
-    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
+    );
+    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     panel.toggle();
 
     await waitForFast(() => {
@@ -482,18 +579,14 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await panel.updateComplete;
     await waitForFast(() => expect(controllers[0].dispose).toHaveBeenCalledOnce());
 
-    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        releaseRefresh = resolve;
-      }),
-    );
+    const releaseRefresh = createDeferred<boolean>();
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(releaseRefresh.promise);
     panel.client = client;
     panel.available = true;
     await panel.updateComplete;
     await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
     expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(0);
-    releaseRefresh?.(false);
+    releaseRefresh.resolve(false);
     await waitForFast(() => {
       expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(1);
     });
@@ -541,9 +634,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
       .mockResolvedValueOnce(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
     let opened = 0;
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.attach") {
           const sessionId = (params as { sessionId: string }).sessionId;
@@ -560,24 +652,19 @@ describe("OpenClawTerminalPanel reconnect", () => {
         }
         return { ok: true } as T;
       },
-      addEventListener: () => () => {},
-    };
-    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.agentId = "research";
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
+    );
+    const panel = mount(
+      TERMINAL_PANEL_ELEMENT_NAME,
+      { agentId: "research", client, available: true },
+      false,
+    );
     await panel.updateComplete;
 
     panel.available = false;
     await panel.updateComplete;
 
-    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        releaseRefresh = resolve;
-      }),
-    );
+    const releaseRefresh = createDeferred<boolean>();
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(releaseRefresh.promise);
     panel.available = true;
     await panel.updateComplete;
     await vi.waitFor(() => expect(refreshControlUiServiceWorker).toHaveBeenCalledOnce());
@@ -610,7 +697,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       ).toContain("Connecting to session");
     });
 
-    releaseRefresh?.(false);
+    releaseRefresh.resolve(false);
     await waitForFast(() => {
       expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(2);
       expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(1);
@@ -633,20 +720,15 @@ describe("OpenClawTerminalPanel reconnect", () => {
   it("cancels captured restore and explicit actions when the panel closes during the fence", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         return (
           method === "terminal.open" ? terminalOpenResult("initial-terminal") : { ok: true }
         ) as T;
       },
-      addEventListener: () => () => {},
-    };
-    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
+    );
+    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     panel.toggle();
     await waitForFast(() => {
       expect(requests.some((request) => request.method === "terminal.open")).toBe(true);
@@ -657,12 +739,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
     await panel.updateComplete;
     requests.splice(0);
 
-    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        releaseRefresh = resolve;
-      }),
-    );
+    const releaseRefresh = createDeferred<boolean>();
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(releaseRefresh.promise);
     panel.client = client;
     panel.available = true;
     await panel.updateComplete;
@@ -673,7 +751,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       }),
     );
     panel.closeTerminalPanel();
-    releaseRefresh?.(false);
+    releaseRefresh.resolve(false);
     await new Promise((resolve) => {
       globalThis.setTimeout(resolve, 0);
     });
@@ -686,9 +764,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
   it("retires an older refresh generation without losing its queued action", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.attach") {
           return {
@@ -699,8 +776,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
         }
         return { ok: true } as T;
       },
-      addEventListener: () => () => {},
-    };
+    );
     const releases: Array<(replacementActivated: boolean) => void> = [];
     vi.mocked(refreshControlUiServiceWorker).mockImplementation(
       () =>
@@ -708,10 +784,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
           releases.push(resolve);
         }),
     );
-    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
+    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     await panel.updateComplete;
 
     panel.client = null;
@@ -750,24 +823,15 @@ describe("OpenClawTerminalPanel reconnect", () => {
 
   it("shows reload guidance when a fenced action cannot make progress", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string) =>
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string) =>
         (method === "terminal.attach"
           ? { ...terminalOpenResult("stalled-terminal"), buffer: "ready", seq: 5 }
           : { ok: true }) as T,
-      addEventListener: () => () => {},
-    };
-    let releaseRefresh: ((replacementActivated: boolean) => void) | undefined;
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        releaseRefresh = resolve;
-      }),
     );
-    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
+    const releaseRefresh = createDeferred<boolean>();
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(releaseRefresh.promise);
+    const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     await panel.updateComplete;
 
     panel.client = null;
@@ -794,7 +858,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
     ).toBeNull();
 
     vi.useRealTimers();
-    releaseRefresh?.(false);
+    releaseRefresh.resolve(false);
     await waitForFast(() => {
       expect(panel.querySelector(".is-live")).not.toBeNull();
       expect(panel.querySelector(".tp-error")).toBeNull();
@@ -804,9 +868,8 @@ describe("OpenClawTerminalPanel reconnect", () => {
   it("carries an explicit terminal action through an activated-worker reload", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.attach") {
           return {
@@ -817,24 +880,16 @@ describe("OpenClawTerminalPanel reconnect", () => {
         }
         return { ok: true } as T;
       },
-      addEventListener: () => () => {},
-    };
-    const stalePanel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    stalePanel.client = client;
-    stalePanel.available = true;
-    document.body.append(stalePanel);
+    );
+    const stalePanel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
     await stalePanel.updateComplete;
 
     stalePanel.client = null;
     stalePanel.available = false;
     await stalePanel.updateComplete;
 
-    let activateReplacement: ((replacementActivated: boolean) => void) | undefined;
-    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        activateReplacement = resolve;
-      }),
-    );
+    const activateReplacement = createDeferred<boolean>();
+    vi.mocked(refreshControlUiServiceWorker).mockReturnValueOnce(activateReplacement.promise);
     stalePanel.client = client;
     stalePanel.available = true;
     await stalePanel.updateComplete;
@@ -844,15 +899,12 @@ describe("OpenClawTerminalPanel reconnect", () => {
         detail: { open: true, terminalSessionId: "requested-after-reload" },
       }),
     );
-    activateReplacement?.(true);
+    activateReplacement.resolve(true);
     await Promise.resolve();
     expect(requests).toHaveLength(0);
 
     stalePanel.remove();
-    const currentPanel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    currentPanel.client = client;
-    currentPanel.available = true;
-    document.body.append(currentPanel);
+    mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true }, false);
 
     await waitForFast(() => {
       expect(requests).toContainEqual({

@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
-import { expect, it, vi, type TestContext } from "vitest";
+import { expect, it, vi, type TestAPI, type TestContext } from "vitest";
+import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import {
@@ -144,10 +145,10 @@ function createWorkerArtifactFixtures(
       };
     }
 
-    async function prepareWorkers(owner: VitestWorkerRun): Promise<VitestWorkerManifest> {
+    function startPreparation(owner: VitestWorkerRun, env = testRunnerFixtureEnv()) {
       commandSignal.throwIfAborted();
       const child = spawn(process.execPath, ["--input-type=module", "--eval", preparationClient], {
-        env: testRunnerFixtureEnv(),
+        env,
         detached: process.platform !== "win32",
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       });
@@ -166,14 +167,19 @@ function createWorkerArtifactFixtures(
         ),
       );
       void fixtureLifetime.verifyCleanup(() => completion.then(() => undefined));
-      const result = await completion;
-      expect(result.code, stderr).toBe(0);
+      return { child, completion, stderr: () => stderr };
+    }
+
+    async function prepareWorkers(owner: VitestWorkerRun): Promise<VitestWorkerManifest> {
+      const pending = startPreparation(owner);
+      const result = await pending.completion;
+      expect(result.code, pending.stderr()).toBe(0);
       return JSON.parse(
         fs.readFileSync(path.join(owner.descriptor.directory, "manifest.json"), "utf8"),
       );
     }
 
-    return { node, runtime, startBorrower, prepareWorkers, observeChild };
+    return { node, runtime, startBorrower, startPreparation, prepareWorkers, observeChild };
   }
 
   return {
@@ -207,6 +213,42 @@ export function createWorkerArtifactTest(compilerEnv: CompilerEnv = (env) => env
   return test;
 }
 
+type WorkerArtifactContext =
+  ReturnType<typeof createWorkerArtifactTest> extends TestAPI<infer Fixtures>
+    ? Fixtures & TestContext
+    : never;
+
+type WorkerArtifactLifetime = Pick<
+  WorkerArtifactContext,
+  "workerArtifacts" | "signal" | "onTestFinished"
+>;
+
+function createWorkerArtifactFixture(context: WorkerArtifactLifetime) {
+  const commands = context.workerArtifacts.createFixtureCommands();
+  const directory = context.workerArtifacts.fixtureDirectory();
+  return {
+    workerArtifacts: context.workerArtifacts,
+    signal: context.signal,
+    onTestFinished: context.onTestFinished,
+    ...commands,
+    directory,
+    write: (name: string, source: string) => writeFixture(directory, name, source),
+    run: (config: string, ...args: string[]) =>
+      commands.node(["scripts/run-vitest.mjs", "run", "--config", config, ...args]),
+    borrow: (owner: VitestWorkerRun, config: string, ...args: string[]) =>
+      commands.startBorrower(owner, ["run", "--config", config, ...args]),
+  };
+}
+
+export function inWorkerArtifactFixture(
+  context: WorkerArtifactLifetime,
+  body: (fixture: ReturnType<typeof createWorkerArtifactFixture>) => Promise<void>,
+) {
+  return context.workerArtifacts.fixtureLifetime.run(() =>
+    body(createWorkerArtifactFixture(context)),
+  );
+}
+
 /** Reuse the shutdown fixture's executable boundary, keeping real owners and IPC. */
 export function createControlledWorkerCompiler(
   directory: string,
@@ -227,8 +269,22 @@ export function createControlledWorkerCompiler(
     }
   `,
   );
+  const args = (generation: string) => [compiler, generation, input, receipt];
   return {
-    args: (generation: string) => [compiler, generation, input, receipt],
+    args,
+    intercept(generation: string, onLaunch?: () => void) {
+      const runManaged = managedChild.runManagedCommand;
+      return vi.spyOn(managedChild, "runManagedCommand").mockImplementation((options) => {
+        if (
+          options.args?.[0] === path.join(root, "scripts/lib/vitest-worker-compiler.mts") &&
+          options.args[1] === generation
+        ) {
+          onLaunch?.();
+          return runManaged({ ...options, args: args(generation) });
+        }
+        return runManaged(options);
+      });
+    },
     env: compilerFixtureEnv(preload, env, runtime),
     read: () =>
       readFixtureLines<{
@@ -316,10 +372,14 @@ function writeWorkerProbe(directory: string, source: string, provide = "") {
   };
 }
 
-export function workerBorrowingProbe(directory: string) {
+export function workerBorrowingProbe(
+  directory: string,
+  hold?: Pick<FixtureReceiptChannel, "endpoint">,
+) {
   return writeWorkerProbe(
     directory,
     `
+    ${hold ? fixtureReceiptClientSource(hold.endpoint) : ""}
     import fs from 'node:fs';
     import path from 'node:path';
     import {it,expect,inject} from 'vitest';
@@ -336,6 +396,7 @@ export function workerBorrowingProbe(directory: string) {
       expect(preparedAtCollection).toBe(true);
       expect(value).toBe('first');
       fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))},JSON.stringify(generation.href)+'\\n');
+      ${hold ? `sendReceipt(${JSON.stringify(path.join(directory, "generations.jsonl"))},'written'); await awaitRelease(${JSON.stringify(path.join(directory, "generations.jsonl"))},'finish');` : ""}
     });
   `,
   );
@@ -391,7 +452,7 @@ export function workerProbe(
       expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(runtimeProcessBuildEntrypoints.length);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
-        expect(source).toMatch(/\\.m?ts$/);
+        expect(source).toMatch(/\\.m?[jt]s$/);
         expect(fs.existsSync(source)).toBe(true);
       }
       expect(entriesPresentAtCollection).toBe(true);
@@ -420,7 +481,7 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
-          expect(tuiUrls).toHaveLength(5);
+          expect(tuiUrls).toHaveLength(6);
           expect(setupUrls).toHaveLength(2);
           expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {

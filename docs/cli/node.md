@@ -209,7 +209,7 @@ Options:
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
-- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
 - `--auth-from-env`: Persist environment Gateway credentials and select them explicitly on service restarts
 - `--force`: Reinstall/overwrite if already installed
@@ -256,6 +256,12 @@ Service commands accept `--json` for machine-readable output.
 `node start` and `node restart` print install hints and exit nonzero when no
 managed node service is installed; run `openclaw node install` first. Stopping
 an absent service remains a successful no-op.
+
+Profile node commands leave conflicting Gateway service definitions unchanged.
+On Linux, a profile's node name can match another profile's legacy Gateway name
+(for example, profile `work` uses `openclaw-node-work.service`). If a command
+reports that the selected service is not a node service, move the conflicting
+Gateway service to its current name before installing or managing the node.
 
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
@@ -412,16 +418,20 @@ a separate check.
 
 Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
-`identity/device-auth.json`. Stop the node host and run
-`openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
-verifies their stored SQLite rows, then removes the old files. Node startup,
-including the macOS app's worker, leaves these inputs for Doctor. Pending device
-auth or exec approvals stop startup before capabilities are prepared. A missing
-stored identity plus retired identity data or an interrupted import claim
-also stops startup before a new key can be created. An existing valid stored
-identity remains authoritative when an older release recreates `identity/device.json`;
-Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
-it contains the device keypair and auth tokens.
+`identity/device-auth.json`. Node startup, including the macOS app's worker,
+automatically prepares legacy credentials and exec approvals before capabilities
+are prepared. It uses the same backup and migration owner as Doctor, preserving
+the existing keypair and pairing tokens. Retained credential JSON stays consumed
+even if an older release recreates it; an existing valid stored identity remains
+authoritative. Malformed or conflicting sources remain unchanged and require the
+repair described in the diagnostic. Keep `client/credentials.sqlite` private;
+it contains the device keypair and auth tokens. Other retired node state remains
+part of `openclaw doctor --fix`.
+
+Retired `node.json` and interrupted Doctor claims must contain valid UTF-8.
+Doctor reports malformed text as a recoverable warning and preserves its bytes
+for repair. Keep a backup, correct the encoding in a copy, replace the affected
+file, then rerun `openclaw doctor --fix` before starting the node host.
 
 ## Exec approvals
 

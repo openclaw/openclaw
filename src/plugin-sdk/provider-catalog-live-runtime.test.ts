@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
@@ -16,20 +15,9 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
 import type { ProviderCatalogContext } from "./provider-catalog-shared.js";
-import type { ModelDefinitionConfig } from "./provider-model-shared.js";
+import { buildCatalogModel as buildModel } from "./provider-catalog.test-support.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
-
-function buildModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
+import { withServer } from "./test-helpers/http-test-server.js";
 
 function buildFetchGuard(body: unknown): {
   fetchGuard: LiveModelCatalogFetchGuard;
@@ -166,59 +154,44 @@ describe("provider-catalog-live-runtime", () => {
   it("contextualizes paginated malformed JSON through the guarded network path", async () => {
     const credential = "reflected-fake-network-credential";
     let requests = 0;
-    const server = createServer((request, response) => {
-      requests += 1;
-      expect(request.headers.authorization).toBe(`Bearer ${credential}`);
-      response.setHeader("content-type", "application/json");
-      response.end(
-        requests === 1
-          ? JSON.stringify({
-              data: [{ id: "model-a", object: "model" }],
-              next: "/models?page=2",
-            })
-          : credential,
-      );
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected local test server address");
-    }
-    const endpoint = `http://127.0.0.1:${address.port}/models`;
-    const fetchGuard: LiveModelCatalogFetchGuard = async (params) =>
-      await fetchWithSsrFGuard({
-        ...params,
-        dispatcherPolicy: { mode: "direct" },
-      });
+    await withServer(
+      (request, response) => {
+        requests += 1;
+        expect(request.headers.authorization).toBe(`Bearer ${credential}`);
+        response.setHeader("content-type", "application/json");
+        response.end(
+          requests === 1
+            ? JSON.stringify({
+                data: [{ id: "model-a", object: "model" }],
+                next: "/models?page=2",
+              })
+            : credential,
+        );
+      },
+      async (baseUrl) => {
+        const endpoint = `${baseUrl}/models`;
+        const fetchGuard: LiveModelCatalogFetchGuard = async (params) =>
+          await fetchWithSsrFGuard({
+            ...params,
+            dispatcherPolicy: { mode: "direct" },
+          });
 
-    try {
-      const error = await fetchLiveProviderModelIds({
-        providerId: "provider",
-        endpoint,
-        apiKey: credential,
-        fetchGuard,
-        policy: { allowPrivateNetwork: true, allowedOrigins: [new URL(endpoint).origin] },
-        requireHttps: false,
-      }).catch((cause: unknown) => cause);
+        const error = await fetchLiveProviderModelIds({
+          providerId: "provider",
+          endpoint,
+          apiKey: credential,
+          fetchGuard,
+          policy: { allowPrivateNetwork: true, allowedOrigins: [new URL(endpoint).origin] },
+          requireHttps: false,
+        }).catch((cause: unknown) => cause);
 
-      expect(error).toMatchObject({
-        message: "provider model discovery: malformed JSON response",
-      });
-      expect(String((error as Error).cause)).not.toContain(credential);
-      expect(requests).toBe(2);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
+        expect(error).toMatchObject({
+          message: "provider model discovery: malformed JSON response",
         });
-      });
-    }
+        expect(String((error as Error).cause)).not.toContain(credential);
+        expect(requests).toBe(2);
+      },
+    );
   });
 
   it("does not re-add credentials to redirected-origin pagination requests", async () => {
@@ -795,27 +768,31 @@ it.each([false, true])("isolates cached HTTP caps inside acquisition=%s", async 
   }
 });
 
-it("does not let an immediate row timeout join its enclosing long pending load", async () => {
+it("keeps an immediate row timeout even with a configured provider timeout", async () => {
   clearLiveCatalogCacheForTests();
   const completion = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
   const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(() => completion.promise);
-  await withProviderCatalogDiscoveryBudget(180_000, async () => {
-    const read = (timeoutMs?: number) =>
-      getCachedLiveProviderModelRows({
-        providerId: "zero-cap",
-        endpoint: "https://zero.example.test/models",
-        timeoutMs,
-        fetchGuard,
+  await withProviderCatalogDiscoveryBudget(
+    180_000,
+    async () => {
+      const read = (timeoutMs?: number) =>
+        getCachedLiveProviderModelRows({
+          providerId: "zero-cap",
+          endpoint: "https://zero.example.test/models",
+          timeoutMs,
+          fetchGuard,
+        });
+      const long = read();
+      const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
+      completion.resolve({
+        response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
+        finalUrl: "https://zero.example.test/models",
+        release: async () => undefined,
       });
-    const long = read();
-    const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
-    completion.resolve({
-      response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
-      finalUrl: "https://zero.example.test/models",
-      release: async () => undefined,
-    });
-    await immediate;
-    expect(await long).toEqual([{ id: "healthy" }]);
-    expect(fetchGuard).toHaveBeenCalledOnce();
-  });
+      await immediate;
+      expect(await long).toEqual([{ id: "healthy" }]);
+      expect(fetchGuard).toHaveBeenCalledOnce();
+    },
+    { "zero-cap": 15_000 },
+  );
 });

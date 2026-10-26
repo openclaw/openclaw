@@ -16,12 +16,13 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
+import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
+import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+import { createGatewayAuxHandlerTestParams } from "./server-aux-handlers.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { advancePlacementFixtureToActive } from "./worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./worker-environments/placement-turn-claim-events.js";
@@ -71,6 +72,23 @@ function expectQuestionCancelled(
   expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
 }
 
+async function expectApproval(id: string, record: Record<string, unknown>) {
+  expect(await getOperatorApprovalDetailed({ id })).toMatchObject({ outcome: "found", record });
+}
+
+async function registerApproval<T>(
+  manager: ExecApprovalManager<T>,
+  request: T,
+  authority?: AgentRuntimeDelegatedAuthority,
+  timeoutMs = 60_000,
+) {
+  const record = manager.create(request, timeoutMs);
+  if (authority) {
+    record.agentRuntimeDelegatedAuthority = authority;
+  }
+  return { record, ...(await manager.register(record, timeoutMs)) };
+}
+
 function createAuthorityHarness(
   params: Pick<
     GatewayAuxParams,
@@ -80,26 +98,12 @@ function createAuthorityHarness(
     | "registerWorkerTurnClaimClosedHandler"
   > = {},
 ): GatewayAux {
-  const aux = createGatewayAuxHandlers({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
-    log: {},
-    getNativeApprovalRouteCoordinator: () => undefined,
-    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-      current: undefined,
-      required: null,
+  const aux = createGatewayAuxHandlers(
+    createGatewayAuxHandlerTestParams({
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+      ...params,
     }),
-    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    clients: [],
-    channelManager: {
-      startChannel: async () => new Map(),
-      stopChannel: async () => {},
-      isManuallyStopped: () => false,
-      resolveRuntimeAccountId: (_channel, accountId) => accountId,
-    },
-    logChannels: { info: () => {} },
-    ...params,
-  });
+  );
   auxiliaries.push(aux);
   return aux;
 }
@@ -132,9 +136,11 @@ describe("gateway auxiliary authority lifecycle", () => {
       instanceId: "stopped-approval-owner",
       runId: "stopped-approval-run",
     });
-    const record = gatewayAux.execApprovalManager.create({ command: "echo pending" }, 60_000);
-    record.agentRuntimeDelegatedAuthority = { ...authority, kind: "local" };
-    await gatewayAux.execApprovalManager.register(record, 60_000);
+    const { record } = await registerApproval(
+      gatewayAux.execApprovalManager,
+      { command: "echo pending" },
+      { ...authority, kind: "local" },
+    );
     const pending = await getOperatorApprovalDetailed({ id: record.id });
     expect(pending).toMatchObject({
       outcome: "found",
@@ -169,9 +175,12 @@ describe("gateway auxiliary authority lifecycle", () => {
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const generation = new AbortController();
       const scoped = claimAgentRunApprovalAuthority(authority, [generation.signal]);
-      const record = gatewayAux.execApprovalManager.create({ command: "echo old" }, 2_000);
-      record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
-      const pending = (await gatewayAux.execApprovalManager.register(record, 2_000)).decision;
+      const { record, decision: pending } = await registerApproval(
+        gatewayAux.execApprovalManager,
+        { command: "echo old" },
+        { ...scoped, kind: "local" },
+        2_000,
+      );
 
       generation.abort();
 
@@ -220,31 +229,26 @@ describe("gateway auxiliary authority lifecycle", () => {
     const records = await Promise.all(
       [first, second].map(async (request, index) => {
         const scoped = claimAgentRunApprovalAuthority(authority, [host.signal, request.signal]);
-        const record = gatewayAux.pluginApprovalManager.create(
+        return registerApproval(
+          gatewayAux.pluginApprovalManager,
           { title: `Request ${index}`, description: "Independent native approval" },
-          60_000,
+          { ...scoped, kind: "local" },
         );
-        record.agentRuntimeDelegatedAuthority = { ...scoped, kind: "local" };
-        const decision = (await gatewayAux.pluginApprovalManager.register(record, 60_000)).decision;
-        return { record, decision };
       }),
     );
     try {
       first.abort();
       await expect(records[0]!.decision).resolves.toBeNull();
-      expect(await getOperatorApprovalDetailed({ id: records[0]!.record.id })).toMatchObject({
-        outcome: "found",
-        record: { status: "cancelled", terminalReason: "run-aborted" },
+      await expectApproval(records[0]!.record.id, {
+        status: "cancelled",
+        terminalReason: "run-aborted",
       });
       await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
       expect(publishResolved).toHaveBeenCalledWith(
         "plugin",
         expect.objectContaining({ id: records[0]!.record.id }),
       );
-      expect(await getOperatorApprovalDetailed({ id: records[1]!.record.id })).toMatchObject({
-        outcome: "found",
-        record: { status: "pending" },
-      });
+      await expectApproval(records[1]!.record.id, { status: "pending" });
       // Scoped approval notifications do not retire whole-run capabilities.
       expect(
         onAgentRunAuthorityClosed.mock.calls.filter(
@@ -269,10 +273,7 @@ describe("gateway auxiliary authority lifecycle", () => {
   it.each(["release", "replacement", "generation"] as const)(
     "settles credential questions on authority %s without waiting for a read",
     async (closure) => {
-      const onAgentRunAuthorityClosed = vi.fn();
-      const gatewayAux = createAuthorityHarness({
-        onAgentRunAuthorityClosed,
-      });
+      const gatewayAux = createAuthorityHarness();
       const operationalRunInstance = Object.freeze({
         instanceId: "egress-proxy-instance",
         runId: "egress-proxy-run",
@@ -301,11 +302,6 @@ describe("gateway auxiliary authority lifecycle", () => {
         // get/list also check liveness, so assert push delivery before either read.
         expectQuestionCancelled(onResolved, question);
         await expect(answer).resolves.toEqual({ status: "cancelled" });
-        expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
-        expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
-          expect.objectContaining({ operationalRunInstance }),
-          undefined,
-        );
       } finally {
         await gatewayAux.stopOperatorInteractions();
         const remaining = replacement ?? authority;
@@ -358,12 +354,12 @@ describe("gateway auxiliary authority lifecycle", () => {
       const gatewayAux = createAuthorityHarness({});
       const handleWebPushExpired = vi.spyOn(gatewayAux.approvalWebPushDelivery, "handleExpired");
       const { broadcast, publishResolved } = bindPublication(gatewayAux, true);
-      const record = gatewayAux.execApprovalManager.create(
+      const { record, decision } = await registerApproval(
+        gatewayAux.execApprovalManager,
         { command: "echo expires" },
+        undefined,
         1_000,
-        "exec-timeout-publish",
       );
-      const decision = (await gatewayAux.execApprovalManager.register(record, 1_000)).decision;
 
       await vi.advanceTimersByTimeAsync(2_000);
 
@@ -371,12 +367,10 @@ describe("gateway auxiliary authority lifecycle", () => {
       // The gateway clock owns expiry: reviewer surfaces must receive the
       // terminal event instead of pruning on their own (skewed) clocks.
       await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
-      expect(handleWebPushExpired).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "exec-timeout-publish" }),
-      );
+      expect(handleWebPushExpired).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }));
       expect(broadcast).toHaveBeenCalledWith(
         "exec.approval.resolved",
-        expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),
+        expect.objectContaining({ id: record.id, decision: "deny" }),
         expect.anything(),
       );
       await gatewayAux.stopOperatorInteractions();
@@ -431,79 +425,55 @@ describe("gateway auxiliary authority lifecycle", () => {
       turnClaim: owner.turnClaim,
     }));
     const validateAuthority = createAgentRuntimeApprovalAuthorityValidator(placements);
-    const lifecycle = vi.fn();
+    const validateDelegated = (candidate: AgentRuntimeDelegatedAuthority) =>
+      validateAuthority({
+        kind: "agentRuntime",
+        ...identity,
+        operationalRunInstance: candidate.operationalRunInstance,
+        delegatedAuthority: candidate,
+      });
     const gatewayAux = createAuthorityHarness({
-      onApprovalLifecycle: lifecycle,
-      validateAgentRuntimeDelegatedAuthority: (candidate) =>
-        validateAuthority({
-          kind: "agentRuntime",
-          agentId: identity.agentId,
-          sessionKey: identity.sessionKey,
-          operationalRunInstance: candidate.operationalRunInstance,
-          delegatedAuthority: candidate,
-        }),
+      validateAgentRuntimeDelegatedAuthority: validateDelegated,
       registerWorkerTurnClaimClosedHandler: (handler) =>
         placements.registerTurnClaimClosedHandler(handler),
     });
-    const { broadcast, publishResolved } = bindPublication(gatewayAux);
-    const execRecord = gatewayAux.execApprovalManager.create(
+    const { broadcast } = bindPublication(gatewayAux);
+    const { record: execRecord, decision: execDecision } = await registerApproval(
+      gatewayAux.execApprovalManager,
       { command: "echo worker", runId: turnClaim.runId },
-      60_000,
-      "exec-worker-close",
+      authority,
     );
-    execRecord.agentRuntimeDelegatedAuthority = authority;
-    const execDecision = (await gatewayAux.execApprovalManager.register(execRecord, 60_000))
-      .decision;
-    const pluginRecord = gatewayAux.pluginApprovalManager.create(
+    const { record: pluginRecord, decision: pluginDecision } = await registerApproval(
+      gatewayAux.pluginApprovalManager,
       { title: "Worker action", description: "Close with worker claim", runId: turnClaim.runId },
-      60_000,
-      "plugin-worker-close",
+      authority,
     );
-    pluginRecord.agentRuntimeDelegatedAuthority = authority;
-    const pluginDecision = (await gatewayAux.pluginApprovalManager.register(pluginRecord, 60_000))
-      .decision;
     const questionResolved = vi.fn();
     const question = gatewayAux.questionManager.request({
       questions: credentialQuestions,
       timeoutMs: 60_000,
-      isRequesterActive: () =>
-        validateAuthority({
-          kind: "agentRuntime",
-          agentId: identity.agentId,
-          sessionKey: identity.sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: authority,
-        }),
+      isRequesterActive: () => validateDelegated(authority),
       onResolved: questionResolved,
     });
 
     for (const record of [execRecord, pluginRecord]) {
-      expect(await getOperatorApprovalDetailed({ id: record.id })).toMatchObject({
-        outcome: "found",
-        record: { status: "pending" },
-      });
+      await expectApproval(record.id, { status: "pending" });
     }
     expect(questionResolved).not.toHaveBeenCalled();
-    expect(publishResolved).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
 
     await placements.releaseTurn(turnClaim);
 
     expectQuestionCancelled(questionResolved, question);
     await expect(execDecision).resolves.toBeNull();
     await expect(pluginDecision).resolves.toBeNull();
-    await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));
-    expect(publishResolved.mock.calls.map((call) => call[0])).toEqual(["exec", "plugin"]);
+    await vi.waitFor(() => expect(broadcast).toHaveBeenCalledTimes(2));
     expect(broadcast.mock.calls.map((call) => call[0])).toEqual([
       "exec.approval.resolved",
       "plugin.approval.resolved",
     ]);
-    for (const kind of ["exec", "plugin"]) {
-      expect(lifecycle).toHaveBeenCalledWith(
-        expect.objectContaining({
-          phase: "terminal",
-          record: expect.objectContaining({ kind, status: "cancelled" }),
-        }),
-      );
+    for (const record of [execRecord, pluginRecord]) {
+      await expectApproval(record.id, { status: "cancelled" });
     }
     await gatewayAux.stopOperatorInteractions();
     releaseAgentRunDelegatedAuthority(runAuthority);

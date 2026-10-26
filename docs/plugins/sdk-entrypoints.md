@@ -255,7 +255,9 @@ Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
 The paired-node file-transfer adapter also connects Skill discovery, resource reads,
 watching and dependency installation through `workspace.skills`. Its native worker
 launcher uses `resolveWorkspaceWorkerArgv("memory" | "skills")` from
-`agent-workspace-runtime`, then appends the operation arguments. Use the same
+`agent-workspace-runtime`, then appends the operation arguments. Worker-thread
+callers use `resolveWorkspaceWorkerUrl` and `resolveWorkspaceWorkerExecArgv` from
+the same owner to keep the declared target separate from loader flags. Use the same
 OpenClaw version on Gateway and node.
 
 This adapter does not implement remote Skill source install/update/remove or
@@ -379,3 +381,37 @@ plugin transport effects and disclosure; pass its assertion into the plugin's
 database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
+
+## OpenAI-compatible Decisions runtime
+
+`openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
+Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+only from a lazy decision runtime, not a plugin's eager entrypoint.
+
+`evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
+V2 context and a provider-owned `{ provider, baseUrl, modelId? }` route. The
+base URL is the API prefix before `/decisions`; an optional upstream model ID
+changes only the wire model, preserving the prepared model's transport binding.
+The helper uses the prepared credential, headers, proxy/TLS policy, abort signal,
+deadline, and live admission assertion. It never discovers credentials or
+constructs conversation history. Consumers own endpoint eligibility and any
+account-specific route grant before calling it.
+
+`supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
+question bounds, and automatic reasoning before transport/discovery. Malformed
+caller contracts throw; structurally valid requests outside protocol support or
+bounds return `false`. Results preserve Boolean/choice/score distributions, token usage, and
+per-question refusals; invalid or credential-reflecting responses fail closed.
+
+The lightweight `decisions` subpath exports
+`ModelInferenceCapabilitiesSchema` for provider-owned catalog augmentation using
+the canonical capability schema rather than a competing normalizer. Static
+capability declarations do not confer account entitlement.
+
+## Runtime request headers
+
+`openclaw/plugin-sdk/provider-request-headers` exports the `ModelRequestHeaders`
+type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
+markers; preserve them through header merges and OpenAI SDK calls. Use the helper
+after the final merge when a direct HTTP client needs a string-only header map.
+This entrypoint loads no provider policy, transport host, or credential runtime.

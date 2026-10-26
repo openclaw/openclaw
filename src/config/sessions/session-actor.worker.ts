@@ -10,17 +10,18 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import {
+  assertTransactionUsable,
+  runSqliteImmediateTransactionSync,
+} from "../../infra/sqlite-transaction.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
 import {
-  deferCapturedSqliteWorkerCommitReceipt,
-  deferSqliteWorkerCommitReceipt,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import { captureSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-settlement.js";
-import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
+  captureSessionRowChanges,
+  type SessionRowChange,
+} from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
@@ -29,6 +30,7 @@ import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-sna
 import { projectSessionActorAuthority } from "./session-actor-command.js";
 import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
+  SessionActorAuthorityFacts,
   SessionActorOperations,
   SessionActorOutcome,
   SessionActorPhase,
@@ -47,9 +49,14 @@ import {
 import { replaceSessionActorParticipants } from "./session-actor-participants.js";
 import {
   applySessionActorPhase,
+  applyPreparedSessionActorAdoption,
+  deferSessionActorOutcome,
   SessionActorStaleStateError,
 } from "./session-actor-phase.worker.js";
-import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
+import {
+  createSessionActorCommittedOutcome,
+  projectSessionActorCommittedOutcome,
+} from "./session-actor-receipt.js";
 import { createSessionActorResidency } from "./session-actor-residency.worker.js";
 import {
   forkSessionActorStoredState,
@@ -58,6 +65,7 @@ import {
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
 import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-transcript-publication.worker.js";
+import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
@@ -273,7 +281,10 @@ export function createSessionActorWorker(
       }
       working.hot.writeToken = pendingToken;
       if (stageResidentState(database, working)) {
-        publication.actorPostimages = new Map([[sessionKey, structuredClone(working.hot)]]);
+        // The synchronous transfer shares the publication's canonical entry, including snapshots.
+        publication.actorPostimages = new Map([
+          [sessionKey, { ...working.hot, entry: postimage.entry }],
+        ]);
       }
     };
     return {
@@ -454,13 +465,26 @@ export function createSessionActorWorker(
         }
         const payloadBytes = transcriptPayloadBytes(command);
         const diagnosticContext: Record<string, number | boolean | undefined> = { payloadBytes };
-        const apply = (opened: OpenClawAgentDatabase) => {
+        const apply = (opened: OpenClawAgentDatabase): { kind: "committed" } => {
           database = opened;
           registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
           registerParticipantOwner(opened);
           registerTranscriptRewriteOwner(opened);
-          const admit = (stage: "transaction" | "commit", publication: unknown) => {
-            withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
+          if (
+            !opened.db.isTransaction &&
+            (!retainedState(opened, target.sessionKey) ||
+              !residents.get(target.sessionKey)?.transcript.contextStats)
+          ) {
+            return runSqliteImmediateTransactionSync(opened.db, () => apply(opened));
+          }
+          const admit: AgentWorkerOperationContext["admit"] = (
+            stage,
+            publication,
+            transferList,
+          ) => {
+            withoutSqliteDatabaseWriteScope(opened.db, () =>
+              context.admit(stage, publication, transferList),
+            );
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
@@ -472,13 +496,17 @@ export function createSessionActorWorker(
           };
           const resident = residents.get(target.sessionKey);
           const before = read(opened, target);
+          const entryReference =
+            command.input.entryReference === before.hot.writeToken ? before.hot : undefined;
+          const projectAuthority = (state: SessionActorAuthorityFacts) =>
+            projectSessionActorAuthority(state, entryReference);
           recordPhase("actorReadMs");
           diagnosticContext.actorResident = before === resident;
           diagnosticContext.actorTranscriptEvents = before.transcript.identities.size;
           diagnosticContext.actorActiveEvents = before.transcript.active.size;
           admit("transaction", {
             kind: "session-actor-admission",
-            snapshot: projectSessionActorAuthority(before.hot),
+            snapshot: projectAuthority(before.hot),
           });
           if (
             command.input.expected !== undefined &&
@@ -505,7 +533,7 @@ export function createSessionActorWorker(
               }
               return operation(opened);
             },
-            admit(stage, publication) {
+            admit(stage, publication, transferList) {
               if (stage === "commit") {
                 commitPublication = publication;
                 // An append shares this transaction and message owner. Its final
@@ -514,49 +542,59 @@ export function createSessionActorWorker(
                   return;
                 }
               }
-              admit(stage, {
-                kind: "session-actor-admission",
-                snapshot: projectSessionActorAuthority(working.hot),
-                publication,
-              });
+              admit(
+                stage,
+                {
+                  kind: "session-actor-admission",
+                  snapshot: projectAuthority(working.hot),
+                  publication,
+                },
+                transferList,
+              );
             },
           };
-          return withSessionActorTransactionState(opened, working, () => {
-            phaseStarted = performance.now();
-            const applied = applySessionActorPhase(command, working, borrowed);
-            recordPhase("actorApplyMs");
+          const finish = (
+            state: SessionActorStoredState,
+            changes: {
+              result: ReturnType<typeof applySessionActorPhase>;
+              changes: readonly SessionRowChange[];
+            },
+            requiresTransaction?: Error,
+          ): { kind: "committed" } => {
+            const applied = changes.result;
             const { value } = applied;
-            working.hot.version = {
+            state.hot.version = {
               epoch: before.hot.version.epoch,
               sequence: before.hot.version.sequence + 1,
             };
-            initializeSessionActorContextStats(opened, working);
-            working.hot = projectSessionActorHotState(working);
+            initializeSessionActorContextStats(opened, state);
+            state.hot = projectSessionActorHotState(state);
             recordPhase("actorProjectionMs");
             const pendingToken = readSqliteDatabasePendingScopedWriteToken(
               opened.db,
-              scopes(target, working.hot.dependencySessionIds),
+              scopes(target, state.hot.dependencySessionIds),
             );
             if (pendingToken === undefined) {
               throw new Error("Session actor lost its native writer revision");
             }
-            working.hot.writeToken = pendingToken;
+            state.hot.writeToken = pendingToken;
             const accepted = createSessionActorCommittedOutcome({
               // SAFETY: The read command returned before entering this write transaction.
               phase: phase as SessionActorPhase,
               command: command.input,
               before: before.hot,
-              after: working.hot,
-              payloads: working.transcript.payloads,
+              after: state.hot,
+              payloads: state.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
               conversationPublication: readStagedConversationPublications(opened),
+              entryMetadata: captureSessionEntryMetadataReceipts(changes.changes),
               applied,
             });
             if (
               !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
                 commit() {
                   committed = true;
-                  residents.remember(working);
+                  residents.remember(state);
                 },
                 invalidate() {
                   residents.drop(target.sessionKey);
@@ -571,66 +609,38 @@ export function createSessionActorWorker(
                 : value && "turn" in value
                   ? value.turn
                   : undefined;
-            const captured = captureSqliteWorkerCommitReceipt(accepted);
-            diagnosticContext.actorReceiptBytes =
-              captured.kind === "inline" ? captured.payloadBytes : captured.serialized.byteLength;
-            if (captured.kind === "oversized") {
-              const transfer = createSqliteWorkerTransferOwner();
-              const handle = transfer.start(
-                [{ kind: "outcome", serialized: captured.serialized }].values(),
-                { kinds: ["outcome"] },
-              );
-              try {
-                let frame = transfer.next(handle.id);
-                let finalFrames;
-                for (;;) {
-                  const next = transfer.next(handle.id);
-                  if (next.done) {
-                    finalFrames = [frame, next];
-                    break;
-                  }
-                  admit("transaction", {
-                    kind: "session-actor-admission",
-                    snapshot: projectSessionActorAuthority(working.hot),
-                    publication: {
-                      kind: "session-actor-outcome",
-                      transfer: { handle, frames: [frame] },
-                    },
-                  });
-                  frame = next;
-                }
-                const receipt = {
-                  kind: "session-actor-committed-transfer" as const,
-                  transferId: handle.id,
-                };
-                deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(opened.db), receipt);
-                recordPhase("actorReceiptMs");
-                admit("commit", {
-                  kind: "session-actor-admission",
-                  snapshot: projectSessionActorAuthority(working.hot),
-                  publication: {
-                    kind: "session-actor-outcome",
-                    transfer: { handle, frames: finalFrames },
-                    publication: turn ?? commitPublication,
-                  },
-                  conversationPublication: accepted.receipt.conversationPublication,
-                  final: true,
-                });
-                return { kind: "committed" as const };
-              } finally {
-                transfer.cancel();
-              }
-            }
-            deferCapturedSqliteWorkerCommitReceipt(sqlPublicationAnchor(opened.db), captured);
-            recordPhase("actorReceiptMs");
-            admit("commit", {
-              kind: "session-actor-admission",
-              snapshot: projectSessionActorAuthority(working.hot),
+            deferSessionActorOutcome({
+              database: opened,
+              outcome: projectSessionActorCommittedOutcome(accepted, entryReference),
+              state,
+              projectAuthority,
               publication: turn ?? commitPublication,
-              conversationPublication: accepted.receipt.conversationPublication,
-              final: true,
+              admit,
+              diagnosticContext,
+              recordReceipt: () => recordPhase("actorReceiptMs"),
+              requiresTransaction,
             });
             return { kind: "committed" as const };
+          };
+          if (opened.db.isTransaction) {
+            return withSessionActorTransactionState(opened, working, () => {
+              phaseStarted = performance.now();
+              const changes = captureSessionRowChanges(opened.db, () =>
+                applySessionActorPhase(command, working, borrowed),
+              );
+              recordPhase("actorApplyMs");
+              return finish(working, changes);
+            });
+          }
+          return applyPreparedSessionActorAdoption({
+            database: opened,
+            before,
+            working,
+            command,
+            context: borrowed,
+            writeScopes: scopes(target, working.hot.dependencySessionIds),
+            recordApplied: () => recordPhase("actorApplyMs"),
+            finish,
           });
         };
         const outcome = context.writeTransaction(
@@ -638,6 +648,7 @@ export function createSessionActorWorker(
           "Session actor",
           apply,
           diagnosticContext,
+          command.type === "session.actor.adoptRun" && !command.input.turn,
         );
         observed.settled(outcome.kind);
         return outcome;

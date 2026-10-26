@@ -13,7 +13,6 @@ import { captureSessionActorStorageOwner } from "../config/sessions/session-acto
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { resolveSessionTitleSource } from "../sessions/session-title-source.js";
@@ -25,7 +24,6 @@ import type { SessionTitleFields } from "./session-utils.types.js";
 
 type SessionTitleReadOptions = {
   includeInterSession?: boolean;
-  readOnly?: boolean;
   skillCommands?: SkillCommandSpec[];
 };
 
@@ -60,7 +58,6 @@ function readSqliteTitleProbeRange(
   totalMessages: number,
   start: number,
   endExclusive: number,
-  readOnly?: boolean,
 ): SessionTranscriptMessageEvent[] {
   const end = Math.min(totalMessages, endExclusive);
   const boundedStart = Math.min(Math.max(0, start), end);
@@ -71,7 +68,7 @@ function readSqliteTitleProbeRange(
     maxMessages: end - boundedStart,
     offset: boundedStart,
     offsetFrom: "start",
-    ...(readOnly ? { readOnly } : {}),
+    readOnly: true,
   }).events;
 }
 
@@ -112,13 +109,12 @@ function readSqliteTitleTailProbe(
   scope: SessionTranscriptReadScope,
   maxMessages: number,
   offset: number,
-  readOnly?: boolean,
 ) {
   const page = readSessionTranscriptBoundedMessageTailPage(scope, {
     maxMessages,
     maxBytes: SQLITE_TITLE_TAIL_PROBE_MAX_BYTES,
     offset,
-    ...(readOnly ? { readOnly } : {}),
+    readOnly: true,
   });
   const newest = page.newestContiguousEventCount
     ? page.events.slice(-page.newestContiguousEventCount)
@@ -131,7 +127,7 @@ function readSqliteTitleTailProbe(
       readSessionTranscriptMessageEventPage(scope, {
         maxMessages,
         offset,
-        ...(readOnly ? { readOnly } : {}),
+        readOnly: true,
       }).events,
     );
   }
@@ -180,7 +176,7 @@ export function readSessionTitleFieldsFromTranscript(
         : key
           ? memory.owner?.readStorage(key, command, memory.authority)
           : undefined;
-    return result?.fields ?? { ...EMPTY_SESSION_TITLE_FIELDS };
+    return result?.fields ?? EMPTY_SESSION_TITLE_FIELDS;
   }
   const target =
     read?.target ?? resolveSessionTranscriptReadTargetCore(input, resolveSessionStorePathForScope);
@@ -189,7 +185,7 @@ export function readSessionTitleFieldsFromTranscript(
     const cacheKey = `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
     const watermark = readSessionTranscriptWatermark(scope);
     if (watermark.maxSeq === null) {
-      return { ...EMPTY_SESSION_TITLE_FIELDS };
+      return EMPTY_SESSION_TITLE_FIELDS;
     }
     const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
     // Command metadata belongs to this naming attempt, not the stable list cache.
@@ -219,14 +215,13 @@ export function readSessionTitleFieldsFromTranscript(
           maxSeq: cached.maxSeq,
           boundarySeq: cached.boundarySeq,
         }
-      : readSqliteTitleTailProbe(scope, SQLITE_TITLE_PROBE_INITIAL_MESSAGES, 0, opts?.readOnly);
+      : readSqliteTitleTailProbe(scope, SQLITE_TITLE_PROBE_INITIAL_MESSAGES, 0);
     let lastText = tail.text;
     if (!current && !lastText && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
       lastText = readSqliteTitleTailProbe(
         scope,
         SQLITE_TITLE_PROBE_MAX_MESSAGES - SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
         SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
-        opts?.readOnly,
       ).text;
     }
     const firstUserMessages =
@@ -241,13 +236,7 @@ export function readSessionTitleFieldsFromTranscript(
       const end = Math.min(tail.totalMessages, limit);
       if (!firstText && scannedMessages < end) {
         firstText = findFirstTitleUserText(
-          readSqliteTitleProbeRange(
-            scope,
-            tail.totalMessages,
-            scannedMessages,
-            end,
-            opts?.readOnly,
-          ),
+          readSqliteTitleProbeRange(scope, tail.totalMessages, scannedMessages, end),
           opts?.includeInterSession === true,
           opts?.skillCommands,
         );
@@ -270,20 +259,13 @@ export function readSessionTitleFieldsFromTranscript(
         lastMessagePreview: fields.lastMessagePreview,
       });
     }
-    return { ...fields };
+    return fields;
   } catch (error) {
-    if (opts?.readOnly && isSessionTranscriptProjectionUnavailableError(error)) {
-      // A read worker returns this to the host that owns projection reconciliation.
-      throw error;
-    }
-    if (
-      !isSessionTranscriptProjectionUnavailableError(error) &&
-      !(error instanceof SessionTranscriptColdError)
-    ) {
+    if (!(error instanceof SessionTranscriptColdError)) {
       throw error;
     }
     // Optional titles must not restore cold payloads. Do not cache nulls under the preserved
     // watermark: restoration and projection reconciliation can make these fields available again.
-    return { ...EMPTY_SESSION_TITLE_FIELDS };
+    return EMPTY_SESSION_TITLE_FIELDS;
   }
 }

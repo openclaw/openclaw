@@ -1,4 +1,3 @@
-// Invalid plugin config tests cover doctor diagnostics for malformed plugin configuration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
@@ -21,21 +20,24 @@ const [{ maybeRepairInvalidPluginConfig }, { migrateLegacyConfig }] = await Prom
   import("./legacy-config-migrate.js"),
 ]);
 
-describe("doctor invalid plugin config repair", () => {
-  beforeEach(() => {
-    validationMocks.validateConfigObjectWithPlugins.mockReset();
-    validationMocks.findDoctorLegacyConfigIssues.mockReset();
+function invalidConfig(path: string, message: string) {
+  validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
+    ok: false,
+    warnings: [],
+    issues: [{ path, message }],
   });
+}
 
+beforeEach(() => {
+  validationMocks.validateConfigObjectWithPlugins.mockReset();
+  validationMocks.findDoctorLegacyConfigIssues.mockReset();
+});
+
+describe("doctor invalid plugin config repair", () => {
   it.each(["pending", "other"])(
     "preserves only the plugin with a declared %s migration",
     (migrationOwner) => {
-      validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
-        ok: false,
-        issues: [
-          { path: "plugins.entries.pending.config", message: "invalid config: retired root" },
-        ],
-      });
+      invalidConfig("plugins.entries.pending.config", "invalid config: retired root");
       validationMocks.findDoctorLegacyConfigIssues.mockReturnValue([
         { path: `plugins.entries.${migrationOwner}.config.root`, message: "Run doctor --fix" },
       ]);
@@ -51,61 +53,26 @@ describe("doctor invalid plugin config repair", () => {
   );
 
   it("ignores non-plugin validation issues", () => {
-    validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
-      ok: false,
-      warnings: [],
-      issues: [
-        {
-          path: "gateway.mode",
-          message: "Expected 'local' or 'remote'",
-        },
-      ],
-    });
-    const cfg = {
-      gateway: {
-        mode: "invalid",
-      },
-    } as unknown as OpenClawConfig;
+    invalidConfig("gateway.mode", "Expected 'local' or 'remote'");
+    const cfg = { gateway: { mode: "invalid" } } as unknown as OpenClawConfig;
 
     expect(maybeRepairInvalidPluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
-});
-
-describe("legacy migration with invalid plugin config", () => {
-  beforeEach(() => {
-    validationMocks.validateConfigObjectWithPlugins.mockReset();
-  });
-
   it("keeps safe migrations when unrelated plugin validation issues remain (#76798)", () => {
-    validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
-      ok: false,
-      warnings: [],
-      issues: [
-        {
-          path: "plugins.entries.brave.config.webSearch.mode",
-          message: "invalid config: must be equal to one of the allowed values",
-        },
-      ],
-    });
-
+    invalidConfig(
+      "plugins.entries.brave.config.webSearch.mode",
+      "invalid config: must be equal to one of the allowed values",
+    );
+    const model = { primary: "openai/gpt-5.5" };
     const raw = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
+      agents: { defaults: { model: structuredClone(model) } },
       session: { typingMode: "thinking" },
     };
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result).toEqual({
       config: {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            typingMode: "thinking",
-          },
-        },
+        agents: { defaults: { model, typingMode: "thinking" } },
         session: {},
       },
       changes: [

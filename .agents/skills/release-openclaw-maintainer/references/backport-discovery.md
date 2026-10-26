@@ -69,27 +69,27 @@ configuration, plugins, or major channels. Benign titles, dependency bumps,
 missing PRs, and broad batches can conceal operational fixes; they require a
 decision with evidence, not a cursory skip.
 
-For each such production diff, mechanically probe applicability in a temporary
-detached worktree at the pinned baseline before judging it:
+For each such production diff, mechanically probe applicability against the
+pinned baseline before judging it. Repeat `--candidate` to emit one TSV report
+for the batch:
 
 ```bash
-audit_root=$(mktemp -d)
-git worktree add --detach "$audit_root/baseline" "$baseline_sha"
-(
-  cd "$audit_root/baseline"
-  git cherry-pick --no-commit "$candidate_sha"
-  git diff --check
-  git reset --hard HEAD
-)
-git worktree remove --force "$audit_root/baseline"
-rmdir "$audit_root"
+pnpm release:backport-probe -- \
+  --baseline "$baseline_sha" \
+  --candidate "$candidate_sha" > backport-probe.tsv
 ```
 
-Record whether the probe was clean, conflicted, empty/already-covered, or
-failed, along with the exact reason. A clean probe is triage evidence only; it
-does not approve a backport. If the commit needs companions, probe and assess
-the smallest ordered final fix rather than treating each clean commit as an
-independent candidate.
+The helper uses `git merge-tree --write-tree` with the candidate's parent as
+the explicit merge base, so it simulates that single patch without checking out
+or resetting a worktree. The TSV binds the resolved candidate and baseline,
+classification (`clean`, `conflicted`, or `already-covered`), conflict count,
+touched-file count, every touched path, and whether that path conflicts. It
+refuses root and merge commits whose cherry-pick mainline is ambiguous.
+
+Record a failed probe with its exact reason. A clean probe is triage evidence
+only; it does not approve a backport. If the commit needs companions, probe and
+assess the smallest ordered final fix rather than treating each clean commit as
+an independent candidate.
 
 ## Close Selected Contracts Before Qualification
 
@@ -114,6 +114,32 @@ git show <selected-main-sha> -- <consumer-path>
 git show <baseline-sha>:<producer-path>
 git log -p -S '<contract-symbol>' <pinned-main-sha> -- <producer-path>
 ```
+
+Run the bounded companion audit for every selected commit. Repeat `--selected`
+for an ordered group. Before picks, omit `--candidate`; after picks, supply the
+final candidate so the report compares the selected main file set with the
+actual baseline-to-candidate delta.
+
+```bash
+pnpm release:backport-companions -- \
+  --baseline <pinned-maintenance-baseline> \
+  --scan-end <pinned-main-sha> \
+  --selected <selected-main-sha> \
+  --candidate <final-candidate-sha>
+```
+
+Disposition every reported later same-path commit, later mention of the
+selected PR number, existing neighbor test, selected-file reference/registry,
+candidate file-set difference, and candidate content difference. A whole-file
+difference is inspection evidence, not a failure: a release adaptation or the
+final selected companion sequence can differ legitimately. This scan is
+heuristic and never establishes dependency closure or approval: manually trace
+symbols, callers, imports/exports, producers, workflows, registries, generated
+inputs, and differently named or cross-directory tests. Record
+`present-equivalent`, `selected`, `missing`, or `not-applicable` in the
+existing backport ledger. Missing or unverified rows keep the group blocked.
+Do not silence a candidate merely because it is not a dependency, and do not
+automatically cherry-pick it.
 
 Read callers and sibling consumers too. For an IPC-readiness consumer, check
 that the baseline's fixture producer emits the expected receipt and preserves
@@ -152,7 +178,10 @@ substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
 explicitly asks for it in that release. After dispatch, only confirmed release
-blockers qualify, each named in the handoff record.
+blockers qualify, each named in the handoff record, unless the operator explicitly
+reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+That decision invalidates affected evidence; it never authorizes publication of
+untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
 proposed set for maintainer approval. After approval, backport with provenance,

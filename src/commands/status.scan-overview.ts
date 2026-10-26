@@ -27,6 +27,7 @@ import {
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
 export type StatusScanOverviewResult = {
+  recoveryCopies?: import("./recovery-disk-usage.js").RecoveryDiskUsage;
   env?: NodeJS.ProcessEnv;
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
@@ -153,13 +154,14 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
-    : await import("../plugins/channel-plugin-ids.js").then(
-        ({ hasConfiguredChannelsForReadOnlyScope }) =>
-          hasConfiguredChannelsForReadOnlyScope({
-            config: cfg,
-            activationSourceConfig: sourceConfig,
-          }),
-      );
+    : await (async () => {
+        const { hasConfiguredChannelsForReadOnlyScope } =
+          await import("../plugins/channel-plugin-ids.js");
+        return hasConfiguredChannelsForReadOnlyScope({
+          config: cfg,
+          activationSourceConfig: sourceConfig,
+        });
+      })();
   const osSummary = resolveOsSummary();
   let sessionStores: PreparedStatusSessionStores | undefined;
   const bootstrap = await createStatusScanCoreBootstrap<
@@ -184,15 +186,6 @@ export async function collectStatusScanOverview(params: {
           }
         }
       : undefined,
-    getTailnetHostname: async (runner) => {
-      return await import("./status.scan.deps.runtime.js").then(({ getTailnetHostname }) =>
-        getTailnetHostname(runner),
-      );
-    },
-    getUpdateCheckResult: async (updateParams) =>
-      await import("./status.update.js").then(({ getUpdateCheckResult }) =>
-        getUpdateCheckResult(updateParams),
-      ),
     getAgentLocalStatuses: async (bootstrapCfg) =>
       await measureCliCommandStartup(
         "status.local-agents",
@@ -322,6 +315,10 @@ export async function collectStatusScanOverview(params: {
   }
 
   return {
+    recoveryCopies: (await import("./recovery-disk-usage.js")).collectRecoveryDiskUsage({
+      cfg,
+      env,
+    }),
     env,
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,

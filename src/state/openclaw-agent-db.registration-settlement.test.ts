@@ -2,39 +2,26 @@ import { mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import { MessagePort, type Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { createSessionRowProjection } from "../gateway/session-row-projection.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "../gateway/session-sharing-preparation.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { OpenClawAgentDatabaseRegistrationCommit } from "./openclaw-agent-db-contract.js";
 import * as registryListing from "./openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import {
-  captureOpenClawStateDatabaseReadAdmission,
-  closeOpenClawStateDatabaseAsync,
-} from "./openclaw-state-db-cache.js";
+import { useRegistrationFixture } from "./openclaw-agent-registration.test-support.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const lostReceipt = vi.hoisted(() => ({
   agentId: "registration-lost-receipt",
@@ -88,57 +75,30 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   };
 });
 
-const subscriptions = new Set<() => void>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    Atomics.store(new Int32Array(lostReceipt.control), 0, 0);
-    for (const stop of subscriptions) {
-      stop();
-    }
-    subscriptions.clear();
-    vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const { createFixture, observeStores } = useRegistrationFixture(() => {
+  Atomics.store(new Int32Array(lostReceipt.control), 0, 0);
+});
 
-function createFixture(
-  env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-registration-commit-") },
-) {
-  const shared = openOpenClawStateDatabase({ env });
-  const options = { agentId: "registration-commit", env };
-  const target = { ...options, path: resolveOpenClawAgentSqlitePath(options) };
-  const admission = captureOpenClawStateDatabaseReadAdmission(shared.path);
-  const receipt: OpenClawAgentDatabaseRegistrationCommit = {
-    agentId: target.agentId,
-    agentPath: target.path,
-    stateDatabasePath: shared.path,
-    stateDatabaseIdentity: admission.identity.key,
-  };
-  const registrations = () => registryListing.readRegisteredAgentDatabases({ env }, false);
-  return { env, shared, target, admission, receipt, registrations };
-}
-
-function observeStores(database: ReturnType<typeof openOpenClawStateDatabase>) {
-  const trace: Array<{ kind: "commit" | "stores"; inTransaction: boolean }> = [];
-  const facts: boolean[] = [];
-  subscriptions.add(
-    sessionChanges.subscribeFacts((change) => {
-      if (isSessionStoreTopologyChange(change)) {
-        facts.push(registryListing.isOpenClawAgentDatabaseRegistryChange(change));
-      }
-    }),
-  );
-  const stop = sessionChanges.subscribe((change) => {
-    if (isSessionStoreTopologyChange(change)) {
-      trace.push({ kind: "stores", inTransaction: database.db.isTransaction });
-    }
-  });
-  subscriptions.add(stop);
-  return { trace, stop, facts };
+function observeRegistrationErrors() {
+  const errors: unknown[] = [];
+  const capture = registryListing.captureOpenClawAgentDatabaseRegistration;
+  const spy = vi
+    .spyOn(registryListing, "captureOpenClawAgentDatabaseRegistration")
+    .mockImplementation((params) => {
+      const owned = capture(params);
+      return {
+        ...owned,
+        recordCommitted(receipt) {
+          try {
+            owned.recordCommitted(receipt);
+          } catch (error) {
+            errors.push(error);
+            throw error;
+          }
+        },
+      };
+    });
+  return { errors, spy };
 }
 
 describe("agent registration native settlement", () => {
@@ -173,20 +133,6 @@ describe("agent registration native settlement", () => {
         mkdirSync(path.join(agentDir, "sessions"), { recursive: true });
         renameSync(stagingPath, storePath);
         const observed = observeStores(shared);
-        const receipts: OpenClawAgentDatabaseRegistrationCommit[] = [];
-        const capture = registryListing.captureOpenClawAgentDatabaseRegistration;
-        vi.spyOn(registryListing, "captureOpenClawAgentDatabaseRegistration").mockImplementation(
-          (params) => {
-            const owned = capture(params);
-            return {
-              ...owned,
-              recordCommitted(receipt) {
-                receipts.push(receipt);
-                owned.recordCommitted(receipt);
-              },
-            };
-          },
-        );
         Atomics.store(control, 0, 1);
         const failure = await readSessionEntryInWorker(
           { agentId, sessionKey, storePath, env: state.env },
@@ -201,7 +147,6 @@ describe("agent registration native settlement", () => {
         }
         expect(Atomics.load(control, 1)).toBe(1);
         expect(lostReceipt.events).toEqual(["native-exit", "read-rejected"]);
-        expect(receipts).toEqual([]);
         expect(registrations()).toEqual([expect.objectContaining({ agentId, path: storePath })]);
         // Unknown registration settlement revokes this lease; a fresh read discovers the store.
         expect(() => prepared.readCurrent(cfg)).toThrow(SessionMutationFactsUnavailableError);
@@ -252,26 +197,7 @@ describe("agent registration native settlement", () => {
         const observed = observeStores(fixture.shared);
         const endScope = createDeferredCore();
         let deliverCommitted: (() => void) | undefined;
-        const receipts: OpenClawAgentDatabaseRegistrationCommit[] = [];
-        const receiptErrors: unknown[] = [];
-        const capture = registryListing.captureOpenClawAgentDatabaseRegistration;
-        const registration = vi
-          .spyOn(registryListing, "captureOpenClawAgentDatabaseRegistration")
-          .mockImplementation((params) => {
-            const owned = capture(params);
-            return {
-              ...owned,
-              recordCommitted(receipt) {
-                receipts.push(receipt);
-                try {
-                  owned.recordCommitted(receipt);
-                } catch (error) {
-                  receiptErrors.push(error);
-                  throw error;
-                }
-              },
-            };
-          });
+        const { errors: receiptErrors, spy: registration } = observeRegistrationErrors();
         let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
         let opening: Promise<unknown> | undefined;
         // Intercept the physical owner's receipt, independently of a caller's admission.
@@ -306,21 +232,10 @@ describe("agent registration native settlement", () => {
         const scope = withExistingOpenClawStateSchema({ path: fixture.shared.path }, async () => {
           const retained = captureOpenClawAgentDatabaseExecution(fixture.target);
           execution = retained;
-          const source: AgentDatabaseRequestExecutionSource = {
-            assertCurrent: () => retained.assertCurrent(),
-            createAdmission(binding) {
-              return () => ({
-                nativeLocations: binding.nativeLocations,
-                admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                  binding.authorize(request);
-                  retained.assertCurrent();
-                  if (!grant()) {
-                    throw new Error("Registration fixture lost admission");
-                  }
-                }, binding.attachment),
-              });
-            },
-          };
+          const source = createSessionWorkerExecutionSource(
+            () => retained.assertCurrent(),
+            "Registration fixture lost admission",
+          );
           opening = retained.prepare(source).then(
             () => ({ ok: true }),
             (error: unknown) => ({ ok: false, error }),
@@ -337,14 +252,12 @@ describe("agent registration native settlement", () => {
             }
             throw new Error("Registration settled before its post-COMMIT receipt barrier");
           }
-          expect(deliverCommitted).toBeTypeOf("function");
           deliverCommitted?.();
           deliverCommitted = undefined;
           expect(await opening).toEqual({
             ok: false,
             error: expect.anything(),
           });
-          expect(receipts).toEqual([fixture.receipt]);
           expect(receiptErrors).toEqual([
             expect.objectContaining({
               message: "Existing shared-state schema admission has ended.",

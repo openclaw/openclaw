@@ -1,92 +1,59 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import { registerVaultCommands } from "./cli.js";
 
-type VaultPlan = {
-  providerUpserts: Record<string, unknown>;
-  targets: Array<Record<string, unknown>>;
-};
-
-function captureStdout() {
+async function runVault(args: string[], config: OpenClawConfig = {}): Promise<string> {
   let output = "";
   const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     output += String(chunk);
     return true;
   }) as typeof process.stdout.write);
-  return {
-    output: () => output,
-    restore: () => writeSpy.mockRestore(),
-  };
-}
-
-function createProgram(config: Record<string, unknown> = {}): Command {
-  const program = new Command();
-  program.exitOverride();
-  registerVaultCommands({ program, config: config as never });
-  return program;
-}
-
-async function createSetupPlan(args: string[]): Promise<VaultPlan> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-cli-"));
-  const planPath = path.join(dir, "plan.json");
   try {
+    const program = new Command().exitOverride();
+    registerVaultCommands({ program, config });
+    await program.parseAsync(["vault", ...args], { from: "user" });
+    return output;
+  } finally {
+    writeSpy.mockRestore();
+  }
+}
+
+function runSetup(planPath: string, args: string[]) {
+  return runVault(["setup", "--plan-out", planPath, ...args]);
+}
+
+async function createSetupPlan(args: string[]): Promise<{ targets: Record<string, unknown>[] }> {
+  return await withTempDir("openclaw-vault-cli-", async (dir) => {
+    const planPath = path.join(dir, "plan.json");
     await runSetup(planPath, args);
-    return JSON.parse(await fs.readFile(planPath, "utf8")) as VaultPlan;
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+    return JSON.parse(await fs.readFile(planPath, "utf8"));
+  });
 }
 
-async function runSetup(planPath: string, args: string[]): Promise<string> {
-  const stdout = captureStdout();
-  try {
-    await createProgram().parseAsync(["vault", "setup", "--plan-out", planPath, ...args], {
-      from: "user",
-    });
-    return stdout.output();
-  } finally {
-    stdout.restore();
-  }
+async function runStatus(config: OpenClawConfig, args: string[] = []) {
+  const output = await runVault(["status", "--json", ...args], config);
+  return JSON.parse(output) as Record<string, unknown>;
 }
-
-async function runStatus(
-  config: Record<string, unknown>,
-  args: string[] = [],
-): Promise<Record<string, unknown>> {
-  const stdout = captureStdout();
-  try {
-    await createProgram(config).parseAsync(["vault", "status", "--json", ...args], {
-      from: "user",
-    });
-    return JSON.parse(stdout.output()) as Record<string, unknown>;
-  } finally {
-    stdout.restore();
-  }
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe("vault CLI setup plan", () => {
   const setupArgs = ["--openai-id", "providers/openai/apiKey"];
 
-  it.skipIf(process.platform === "win32").each([0o755])(
-    "creates private plans in a %o directory without overwriting files or following symlinks",
-    async (directoryMode) => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-plan-security-"));
-      const privatePath = path.join(dir, "private.json");
-      const existingPath = path.join(dir, "existing.json");
-      const targetPath = path.join(dir, "target.json");
-      const symlinkPath = path.join(dir, "symlink.json");
-      try {
-        await fs.chmod(dir, directoryMode);
+  it.skipIf(process.platform === "win32")(
+    "creates private plans in a readable directory without overwriting files or following symlinks",
+    async () => {
+      await withTempDir("openclaw-vault-plan-security-", async (dir) => {
+        const privatePath = path.join(dir, "private.json");
+        const existingPath = path.join(dir, "existing.json");
+        const targetPath = path.join(dir, "target.json");
+        const symlinkPath = path.join(dir, "symlink.json");
+        await fs.chmod(dir, 0o755);
         await runSetup(privatePath, setupArgs);
         expect((await fs.stat(privatePath)).mode & 0o777).toBe(0o600);
-        expect((await fs.stat(dir)).mode & 0o777).toBe(directoryMode);
+        expect((await fs.stat(dir)).mode & 0o777).toBe(0o755);
         await fs.writeFile(existingPath, "keep-me", "utf8");
         await expect(runSetup(existingPath, setupArgs)).rejects.toThrow("Plan path already exists");
         await expect(fs.readFile(existingPath, "utf8")).resolves.toBe("keep-me");
@@ -94,9 +61,7 @@ describe("vault CLI setup plan", () => {
         await fs.symlink(targetPath, symlinkPath);
         await expect(runSetup(symlinkPath, setupArgs)).rejects.toThrow("Plan path already exists");
         await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("keep-me");
-      } finally {
-        await fs.rm(dir, { recursive: true, force: true });
-      }
+      });
     },
   );
 
@@ -124,24 +89,16 @@ describe("vault CLI setup plan", () => {
   });
 });
 
-describe("vault CLI status", () => {
-  it("requires an explicit alias when multiple Vault providers are configured", async () => {
-    const config = {
-      secrets: {
-        providers: Object.fromEntries(
-          ["corp-vault", "prod-vault"].map((alias) => [
-            alias,
-            {
-              source: "exec",
-              pluginIntegration: { pluginId: "vault", integrationId: "vault" },
-            },
-          ]),
-        ),
-      },
-    };
-    await expect(runStatus(config)).rejects.toThrow("Multiple Vault provider aliases");
-    expect((await runStatus(config, ["--provider-alias", "prod-vault"])).providerAlias).toBe(
-      "prod-vault",
-    );
-  });
+it("requires an explicit alias when multiple Vault providers are configured", async () => {
+  const provider = {
+    source: "exec",
+    pluginIntegration: { pluginId: "vault", integrationId: "vault" },
+  } as const;
+  const config = {
+    secrets: { providers: { "corp-vault": provider, "prod-vault": provider } },
+  };
+  await expect(runStatus(config)).rejects.toThrow("Multiple Vault provider aliases");
+  expect((await runStatus(config, ["--provider-alias", "prod-vault"])).providerAlias).toBe(
+    "prod-vault",
+  );
 });

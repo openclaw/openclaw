@@ -12,6 +12,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
+import { isCodexOutputSchemaUnsupported } from "./bounded-turn-output-schema.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
@@ -35,7 +36,6 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
-import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
@@ -68,12 +68,12 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: CodexPluginConfig;
-  clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 
 type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
+  submittedInput: CodexUserInput[];
   model: string;
   nativeSelection: { model: string; modelProvider?: string | null };
   managedHooksEnabled: boolean;
@@ -111,6 +111,7 @@ type CodexBoundedTurnParams = {
   taskLabel: string;
   developerInstructions: string;
   input: CodexUserInput[];
+  outputSchema?: JsonObject;
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
@@ -157,10 +158,15 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   params: CodexBoundedTurnParams,
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
+  timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
-  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, timeoutMs);
-  const deadline = performance.now() + timeoutMs;
+  const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
+  const deadline = timing?.deadline ?? performance.now() + totalTimeoutMs;
+  const timeoutMs = deadline - performance.now();
+  if (timeoutMs <= 0) {
+    throw timeoutError;
+  }
   params.assertCurrent?.();
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
@@ -174,7 +180,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         params.requireNoExternalCapabilities === true,
       )
     : appServer.start;
-  const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
     : { authProfileId: params.profile };
@@ -188,14 +193,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = params.options.clientFactory
-    ? await params.options.clientFactory(clientOptions)
-    : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
-        createIsolatedCodexAppServerClient({
-          ...clientOptions,
-          authProfileStore: params.authProfileStore,
-        }),
-      );
+  const client = await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
+    createIsolatedCodexAppServerClient({
+      ...clientOptions,
+      authProfileStore: params.authProfileStore,
+    }),
+  );
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
@@ -228,6 +231,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
+  let fallbackInput: CodexUserInput[];
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
@@ -338,6 +342,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
                     modelId: modelSelection.model,
                     supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
                   }),
+            ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
           } satisfies CodexTurnStartParams,
           requestOptions,
         ),
@@ -386,6 +391,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       return {
         text,
         items: result.items,
+        submittedInput: params.input,
         usage: result.usage,
         model: modelSelection.id,
         nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
@@ -403,15 +409,32 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    throw codexPrewriteRejectionCause(error);
+    if (!params.outputSchema || !isCodexOutputSchemaUnsupported(error)) {
+      throw codexPrewriteRejectionCause(error);
+    }
+    fallbackInput = [
+      ...params.input,
+      {
+        type: "text",
+        text:
+          "Return one valid JSON value matching this JSON Schema. Do not include markdown or commentary.\n\n" +
+          JSON.stringify(params.outputSchema),
+        text_elements: [],
+      },
+    ];
   } finally {
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
-    if (ownsClient) {
-      await closeCodexStartupClientBestEffort(client);
-    }
+    await closeCodexStartupClientBestEffort(client);
   }
+  // Retry only after the rejected client's cleanup, within the original deadline.
+  return await runBoundedCodexAppServerTurnInWorkspace(
+    { ...params, input: fallbackInput, outputSchema: undefined },
+    appServer,
+    workspace,
+    { deadline, timeoutMs: totalTimeoutMs },
+  );
 }
 
 function resolveBoundedThreadConfig(

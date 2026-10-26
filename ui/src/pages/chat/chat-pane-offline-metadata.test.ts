@@ -14,6 +14,11 @@ import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
 } from "../../test-helpers/gateway-methods.ts";
+import {
+  answerConfirmDialog,
+  createModalDialogTestFixture,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
@@ -21,7 +26,11 @@ import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./components/chat-message.test-support.ts";
-import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
+import {
+  openNativeMenu,
+  renderPaneHeaderInto,
+  selectNativeMenu,
+} from "./components/chat-pane-header.test-support.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -33,6 +42,7 @@ async function setup() {
   store.gateway.start();
   const client = store.current();
   Object.assign(client, { recoveryScope: "offline-owner", recoveryScopeReady: true });
+  let deleted = false;
   let row: GatewaySessionRow = {
     key: "agent:main:current",
     sessionId: "current-incarnation",
@@ -49,9 +59,12 @@ async function setup() {
       case "agents.list":
         return { defaultId: "main", mainKey: "main", agents: [{ id: "main" }] };
       case "sessions.list":
-        return sessionsResult([{ ...row }]);
+        return sessionsResult(deleted ? [] : [{ ...row }]);
       case "sessions.describe":
-        return { session: { ...row } };
+        return { session: deleted ? null : { ...row } };
+      case "sessions.delete":
+        deleted = true;
+        return { ok: true, key: row.key, deleted: true, archived: [] };
       case "sessions.subscribe":
         return { subscribed: true };
       case "sessions.patch":
@@ -87,7 +100,7 @@ async function setup() {
     ]),
     auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: "offline-owner" },
   };
-  client.opts.onHello?.(hello);
+  client.testOptions.onHello?.(hello);
   await store.gateway.loadSelfProfile();
   const sessions = createTestSessionCapability(store.gateway);
   assert(store.gateway.snapshot.client);
@@ -148,8 +161,8 @@ async function setup() {
     draw,
     writes,
     disconnect: () =>
-      client.opts.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
-    reconnect: () => client.opts.onHello?.(hello),
+      client.testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
+    reconnect: () => client.testOptions.onHello?.(hello),
   };
 }
 
@@ -158,25 +171,25 @@ it.each(["identity change", "retirement", "stop"] as const)(
   async (retirement) => {
     const h = await setup();
     h.draw();
-    expect.soft(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect.soft(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect.soft(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
     h.disconnect();
     expect(h.gateway.snapshot.phase).toBe("reconnecting");
     expect(h.gateway.snapshot.hello).not.toBeNull();
     expect(h.sessions.state.result).toBeNull();
     h.draw();
-    expect.soft(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect.soft(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect.soft(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
     if (retirement === "identity change") {
       h.gateway.connect({ token: "synthetic-other-identity" });
     } else if (retirement === "retirement") {
-      Object.assign(h.current(), { offlineRecoveryRetired: true });
+      Object.defineProperty(h.current(), "offlineRecoveryRetired", { value: true });
       h.disconnect();
     } else {
       h.gateway.stop();
     }
     h.draw();
-    expect(h.header.querySelector('button[title="Rename session"]')).toBeNull();
+    expect(h.header.querySelector("button.chat-pane__session-title-button")).toBeNull();
     expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(0);
   },
 );
@@ -236,7 +249,7 @@ it.each(["descriptor", "startup"] as const)(
     expect(h.sessions.presentation.result).toBe(retained);
     h.draw();
     expect(h.header.textContent).toContain("Original title");
-    expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
 
     pendingList.resolve(canonical);
@@ -246,16 +259,58 @@ it.each(["descriptor", "startup"] as const)(
     h.draw();
     expect(h.header.textContent).toContain("Reconnected title");
     expect(selectedChatSessionRow(h.state)?.archived).toBe(true);
-    expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(0);
   },
 );
+
+it("keeps the observed current title when startup precedes a bounded reconnect list", async () => {
+  const h = await setup();
+  const request = h.current().request.getMockImplementation();
+  assert(request);
+  const bounded = sessionsResult([
+    { key: "agent:main:other", kind: "direct", label: "Other session", updatedAt: 2 },
+  ]);
+  bounded.defaults = { modelProvider: "openai", model: "gpt-6.1", contextTokens: 128_000 };
+  h.current().request.mockImplementation((method, params) =>
+    method === "sessions.list" ? Promise.resolve(bounded) : request(method, params),
+  );
+  await h.sessions.refresh({ agentId: "main", force: true });
+  expect(h.sessions.presentation.result?.sessions).toEqual(bounded.sessions);
+  const pendingList = createDeferred<typeof bounded>();
+  onTestFinished(() => pendingList.resolve(bounded));
+  const reconnectList = vi.fn(() => pendingList.promise);
+  h.current().request.mockImplementation((method, params) =>
+    method === "sessions.list" ? reconnectList() : request(method, params),
+  );
+  h.disconnect();
+  h.reconnect();
+  await waitForSolid(() => expect(reconnectList).toHaveBeenCalled());
+  await refreshPageChat(h.state, {
+    historyLoad: loadChatHistory(h.state, { startup: true }),
+    awaitHistory: true,
+    scheduleScroll: false,
+  });
+  expect(h.sessions.presentation.result?.sessions).toEqual(bounded.sessions);
+  expect(h.state.sessionsResult?.defaults).toEqual(bounded.defaults);
+  expect(h.state.sessionsResult?.sessions).toContainEqual(bounded.sessions[0]);
+  expect(selectedChatSessionRow(h.state)?.label).toBe("Original title");
+  h.draw();
+  expect(h.header.textContent).toContain("Original title");
+  pendingList.resolve(bounded);
+  await waitForSolid(() => expect(h.sessions.state.resultCached).toBe(false));
+  expect(h.state.sessionsResult?.defaults).toEqual(bounded.defaults);
+  expect(h.state.sessionsResult?.sessions).toContainEqual(bounded.sessions[0]);
+  expect(selectedChatSessionRow(h.state)?.label).toBe("Original title");
+});
 
 it("queues a header rename and rendered reaction through the shared outbox", async () => {
   const h = await setup();
   h.disconnect();
   h.draw();
-  const rename = h.header.querySelector<HTMLButtonElement>('button[title="Rename session"]');
+  const rename = h.header.querySelector<HTMLButtonElement>(
+    "button.chat-pane__session-title-button",
+  );
   assert(rename);
   rename.click();
   h.draw();
@@ -264,7 +319,7 @@ it("queues a header rename and rendered reaction through the shared outbox", asy
   input.value = "Renamed offline";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(1));
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
   h.draw();
   expect(selectedChatSessionRow(h.state)?.label).toBe("Renamed offline");
   expect(h.header.textContent).toContain("Renamed offline");
@@ -302,4 +357,105 @@ it("queues a header rename and rendered reaction through the shared outbox", asy
     remove: false,
   });
   await waitForSolid(() => expect(selectedChatSessionRow(h.state)?.label).toBe("Renamed offline"));
+});
+
+it("renders enabled Archive and Delete in the reconnecting header menu", async () => {
+  const h = await setup();
+  h.disconnect();
+  h.draw();
+  const menu = h.header.querySelector("openclaw-chat-header-session-menu");
+  assert(menu);
+  await openNativeMenu(menu, "toggle-archived");
+  expect(menu.querySelector<HTMLButtonElement>('[data-value="toggle-archived"]')?.disabled).toBe(
+    false,
+  );
+  await selectNativeMenu(menu, "submenu:advanced");
+  expect(menu.querySelector<HTMLButtonElement>('[data-value="delete"]')?.disabled).toBe(false);
+});
+
+it.each(["toggle-archived", "delete"] as const)(
+  "queues %s from the rendered offline header and updates the open conversation",
+  async (action) => {
+    const h = await setup();
+    const modal = createModalDialogTestFixture();
+    onTestFinished(() => modal.cleanup());
+    h.pane.onSessionDeleted = vi.fn();
+    h.disconnect();
+    h.draw();
+    const menu = h.header.querySelector("openclaw-chat-header-session-menu");
+    assert(menu);
+    if (action === "delete") {
+      await selectNativeMenu(menu, "submenu:advanced");
+    }
+    await selectNativeMenu(menu, action);
+    if (action === "delete") {
+      const dialog = await waitForConfirmDialogActions();
+      expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
+      answerConfirmDialog(dialog, "confirm");
+    }
+    await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(1));
+    if (action === "delete") {
+      expect(h.sessions.presentation.result?.sessions).toHaveLength(0);
+      expect(h.pane.onSessionDeleted).toHaveBeenCalledWith(
+        h.pane.paneId,
+        "agent:main:current",
+        "agent:main:main",
+        true,
+      );
+    } else {
+      expect(h.state.selectedChatSessionArchived).toBe(true);
+    }
+    h.reconnect();
+    if (action === "delete") {
+      await waitForSolid(() =>
+        expect(h.pane.onSessionDeleted).toHaveBeenCalledWith(
+          h.pane.paneId,
+          "agent:main:current",
+          "agent:main:main",
+          false,
+        ),
+      );
+    } else {
+      await waitForSolid(() => expect(h.writes()).toHaveLength(1));
+      expect(h.state.selectedChatSessionArchived).toBe(true);
+    }
+    await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
+  },
+);
+
+it("a queued delete discards and rolls back the open chat's queued reaction and metadata", async () => {
+  const h = await setup();
+  h.disconnect();
+  const onReact = h.pane.render().layout?.primary.chat.onReact;
+  assert(onReact);
+  onReact("message-1", "👍", false);
+  await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(1));
+  await h.sessions.patch(
+    "agent:main:current",
+    { label: "Unsent title" },
+    {
+      agentId: "main",
+      expectedSessionId: "current-incarnation",
+    },
+  );
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  h.draw();
+  expect(h.messages.querySelector(".chat-reaction-chip")).not.toBeNull();
+  await h.sessions.delete("agent:main:current", {
+    agentId: "main",
+    expectedSessionId: "current-incarnation",
+  });
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  h.draw();
+  expect(h.messages.querySelector(".chat-reaction-chip")).toBeNull();
+  // Replacing the delete exposes the rolled-back row, not its abandoned name.
+  await h.sessions.patch(
+    "agent:main:current",
+    { archived: false },
+    {
+      agentId: "main",
+      expectedSessionId: "current-incarnation",
+    },
+  );
+  expect(h.sessions.presentation.result?.sessions[0]?.label).toBe("Original title");
 });

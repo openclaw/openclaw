@@ -13,10 +13,8 @@ const WIDGET_MAX_PER_SCOPE = 32;
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
 type CanvasDocumentCreateInput = {
-  id?: string;
   html: string;
   title?: string;
-  surface?: "assistant_message" | "tool_card" | "sidebar";
   retentionScope?: string;
   /** Serve with a CSP sandbox header so direct opens get an opaque origin. */
   cspSandbox?: "scripts";
@@ -141,7 +139,9 @@ async function pruneCanvasDocumentsForScope(params: {
   );
 }
 
-export function resolveCanvasHttpPathToLocalPath(requestPath: string): string | null {
+export function parseCanvasDocumentHttpPath(
+  requestPath: string,
+): { documentId: string; entrypoint: string } | null {
   const trimmed = requestPath.trim();
   const prefix = `${CANVAS_DOCUMENTS_PATH}/`;
   if (!trimmed.startsWith(prefix)) {
@@ -158,29 +158,27 @@ export function resolveCanvasHttpPathToLocalPath(requestPath: string): string | 
       return null;
     }
     const documentId = normalizeCanvasDocumentId(rawDocumentId);
-    const normalizedEntrypoint = normalizeLogicalPath(entrySegments.join("/"));
-    const documentsDir = resolveCanvasDocumentsDir();
-    const candidatePath = path.resolve(documentsDir, documentId, normalizedEntrypoint);
-    if (!candidatePath.startsWith(`${documentsDir}${path.sep}`)) {
-      return null;
-    }
-    return candidatePath;
+    return { documentId, entrypoint: normalizeLogicalPath(entrySegments.join("/")) };
   } catch {
     return null;
   }
 }
 
+export function resolveCanvasHttpPathToLocalPath(requestPath: string): string | null {
+  const parsed = parseCanvasDocumentHttpPath(requestPath);
+  if (!parsed) {
+    return null;
+  }
+  const documentsDir = resolveCanvasDocumentsDir();
+  const candidatePath = path.resolve(documentsDir, parsed.documentId, parsed.entrypoint);
+  return candidatePath.startsWith(`${documentsDir}${path.sep}`) ? candidatePath : null;
+}
+
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
-  options?: {
-    stateDir?: string;
-  },
 ): Promise<CanvasDocumentManifest> {
-  const id = input.id?.trim()
-    ? normalizeCanvasDocumentId(input.id)
-    : `cv_${randomUUID().replaceAll("-", "")}`;
-  const rootDir = path.join(resolveCanvasDocumentsDir(options?.stateDir), id);
-  await fs.rm(rootDir, { recursive: true, force: true });
+  const id = `cv_${randomUUID().replaceAll("-", "")}`;
+  const rootDir = path.join(resolveCanvasDocumentsDir(), id);
   await fs.mkdir(rootDir, { recursive: true });
   const root = await fsRoot(rootDir);
   await root.write("index.html", input.html);
@@ -188,7 +186,7 @@ export async function createCanvasDocument(
     id,
     kind: "html_bundle",
     ...(input.title?.trim() ? { title: input.title.trim() } : {}),
-    ...(input.surface ? { surface: input.surface } : {}),
+    surface: "assistant_message",
     ...(input.retentionScope ? { retentionScope: input.retentionScope } : {}),
     ...(input.cspSandbox ? { cspSandbox: input.cspSandbox } : {}),
     createdAt: new Date().toISOString(),
@@ -200,7 +198,7 @@ export async function createCanvasDocument(
   if (input.retentionScope) {
     // Bounded transcript widgets cannot grow managed Canvas storage without limit.
     await pruneCanvasDocumentsForScope({
-      documentsDir: resolveCanvasDocumentsDir(options?.stateDir),
+      documentsDir: resolveCanvasDocumentsDir(),
       retentionScope: input.retentionScope,
     });
   }

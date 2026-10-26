@@ -53,7 +53,13 @@ export async function collectProjectCloneShapeHealthFindings(
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
   const warn = (finding: Omit<HealthFinding, "checkId" | "severity">) =>
-    findings.push({ checkId: CHECK_ID, severity: "warning", ...finding });
+    findings.push({
+      checkId: CHECK_ID,
+      severity: "warning",
+      category: "fix-now",
+      docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
+      ...finding,
+    });
   let projects;
   try {
     projects = (await listProjectRegistry(cfg)).filter((project) => project.source === "cloned");
@@ -104,13 +110,15 @@ export async function collectProjectCloneShapeHealthFindings(
           : [`git config --unset-all ${quoteCliArg(key.name)}`];
       warn({
         path: project.repoRoot,
+        category: "recommended",
         message: `Project clone ${project.displayName} (${project.id}): shallow=${shallow}; partial-clone keys: ${keys.map((key) => key.name).join(", ") || "none"}. Full clones are recommended for managed worktrees.`,
         fixHint: [
           "Manual repair only (POSIX shell); stop on any failed step:",
           `cd ${quoteCliArg(project.repoRoot)}`,
           ...keys.filter((key) => key.name.endsWith(".partialclonefilter")).flatMap(unset),
-          `git fetch --refetch${shallow === "true" ? " --unshallow" : ""} origin`,
-          "git rev-list --objects --missing=print --all | grep '^?' | cut -c2- | git fetch origin --no-tags --no-write-fetch-head --recurse-submodules=no --stdin",
+          // Refetch consolidation must not overlap the explicit final repack.
+          `git fetch --no-auto-maintenance --refetch${shallow === "true" ? " --unshallow" : ""} origin`,
+          "git rev-list --objects --missing=print --all | grep '^?' | cut -c2- | git fetch --no-auto-maintenance origin --no-tags --no-write-fetch-head --recurse-submodules=no --stdin",
           ...keys
             .filter(
               (key) => key.name.endsWith(".promisor") || key.name === "extensions.partialclone",

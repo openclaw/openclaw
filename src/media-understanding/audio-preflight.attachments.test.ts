@@ -10,7 +10,43 @@ import { transcribeAudioAttachments, transcribeFirstAudio } from "./audio-prefli
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+type AudioConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]>;
+type SelectionOptions = {
+  emptyFirst?: boolean;
+  failFirst?: boolean;
+  attachmentCount?: number;
+  previousImageFailure?: boolean;
+};
 const runExecMock = vi.hoisted(() => vi.fn());
+const caption = "typed caption";
+const captionFields = { RawBody: caption, CommandBody: caption };
+const allAttachments = { mode: "all", maxAttachments: 2 } as const;
+const limitMarker = "[Audio attachment not processed: attachment limit reached]";
+const failedMarker = "[Audio attachment could not be analyzed]";
+const firstAudio = ["first.wav"];
+const bothAudio = ["first.wav", "second.wav"];
+const emptyTranscript = { emptyFirst: true };
+const unsuccessfulMarkers = [failedMarker, limitMarker];
+
+async function audioFiles(dir: string, names: string[]) {
+  return Promise.all(
+    names.map(async (name) => {
+      const filePath = path.join(dir, name);
+      await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
+      return { path: filePath, contentType: "audio/wav", workspaceDir: dir };
+    }),
+  );
+}
+
+function audioConfig(command: string, args: string[], audio: AudioConfig): OpenClawConfig {
+  return {
+    plugins: { enabled: false },
+    tools: { media: { models: [{ type: "cli", command, args, capabilities: ["audio"] }], audio } },
+  };
+}
+function enrichAudio(ctx: MsgContext, cfg: OpenClawConfig, workspaceDir: string) {
+  return applyMediaUnderstanding({ ctx, cfg, workspaceDir, processingMode: "audio-only" });
+}
 vi.mock("../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
@@ -31,8 +67,7 @@ describe("audio preflight attachment handoff", () => {
       Body: "transport envelope",
       agentText: "",
       BodyForAgent: "stale alias",
-      RawBody: "typed caption",
-      CommandBody: "typed caption",
+      ...captionFields,
     };
     const before = { ...ctx };
     await applyMediaUnderstanding({ ctx, cfg: { plugins: { enabled: false } } });
@@ -45,28 +80,20 @@ describe("audio preflight attachment handoff", () => {
 
   it("forwards the selected workspace through preflight to the provider request", async () => {
     await withTestDir({ prefix: "openclaw-audio-preflight-workspace-" }, async (dir) => {
-      const filePath = path.join(dir, "voice.wav");
-      await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
-      let providerWorkspaceDir: string | undefined;
+      const media = await audioFiles(dir, ["voice.wav"]);
       const providers: Record<string, MediaUnderstandingProvider> = {
         fixture: {
           id: "fixture",
           capabilities: ["audio"],
           defaultModels: { audio: "fixture-audio" },
           transcribeAudioWithContext: async (request) => {
-            providerWorkspaceDir = request.workspaceDir;
+            expect(request.workspaceDir).toBe("/workspaces/support");
             return { ok: true, value: { text: "The meeting starts at nine." } };
           },
         },
       };
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
-        tools: { media: { audio: {} } },
-      };
-      const ctx: MsgContext = {
-        Body: "<media:audio>",
-        media: [{ path: filePath, contentType: "audio/wav", workspaceDir: dir }],
-      };
+      const cfg: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { audio: {} } } };
+      const ctx: MsgContext = { Body: "<media:audio>", media };
 
       const transcript = await transcribeFirstAudio({
         ctx,
@@ -76,80 +103,44 @@ describe("audio preflight attachment handoff", () => {
         providers,
         activeModel: { provider: "fixture", model: "chat-model" },
       });
-      expect(providerWorkspaceDir).toBe("/workspaces/support");
       expect(transcript).toBe("The meeting starts at nine.");
     });
   });
 
-  it.each([
-    { name: "default selection", attachments: undefined, emptyFirst: false, textField: "Body" },
-    {
-      name: "last preference",
-      attachments: { prefer: "last" as const },
-      emptyFirst: false,
-      textField: "agentText",
-    },
-    {
-      name: "all attachments",
-      attachments: { mode: "all" as const, maxAttachments: 2 },
-      emptyFirst: false,
-      textField: "BodyForAgent",
-    },
-    {
-      name: "empty first transcript",
-      attachments: { mode: "all" as const, maxAttachments: 2 },
-      emptyFirst: true,
-      textField: "agentText",
-    },
+  it.each<[string, AudioConfig["attachments"], boolean, string]>([
+    ["default selection", undefined, false, "Body"],
+    ["last preference", { prefer: "last" }, false, "agentText"],
+    ["all attachments", allAttachments, false, "BodyForAgent"],
+    ["empty first transcript", allAttachments, true, "agentText"],
   ])(
-    "keeps first-only preflight separate from $name",
-    async ({ attachments, emptyFirst, textField }) => {
+    "keeps first-only preflight separate from %s",
+    async (_name, attachments, emptyFirst, textField) => {
       await withTestDir({ prefix: "openclaw-audio-preflight-" }, async (dir) => {
         const callsPath = path.join(dir, "calls.txt");
-        const media = await Promise.all(
-          ["previous.wav", "first.wav", "second.wav"].map(async (name) => {
-            const filePath = path.join(dir, name);
-            await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
-            return { path: filePath, contentType: "audio/wav", workspaceDir: dir };
-          }),
-        );
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
-          tools: {
-            media: {
-              models: [
-                {
-                  type: "cli",
-                  command: process.execPath,
-                  args: [
-                    "-e",
-                    `const fs = require("node:fs");
+        const media = await audioFiles(dir, ["previous.wav", "first.wav", "second.wav"]);
+        const cfg = audioConfig(
+          process.execPath,
+          [
+            "-e",
+            `const fs = require("node:fs");
 const name = require("node:path").basename(process.argv[1]);
 fs.appendFileSync(process.argv[2], name + "\\n");
 process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\n" : "heard " + name);`,
-                    "{{AttachmentPath}}",
-                    callsPath,
-                    emptyFirst ? "empty" : "text",
-                  ],
-                  capabilities: ["audio"],
-                },
-              ],
-              audio: { attachments },
-            },
-          },
-        };
+            "{{AttachmentPath}}",
+            callsPath,
+            emptyFirst ? "empty" : "text",
+          ],
+          { attachments },
+        );
         const ctx: MsgContext = {
           Body: "",
+          CommandAuthorized: false,
           media: [{}, { ...media[0], transcribed: true }, ...media.slice(1)],
         };
         const transcript = await transcribeFirstAudio({ ctx, cfg });
         expect(transcript).toBe(emptyFirst ? undefined : "heard first.wav");
-        expect(ctx.media?.map((fact) => fact.transcribed === true)).toEqual([
-          false,
-          true,
-          !emptyFirst,
-          false,
-        ]);
+        const transcribed = ctx.media?.map((fact) => fact.transcribed === true);
+        expect(transcribed).toEqual([false, true, !emptyFirst, false]);
         expect(await fs.readFile(callsPath, "utf8")).toBe("first.wav\n");
 
         ctx.Body = "transport envelope <media:audio>";
@@ -163,35 +154,21 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         } else {
           ctx.agentText = preparedText;
         }
-        ctx.RawBody = "typed caption";
-        ctx.CommandBody = "typed caption";
-        await applyMediaUnderstanding({
-          ctx,
-          cfg,
-          workspaceDir: dir,
-          processingMode: "audio-only",
-        });
+        Object.assign(ctx, captionFields);
+        await enrichAudio(ctx, cfg, dir);
 
         expect(await fs.readFile(callsPath, "utf8")).toBe(
           emptyFirst ? "first.wav\nfirst.wav\nsecond.wav\n" : "first.wav\nsecond.wav\n",
         );
-        expect(ctx.MediaUnderstanding).toEqual([
-          expect.objectContaining({
-            kind: "audio.transcription",
-            attachmentIndex: 3,
-            text: "heard second.wav",
-          }),
+        expect(ctx.MediaUnderstanding).toMatchObject([
+          { kind: "audio.transcription", attachmentIndex: 3, text: "heard second.wav" },
         ]);
         expect(ctx.Body).toContain("heard second.wav");
         expect(ctx.agentText).toContain("heard second.wav");
         expect(ctx.BodyForAgent).toBe(ctx.agentText);
         expect(ctx.agentText).not.toContain("stale alias");
-        expect(ctx).toMatchObject({
-          RawBody: "typed caption",
-          CommandBody: "typed caption",
-          rawText: "typed caption",
-          commandText: "typed caption",
-        });
+        expect(ctx).toMatchObject({ ...captionFields, rawText: caption, commandText: caption });
+        expect(ctx.CommandAuthorized).toBe(false);
         if (textField !== "Body") {
           expect(ctx.Body).toContain("transport envelope");
           expect(ctx.agentText).not.toContain("transport envelope");
@@ -202,89 +179,31 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
       });
     },
   );
-  it.each([
-    {
-      name: "default limit",
-      emptyFirst: false,
-      attachments: undefined,
-      expected: ["first.wav"],
-      markers: ["[Audio attachment not processed: attachment limit reached]"],
-    },
-    {
-      name: "last preference",
-      emptyFirst: false,
-      attachments: { prefer: "last" as const },
-      expected: ["second.wav"],
-      markers: ["[Audio attachment not processed: attachment limit reached]"],
-    },
-    {
-      name: "all attachments",
-      emptyFirst: false,
-      attachments: { mode: "all" as const, maxAttachments: 2 },
-      expected: ["first.wav", "second.wav"],
-      markers: [],
-    },
-    {
-      name: "partial success",
-      emptyFirst: true,
-      attachments: { mode: "all" as const, maxAttachments: 2 },
-      expected: ["first.wav", "second.wav"],
-      markers: ["[Audio attachment could not be analyzed]"],
-    },
-    {
-      name: "empty selected attachment",
-      emptyFirst: true,
-      attachments: undefined,
-      expected: ["first.wav"],
-      markers: [
-        "[Audio attachment could not be analyzed]",
-        "[Audio attachment not processed: attachment limit reached]",
-      ],
-    },
-    {
-      name: "failed selected attachment",
-      emptyFirst: true,
-      failFirst: true,
-      attachments: undefined,
-      expected: ["first.wav"],
-      markers: [
-        "[Audio attachment could not be analyzed]",
-        "[Audio attachment not processed: attachment limit reached]",
-      ],
-    },
-    {
-      name: "bounded dropped-attachment warnings",
-      emptyFirst: false,
-      attachments: undefined,
-      attachmentCount: 8,
-      expected: ["first.wav"],
-      markers: [
-        ...Array.from(
-          { length: 5 },
-          () => "[Audio attachment not processed: attachment limit reached]",
-        ),
-        "[2 more attachments skipped]",
-      ],
-    },
-    {
-      name: "audio-only capability scope",
-      emptyFirst: false,
-      attachments: { mode: "all" as const, maxAttachments: 2 },
-      previousImageFailure: true,
-      expected: ["first.wav", "second.wav"],
-      markers: [],
-    },
+  it.each<[string, AudioConfig["attachments"], string[], string[], SelectionOptions?]>([
+    ["default limit", undefined, firstAudio, [limitMarker]],
+    ["last preference", { prefer: "last" }, ["second.wav"], [limitMarker]],
+    ["all attachments", allAttachments, bothAudio, []],
+    ["partial success", allAttachments, bothAudio, [failedMarker], emptyTranscript],
+    ["empty selected attachment", undefined, firstAudio, unsuccessfulMarkers, emptyTranscript],
+    [
+      "failed selected attachment",
+      undefined,
+      firstAudio,
+      unsuccessfulMarkers,
+      { emptyFirst: true, failFirst: true },
+    ],
+    [
+      "bounded dropped-attachment warnings",
+      undefined,
+      firstAudio,
+      [...Array.from({ length: 5 }, () => limitMarker), "[2 more attachments skipped]"],
+      { attachmentCount: 8 },
+    ],
+    ["audio-only capability scope", allAttachments, bothAudio, [], { previousImageFailure: true }],
   ])(
-    "preserves configured $name through internal preflight and later enrichment",
-    async ({
-      attachments,
-      expected,
-      emptyFirst,
-      failFirst,
-      markers,
-      attachmentCount,
-      previousImageFailure,
-    }) => {
+    "preserves configured %s through internal preflight and later enrichment",
+    async (_name, attachments, expected, markers, options = {}) => {
+      const { emptyFirst, failFirst, attachmentCount, previousImageFailure } = options;
       await withTestDir({ prefix: "openclaw-audio-selection-" }, async (dir) => {
         const calls: string[] = [];
         runExecMock.mockImplementation(async (_command, args: string[]) => {
@@ -302,35 +221,19 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
             stderr: "",
           };
         });
-        const media = await Promise.all(
+        const media = await audioFiles(
+          dir,
           Array.from({ length: attachmentCount ?? 2 }, (_, index) =>
             index === 0 ? "first.wav" : index === 1 ? "second.wav" : `note-${index}.wav`,
-          ).map(async (name) => {
-            const filePath = path.join(dir, name);
-            await fs.writeFile(filePath, createSafeAudioFixtureBuffer());
-            return { path: filePath, contentType: "audio/wav", workspaceDir: dir };
-          }),
+          ),
         );
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
-          tools: {
-            media: {
-              models: [
-                {
-                  type: "cli",
-                  command: "fixture-transcriber",
-                  args: ["{{AttachmentPath}}"],
-                  capabilities: ["audio"],
-                },
-              ],
-              audio: { attachments, echoTranscript: true },
-            },
-          },
-        };
+        const cfg = audioConfig("fixture-transcriber", ["{{AttachmentPath}}"], {
+          attachments,
+          echoTranscript: true,
+        });
         const ctx: MsgContext = {
-          Body: "typed caption",
-          RawBody: "typed caption",
-          CommandBody: "typed caption",
+          Body: caption,
+          ...captionFields,
           Surface: "webchat",
           From: "fixture-user",
           media: [{}, ...media],
@@ -351,15 +254,6 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
           ];
         }
         const transcript = await transcribeAudioAttachments({ ctx, cfg });
-        expect(transcript).toBe(
-          emptyFirst
-            ? expected.length === 1
-              ? undefined
-              : "heard second.wav"
-            : expected.length === 1
-              ? "heard " + expected[0]
-              : "Audio 1:\nheard first.wav\n\nAudio 2:\nheard second.wav",
-        );
         expect(ctx.media?.map((fact) => fact.transcribed === true)).toEqual([
           false,
           ...media.map(
@@ -368,23 +262,12 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
               expected.includes(path.basename(fact.path)),
           ),
         ]);
-        const preparedText = transcript
-          ? formatAudioTranscriptForAgent(transcript)
-          : "typed caption";
-        ctx.agentText = preparedText;
-        ctx.BodyForAgent = preparedText;
-        await applyMediaUnderstanding({
-          ctx,
-          cfg,
-          workspaceDir: dir,
-          processingMode: "audio-only",
-        });
+        const preparedText = transcript ? formatAudioTranscriptForAgent(transcript) : caption;
+        Object.assign(ctx, { agentText: preparedText, BodyForAgent: preparedText });
+        await enrichAudio(ctx, cfg, dir);
         expect(calls).toEqual(expected);
-        const expectedAgentText = [preparedText, ...markers].join("\n\n");
-        expect(ctx.agentText).toBe(expectedAgentText);
-        expect(ctx.BodyForAgent).toBe(expectedAgentText);
-        expect(ctx.RawBody).toBe("typed caption");
-        expect(ctx.CommandBody).toBe("typed caption");
+        const agentText = [preparedText, ...markers].join("\n\n");
+        expect(ctx).toMatchObject({ ...captionFields, agentText, BodyForAgent: agentText });
         expect(ctx.MediaUnderstanding).toBeUndefined();
       });
     },

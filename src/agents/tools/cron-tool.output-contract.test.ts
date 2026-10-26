@@ -8,7 +8,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
@@ -20,9 +19,7 @@ import { applyCodeModeCatalog } from "../code-mode.js";
 import {
   createCodeModeHarness,
   resetCodeModeTestState,
-  resultDetails,
   runUntilCompleted,
-  waitUntilCompleted,
 } from "../code-mode.test-support.js";
 import { createToolSearchTools, TOOL_CALL_RAW_TOOL_NAME } from "../tool-search.js";
 import { createCronTool } from "./cron-tool.js";
@@ -50,13 +47,7 @@ const compactSourceJob: CronJob = {
     autoDisabled: { reason: "consecutive-failures", atMs: 0, consecutiveErrors: 3 },
   },
 };
-const page = {
-  total: 1,
-  offset: 0,
-  limit: 50,
-  hasMore: false,
-  nextOffset: null,
-};
+const page = { total: 1, offset: 0, limit: 50, hasMore: false, nextOffset: null };
 const deliveryPreview = { label: "Current conversation", detail: "No external delivery" };
 const createJob = {
   name: job.name,
@@ -88,9 +79,37 @@ function createCronService(storePath: string) {
     sessionStorePath: path.join(path.dirname(storePath), "sessions.json"),
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
+}
+
+function mockGateway(call: typeof gatewayModule.callGatewayTool) {
+  const spy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(call);
+  onTestFinished(() => spy.mockRestore());
+}
+
+function codeMode(tool: ReturnType<typeof createCronTool>) {
+  onTestFinished(resetCodeModeTestState);
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+  return {
+    toolCall: expectDefined(
+      createToolSearchTools(h.ctx).find((entry) => entry.name === TOOL_CALL_RAW_TOOL_NAME),
+      "Tool Search call",
+    ),
+    run: (code: string) =>
+      runUntilCompleted({
+        execTool: expectDefined(h.tools[0], "Code Mode exec"),
+        waitTool: expectDefined(h.tools[1], "Code Mode wait"),
+        code,
+      }),
+  };
+}
+
+function expectOutput(tool: ReturnType<typeof createCronTool>, details: unknown) {
+  expect(
+    Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), details),
+  ).toEqual([]);
 }
 
 describe("automations output contract", () => {
@@ -100,55 +119,6 @@ describe("automations output contract", () => {
     setRuntimeConfigSnapshot({});
     onTestFinished(clearRuntimeConfigSnapshot);
   });
-
-  it.each(["current"] as const)(
-    "accepts successful removal with pending %s session cleanup without retrying",
-    async (sessionTarget) => {
-      onTestFinished(resetCodeModeTestState);
-      const { storePath } = await makeStorePath();
-      const cron = createCronService(storePath);
-      const input = {
-        ...createJob,
-        id: `code-mode-cleanup-${sessionTarget}`,
-        enabled: false,
-        sessionTarget,
-        sessionKey: "agent:main:cleanup-fixture",
-        payload: { kind: "agentTurn" as const, message: "Synthetic pending cleanup" },
-      };
-      const activeJob = await cron.add(input);
-      const marker = markCronJobActive(activeJob.id);
-      const gatewayCall = vi.fn().mockImplementation(async () => await cron.remove(activeJob.id));
-      const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
-      onTestFinished(() => gatewaySpy.mockRestore());
-      const tool = createCronTool();
-      const h = createCodeModeHarness();
-      applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-      try {
-        const result = await runUntilCompleted({
-          execTool: expectDefined(h.tools[0], "Code Mode exec"),
-          waitTool: expectDefined(h.tools[1], "Code Mode wait"),
-          code: `return await automations({action:"remove",jobId:${JSON.stringify(activeJob.id)}});`,
-        });
-        expect(gatewayCall).toHaveBeenCalledOnce();
-        expect(gatewayCall.mock.calls[0]?.[0]).toBe("cron.remove");
-        expect(cron.getJob(activeJob.id)).toBeUndefined();
-        expect(result, JSON.stringify(result)).toMatchObject({
-          status: "completed",
-          value: {
-            ok: true,
-            removed: true,
-            activeRunCancellationRequested: true,
-            sessionCleanup: "pending",
-          },
-        });
-      } finally {
-        clearCronJobActive(activeJob.id, marker);
-        // Reusing the id joins the owner's deferred cleanup before fixture teardown.
-        await cron.add(input);
-        cron.stop();
-      }
-    },
-  );
 
   it("keeps older full inventories valid after compact fallback", async () => {
     const gatewayCall = vi
@@ -165,8 +135,7 @@ describe("automations output contract", () => {
         jobs: [{ ...job, effectiveAgentId: "main" }],
         deliveryPreviews: { [job.id]: deliveryPreview },
       });
-    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
-    onTestFinished(() => gatewaySpy.mockRestore());
+    mockGateway(gatewayCall);
     const tool = createCronTool();
     const result = await tool.execute("call-full", { action: "list" });
     expect(gatewayCall).toHaveBeenCalledTimes(2);
@@ -174,9 +143,7 @@ describe("automations output contract", () => {
       includeDisabled: false,
       inventoryHint: expect.stringContaining("Disabled automations are omitted"),
     });
-    expect(
-      Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
-    ).toEqual([]);
+    expectOutput(tool, result.details);
   });
 
   it("still runs on a shipped Gateway that rejects the run wait", async () => {
@@ -189,8 +156,7 @@ describe("automations output contract", () => {
         }),
       )
       .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
-    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
-    onTestFinished(() => gatewaySpy.mockRestore());
+    mockGateway(gatewayCall);
     const tool = createCronTool();
     const result = await tool.execute("call-run", {
       action: "run",
@@ -202,13 +168,10 @@ describe("automations output contract", () => {
       { id: "job", mode: "force" },
     ]);
     expect(result.details).toMatchObject({ runId: "manual:job:1", note: expect.any(String) });
-    expect(
-      Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
-    ).toEqual([]);
+    expectOutput(tool, result.details);
   });
 
   it("preserves terminal approval outcomes through direct tools, Tool Search, and Code Mode", async () => {
-    onTestFinished(resetCodeModeTestState);
     let refusal: Record<string, unknown>;
     const gatewayCall = vi.fn().mockImplementation(async () => {
       throw new GatewayClientRequestError({
@@ -218,15 +181,9 @@ describe("automations output contract", () => {
         retryable: false,
       });
     });
-    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
-    onTestFinished(() => gatewaySpy.mockRestore());
+    mockGateway(gatewayCall);
     const tool = createCronTool();
-    const h = createCodeModeHarness();
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-    const toolCall = expectDefined(
-      createToolSearchTools(h.ctx).find((entry) => entry.name === TOOL_CALL_RAW_TOOL_NAME),
-      "Tool Search call",
-    );
+    const { toolCall, run } = codeMode(tool);
     for (const outcome of ["operator-denied", "expired", "cancelled"] as const) {
       for (const action of ["add", "update"] as const) {
         refusal = {
@@ -243,17 +200,13 @@ describe("automations output contract", () => {
             : { action, jobId: job.id, job: { name: "Changed name" } };
         const direct = await tool.execute("direct-refusal", args);
         expect(direct.details).toEqual(refusal);
-        expect(
-          Value.Errors(expectDefined(tool.outputSchema, "output schema"), direct.details),
-        ).toEqual([]);
+        expectOutput(tool, direct.details);
         const searched = await toolCall.execute("searched-refusal", { id: "automations", args });
         expect(searched.details).toMatchObject({ result: { details: refusal } });
-        const codeMode = await runUntilCompleted({
-          execTool: expectDefined(h.tools[0], "Code Mode exec"),
-          waitTool: expectDefined(h.tools[1], "Code Mode wait"),
-          code: `return await automations(${JSON.stringify(args)});`,
+        expect(await run(`return await automations(${JSON.stringify(args)});`)).toMatchObject({
+          status: "completed",
+          value: refusal,
         });
-        expect(codeMode).toMatchObject({ status: "completed", value: refusal });
       }
     }
     // Similar error text cannot turn a validation failure into a native decision.
@@ -267,7 +220,6 @@ describe("automations output contract", () => {
   });
 
   it("composes action results through generated declarations and JavaScript", async () => {
-    onTestFinished(resetCodeModeTestState);
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
     onTestFinished(() => cron.stop());
@@ -277,12 +229,17 @@ describe("automations output contract", () => {
       snapshotRevision: "inventory-revision",
     };
     const list = { ...source, jobs: projectCronListJobs(cron, source, true) };
-    const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
       "cron.list": list,
       "cron.status": { enabled: true, jobs: 1 },
       "cron.get": job,
       "cron.runs": history,
+      "cron.remove": {
+        ok: true,
+        removed: true,
+        activeRunCancellationRequested: true,
+        sessionCleanup: "pending",
+      },
     };
     const gatewayCall = vi.fn().mockImplementation(async (method: string) => {
       if (!(method in replies)) {
@@ -290,8 +247,7 @@ describe("automations output contract", () => {
       }
       return replies[method];
     });
-    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
-    onTestFinished(() => gatewaySpy.mockRestore());
+    mockGateway(gatewayCall);
     const tool = createCronTool();
     const streamJob = {
       ...job,
@@ -334,58 +290,26 @@ describe("automations output contract", () => {
       }
       return await execute(...args);
     };
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-    const toolCall = expectDefined(
-      createToolSearchTools(h.ctx).find((entry) => entry.name === TOOL_CALL_RAW_TOOL_NAME),
-      "Tool Search call",
-    );
-    for (const [variant, args] of [
-      ["direct", { action: "add", job: streamInput }],
-      ["declarative", { action: "add", job: { ...streamInput, declarationKey: "watcher" } }],
-      ["update", { action: "update", jobId: job.id, job: { enabled: true } }],
-    ] as const) {
-      const result = await toolCall.execute(`approval-${variant}`, { id: "automations", args });
-      expect(result.details).toMatchObject({ result: { details: approvedResults[variant] } });
-      const content = expectDefined(result.content[0], "model-visible dispatch result");
-      if (content.type !== "text") {
-        throw new Error("Expected model-visible dispatch text");
-      }
-      const envelope = JSON.parse(content.text);
-      expect(envelope).toMatchObject({
-        tool: { name: "automations" },
-        result: { content: [{ type: "text", text: expect.any(String) }] },
-      });
-      expect(JSON.parse(envelope.result.content[0].text)).toMatchObject({
-        streamExecutionApproval: receipt,
-      });
-    }
-    const result = await runUntilCompleted({
-      execTool: expectDefined(h.tools[0], "Code Mode exec"),
-      waitTool: expectDefined(h.tools[1], "Code Mode wait"),
-      code: 'return await API.read("tools/automations.d.ts");',
-    });
+    const { run } = codeMode(tool);
+    const result = await run('return await API.read("tools/automations.d.ts");');
     expect(result).toMatchObject({ status: "completed" });
     const file = result.value as { content: string };
     const composition = `
 async function consume() {
   const listed = await automations({ action: "list" });
-  const includeDisabled = listed.includeDisabled;
-  const inventoryHint = listed.inventoryHint;
-  const names = listed.jobs.map(job => job.name);
-  const next = listed.nextOffset;
   const status = await automations({ action: "status" });
-  const enabled = status.enabled;
-  const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
-  const name = details.name;
-  const scheduleErrorCount = details.state.scheduleErrorCount;
   const runs = await automations({ action: "runs", jobId: details.id });
-  const summaries = runs.entries.map(entry => entry.summary);
   const direct = await automations({ action: "add", job: ${JSON.stringify(streamInput)} });
   const declarative = await automations({ action: "add", job: ${JSON.stringify({ ...streamInput, declarationKey: "watcher" })} });
   const updated = await automations({ action: "update", jobId: "invoice-check", job: { enabled: true } });
+  const removed = await automations({ action: "remove", jobId: "invoice-check" });
   return {
-    names, next, enabled, jobCount, name, scheduleErrorCount, summaries, includeDisabled, inventoryHint,
+    removed,
+    names: listed.jobs.map(job => job.name), next: listed.nextOffset,
+    includeDisabled: listed.includeDisabled, inventoryHint: listed.inventoryHint,
+    enabled: status.enabled, jobCount: status.jobs, name: details.name,
+    scheduleErrorCount: details.state.scheduleErrorCount, summaries: runs.entries.map(entry => entry.summary),
     approvals: [direct, declarative, updated].map(result => "saved" in result ? undefined : result.streamExecutionApproval),
   };
 }
@@ -397,14 +321,14 @@ async function consume() {
       `
 async function checkContracts(action: "list" | "runs", input: Parameters<typeof automations>[0]) {
   const listed = await automations({ action: "list" });
-  const includeDisabled: boolean = listed.includeDisabled;
-  const inventoryHint: string = listed.inventoryHint;
+  const { includeDisabled, inventoryHint }: { includeDisabled: boolean; inventoryHint: string } = listed;
   // @ts-expect-error Invented invoice fields are not part of an automation.
   listed.jobs[0].invoiceTotal;
   const removed = await automations({ action: "remove", jobId: "invoice-check" });
   if (removed.ok) {
-    const cancellation: true | undefined = removed.activeRunCancellationRequested;
-    const cleanup: "pending" | undefined = removed.sessionCleanup;
+    const { activeRunCancellationRequested, sessionCleanup }: {
+      activeRunCancellationRequested?: true; sessionCleanup?: "pending";
+    } = removed;
   }
   const added = await automations({ action: "add", job: ${JSON.stringify(createJob)} });
   // @ts-expect-error Add can return a direct job or a convergence envelope.
@@ -418,10 +342,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   const id: string = addedJob.id;
   const approval = added.streamExecutionApproval;
   if (approval) {
-    const approvalId: string = approval.approvalId;
-    const decision: "allow-once" = approval.decision;
-    const source: "operator" = approval.source;
-    const attribution: string = approval.message;
+    const receipt: { approvalId: string; decision: "allow-once"; source: "operator"; message: string } = approval;
     // @ts-expect-error A successful stream receipt never represents a denial.
     const denied: "deny" = approval.decision;
   }
@@ -444,17 +365,11 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
 }
 `;
     expect(typeCheckSources({ [fileName]: declarationSource })).toEqual([]);
-    const composed = await waitUntilCompleted({
-      details: resultDetails(
-        await expectDefined(h.tools[0], "Code Mode exec").execute("compose-automations", {
-          code: `${composition}\nreturn await consume();`,
-        }),
-      ),
-      waitTool: expectDefined(h.tools[1], "Code Mode wait"),
-    });
+    const composed = await run(`${composition}\nreturn await consume();`);
     expect(composed, JSON.stringify(composed)).toMatchObject({
       status: "completed",
       value: {
+        removed: replies["cron.remove"],
         names: [job.name],
         includeDisabled: false,
         inventoryHint: expect.stringContaining("get jobId"),
@@ -467,6 +382,6 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
         approvals: [receipt, receipt, receipt],
       },
     });
-    expect(gatewayCall).toHaveBeenCalledTimes(4);
+    expect(gatewayCall).toHaveBeenCalledTimes(5);
   });
 });

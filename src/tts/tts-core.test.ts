@@ -1,37 +1,10 @@
-// TTS core tests cover provider selection, synthesis, and error handling.
 import { readFileSync } from "node:fs";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Model, Usage } from "../llm/types.js";
-import type { SpeechModelOverridePolicy } from "./provider-types.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
-import type { ResolvedTtsConfig } from "./tts-types.js";
-
-const modelOverridePolicy: SpeechModelOverridePolicy = {
-  enabled: false,
-  allowText: false,
-  allowProvider: false,
-  allowVoice: false,
-  allowModelId: false,
-  allowVoiceSettings: false,
-  allowNormalization: false,
-  allowSeed: false,
-};
-
-const usage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+import { resolveTtsConfig } from "./tts-settings.js";
 
 describe("TTS core", () => {
   it("keeps summarization-only LLM modules lazy", () => {
@@ -53,45 +26,24 @@ describe("TTS core", () => {
   it("clamps oversized summarization timeout timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const model = {
+      const model = makeProviderModelFixture({
         id: "test-model",
-        name: "Test Model",
         api: "test-api",
         provider: "test-provider",
         baseUrl: "https://example.test",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 4096,
-        maxTokens: 1024,
-      } satisfies Model;
-      const config = {
-        auto: "off",
-        mode: "final",
-        provider: "test-provider",
-        providerSource: "config",
-        personas: {},
-        summaryModel: "test-provider/test-model",
-        modelOverrides: modelOverridePolicy,
-        providerConfigs: {},
-        maxTextLength: 10_000,
-        timeoutMs: 10_000,
-      } satisfies ResolvedTtsConfig;
+      });
+      const config = resolveTtsConfig({ tts: { summaryModel: "test-provider/test-model" } });
       const auth = {
         apiKey: "key",
         source: "test",
         mode: "api-key",
       } as const;
-      const assistant = {
-        role: "assistant",
+      const assistant = makeAgentAssistantMessage({
         content: [{ type: "text", text: "Short summary." }],
         api: model.api,
         provider: model.provider,
         model: model.id,
-        stopReason: "stop",
-        usage,
-        timestamp: Date.now(),
-      } satisfies AssistantMessage;
+      });
 
       const result = await summarizeText(
         {

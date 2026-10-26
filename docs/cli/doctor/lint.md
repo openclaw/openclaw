@@ -151,6 +151,11 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 
 `--only` and `--skip` accept full check ids and may be repeated. An unregistered `--only` id emits a `core/doctor/lint-selection` error finding; valid selected checks still run. Use `checksRun`/`checksSkipped` in the output to confirm a focused gate selects the checks you expect.
 
+`core/doctor/disk-space` checks the volume containing the operator's state directory,
+including when other selected checks use a private state snapshot. It is opt-in
+through `--only` or `--all`. Below 100 MiB free is an error; exactly 100 MiB through
+less than 500 MiB is a warning.
+
 To check model credentials, run `openclaw doctor --lint --only core/doctor/auth-profiles --json`.
 This opt-in check inspects shared credentials and each configured agent's local
 auth store, including fleets without a default agent. Shared credential problems
@@ -165,9 +170,18 @@ serving configuration. Validate plugin-provided servers or agent-local auth prof
 from an authenticated serving-agent turn so refreshed credentials persist with their
 owner. Non-OAuth MCP schema checks still run.
 
+Workboard tool schema discovery does not open its durable store. Inspecting schemas
+leaves Workboard data and PostgreSQL namespaces unchanged, including when the
+private inspection state has no Workboard engine anchor.
+
 ## Post-upgrade mode
 
 `openclaw doctor --post-upgrade` runs plugin compatibility checks for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
+
+Standalone builds validate compiled plugin entries against the running image's
+module inventory. Those entries do not need a second copy on disk. Plugin package
+boundaries still apply, and entries outside the image must have their runtime
+files installed.
 
 The checks also warn with `plugin.version_drift` when an enabled official plugin
 in the installed index belongs to a different release cohort than the upgraded

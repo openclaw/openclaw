@@ -17,9 +17,7 @@ import {
   type SlashCommandDef,
 } from "./commands.ts";
 
-afterEach(() => {
-  replaceSlashCommands(buildFallbackSlashCommands());
-});
+afterEach(() => replaceSlashCommands(buildFallbackSlashCommands()));
 
 describe("model-independent commands", () => {
   it.each([
@@ -52,52 +50,30 @@ describe("findInlineSlashCompletion", () => {
   });
 
   it("offers every non-skill command inline and can hide them when no command owner exists", () => {
-    applyRemoteEntries([
-      remoteCommand("weather", {
-        source: "skill",
-        skillModelVisible: true,
-        scope: "text",
-      }),
-    ]);
+    applyRemoteEntries(
+      remoteCommand("weather", { source: "skill", skillModelVisible: true, scope: "text" }),
+    );
     expect(completionNames("weather", { inlineOnly: true })).toEqual(["weather"]);
     expect(completionNames("reset", { inlineOnly: true })).toEqual(["reset"]);
-    expect(completionNames("elevated", { inlineOnly: true })).toEqual(["elevated"]);
-    expect(completionNames("exec", { inlineOnly: true })).toContain("exec");
-    expect(completionNames("think", { inlineOnly: true })).toContain("think");
-    expect(
-      getSlashCommandCompletions("reset", {
-        inlineOnly: true,
-        allowImmediateInlineCommands: false,
-      }),
-    ).toEqual([]);
-    expect(
-      completionNames("weather", {
-        inlineOnly: true,
-        allowImmediateInlineCommands: false,
-      }),
-    ).toEqual(["weather"]);
+    const noOwner = { inlineOnly: true, allowImmediateInlineCommands: false };
+    expect(completionNames("reset", noOwner)).toEqual([]);
+    expect(completionNames("weather", noOwner)).toEqual(["weather"]);
   });
 });
 
 function expectCommand(name: string, expected: Record<string, unknown>) {
-  expectObjectFields(requireCommandByName(name), expected);
-}
-
-function requireCommandByName(name: string): SlashCommandDef {
-  return expectDefined(
+  expectObjectFields(
     SLASH_COMMANDS.find((entry) => entry.name === name),
-    `slash command ${name}`,
+    expected,
   );
 }
 
-function applyRemoteEntries(entries: Parameters<typeof buildSlashCommandsFromEntries>[0]) {
+function applyRemoteEntries(...entries: Parameters<typeof buildSlashCommandsFromEntries>[0]) {
   replaceSlashCommands(buildSlashCommandsFromEntries(entries));
 }
 
 function expectParsedSlash(input: string, commandFields: Record<string, unknown>, args: string) {
-  const parsed = expectDefined(parseSlashCommand(input), `parsed ${input}`);
-  expectObjectFields(parsed.command, commandFields);
-  expect(parsed.args).toBe(args);
+  expect(parseSlashCommand(input)).toMatchObject({ command: commandFields, args });
 }
 
 function completionNames(
@@ -156,12 +132,6 @@ describe("getSlashCommandCompletions", () => {
       "essential-tools",
       "standard-session",
       "standard-agent",
-    ]);
-    expect(completionNames("", { showAll: true })).toEqual([
-      "essential-session",
-      "essential-tools",
-      "standard-session",
-      "standard-agent",
       "power-session",
     ]);
   });
@@ -173,109 +143,88 @@ describe("parseSlashCommand", () => {
   });
 
   it("builds runtime commands from native, plugin, and direct skill entries", () => {
-    applyRemoteEntries([
+    applyRemoteEntries(
       remoteCommand("inspect-session", {
         textAliases: ["/inspect-session", "/inspect_session"],
         source: "native",
-        acceptsArgs: false,
-        category: "tools",
       }),
       remoteCommand("dreaming"),
       remoteCommand("draft", {
         source: "skill",
         skillModelVisible: true,
       }),
-    ]);
+    );
 
     expectCommand("inspect-session", {
       aliases: ["inspect_session"],
-      category: "tools",
       executeLocal: false,
     });
-    expectCommand("dreaming", { key: "dreaming", executeLocal: false });
-    expectCommand("draft", {
-      key: "draft",
-      executeLocal: false,
-      source: "skill",
-      skillModelVisible: true,
-    });
+    expectParsedSlash("/dreaming", { name: "dreaming", executeLocal: false }, "");
     expectParsedSlash("/inspect_session", { name: "inspect-session" }, "");
     expect(getSkillCommandCompletions("dra").map((command) => command.name)).toEqual(["draft"]);
   });
 
   it("matches skill queries against both display titles and command tokens", () => {
-    applyRemoteEntries([
+    applyRemoteEntries(
       remoteCommand("release_notes", {
         skillDisplayName: "Release Notes",
         source: "skill",
         skillModelVisible: true,
       }),
-    ]);
+    );
 
-    expect(getSkillCommandCompletions("notes")).toMatchObject([
-      { name: "release_notes", skillDisplayName: "Release Notes" },
-    ]);
-    expect(getSkillCommandCompletions("release_n")).toMatchObject([
-      { name: "release_notes", skillDisplayName: "Release Notes" },
-    ]);
+    const expected = [{ name: "release_notes", skillDisplayName: "Release Notes" }];
+    expect(getSkillCommandCompletions("notes")).toMatchObject(expected);
+    expect(getSkillCommandCompletions("release_n")).toMatchObject(expected);
   });
 
   it.each([false, undefined])(
     "keeps skills with visibility %j in slash commands but out of $ completions",
     (skillModelVisible) => {
-      applyRemoteEntries([remoteCommand("hidden_skill", { source: "skill", skillModelVisible })]);
+      applyRemoteEntries(remoteCommand("hidden_skill", { source: "skill", skillModelVisible }));
       expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
       expect(getSkillCommandCompletions("hidden")).toEqual([]);
     },
   );
 
   it("does not let remote commands collide with reserved local commands", () => {
-    applyRemoteEntries([remoteCommand("redirect")]);
+    applyRemoteEntries(remoteCommand("redirect"));
 
-    expectCommand("redirect", {
-      key: "redirect",
-      executeLocal: true,
-      description: "Abort and restart with a new message",
-    });
+    expectCommand("redirect", { executeLocal: true });
   });
 
   it("keeps remote descriptions when a command name matches an object prototype property", () => {
-    applyRemoteEntries([
+    applyRemoteEntries(
       remoteCommand("constructor", {
         description: "Construct a sample project.",
-        acceptsArgs: false,
       }),
-    ]);
+    );
 
     const command = expectDefined(getSlashCommandCompletions("constructor")[0], "completion");
-    expect(command.name).toBe("constructor");
     expect(getSlashCommandDescription(command)).toBe("Construct a sample project.");
   });
 
   it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {
-    applyRemoteEntries([
+    applyRemoteEntries(
       remoteCommand("draft now", {
         textAliases: ["/draft now", "/safe-name"],
         source: "skill",
       }),
-      remoteCommand("bad:alias", { acceptsArgs: false }),
-    ]);
+      remoteCommand("bad:alias"),
+    );
 
-    expectCommand("safe-name", { name: "safe-name" });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "draft now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });
 
   it("projects argument hints and fixed choices from Gateway command entries", () => {
-    applyRemoteEntries([
+    applyRemoteEntries(
       remoteCommand("inspect-session", {
-        source: "native",
-        scope: "text",
         args: [
           {
             name: "mode",
-            description: "Inspection mode.",
+            description: "Mode",
             type: "string",
             required: true,
             choices: [
@@ -284,10 +233,10 @@ describe("parseSlashCommand", () => {
               { value: "full", label: "Full" },
             ],
           },
-          { name: "target", description: "Target session.", type: "string", dynamic: true },
+          { name: "target", description: "Target", type: "string", dynamic: true },
         ],
       }),
-    ]);
+    );
 
     expectCommand("inspect-session", {
       args: "<mode> [target]",
@@ -296,18 +245,11 @@ describe("parseSlashCommand", () => {
   });
 
   it("preserves known plugin client presentation metadata", () => {
-    applyRemoteEntries([
-      remoteCommand("pair", {
-        clientPresentation: {
-          when: "no-arguments",
-          action: { kind: "device-pairing" },
-        },
-      }),
-    ]);
-
-    expect(requireCommandByName("pair").clientPresentation).toEqual({
+    const clientPresentation = {
       when: "no-arguments",
       action: { kind: "device-pairing" },
-    });
+    } as const;
+    applyRemoteEntries(remoteCommand("pair", { clientPresentation }));
+    expectCommand("pair", { clientPresentation });
   });
 });

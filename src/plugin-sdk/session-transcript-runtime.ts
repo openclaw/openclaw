@@ -151,7 +151,8 @@ export async function appendSessionYieldContext(
     appendSessionTranscriptReport(target, {
       kind: "custom",
       customTypes: [],
-      selectReport: () => buildSessionsYieldContextMessage(message),
+      selectReport: () =>
+        buildSessionsYieldContextMessage(message, { nativeInterruptMarker: true }),
     }),
   );
   if (!result.ok) {

@@ -51,10 +51,18 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
       pending.push(running);
       return running;
     },
-    hold(repeat = false) {
-      const held = holdGc(repeat);
+    hold(repeat = false, onRun = () => {}) {
+      const held = holdGc(repeat, onRun);
       release = () => held.release.resolve(completedResult());
       return held;
+    },
+    async runHeld(repeat = false, overrides: Partial<typeof params> = {}) {
+      const held = this.hold(repeat);
+      const owner = this.start(overrides);
+      const receipt = owner.request();
+      const running = this.run();
+      const guard = await awaitCleanup(held.entered.promise, running);
+      return { ...held, owner, receipt, running, guard };
     },
     async [Symbol.asyncDispose]() {
       release();
@@ -69,10 +77,11 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
   };
 }
 
-function holdGc(repeat = false) {
+function holdGc(repeat = false, onRun = () => {}) {
   const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
   const release = createDeferred<ManagedWorktreeGcResult>();
   const implementation = (params: NonNullable<Parameters<typeof managedWorktrees.gc>[0]> = {}) => {
+    onRun();
     entered.resolve(params);
     return release.promise;
   };
@@ -95,14 +104,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("coalesces archive notifications into cleanup under the maintenance context", async () => {
+it("coalesces archives in the maintenance context and sweeps again after in-flight commits", async () => {
   await using fixture = maintenanceFixture();
   const { clock, getRuntimeConfig, start } = fixture;
   const context = new AsyncLocalStorage<string>();
   const observed: Array<string | undefined> = [];
-  const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async () => {
+  const { entered, release, gc } = fixture.hold(false, () => {
     observed.push(context.getStore());
-    return completedResult();
   });
   context.run("maintenance", start);
   context.run("archive-request", () => {
@@ -110,18 +118,9 @@ it("coalesces archive notifications into cleanup under the maintenance context",
     notifyGatewayWorktreeArchive(getRuntimeConfig);
   });
   expect(gc).not.toHaveBeenCalled();
-  await context.run("host-wake", () => clock.advanceBy(0));
-  expect(observed).toEqual(["maintenance"]);
-});
-
-it("sweeps again after archive commits during cleanup without overlapping passes", async () => {
-  await using fixture = maintenanceFixture();
-  const { clock, getRuntimeConfig, start } = fixture;
-  const { entered, release, gc } = fixture.hold();
-  start();
-  notifyGatewayWorktreeArchive(getRuntimeConfig);
-  const running = fixture.run();
+  const running = context.run("host-wake", () => fixture.run());
   await awaitCleanup(entered.promise, running);
+  expect(observed).toEqual(["maintenance"]);
   notifyGatewayWorktreeArchive(getRuntimeConfig);
   notifyGatewayWorktreeArchive(getRuntimeConfig);
   await clock.advanceBy(0);
@@ -200,13 +199,9 @@ it.each([
 
 it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
   await using fixture = maintenanceFixture();
-  const { getRuntimeConfig, onComplete, onError, start } = fixture;
-  const { entered, release } = fixture.hold(true);
-  const owner = start();
-  owner.request();
-  const running = fixture.run();
+  const { getRuntimeConfig, onComplete, onError } = fixture;
+  const { owner, guard, release } = await fixture.runHeld(true);
   let stopped = false;
-  const guard = await awaitCleanup(entered.promise, running);
   const stopping = owner.stop().then(() => {
     stopped = true;
   });
@@ -228,11 +223,7 @@ it("waits for admitted cleanup to settle when stopped and withdraws its authorit
 it("drains a replaced owner before its successor starts another sweep", async () => {
   await using fixture = maintenanceFixture();
   const { getRuntimeConfig, onComplete, start } = fixture;
-  const { entered, release, gc } = fixture.hold();
-  const first = start();
-  first.request();
-  const oldRun = fixture.run();
-  await awaitCleanup(entered.promise, oldRun);
+  const { owner: first, running: oldRun, release, gc } = await fixture.runHeld();
   const successor = start();
   const receipt = successor.request();
   const newRun = fixture.run();
@@ -280,13 +271,11 @@ it.each<[string, OpenClawConfig, boolean?, boolean?]>([
   async (_name, change, cancels = true, inPlace = false) => {
     await using fixture = maintenanceFixture();
     const { onComplete } = fixture;
-    const { entered, release } = fixture.hold(true);
     const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config);
-    const owner = fixture.start({ getRuntimeConfig: () => getRuntimeConfigSnapshot()! });
-    const receipt = owner.request();
-    const running = fixture.run();
-    const guard = await awaitCleanup(entered.promise, running);
+    const { owner, receipt, running, guard, release } = await fixture.runHeld(true, {
+      getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
+    });
     setRuntimeConfigSnapshot(inPlace ? Object.assign(config, change) : { ...config, ...change });
     if (cancels) {
       expect(() => guard.commitGuard!()).toThrow(/configuration changed/);

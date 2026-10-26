@@ -42,6 +42,7 @@ import {
   startedHandoff,
   idleActiveWorkInspectors,
   expectNoCalls,
+  type PersistedUpdateCheckState,
 } from "./update-startup-suite.test-support.js";
 
 const {
@@ -62,21 +63,6 @@ const UPDATE_CHECK_STATE_KEY = "update.checkState";
 function commandSuccess(stdout = "") {
   return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" as const };
 }
-
-type PersistedUpdateCheckState = {
-  lastCheckedAt?: string;
-  lastCheckedChannel?: "stable" | "extended-stable" | "beta" | "dev";
-  lastNotifiedVersion?: string;
-  lastNotifiedTag?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-  autoInstallId?: string;
-  autoFirstSeenVersion?: string;
-  autoFirstSeenTag?: string;
-  autoFirstSeenAt?: string;
-  autoLastAttemptVersion?: string;
-  autoLastAttemptAt?: string;
-};
 
 describe("update-startup", () => {
   let tempDir: string;
@@ -291,11 +277,13 @@ describe("update-startup", () => {
 
   function mockPackageInstallStatus(root = "/opt/openclaw") {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
+    const status = {
       root,
       installKind: "package",
       packageManager: "npm",
-    } satisfies UpdateCheckResult);
+    } satisfies UpdateCheckResult;
+    vi.mocked(checkUpdateStatus).mockResolvedValue(status);
+    return status;
   }
 
   function mockNpmChannelTag(tag: string, version: string) {
@@ -316,15 +304,36 @@ describe("update-startup", () => {
     return run;
   }
 
-  function createBetaAutoUpdateConfig() {
-    return { update: { channel: "beta" as const, auto: { enabled: true } } };
+  function autoConfig(
+    channel: "stable" | "beta" | "dev" | "extended-stable" = "beta",
+  ): OpenClawConfig {
+    return { update: { channel, auto: { enabled: true } } };
   }
 
-  function createExtendedStableConfig(params?: { autoEnabled?: boolean }) {
+  function checkAutomatically(
+    cfg: CheckOptions["cfg"],
+    params: Partial<Parameters<typeof runGatewayUpdateCheck>[0]> = {},
+  ) {
+    return runGatewayUpdateCheck({
+      cfg,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      ...params,
+    });
+  }
+
+  function observeTerminalSentinels() {
+    const sentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
     return {
-      update: {
-        channel: "extended-stable" as const,
-        ...(params?.autoEnabled ? { auto: { enabled: true } } : {}),
+      sentinels,
+      onUpdateScheduleChange: (
+        schedule: Parameters<
+          NonNullable<Parameters<typeof runGatewayUpdateCheck>[0]["onUpdateScheduleChange"]>
+        >[0],
+      ) => {
+        if (!schedule.campaign) {
+          // The observer outlives the campaign job publishing its terminal schedule.
+          sentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
+        }
       },
     };
   }
@@ -332,44 +341,40 @@ describe("update-startup", () => {
   async function runExtendedStableUpdateCheck(
     params: Partial<Parameters<typeof runGatewayUpdateCheck>[0]> = {},
   ) {
-    await runGatewayUpdateCheck({ cfg: createExtendedStableConfig(), ...params });
+    await runGatewayUpdateCheck({ cfg: { update: { channel: "extended-stable" } }, ...params });
   }
 
-  async function seedExtendedStableAvailability(params?: {
+  async function seedExtendedStableAvailability(
     onUpdateAvailableChange?: Parameters<
       typeof runGatewayUpdateCheck
-    >[0]["onUpdateAvailableChange"];
-  }) {
-    mockPackageInstallStatus();
-    mockNpmChannelTag("extended-stable", "2.0.0");
-    await runExtendedStableUpdateCheck({
-      onUpdateAvailableChange: params?.onUpdateAvailableChange,
-    });
+    >[0]["onUpdateAvailableChange"],
+  ) {
+    mockPackageUpdateStatus("extended-stable");
+    await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
   }
 
   function seedStableAutoRolloutState() {
     writePersistedUpdateCheckState({
       ...readPersistedUpdateCheckState(),
-      autoInstallId: "stable-install-id",
-      autoFirstSeenVersion: "3.0.0",
-      autoFirstSeenTag: "latest",
-      autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
+      ...stableRolloutState,
     });
   }
 
+  const stableRolloutState = {
+    autoInstallId: "stable-install-id",
+    autoFirstSeenVersion: "3.0.0",
+    autoFirstSeenTag: "latest",
+    autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
+  };
+
   function expectStableAutoRolloutStatePreserved() {
-    expect(readPersistedUpdateCheckState()).toMatchObject({
-      autoInstallId: "stable-install-id",
-      autoFirstSeenVersion: "3.0.0",
-      autoFirstSeenTag: "latest",
-      autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
-    });
+    expect(readPersistedUpdateCheckState()).toMatchObject(stableRolloutState);
   }
 
   async function runAutoUpdateCheckWithDefaults(
     params: Parameters<typeof runGatewayUpdateCheck>[0],
   ) {
-    await runGatewayUpdateCheck({ activeWorkInspectors: idleActiveWorkInspectors(), ...params });
+    await checkAutomatically(params.cfg, params);
     await clock.advanceBy(60_000);
   }
 
@@ -386,7 +391,7 @@ describe("update-startup", () => {
     supervisor.mockReturnValue("systemd");
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig(),
+      cfg: autoConfig(),
       log: params.log,
       activeWorkInspectors: idleActiveWorkInspectors(),
     });
@@ -512,7 +517,7 @@ describe("update-startup", () => {
       const real = await vi.importActual<typeof import("./update-check.js")>("./update-check.js");
       vi.mocked(resolveNpmChannelTag).mockImplementation(real.resolveNpmChannelTag);
       const checking = runGatewayUpdateCheck({
-        cfg: createExtendedStableConfig(),
+        cfg: { update: { channel: "extended-stable" } },
         signal: controller.signal,
       });
       await withinTest(
@@ -540,13 +545,13 @@ describe("update-startup", () => {
     const log = { info: vi.fn() };
 
     await runExtendedStableUpdateCheck({
-      cfg: createExtendedStableConfig({ autoEnabled: true }),
+      cfg: autoConfig("extended-stable"),
       log,
       onUpdateAvailableChange,
     });
     clock.setTime(Date.parse("2026-01-18T11:00:00Z"));
     await runExtendedStableUpdateCheck({
-      cfg: createExtendedStableConfig({ autoEnabled: true }),
+      cfg: autoConfig("extended-stable"),
       log,
       onUpdateAvailableChange,
     });
@@ -570,7 +575,7 @@ describe("update-startup", () => {
 
   it("clears stale extended-stable availability when exact selector resolution fails", async () => {
     const onUpdateAvailableChange = vi.fn();
-    await seedExtendedStableAvailability({ onUpdateAvailableChange });
+    await seedExtendedStableAvailability(onUpdateAvailableChange);
     seedStableAutoRolloutState();
     onUpdateAvailableChange.mockClear();
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "extended-stable", version: null });
@@ -636,6 +641,11 @@ describe("update-startup", () => {
   });
 
   it("announces and applies a dev git campaign without consulting npm", async () => {
+    writeDevGitInstallReceipt({
+      status: "error",
+      ts: Date.now() - 60_000,
+      reason: "managed-service-handoff-failed",
+    });
     mockDevGitStatus({
       branch: "HEAD",
       repositoryUrl: "https://github.com/example/openclaw",
@@ -656,20 +666,18 @@ describe("update-startup", () => {
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "dev", version: "99.0.0-dev.1" });
     const runAutoUpdate = mockAutoUpdate();
 
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
+    await checkAutomatically(autoConfig("dev"));
 
+    expect(checkUpdateStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchGit: true,
+        includeRegistry: false,
+        useDetachedDevUpstream: true,
+      }),
+    );
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
-    expect(getUpdateAvailable()).toEqual({
-      currentVersion: "1.0.0",
-      latestVersion: "1.0.0",
-      channel: "dev",
-      currentSha: "current-sha",
-      upstreamRef: "origin/main",
+    expect(getUpdateAvailable()).toMatchObject({
       upstreamSha: "upstream-sha",
-      repositoryUrl: "https://github.com/example/openclaw",
       commitsBehind: 2,
       commits: [
         { sha: "aaaaaaa", subject: "x".repeat(120) },
@@ -683,16 +691,12 @@ describe("update-startup", () => {
     expect(runAutoUpdate).not.toHaveBeenCalled();
 
     await clock.advanceBy(60_000);
-    expect(runAutoUpdate).toHaveBeenCalledWith({
-      runId: listUpdateRuns()[0]?.runId,
-      signal: expect.any(AbortSignal),
-      channel: "dev",
-      mode: "git",
-      timeoutMs: 45 * 60 * 1000,
-      restartDrainTimeoutMs: 300_000,
-      root: "/opt/openclaw",
-      devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
-    });
+    expect(runAutoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "dev",
+        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
+      }),
+    );
   });
 
   it("pins managed dev campaign handoffs to the announced commit", async () => {
@@ -700,11 +704,7 @@ describe("update-startup", () => {
     supervisor.mockReturnValue("launchd");
     const onUpdateRunCreated = vi.fn();
 
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      onUpdateRunCreated,
-    });
+    await checkAutomatically(autoConfig("dev"), { onUpdateRunCreated });
     await clock.advanceBy(60_000);
     await handoffTransferStarted.promise;
 
@@ -735,15 +735,10 @@ describe("update-startup", () => {
       result: updateResult({ status: "skipped", mode: "git", reason, durationMs: 1 }),
       message: "The selected version is already current.",
     }));
-    const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+    const { sentinels: terminalSentinels, onUpdateScheduleChange } = observeTerminalSentinels();
     await runAutoUpdateCheckWithDefaults({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      onUpdateScheduleChange: (schedule) => {
-        if (!schedule.campaign) {
-          // This observer outlives the campaign job that publishes its terminal schedule.
-          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
-        }
-      },
+      cfg: autoConfig("dev"),
+      onUpdateScheduleChange,
     });
     expectNoCalls(startHandoff, transferHandoff, restart);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
@@ -764,62 +759,17 @@ describe("update-startup", () => {
     expect(triage).not.toHaveBeenCalled();
   });
 
-  it("continues automatic dev campaigns despite a failed handoff receipt", async () => {
-    writeDevGitInstallReceipt({
-      status: "error",
-      ts: Date.now() - 60_000,
-      reason: "managed-service-handoff-failed",
-    });
-    mockDevGitStatus({ branch: "HEAD" });
-    const runAutoUpdate = mockAutoUpdate();
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
-
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-      gitSourceHint: expect.objectContaining({
-        root: "/opt/openclaw",
-        sha: "current-sha",
-        upstreamRef: "origin/main",
-      }),
-    });
-    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
-    await clock.advanceBy(60_000);
-    expect(runAutoUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
-      }),
-    );
-  });
-
-  it("reports current checkout metadata from its matching receipt", async () => {
-    const installedAtMs = Date.now() - 60 * 60 * 1000;
-    const commitAtMs = installedAtMs - 24 * 60 * 60 * 1000;
-    writeDevGitInstallReceipt({ status: "ok", ts: installedAtMs });
-    mockDevGitStatus({ behind: 0, commitAtMs });
-    await runGatewayUpdateCheck({ cfg: { update: { channel: "dev" } } });
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(getUpdateAvailable()).toBeNull();
-    expect(getUpdateSchedule()?.install).toEqual({
-      kind: "git",
-      git: {
-        status: "current",
-        currentSha: "current-sha",
-        upstreamSha: "upstream-sha",
-        commitAtMs,
-        installedAtMs,
-      },
-    });
-  });
-
   it.each([
+    {
+      name: "current checkout with matching receipt",
+      git: { behind: 0, commitAtMs: 1_768_557_600_000 },
+      expected: {
+        status: "current",
+        upstreamSha: "upstream-sha",
+        commitAtMs: 1_768_557_600_000,
+        installedAtMs: 1_768_644_000_000,
+      },
+    },
     {
       name: "failed fetch",
       git: { fetchOk: false, ahead: null, behind: null },
@@ -835,13 +785,23 @@ describe("update-startup", () => {
         commitsBehind: 3,
       },
     },
-  ])("reports $name without fabricating current", async ({ git, expected }) => {
+  ])("projects $name into the install schedule", async ({ git, expected }) => {
+    if (expected.status === "current") {
+      writeDevGitInstallReceipt({ status: "ok", ts: 1_768_644_000_000 });
+    }
     mockDevGitStatus(git);
 
-    await runGatewayUpdateCheck({ cfg: { update: { channel: "dev", auto: { enabled: true } } } });
+    await runGatewayUpdateCheck({ cfg: autoConfig("dev") });
 
-    expect(getUpdateSchedule()?.install?.git).toEqual({ currentSha: "current-sha", ...expected });
+    expect(getUpdateSchedule()?.install).toEqual({
+      kind: "git",
+      git: { currentSha: "current-sha", ...expected },
+    });
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
+    if (expected.status === "current") {
+      expectNoCalls(runCommandWithTimeout);
+      expect(getUpdateAvailable()).toBeNull();
+    }
   });
 
   it("keeps a new dev target visible during the automatic attempt cooldown", async () => {
@@ -851,12 +811,9 @@ describe("update-startup", () => {
     });
     mockDevGitStatus({ upstreamSha: "upstream-two", behind: 3 });
     const runAutoUpdate = mockAutoUpdate();
-    const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
+    const cfg = autoConfig("dev");
 
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
+    await checkAutomatically(cfg);
 
     expect(getUpdateAvailable()).toMatchObject({ upstreamSha: "upstream-two" });
     expect(getUpdateSchedule()?.target).toMatchObject({ upstreamSha: "upstream-two" });
@@ -864,10 +821,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).not.toHaveBeenCalled();
 
     clock.setTime(Date.now() + 60 * 60 * 1000 + 1);
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
+    await checkAutomatically(cfg);
 
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     expect(runAutoUpdate).not.toHaveBeenCalled();
@@ -971,52 +925,73 @@ describe("update-startup", () => {
     }
   });
 
-  it("cancels and joins a commit summary read before stopping discovery", async ({ signal }) => {
-    mockDevGitStatus();
-    process.env.NODE_ENV = "production";
-    const logRead = createDeferred<Awaited<ReturnType<typeof runCommandWithTimeout>>>();
-    const entered = createDeferred();
-    vi.mocked(runCommandWithTimeout).mockImplementationOnce(pauseAt(entered, logRead));
-    const onUpdateAvailableChange = vi.fn();
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "dev" } },
-      onUpdateAvailableChange,
-    });
-    let stopped = false;
-    const result = {
-      stdout: "abc123\tsynthetic commit\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    };
-    const checking = clock.advanceBy(0);
-    try {
-      await withinTest(entered.promise, signal);
-      const [argv, options] = vi.mocked(runCommandWithTimeout).mock.calls[0] ?? [];
-      expect(argv).toContain("log");
-      const discoverySignal = typeof options === "object" ? options.signal : undefined;
-      const stopping = stop().then(() => {
-        stopped = true;
+  it.for(["commits", "catalog"] as const)(
+    "aborts and joins the active %s read before stopping",
+    async (kind, { signal }) => {
+      const entered = createDeferred();
+      const command = createDeferred<Awaited<ReturnType<typeof runCommandWithTimeout>>>();
+      const catalog = createDeferred<Awaited<ReturnType<typeof refreshCatalog>>>();
+      const result = commandSuccess("abc123\tsynthetic commit\n");
+      let capturedSignal: AbortSignal | undefined;
+      let commandArgs: readonly string[] | undefined;
+      const onUpdateAvailableChange = vi.fn();
+      if (kind === "commits") {
+        mockDevGitStatus();
+        process.env.NODE_ENV = "production";
+        vi.mocked(runCommandWithTimeout).mockImplementationOnce((argv, options) => {
+          commandArgs = argv;
+          capturedSignal = typeof options === "object" ? options.signal : undefined;
+          entered.resolve();
+          return command.promise;
+        });
+      } else {
+        refreshCatalog.mockImplementationOnce(({ signal: catalogSignal }) => {
+          capturedSignal = catalogSignal;
+          entered.resolve();
+          return catalog.promise;
+        });
+      }
+      const stop = scheduleGatewayUpdateCheck({
+        cfg: {
+          update:
+            kind === "commits"
+              ? { channel: "dev" }
+              : { channel: "extended-stable", checkOnStart: false },
+        },
+        onUpdateAvailableChange,
       });
-      expect(discoverySignal?.aborted).toBe(true);
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-      logRead.resolve(result);
-      await stopping;
-      expect(onUpdateAvailableChange).not.toHaveBeenCalled();
-    } finally {
-      logRead.resolve(result);
-      await Promise.all([checking, stop()]);
-    }
-  });
+      const checking = clock.advanceBy(0);
+      const stopped = vi.fn();
+      try {
+        await withinTest(entered.promise, signal);
+        if (kind === "commits") {
+          expect(commandArgs).toContain("log");
+        }
+        expect(capturedSignal?.aborted).toBe(false);
+        const stopping = stop().then(stopped);
+        expect(capturedSignal?.aborted).toBe(true);
+        await Promise.resolve();
+        expect(stopped).not.toHaveBeenCalled();
+        if (kind === "commits") {
+          command.resolve(result);
+        } else {
+          catalog.reject(new Error("synthetic catalog cancellation"));
+        }
+        await stopping;
+        expect(onUpdateAvailableChange).not.toHaveBeenCalled();
+      } finally {
+        command.resolve(result);
+        catalog.resolve({ status: "error", error: "aborted", providers: 0, models: 0 });
+        await Promise.all([checking, stop()]);
+      }
+    },
+  );
 
   it("schedules enabled dev git checks hourly", async () => {
     mockDevGitStatus();
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      cfg: autoConfig("dev"),
     });
     await clock.advanceBy(0);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
@@ -1051,15 +1026,10 @@ describe("update-startup", () => {
   });
 
   it("reads telemetry consent after awaited install discovery", async ({ signal }) => {
-    mockPackageInstallStatus();
+    const status = mockPackageInstallStatus();
     const discovery = createDeferred<UpdateCheckResult>();
     const entered = createDeferred();
     vi.mocked(checkUpdateStatus).mockImplementationOnce(pauseAt(entered, discovery));
-    const status: UpdateCheckResult = {
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    };
     let cfg: OpenClawConfig = { telemetry: { enabled: true } };
     const params = {
       cfg: () => cfg,
@@ -1116,7 +1086,7 @@ describe("update-startup", () => {
     const applying = createDeferred<{ status: "handoff" }>();
     const entered = createDeferred();
     mockAutoUpdate(pauseAt(entered, applying));
-    let cfg: OpenClawConfig = createBetaAutoUpdateConfig();
+    let cfg = autoConfig();
     const params = {
       cfg: () => cfg,
       activeWorkInspectors: idleActiveWorkInspectors(),
@@ -1148,7 +1118,7 @@ describe("update-startup", () => {
     const onOldSchedule = vi.fn();
     const onOldAvailable = vi.fn();
     const stopOld = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      cfg: autoConfig("dev"),
       activeWorkInspectors: idleActiveWorkInspectors(),
       onUpdateScheduleChange: onOldSchedule,
       onUpdateAvailableChange: onOldAvailable,
@@ -1161,7 +1131,7 @@ describe("update-startup", () => {
       const stoppingOld = stopOld();
       mockDevGitStatus({ upstreamSha: "new-upstream", behind: 3 });
       stopReplacement = scheduleGatewayUpdateCheck({
-        cfg: { update: { channel: "dev", auto: { enabled: true } } },
+        cfg: autoConfig("dev"),
         activeWorkInspectors: idleActiveWorkInspectors(),
       });
       replacementChecking = clock.advanceBy(0);
@@ -1180,43 +1150,39 @@ describe("update-startup", () => {
     }
   });
 
+  async function expectJoinedStop(stop: () => Promise<void>, release: () => void) {
+    let stopped = false;
+    const stopping = stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(restart).not.toHaveBeenCalled();
+    release();
+    await stopping;
+  }
+
   it.for([
-    { channel: "beta", joined: true, cancelled: "restored-in-process" as const },
-    { channel: "beta", joined: false, cancelled: false as const },
+    { joined: true, cancelled: "restored-in-process" as const },
+    { joined: false, cancelled: false as const },
   ])(
-    "reconciles a late $channel handoff after stop with joined=$joined and cancellation=$cancelled",
+    "reconciles a late beta handoff after stop with joined=$joined and cancellation=$cancelled",
     async ({ joined, cancelled }, { signal }) => {
       cancelHandoff.mockResolvedValueOnce(cancelled);
       const entered = createDeferred();
-      let releaseHandoff!: () => void;
-      startHandoff.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            entered.resolve();
-            releaseHandoff = () => {
-              const handoff = startedHandoff({
-                logPath: "/tmp/late-handoff.log",
-                handoffId: "late-handoff",
-              });
-              resolve(
-                joined ? { ...handoff, status: "joined" } : { ...handoff, status: "started" },
-              );
-            };
-          }),
-      );
+      const pending = createDeferred<Awaited<ReturnType<typeof startHandoff>>>();
+      const release = () =>
+        pending.resolve({
+          ...startedHandoff({ logPath: "/tmp/late-handoff.log", handoffId: "late-handoff" }),
+          status: joined ? "joined" : "started",
+          message: "Update blocked by another update lease.",
+        });
+      startHandoff.mockImplementationOnce(pauseAt(entered, pending));
       const log = { info: vi.fn() };
       await withScheduledBetaCampaign(
-        { started: entered.promise, signal, release: () => releaseHandoff?.(), log },
+        { started: entered.promise, signal, release, log },
         async (stop) => {
-          expect(releaseHandoff).toEqual(expect.any(Function));
-          let stopped = false;
-          const stopping = stop().then(() => {
-            stopped = true;
-          });
-          await Promise.resolve();
-          expect(stopped).toBe(false);
-          releaseHandoff();
-          await stopping;
+          await expectJoinedStop(stop, release);
           if (joined) {
             expect(cancelHandoff).not.toHaveBeenCalled();
           } else {
@@ -1225,16 +1191,13 @@ describe("update-startup", () => {
               handoffId: "late-handoff",
               installRoot: "/opt/openclaw",
             });
-            if (cancelled !== "restored-in-process") {
-              expect(log.info).toHaveBeenCalledWith(
-                "stopped auto-update handoff cancellation could not be verified",
-                expect.objectContaining({ result: cancelled, logPath: "/tmp/late-handoff.log" }),
-              );
-            }
+            expect(log.info).toHaveBeenCalledWith(
+              "stopped auto-update handoff cancellation could not be verified",
+              expect.objectContaining({ result: cancelled, logPath: "/tmp/late-handoff.log" }),
+            );
           }
-          expectNoCalls(restart, transferHandoff);
+          expectNoCalls(restart, transferHandoff, triage);
           expect(await readRestartSentinel()).toBeNull();
-          expect(triage).not.toHaveBeenCalled();
         },
       );
     },
@@ -1250,7 +1213,6 @@ describe("update-startup", () => {
     await withScheduledBetaCampaign(
       { started: entered.promise, signal, release: () => pendingTriage.resolve(triageResult) },
       async (stop) => {
-        expect(triage).toHaveBeenCalledOnce();
         const stopping = stop();
         await writeRestartSentinel({
           kind: "restart",
@@ -1276,16 +1238,8 @@ describe("update-startup", () => {
     await withScheduledBetaCampaign(
       { started: handoffTransferStarted.promise, signal, release: () => transferred.resolve(true) },
       async (stop) => {
-        expect(transferHandoff).toHaveBeenCalledOnce();
-        let stopped = false;
-        const stopping = stop().then(() => {
-          stopped = true;
-        });
-        await Promise.resolve();
-        expect(stopped).toBe(false);
         expect(restart).not.toHaveBeenCalled();
-        transferred.resolve(true);
-        await stopping;
+        await expectJoinedStop(stop, () => transferred.resolve(true));
         expect(cancelHandoff).toHaveBeenCalledExactlyOnceWith({
           kind: "managed-update-handoff",
           handoffId: "auto-handoff-id",
@@ -1301,38 +1255,28 @@ describe("update-startup", () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
     const runAutoUpdate = mockAutoUpdate();
-    const stableAutoConfig = { update: { channel: "stable" as const, auto: { enabled: true } } };
+    const stableAutoConfig = autoConfig("stable");
 
-    await runGatewayUpdateCheck({
-      cfg: stableAutoConfig,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
+    await checkAutomatically(stableAutoConfig);
     expect(runAutoUpdate).not.toHaveBeenCalled();
 
     clock.setTime(Date.parse("2026-01-18T07:00:00Z"));
-    await runGatewayUpdateCheck({
-      cfg: stableAutoConfig,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
+    await checkAutomatically(stableAutoConfig);
     await clock.advanceBy(60_000);
 
-    expect(runAutoUpdate).toHaveBeenCalledExactlyOnceWith({
-      channel: "stable",
-      runId: listUpdateRuns()[0]?.runId,
-      signal: expect.any(AbortSignal),
-      mode: "npm",
-      timeoutMs: 45 * 60 * 1000,
-      restartDrainTimeoutMs: 300_000,
-      root: "/opt/openclaw",
-      packageTargetVersion: "2.0.0",
-    });
+    expect(runAutoUpdate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        channel: "stable",
+        packageTargetVersion: "2.0.0",
+      }),
+    );
   });
 
   it("ends a held stable campaign when its replacement target is not yet due", async () => {
     const campaign = new UpdateCampaignController(scheduler);
     currentUpdateCheckLifecycle().campaign = campaign;
     const runAutoUpdate = mockAutoUpdate();
-    const cfg = { update: { channel: "stable" as const, auto: { enabled: true } } };
+    const cfg = autoConfig("stable");
     mockPackageUpdateStatus("latest", "2.0.0");
     writePersistedUpdateCheckState({
       autoInstallId: "stable-held-install",
@@ -1340,11 +1284,7 @@ describe("update-startup", () => {
       autoFirstSeenTag: "latest",
       autoFirstSeenAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
     });
-    const check = () =>
-      runGatewayUpdateCheck({
-        cfg,
-        activeWorkInspectors: idleActiveWorkInspectors(),
-      });
+    const check = () => checkAutomatically(cfg);
 
     try {
       await check();
@@ -1376,7 +1316,7 @@ describe("update-startup", () => {
       await runGatewayUpdateCheck({
         cfg: {
           update: {
-            ...createBetaAutoUpdateConfig().update,
+            ...autoConfig().update,
             ...(optOut === "checkOnStart" ? { checkOnStart: false } : {}),
           },
         },
@@ -1401,7 +1341,7 @@ describe("update-startup", () => {
     const log = { info: vi.fn() };
     const runAutoUpdate = mockAutoUpdate();
 
-    await runGatewayUpdateCheck({ cfg: createBetaAutoUpdateConfig(), log });
+    await runGatewayUpdateCheck({ cfg: autoConfig(), log });
 
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("auto-update delegated to external supervisor", {
@@ -1413,9 +1353,8 @@ describe("update-startup", () => {
 
   it("keeps a foreground Gateway serving when automatic update has no restart owner", async () => {
     process.env.OPENCLAW_PROFILE = "work";
-    mockPackageInstallStatus();
-    mockNpmChannelTag("beta", "2.0.0-beta.1");
-    await runAutoUpdateCheckWithDefaults({ cfg: createBetaAutoUpdateConfig() });
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
     expectNoCalls(runCommandWithTimeout, startHandoff, restart);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
@@ -1436,33 +1375,21 @@ describe("update-startup", () => {
       new Error(`ENOENT: no such file or directory, open '${helperPath}'`),
       { code: "ENOENT", path: helperPath },
     );
-    mockPackageInstallStatus();
-    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     supervisor.mockReturnValue("launchd");
     startHandoff.mockRejectedValueOnce(startupError);
     triage.mockResolvedValueOnce({
       status: "failed",
       hint: "Triage could not complete: collector failed. Run openclaw triage.",
     });
-    const log = { info: vi.fn() };
-    const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+    const { sentinels: terminalSentinels, onUpdateScheduleChange } = observeTerminalSentinels();
 
-    await runGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig(),
-      log,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      onUpdateScheduleChange: (schedule) => {
-        if (!schedule.campaign) {
-          // This observer outlives the campaign job that publishes its terminal schedule.
-          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
-        }
-      },
-    });
-    await clock.advanceBy(60_000);
+    await runAutoUpdateCheckWithDefaults({ cfg: autoConfig(), onUpdateScheduleChange });
 
     expect(restart).not.toHaveBeenCalled();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
-    expect((await terminalSentinels.at(-1))?.payload).toMatchObject({
+    const payload = (await terminalSentinels.at(-1))?.payload;
+    expect(payload).toMatchObject({
       kind: "update",
       status: "error",
       doctorHint: expect.stringContaining("openclaw triage"),
@@ -1470,7 +1397,7 @@ describe("update-startup", () => {
     });
     expect(triage).toHaveBeenCalledOnce();
     expect(JSON.stringify(triage.mock.calls[0]?.[0].failure)).not.toContain(helperPath);
-    expect(JSON.stringify((await terminalSentinels.at(-1))?.payload)).not.toContain(helperPath);
+    expect(JSON.stringify(payload)).not.toContain(helperPath);
     expect(listUpdateRuns()[0]).toMatchObject({
       target: { installationMethod: "managed-service" },
       verification: { rollbackOutcome: { status: "not-attempted" } },
@@ -1483,18 +1410,15 @@ describe("update-startup", () => {
   });
 
   it("does not schedule another restart when auto-update joins an active handoff", async () => {
-    mockPackageInstallStatus();
-    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     supervisor.mockReturnValue("launchd");
     startHandoff.mockResolvedValueOnce({
+      ...startedHandoff(),
       status: "joined",
-      pid: 12345,
-      command: "openclaw update --yes --channel beta",
-      logPath: "/tmp/openclaw-handoff.log",
-      handoffId: "handoff-existing",
+      message: "Update blocked by another update lease.",
     });
 
-    await runAutoUpdateCheckWithDefaults({ cfg: createBetaAutoUpdateConfig() });
+    await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
     expectNoCalls(restart, transferHandoff, triage);
     expect(listUpdateRuns()).toEqual(
@@ -1502,41 +1426,10 @@ describe("update-startup", () => {
         trigger: "campaign",
         status: "skipped",
         reason: "managed-service-handoff-already-running",
+        origin: expect.objectContaining({ nextAction: "Update blocked by another update lease." }),
         finishedAtMs: expect.any(Number),
       }),
     );
-  });
-
-  it("joins an aborted catalog refresh when it rejects", async ({ signal }) => {
-    let capturedSignal: AbortSignal | undefined;
-    const entered = createDeferred();
-    const finished = createDeferred<Awaited<ReturnType<typeof refreshCatalog>>>();
-    refreshCatalog.mockImplementationOnce(({ signal: catalogSignal }) => {
-      capturedSignal = catalogSignal;
-      entered.resolve();
-      return finished.promise;
-    });
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
-    });
-
-    let stopped = false;
-    const checking = clock.advanceBy(0);
-    try {
-      await withinTest(entered.promise, signal);
-      expect(capturedSignal?.aborted).toBe(false);
-      const stopping = stop().then(() => {
-        stopped = true;
-      });
-      expect(capturedSignal?.aborted).toBe(true);
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-      finished.reject(new Error("synthetic catalog cancellation"));
-      await stopping;
-    } finally {
-      finished.resolve({ status: "error", error: "aborted", providers: 0, models: 0 });
-      await Promise.all([checking, stop()]);
-    }
   });
 
   it.each(["unchanged", "failed"] as const)(

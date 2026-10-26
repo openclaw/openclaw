@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as githubIssue from "./github-issue.js";
@@ -116,6 +117,10 @@ export function createUpdateFailureReportFixture(
   };
 }
 
+export async function expectMissing(file: string) {
+  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 export function savedReportArtifactPath(
   prepared: PreparedUpdateFailureReport,
   reservationId: string,
@@ -128,18 +133,27 @@ export function savedReportArtifactPath(
   return path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`);
 }
 
-function mockIssue<T extends githubIssue.GithubIssueSubmitResult>(result: T, create: boolean) {
+function mockIssue<T extends githubIssue.GithubIssueSubmitResult>(
+  result: T,
+  create: boolean,
+  controls: { afterAuth?: () => void; onCreate?: () => void } = {},
+) {
   return vi.fn(async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
     await hooks.afterAuthPreflight?.();
+    controls.afterAuth?.();
     if (create) {
       const commitIssueCreate = await hooks.beforeIssueCreate?.();
       commitIssueCreate?.();
+      controls.onCreate?.();
     }
     return result;
   });
 }
 
-export const mockCreatedIssue = (url: string) => mockIssue({ status: "created", url }, true);
+export const mockCreatedIssue = (
+  url: string,
+  controls?: { afterAuth?: () => void; onCreate?: () => void },
+) => mockIssue({ status: "created", url }, true, controls);
 export const mockFallbackIssue = (url: string | undefined) => fallbackIssue(url, false);
 export const mockFallbackAfterIssueCreateNoStart = (url: string | undefined) =>
   fallbackIssue(url, true);

@@ -1,13 +1,17 @@
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const rejected = (toolName: string, violation: string) => ({
+  tools: [],
+  diagnostics: [{ toolName, toolIndex: 0, violations: [violation] }],
+});
 function expectInvalid(schema: unknown, path: string) {
   expect(projectRuntimeToolInputSchema(schema)).toEqual({
     schema: {},
@@ -114,6 +118,76 @@ describe("runtime tool input schema projection", () => {
     expect(parameters).toEqual(original);
   });
 
+  it("reuses published inspection facts without copying their empty diagnostics across attempts", () => {
+    const projection = publishRuntimeToolInputSchema(objectSchema({ query: { type: "string" } }));
+    assert(projection.schema !== null && typeof projection.schema === "object");
+    const tool = { name: "search", parameters: projection.schema };
+    const iterator = Array.prototype[Symbol.iterator];
+    let diagnosticCopies = 0;
+    // eslint-disable-next-line no-extend-native -- Count copies without a spy recursively iterating its own call arguments.
+    Array.prototype[Symbol.iterator] = function (this: unknown[]) {
+      if (this === projection.violations) {
+        diagnosticCopies++;
+      }
+      return iterator.call(this);
+    };
+    try {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        filterRuntimeCompatibleTools([tool]);
+      }
+    } finally {
+      // eslint-disable-next-line no-extend-native -- Restore synchronous work-count instrumentation even on failure.
+      Array.prototype[Symbol.iterator] = iterator;
+    }
+    expect(diagnosticCopies).toBe(0);
+  });
+
+  it("rechecks current descriptors and mutable schemas across filter modes and recovery", () => {
+    const parameters = { type: "object", $dynamicRef: "#node" };
+    let unreadableName = false;
+    let unreadableParameters = false;
+    const tool = {
+      get name() {
+        if (unreadableName) {
+          throw new Error("unreadable name");
+        }
+        return "mutable";
+      },
+      get parameters() {
+        if (unreadableParameters) {
+          throw new Error("unreadable parameters");
+        }
+        return parameters;
+      },
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(filterProviderNormalizableTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
+      expect(filterRuntimeCompatibleTools([tool])).toEqual(
+        rejected("mutable", "mutable.parameters.$dynamicRef"),
+      );
+    }
+    Reflect.deleteProperty(parameters, "$dynamicRef");
+    expect(filterRuntimeCompatibleTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
+    unreadableName = true;
+    unreadableParameters = true;
+    expect(filterRuntimeCompatibleTools([tool])).toEqual({
+      tools: [],
+      diagnostics: [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0].name is unreadable", "tool[0].parameters is unreadable"],
+        },
+      ],
+    });
+    unreadableParameters = false;
+    expect(filterRuntimeCompatibleTools([tool])).toEqual(
+      rejected("tool[0]", "tool[0].name is unreadable"),
+    );
+    unreadableName = false;
+    expect(filterRuntimeCompatibleTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
+  });
+
   it("quarantines unreadable runtime tool fields without dropping healthy siblings", () => {
     const unreadable = {
       name: "fuzzplugin_unreadable",
@@ -124,44 +198,19 @@ describe("runtime tool input schema projection", () => {
     const healthy = { name: "healthy", parameters: objectSchema({}) };
 
     expect(filterRuntimeCompatibleTools([unreadable, healthy])).toEqual({
+      ...rejected("fuzzplugin_unreadable", "fuzzplugin_unreadable.parameters is unreadable"),
       tools: [healthy],
-      diagnostics: [
-        {
-          toolName: "fuzzplugin_unreadable",
-          toolIndex: 0,
-          violations: ["fuzzplugin_unreadable.parameters is unreadable"],
-        },
-      ],
-    });
-  });
-
-  it("keeps missing parameter schemas for provider-specific normalization", () => {
-    const parameterFree = {
-      name: "fuzzplugin_parameter_free",
-      parameters: undefined,
-    } as unknown as Pick<AnyAgentTool, "name" | "parameters">;
-
-    expect(filterProviderNormalizableTools([parameterFree])).toEqual({
-      tools: [parameterFree],
-      diagnostics: [],
     });
   });
 
   it("quarantines non-object schemas before provider normalization", () => {
+    const name = "fuzzplugin_array_root";
     const arraySchema = {
-      name: "fuzzplugin_array_root",
+      name,
       parameters: { type: "array", items: { type: "number" } },
     };
-
-    expect(filterProviderNormalizableTools([arraySchema])).toEqual({
-      tools: [],
-      diagnostics: [
-        {
-          toolName: "fuzzplugin_array_root",
-          toolIndex: 0,
-          violations: ['fuzzplugin_array_root.parameters.type must be "object"'],
-        },
-      ],
-    });
+    expect(filterProviderNormalizableTools([arraySchema])).toEqual(
+      rejected(name, `${name}.parameters.type must be "object"`),
+    );
   });
 });

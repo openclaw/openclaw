@@ -58,7 +58,19 @@ export async function runDoctorHealthRepairs(
     try {
       checkFindings = await phase("check", () => check.detect(checkContext));
     } catch (err) {
-      outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
+      const cause = scrubDoctorErrorMessage(err);
+      outcome.warnings.push(`${check.id} detect failed: ${cause}`);
+      const inspectionFailure: HealthFinding = {
+        checkId: check.id,
+        severity: "warning",
+        category: "fix-now",
+        message: `Doctor could not complete ${check.description}: ${cause}`,
+        fixHint:
+          "Inspect the reported cause and correct the failed prerequisite, then rerun openclaw doctor. This check has not established its health.",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/running#understanding-findings",
+      };
+      outcome.findings.push(inspectionFailure);
+      outcome.remainingFindings.push(inspectionFailure);
       continue;
     }
     outcome.findings.push(...checkFindings);
@@ -70,7 +82,7 @@ export async function runDoctorHealthRepairs(
     let remainingFindings = checkFindings;
     // Split checks expose detect/repair separately, so repair output must be validated by detect().
     try {
-      const repair = check.repair;
+      const repair = check.repair.bind(check);
       const result = await phase("repair", () =>
         repair(
           { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },

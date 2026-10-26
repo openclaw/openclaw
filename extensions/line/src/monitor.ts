@@ -17,6 +17,7 @@ import {
 import {
   canonicalizeWebhookRouteKey,
   registerWebhookTargetWithPluginRoute,
+  resolveWebhookPath,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   beginWebhookRequestPipelineOrReject,
@@ -31,7 +32,6 @@ import { showLoadingAnimation } from "./send.js";
 import type { LineChannelData } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
-import { resolveLineWebhookPath } from "./webhook-utils.js";
 
 interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -41,7 +41,6 @@ interface MonitorLineProviderOptions {
   runtime: RuntimeEnv;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
-  webhookUrl?: string;
   webhookPath?: string;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }
@@ -249,7 +248,8 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
     },
   });
 
-  const normalizedPath = resolveLineWebhookPath(webhookPath);
+  const defaultPath = "/line/webhook";
+  const normalizedPath = resolveWebhookPath({ webhookPath, defaultPath }) ?? defaultPath;
   const webhookRouteKey = canonicalizeWebhookRouteKey(normalizedPath);
   const handleWebhook = createLineNodeWebhookHandler({
     getTargets: () => lineWebhookTargets.get(webhookRouteKey) ?? [],

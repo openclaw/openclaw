@@ -1,13 +1,10 @@
-import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const diagnostics = channel("openclaw.projects.list");
-
 export function startProjectsListDiagnostics(context: GatewayRequestContext) {
-  if (!areDiagnosticsEnabledForProcess() && !diagnostics.hasSubscribers) {
+  if (!areDiagnosticsEnabledForProcess()) {
     return undefined;
   }
   const timing = createStageTimingTracker(() => performance.now());
@@ -29,9 +26,6 @@ export function startProjectsListDiagnostics(context: GatewayRequestContext) {
         ),
       };
       try {
-        if (diagnostics.hasSubscribers) {
-          diagnostics.publish(fields);
-        }
         if (totalMs >= 1_000 && areDiagnosticsEnabledForProcess()) {
           context.logGateway?.warn("projects.list: slow request", fields);
         }

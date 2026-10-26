@@ -2,35 +2,24 @@ import { describe, expect, it } from "vitest";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { assembleMSTeamsInboundFacts, prepareMSTeamsDebounceEntry } from "./inbound-facts.js";
 
-function context(activity: MSTeamsTurnContext["activity"]): MSTeamsTurnContext {
-  return { activity } as MSTeamsTurnContext;
+function prepare(activity: Omit<MSTeamsTurnContext["activity"], "type">) {
+  return prepareMSTeamsDebounceEntry({
+    accountId: "default",
+    context: { activity: { type: "message", ...activity } } as MSTeamsTurnContext,
+  });
 }
 
 describe("msteams inbound facts", () => {
   it("prefers activity text, then HTML, then adaptive-card values", async () => {
-    const textEntry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        text: "  <at>Bot</at> hello &lt;tag&gt;  ",
-        attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
-        value: { action: "ignored" },
-      }),
+    const textEntry = await prepare({
+      text: "  <at>Bot</at> hello &lt;tag&gt;  ",
+      attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
+      value: { action: "ignored" },
     });
-    const htmlEntry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }],
-      }),
+    const htmlEntry = await prepare({
+      attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }],
     });
-    const valueEntry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        value: { action: "approve", id: 7 },
-      }),
-    });
+    const valueEntry = await prepare({ value: { action: "approve", id: 7 } });
 
     expect(textEntry.text).toBe("hello &lt;tag&gt;");
     expect(htmlEntry.text).toBe("hello & goodbye");
@@ -49,66 +38,48 @@ describe("msteams inbound facts", () => {
       "See report https://example.test/?a=1&b=2",
     ],
   ])("preserves HTML text in the inbound body: %s", async (html, expected) => {
-    const entry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        attachments: [{ contentType: "text/html", content: html }],
-        value: { action: "ignored" },
-      }),
+    const entry = await prepare({
+      attachments: [{ contentType: "text/html", content: html }],
+      value: { action: "ignored" },
     });
 
     expect(assembleMSTeamsInboundFacts(entry).rawBody).toBe(expected);
   });
 
   it("strips native mentions from card text when HTML has no visible text", async () => {
-    const entry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        attachments: [{ contentType: "text/html", content: "<at>Bot</at>" }],
-        value: "<at>Bot</at> answer &lt;tag&gt;",
-      }),
+    const entry = await prepare({
+      attachments: [{ contentType: "text/html", content: "<at>Bot</at>" }],
+      value: "<at>Bot</at> answer &lt;tag&gt;",
     });
 
     expect(entry.text).toBe("answer &lt;tag&gt;");
   });
 
   it("preserves raw Bot Framework IDs while normalizing routing facts", async () => {
-    const entry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        id: "message-1",
-        text: "hello",
-        from: { id: "user-1", aadObjectId: "aad-1", name: "Alice" },
-        recipient: { id: "bot-1", name: "Bot" },
-        conversation: {
-          id: "19:channel@thread.tacv2;messageid=thread-root",
-          conversationType: "channel",
-        },
-        channelData: {
-          team: { id: "team-1" },
-          channel: { id: "channel-1" },
-          tenant: { id: "tenant-1" },
-        },
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-      }),
+    const entry = await prepare({
+      conversation: {
+        id: "19:channel@thread.tacv2;messageid=thread-root",
+        conversationType: "channel",
+      },
+      channelData: {
+        team: { id: "team-1" },
+        tenant: { id: "tenant-1" },
+      },
     });
 
-    const facts = assembleMSTeamsInboundFacts(entry);
-
-    expect(facts.rawConversationId).toBe("19:channel@thread.tacv2;messageid=thread-root");
-    expect(facts.conversationId).toBe("19:channel@thread.tacv2");
-    expect(facts.conversationMessageId).toBe("thread-root");
-    expect(facts.threadId).toBe("thread-root");
-    expect(facts.conversationRef).toMatchObject({
-      tenantId: "tenant-1",
-      teamId: "team-1",
+    expect(assembleMSTeamsInboundFacts(entry)).toMatchObject({
+      conversation: { id: "19:channel@thread.tacv2;messageid=thread-root" },
+      conversationId: "19:channel@thread.tacv2",
+      conversationMessageId: "thread-root",
       threadId: "thread-root",
-      conversation: {
-        id: "19:channel@thread.tacv2",
+      conversationRef: {
         tenantId: "tenant-1",
+        teamId: "team-1",
+        threadId: "thread-root",
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          tenantId: "tenant-1",
+        },
       },
     });
   });

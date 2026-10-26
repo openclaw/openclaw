@@ -1,5 +1,5 @@
 import os from "node:os";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
@@ -16,34 +16,34 @@ const hostInfo = (overrides: Partial<VitestHostInfo>) => ({
   ...overrides,
 });
 const profile = (shardParallelism: number) => ({ shardParallelism, vitestMaxWorkers: 1 });
+const scheduling = (maxWorkers: number, throttledBySystem = false) => ({
+  maxWorkers,
+  fileParallelism: maxWorkers > 1,
+  throttledBySystem,
+});
 
 it("sizes separately bundled project configs against one host reading", async () => {
-  // Separately bundled configs must share worker sizing despite changing host readings.
-  const host = os as unknown as Record<string, unknown>;
   const store = globalThis as Record<PropertyKey, unknown>;
   const snapshotKey = Symbol.for("openclaw.vitestSchedulingHostInfo");
   const savedSnapshot = Object.getOwnPropertyDescriptor(store, snapshotKey);
-  const saved = {
-    availableParallelism: os.availableParallelism,
-    totalmem: os.totalmem,
-    freemem: os.freemem,
-    loadavg: os.loadavg,
-  };
-  const constrainedMemory = vi.spyOn(process, "constrainedMemory");
-  const availableMemory = vi.spyOn(process, "availableMemory");
+  const load = vi.spyOn(os, "loadavg").mockReturnValue([0, 0, 0]);
+  const constrainedMemory = vi.spyOn(process, "constrainedMemory").mockReturnValue(32 * GiB);
+  const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(12 * GiB);
+  const mocks = [
+    load,
+    constrainedMemory,
+    availableMemory,
+    vi.spyOn(os, "availableParallelism").mockReturnValue(16),
+    vi.spyOn(os, "totalmem").mockReturnValue(512 * GiB),
+    vi.spyOn(os, "freemem").mockReturnValue(256 * GiB),
+  ];
   try {
     delete store[snapshotKey];
-    host.availableParallelism = () => 16;
-    host.totalmem = () => 512 * GiB;
-    host.freemem = () => 256 * GiB;
-    host.loadavg = () => [0, 0, 0];
-    constrainedMemory.mockReturnValue(32 * GiB);
-    availableMemory.mockReturnValue(12 * GiB);
     vi.resetModules();
     const first = await import("../../scripts/lib/vitest-local-scheduling.mts");
     const before = first.resolveLocalVitestScheduling({});
     expect(before.maxWorkers).toBe(4);
-    host.loadavg = () => [64, 64, 64];
+    load.mockReturnValue([64, 64, 64]);
     constrainedMemory.mockReturnValue(2 * GiB);
     availableMemory.mockReturnValue(0);
     vi.resetModules();
@@ -58,9 +58,7 @@ it("sizes separately bundled project configs against one host reading", async ()
     });
     expect(after).toEqual(before);
   } finally {
-    Object.assign(host, saved);
-    constrainedMemory.mockRestore();
-    availableMemory.mockRestore();
+    mocks.forEach((mock) => mock.mockRestore());
     if (savedSnapshot) {
       Object.defineProperty(store, snapshotKey, savedSnapshot);
     } else {
@@ -69,104 +67,49 @@ it("sizes separately bundled project configs against one host reading", async ()
   }
 });
 
-describe("local Vitest scheduling", () => {
-  it.each([
-    [{ cpuCount: 4, totalMemoryBytes: 16 * GiB, loadAverage1m: 3 }, {}, [1, false]],
-    [{ freeMemoryBytes: 0, availableMemoryBytes: 6 * GiB }, {}, [2, true]],
-    [{ cpuCount: 8, constrainedMemoryBytes: 24 * GiB }, { CI: "true" }, [6, false]],
-    [
-      { cpuCount: 2, loadAverage1m: 1.5, freeMemoryBytes: 0, availableMemoryBytes: 0 },
-      {},
-      [1, true],
-    ],
-    [
-      { constrainedMemoryBytes: 16 * GiB, availableMemoryBytes: 0 },
-      { OPENCLAW_TEST_WORKERS: "4" },
-      [4, false],
-    ],
-  ] as const)("schedules host %j with %j", (readings, env, [maxWorkers, throttledBySystem]) => {
-    const host = hostInfo(readings);
-    expect(resolveLocalVitestScheduling(env, host)).toEqual({
-      maxWorkers,
-      fileParallelism: maxWorkers > 1,
-      throttledBySystem,
-    });
-    expect(resolveLocalFullSuiteProfile(env, host)).toEqual(profile(maxWorkers));
-  });
-
-  it.each([
-    ["CI half load", { CI: "true" }, 8, 31, 4, 7],
-    ["large host", {}, 32, 256, 0, 12],
-  ] as const)("%s", (_name, env, cpuCount, totalMemoryGb, loadAverage1m, maxWorkers) => {
-    expect(
-      resolveLocalVitestScheduling(env, {
-        cpuCount,
-        totalMemoryBytes: totalMemoryGb * GiB,
-        loadAverage1m,
-      }),
-    ).toEqual({ maxWorkers, fileParallelism: true, throttledBySystem: false });
+it.each([
+  [{ cpuCount: 4, totalMemoryBytes: 16 * GiB, loadAverage1m: 3 }, {}, [1, false]],
+  [{ freeMemoryBytes: 0, availableMemoryBytes: 6 * GiB }, {}, [2, true]],
+  [{ cpuCount: 8, constrainedMemoryBytes: 24 * GiB }, { CI: "true" }, [6, false]],
+  [{ cpuCount: 2, loadAverage1m: 1.5, freeMemoryBytes: 0, availableMemoryBytes: 0 }, {}, [1, true]],
+  [
+    { constrainedMemoryBytes: 16 * GiB, availableMemoryBytes: 0 },
+    { OPENCLAW_TEST_WORKERS: "4" },
+    [4, false],
+  ],
+  [{ cpuCount: 8, totalMemoryBytes: 31 * GiB, loadAverage1m: 4 }, { CI: "true" }, [7, false]],
+  [{ cpuCount: 32, totalMemoryBytes: 256 * GiB }, {}, [12, false]],
+  [{ cpuCount: 14, loadAverage1m: 14, totalMemoryBytes: 48 * GiB }, {}, [1, true]],
+  [{ cpuCount: 64, totalMemoryBytes: 512 * GiB, freeMemoryBytes: undefined }, {}, [16, false]],
+  [
+    { cpuCount: 10, totalMemoryBytes: 24 * GiB, freeMemoryBytes: 3 * GiB },
+    { OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE: "1" },
+    [4, false],
+  ],
+] as const)("schedules host %j with %j", (readings, env, [maxWorkers, throttledBySystem]) => {
+  const host = hostInfo(readings);
+  expect(resolveLocalVitestScheduling(env, host)).toEqual(
+    scheduling(maxWorkers, throttledBySystem),
+  );
+  expect(resolveLocalFullSuiteProfile(env, host)).toEqual(profile(Math.min(maxWorkers, 10)));
+});
+it.each([
+  [{ OPENCLAW_LOCAL_CHECK: "0" }, "1"],
+  [{ OPENCLAW_LOCAL_CHECK: "false" }, "1"],
+  [{ GITHUB_ACTIONS: "yes", OPENCLAW_LOCAL_CHECK: "0" }, "0"],
+] as const)("normalizes local-check policy for %j", (env, expected) => {
+  expect(resolveLocalVitestEnv({ ...env, PATH: "/usr/bin" })).toEqual({
+    ...env,
+    PATH: "/usr/bin",
+    OPENCLAW_LOCAL_CHECK: expected,
   });
 });
 
-describe("vitest local full-suite profile", () => {
-  it("forces local Vitest runs back onto local-check policy", () => {
-    for (const value of ["0", "false"]) {
-      expect(resolveLocalVitestEnv({ OPENCLAW_LOCAL_CHECK: value, PATH: "/usr/bin" })).toEqual({
-        OPENCLAW_LOCAL_CHECK: "1",
-        PATH: "/usr/bin",
-      });
-    }
-  });
-
-  it("keeps local-check disablement for GitHub Actions runs", () => {
-    expect(
-      resolveLocalVitestEnv({ GITHUB_ACTIONS: "yes", OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" }),
-    ).toEqual({
-      GITHUB_ACTIONS: "yes",
-      OPENCLAW_LOCAL_CHECK: "0",
-      PATH: "/usr/bin",
-    });
-  });
-
-  it.each([
-    [
-      "throttled host",
-      hostInfo({ cpuCount: 14, loadAverage1m: 14, totalMemoryBytes: 48 * GiB }),
-      1,
-    ],
-    ["largest host", { cpuCount: 64, loadAverage1m: 0, totalMemoryBytes: 512 * GiB }, 10],
-  ] as const)("caps full-suite fanout: %s", (_name, host, workers) => {
-    expect(resolveLocalFullSuiteProfile({}, host)).toEqual(profile(workers));
-  });
-
-  it("lets explicit system throttle opt-out ignore memory pressure", () => {
-    const env = { OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE: "1" };
-    const host = hostInfo({
-      cpuCount: 10,
-      totalMemoryBytes: 24 * GiB,
-      freeMemoryBytes: 3 * GiB,
-    });
-
-    expect(resolveLocalVitestScheduling(env, host, "threads")).toEqual({
-      maxWorkers: 4,
-      fileParallelism: true,
-      throttledBySystem: false,
-    });
-    expect(resolveLocalFullSuiteProfile(env, host)).toEqual(profile(4));
-  });
-
-  it("rejects malformed explicit worker limits", () => {
-    const host = hostInfo({
-      cpuCount: 10,
-      totalMemoryBytes: 24 * GiB,
-      freeMemoryBytes: 12 * GiB,
-    });
-
-    expect(() =>
-      resolveLocalVitestScheduling({ OPENCLAW_VITEST_MAX_WORKERS: "8x" }, host, "threads"),
-    ).toThrow("OPENCLAW_VITEST_MAX_WORKERS must be a positive integer; got: 8x");
-    expect(() =>
-      resolveLocalVitestScheduling({ OPENCLAW_TEST_WORKERS: "1e0" }, host, "threads"),
-    ).toThrow("OPENCLAW_TEST_WORKERS must be a positive integer; got: 1e0");
-  });
+it.each([
+  ["OPENCLAW_VITEST_MAX_WORKERS", "8x"],
+  ["OPENCLAW_TEST_WORKERS", "1e0"],
+] as const)("rejects malformed explicit worker limit %s", (key, value) => {
+  expect(() => resolveLocalVitestScheduling({ [key]: value }, hostInfo({}), "threads")).toThrow(
+    `${key} must be a positive integer; got: ${value}`,
+  );
 });

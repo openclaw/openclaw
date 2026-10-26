@@ -118,6 +118,8 @@ export function meetStatusScript(params: {
       '[role="combobox"][aria-label*="microphone" i]',
       '[role="listbox"][aria-label*="microphone" i]',
       '[aria-haspopup="listbox"][aria-label*="microphone" i]',
+      'button[aria-haspopup="menu"][aria-label^="microphone:" i]',
+      '[role="button"][aria-haspopup="menu"][aria-label^="microphone:" i]',
     ];
     for (const selector of selectors) {
       const control = document.querySelector(selector);
@@ -296,7 +298,7 @@ export function meetStatusScript(params: {
     ) return;
     const mediaElements = [...document.querySelectorAll('audio, video')]
       .filter((el) => typeof el.setSinkId === 'function');
-    if (mediaElements.length === 0) return;
+
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputFamily = audioDeviceFamily(audioInputDeviceLabel);
@@ -314,14 +316,30 @@ export function meetStatusScript(params: {
         }
         return;
       }
+      if (mediaElements.length === 0) {
+        // Meet can use WebAudio without DOM media; device presence alone does not prove selection.
+        const control = document.querySelector(
+          'button[aria-haspopup="menu"][aria-label^="speaker:" i], [role="button"][aria-haspopup="menu"][aria-label^="speaker:" i]'
+        );
+        audioOutputRouted = Boolean(control) && audioDeviceFamily(deviceNodeLabel(control)) === audioDeviceFamily(output.label);
+        if (audioOutputRouted) audioOutputDeviceLabel = output.label;
+        return;
+      }
       let routed = 0;
+      let rejected = 0;
       for (const element of mediaElements) {
         if (element.sinkId !== output.deviceId) {
           if (readOnly) {
             continue;
           }
-          await element.setSinkId(output.deviceId);
-          routed += 1;
+          // One element (e.g. Meet's <video>) rejecting must not abort routing for the rest.
+          try {
+            await element.setSinkId(output.deviceId);
+            routed += 1;
+          } catch (error) {
+            rejected += 1;
+            audioOutputRouteError ??= error?.message || String(error);
+          }
         }
       }
       audioOutputRouted = mediaElements.some((element) => element.sinkId === output.deviceId);
@@ -332,6 +350,11 @@ export function meetStatusScript(params: {
             ? \`Routed Meet media output to \${audioOutputDeviceLabel}.\`
             : \`Meet media output already routed to \${audioOutputDeviceLabel}.\`
         );
+        if (rejected > 0) {
+          notes.push(\`\${rejected} Meet media element(s) rejected the speaker route: \${audioOutputRouteError}\`);
+        }
+      } else if (rejected > 0) {
+        notes.push(\`Could not route Meet speaker output to the virtual audio device: \${audioOutputRouteError}\`);
       }
     } catch (error) {
       audioOutputRouted = false;

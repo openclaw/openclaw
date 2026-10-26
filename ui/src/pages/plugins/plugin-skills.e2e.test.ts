@@ -140,22 +140,27 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       const session = await setup({ methodResponses: responses(installed) }, route);
       const { page, gateway, modal, file, open, read, content } = session;
       if (name === "installed settings") {
-        const description = page.locator(".plugin-skills-section .plugin-capability__copy > span");
+        const descriptionSelector = ".plugin-skills-section .plugin-capability__copy > span";
+        const description = page.locator(descriptionSelector);
         for (const width of [1440, 390]) {
           await page.setViewportSize({ width, height: 1000 });
           expect(await description.textContent()).toBe(skill.description);
-          expect(await description.count()).toBe(1);
+          // Query and measure together so a rerender cannot detach the sampled row.
           expect(
-            await description.evaluate((element) => {
-              const style = getComputedStyle(element);
-              const height = element.getBoundingClientRect().height;
-              return {
-                lineClamp: style.webkitLineClamp,
-                clamped: height <= Number.parseFloat(style.lineHeight) * 2 + 1,
-                overflowing: element.scrollHeight > height,
-              };
-            }),
-          ).toEqual({ lineClamp: "2", clamped: true, overflowing: true });
+            await page.evaluate(
+              (selector) =>
+                Array.from(document.querySelectorAll(selector), (element) => {
+                  const style = getComputedStyle(element);
+                  const height = element.getBoundingClientRect().height;
+                  return {
+                    lineClamp: style.webkitLineClamp,
+                    clamped: height <= Number.parseFloat(style.lineHeight) * 2 + 1,
+                    overflowing: element.scrollHeight > height,
+                  };
+                }),
+              descriptionSelector,
+            ),
+          ).toEqual([{ lineClamp: "2", clamped: true, overflowing: true }]);
           await captureScreenshot(page, `skill-row-${width}.png`, "viewport");
         }
         await page.setViewportSize({ width: 1440, height: 900 });

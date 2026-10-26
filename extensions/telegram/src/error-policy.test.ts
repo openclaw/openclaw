@@ -18,8 +18,7 @@ function suppress(errorMessage: string) {
 
 describe("telegram error policy", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z") });
     accountId = `work-${scopeSequence++}`;
   });
 
@@ -34,23 +33,13 @@ describe("telegram error policy", () => {
         groupConfig: {},
         topicConfig: { errorPolicy: "silent" },
       }),
-    ).toEqual({
-      policy: "silent",
-      cooldownMs: 14_400_000,
-    });
+    ).toEqual({ policy: "silent", cooldownMs: 14_400_000 });
   });
 
-  it("keeps cooldowns per error message within the same scope", () => {
-    expect(suppress("A")).toBe(false);
-    expect(suppress("B")).toBe(false);
-    expect(suppress("A")).toBe(true);
-  });
-
-  it("prunes expired cooldowns within a single scope", () => {
-    expect(suppress("A")).toBe(false);
+  it("isolates error cooldowns by message and prunes them after expiry", () => {
+    expect([suppress("A"), suppress("B"), suppress("A")]).toEqual([false, false, true]);
     vi.advanceTimersByTime(1001);
-    expect(suppress("B")).toBe(false);
-    expect(suppress("A")).toBe(false);
+    expect([suppress("B"), suppress("A")]).toEqual([false, false]);
   });
 
   it("does not leak suppression across accounts or threads", () => {
@@ -92,17 +81,12 @@ describe("telegram error policy", () => {
   });
 
   it("keeps forum and direct-message topics with the same id in separate scopes", () => {
-    const base = { accountId, chatId: 42 };
-    expect(
+    const scope = (kind: "forum" | "direct-messages") =>
       buildTelegramErrorScopeKey({
-        ...base,
-        threadSpec: { id: 9, scope: "forum" },
-      }),
-    ).not.toBe(
-      buildTelegramErrorScopeKey({
-        ...base,
-        threadSpec: { id: 9, scope: "direct-messages" },
-      }),
-    );
+        accountId,
+        chatId: 42,
+        threadSpec: { id: 9, scope: kind },
+      });
+    expect(scope("forum")).not.toBe(scope("direct-messages"));
   });
 });

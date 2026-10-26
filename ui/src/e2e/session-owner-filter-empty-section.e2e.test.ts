@@ -2,10 +2,12 @@ import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
+  captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  waitForMobileSidebarDrawerOpen,
 } from "./session-management.test-support.ts";
 import { sessionPerson } from "./session-ownership-fixtures.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
@@ -51,6 +53,7 @@ suite.define(() => {
         await selectAllSidebarSessions(page);
         const menu = await openSidebarMenu(page);
         await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
+        await chooseSidebarMenuOption(page, "Status", "All");
         const people = page.locator('[data-session-section^="person:"]');
         const other = page.locator('[data-session-section="ungrouped"]');
         const otherTitle = other.getByRole("button", { name: "Other", exact: true });
@@ -98,6 +101,93 @@ suite.define(() => {
         await expectBrowser(other.locator("[data-session-key]")).toHaveCount(0);
       }),
   );
+  it.each([
+    { name: "desktop", width: 1200, height: 800 },
+    { name: "mobile", width: 390, height: 844 },
+  ])("applies status-only empty-group filtering on $name", ({ name, width, height }) =>
+    suite.withPage(
+      { viewport: { width, height }, hasTouch: name === "mobile" },
+      async ({ page }) => {
+        const owners = [sessionPerson("profile-0", "Taylor"), sessionPerson("profile-1", "Morgan")];
+        const sessions = [
+          sessionRow("agent:main:planning", "Plan next release", 30, { category: "Planning" }),
+          sessionRow("agent:main:completed", "Release checklist", 20, {
+            category: "Completed work",
+            archived: true,
+          }),
+          sessionRow("agent:main:later", "Follow-up tomorrow", 10, {
+            category: "Later",
+            snoozedUntil: 4_000_000_000_000,
+          }),
+        ];
+        await installMockGateway(page, {
+          sessionGroups: ["Planning", "Completed work", "Later", "Empty group"],
+          presenceUsers: [{ self: true, id: "profile-0", name: "Taylor" }],
+          sessions,
+          methodResponses: { "sessions.list": { ...sessionsListResponse(sessions), owners } },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        if (name === "mobile") {
+          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+          await waitForMobileSidebarDrawerOpen(page);
+        }
+        await selectAllSidebarSessions(page);
+        const group = (title: string) => page.locator(`[data-session-section="category:${title}"]`);
+        const menu = await openSidebarMenu(page);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
+        await expectBrowser(group("Planning")).toContainText("Plan next release");
+        await expectBrowser(group("Completed work")).toContainText("Release checklist");
+        await expectBrowser(group("Later")).toContainText("Follow-up tomorrow");
+        await expectBrowser(group("Empty group")).toBeVisible();
+
+        await openSidebarMenu(page);
+        await chooseSidebarMenuOption(page, "Status", "Active");
+        await closeSidebarMenu(page);
+        await expectBrowser(group("Planning")).toBeVisible();
+        await captureUiProof(suite, page, `status-active-${name}.png`);
+        await expectBrowser(group("Completed work")).toHaveCount(0);
+        await expectBrowser(group("Later")).toHaveCount(0);
+        await expectBrowser(group("Empty group")).toHaveCount(0);
+        // A collapsed, populated group remains a destination through filter changes.
+        await group("Planning").locator(".sidebar-session-group-toggle").click();
+        await expectBrowser(
+          group("Planning").locator(".sidebar-session-group-toggle"),
+        ).toHaveAttribute("aria-expanded", "false");
+
+        await openSidebarMenu(page);
+        await chooseSidebarMenuOption(page, "Hide empty groups", "Never");
+        await closeSidebarMenu(page);
+        await expectBrowser(group("Completed work")).toBeVisible();
+        await expectBrowser(group("Completed work").locator("[data-session-key]")).toHaveCount(0);
+        await openSidebarMenu(page);
+        await chooseSidebarMenuOption(page, "Hide empty groups", "When filtering");
+        await chooseSidebarMenuOption(page, "Status", "Archived");
+        await closeSidebarMenu(page);
+        await expectBrowser(group("Completed work")).toContainText("Release checklist");
+        await expectBrowser(group("Planning")).toHaveCount(0);
+        await expectBrowser(group("Later")).toHaveCount(0);
+        await openSidebarMenu(page);
+        await chooseSidebarMenuOption(page, "Status", "Snoozed");
+        await closeSidebarMenu(page);
+        await expectBrowser(group("Later")).toContainText("Follow-up tomorrow");
+        await expectBrowser(group("Completed work")).toHaveCount(0);
+        await openSidebarMenu(page);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
+        await expectBrowser(group("Empty group")).toBeVisible();
+        await expectBrowser(group("Completed work")).toContainText("Release checklist");
+        await expectBrowser(
+          group("Planning").locator(".sidebar-session-group-toggle"),
+        ).toHaveAttribute("aria-expanded", "false");
+        await openSidebarMenu(page);
+        await expectBrowser(
+          menu.getByRole("button", { name: "Hide empty groups: When filtering", exact: true }),
+        ).toBeVisible();
+      },
+    ),
+  );
+
   it("keeps empty-group choices inside the narrow-screen menu and remembers the choice", () =>
     suite.withPage({ viewport: { width: 390, height: 844 }, hasTouch: true }, async ({ page }) => {
       await installMockGateway(page, {
@@ -105,11 +195,9 @@ suite.define(() => {
         sessions: [sessionRow("agent:main:mobile", "Mobile session", 8)],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:mobile"));
-      const filter = page.getByRole("button", { name: "Filter & sort", exact: true });
       const openMenu = async () => {
-        if (!(await filter.isVisible())) {
-          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        }
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await waitForMobileSidebarDrawerOpen(page);
         return openSidebarMenu(page);
       };
       const menu = await openMenu();

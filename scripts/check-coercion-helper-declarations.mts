@@ -70,6 +70,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "commonPrefixLength",
       "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
@@ -155,6 +156,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "isRecord",
       "isStringArray",
       "isStringRecord",
+      "omitUndefinedFields",
       "readStringField",
     ],
   },
@@ -172,6 +174,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
       "formatErrorStackWithMessage",
+      "mapErrorCauseChain",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",

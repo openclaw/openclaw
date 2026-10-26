@@ -1,6 +1,6 @@
 # Private Claw draft format
 
-Write only the existing JSON file named in the `/skill create-claw` input. Keep these fields:
+Write only the request-specific JSON draft at `.openclaw/claw-drafts/<draftId>.json`, using the `draftId` attached to this skill invocation's working context. Never infer a target from creation time or a shared pointer. Keep these fields:
 
 ```json
 {

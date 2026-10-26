@@ -39,8 +39,6 @@ const NPM_FRESHNESS_BYPASS_KEYS = [
   "npm_config_min-release-age",
 ] as const;
 
-type NpmFreshnessBypassMode = "before" | "min-release-age";
-
 export type NpmConfigScope = {
   npmConfigCwd?: string;
   npmConfigPrefix?: string | null;
@@ -278,7 +276,7 @@ export function findExplicitNpmConfigKeys(
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmConfigScope,
-): NpmFreshnessBypassMode {
+): "before" | "min-release-age" {
   if (process.platform === "win32") {
     return "before";
   }
@@ -333,7 +331,6 @@ export function applyNpmFreshnessBypassEnv(
 export function createNpmProjectInstallEnv(
   env: NodeJS.ProcessEnv,
   options: NpmProjectInstallEnvOptions = {},
-  now = new Date(),
 ): NodeJS.ProcessEnv {
   const nextEnv = resolveRuntimeScriptEnv(env);
   for (const key of Object.keys(nextEnv)) {
@@ -365,7 +362,7 @@ export function createNpmProjectInstallEnv(
     npm_config_save: "false",
     ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
-  applyNpmFreshnessBypassEnv(installEnv, now, options);
+  applyNpmFreshnessBypassEnv(installEnv, new Date(), options);
   applyPosixNpmScriptShellEnv(installEnv);
   return installEnv;
 }

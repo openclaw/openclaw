@@ -4,6 +4,7 @@ import {
   isCompletionReportInputProvenance,
   normalizeInputProvenance,
 } from "../sessions/input-provenance.js";
+import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
 import { hasVerifiedRequesterCompletionHandoff } from "./requester-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createRuntimeToolMatcher } from "./tool-policy-match.js";
@@ -35,6 +36,14 @@ const REPORT_ONLY_TOOL_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new M
 
 const REPORT_ONLY_ERROR =
   "New delegation is unavailable while reporting a completion through a fallback model.";
+
+/** Retries and a sticky rate-limit fallback tried first both run a fallback model. */
+export function isFallbackAttempt(params: {
+  isFallbackRetry: boolean;
+  modelRoutingProvenance: Pick<ModelFallbackAttemptProvenance, "stage">;
+}): boolean {
+  return params.isFallbackRetry || params.modelRoutingProvenance.stage === "fallback";
+}
 
 export function resolveDelegationCapability(params: {
   fallbackActive: boolean;
