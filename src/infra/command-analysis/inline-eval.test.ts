@@ -1,27 +1,27 @@
-// Covers interpreter inline-eval flag detection, positional program forms, and
-// allowlist pattern matching for approval policy.
 import { describe, expect, it } from "vitest";
-import type { InterpreterInlineEvalHit } from "./inline-eval.js";
 import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
   isInterpreterLikeAllowlistPattern,
 } from "./inline-eval.js";
 
-function expectInlineEvalDescription(hit: InterpreterInlineEvalHit | null, expected: string) {
-  if (hit === null) {
-    throw new Error(`Expected inline eval hit for ${expected}`);
-  }
-  expect(describeInterpreterInlineEval(hit)).toBe(expected);
-}
-
 function evalFlags(
   executable: string,
   flags: string,
   code: string,
-  expected: string,
+  expected?: string,
 ): [string[], string][] {
-  return flags.split(" ").map((flag) => [[executable, flag, code], expected]);
+  return flags
+    .split(" ")
+    .map((flag) => [
+      flag.endsWith("=") ? [executable, flag + code] : [executable, flag, code],
+      expected ?? `${executable} ${flag.replace(/[=]$/u, "")}`,
+    ]);
+}
+
+function checkInlineEval(argv: readonly string[], expected: string) {
+  const hit = detectInterpreterInlineEvalArgv([...argv]);
+  expect(hit && describeInterpreterInlineEval(hit)).toBe(expected);
 }
 
 function expectNoInlineEval(argv: string[]) {
@@ -49,10 +49,8 @@ describe("exec inline eval detection", () => {
       "say 1",
       "perl -e",
     ),
-    [["php", "-B", "system('id');"], "php -B"],
+    ...evalFlags("php", "-B -E -R", "system('id');"),
     [["php", "-rsystem('id');"], "php -r"],
-    [["php", "-E", "system('id');"], "php -E"],
-    [["php", "-R", "system('id');"], "php -R"],
     [["Rscript", "-e", "system('id')"], "rscript -e"],
     [["julia", "-e", "run(`id`)"], "julia -e"],
     [["julia", "-erun(`id`)"], "julia -e"],
@@ -68,26 +66,21 @@ describe("exec inline eval detection", () => {
     [["guile", "-e", '(lambda args (system "id"))', "/dev/null"], "guile -e"],
     [["groovy", "-e", '"id".execute()'], "groovy -e"],
     [["groovy", '-e"id".execute()'], "groovy -e"],
-    [["groovy", "-ne", '["id"].execute()'], "groovy -e"],
-    [["groovy", "-pe", '["id"].execute()'], "groovy -e"],
+    ...evalFlags("groovy", "-ne -pe", '["id"].execute()', "groovy -e"),
     [["groovy", '-encoding:["id"].execute()'], "groovy -e"],
-    [["scala", "-e", 'sys.process.Process("id").!'], "scala -e"],
-    [["scala", "--script-snippet", 'sys.process.Process("id").!'], "scala --script-snippet"],
-    [
-      ["scala-cli", "--script-snippet", 'sys.process.Process("id").!'],
-      "scala-cli --script-snippet",
-    ],
-    [["scala", "--execute-script", 'sys.process.Process("id").!'], "scala --execute-script"],
-    [["scala", "--execute-sc=println(1)"], "scala --execute-sc"],
-    [["scala", "--execute-scala-script=println(1)"], "scala --execute-scala-script"],
-    [["scala", "--scala-snippet=println(1)"], "scala --scala-snippet"],
-    [["scala", "--execute-scala=println(1)"], "scala --execute-scala"],
-    [["scala", "--java-snippet", "class Main {}"], "scala --java-snippet"],
-    [["scala", "--execute-java=class Main {}"], "scala --execute-java"],
-    [["scala", "--markdown-snippet", "```scala\nprintln(1)\n```"], "scala --markdown-snippet"],
-    [["scala", "--md-snippet=```scala\nprintln(1)\n```"], "scala --md-snippet"],
-    [["scala", "--execute-markdown", "```scala\nprintln(1)\n```"], "scala --execute-markdown"],
-    [["scala", "--execute-md=```scala\nprintln(1)\n```"], "scala --execute-md"],
+    ...evalFlags("scala", "-e --script-snippet --execute-script", 'sys.process.Process("id").!'),
+    ...evalFlags("scala-cli", "--script-snippet", 'sys.process.Process("id").!'),
+    ...evalFlags(
+      "scala",
+      "--execute-sc= --execute-scala-script= --scala-snippet= --execute-scala=",
+      "println(1)",
+    ),
+    ...evalFlags("scala", "--java-snippet --execute-java=", "class Main {}"),
+    ...evalFlags(
+      "scala",
+      "--markdown-snippet --md-snippet= --execute-markdown --execute-md=",
+      "```scala\nprintln(1)\n```",
+    ),
     [["clojure", "-e", '(clojure.java.shell/sh "id")'], "clojure -e"],
     [["clj", "--eval", "(println 1)"], "clj --eval"],
     [["raku", "-e", "run 'id'"], "raku -e"],
@@ -105,30 +98,16 @@ describe("exec inline eval detection", () => {
     [["werl", "-run", "os", "cmd", "id"], "werl -run"],
     [["gdb", "-ex", "shell id", "-ex", "quit"], "gdb -ex"],
     [["gdb", "-ex=shell id", "-ex", "quit"], "gdb -ex"],
-    [["gdb", "-iex", "shell id"], "gdb -iex"],
-    [["gdb", "-iex=shell id"], "gdb -iex"],
-    ...evalFlags("gdb", "-ev -eval -eval-c", "shell id", "gdb -eval-command"),
-    [["gdb", "-eval-c=shell id"], "gdb -eval-command"],
-    [["gdb", "-eval-command", "shell id"], "gdb -eval-command"],
-    [["gdb", "-eval-command=shell id"], "gdb -eval-command"],
-    [["gdb", "--ev", "shell id"], "gdb --eval-command"],
-    [["gdb", "--eval", "shell id"], "gdb --eval-command"],
-    [["gdb", "--eval-c=shell id"], "gdb --eval-command"],
-    [["gdb", "--eval-command=shell id"], "gdb --eval-command"],
-    [["gdb", "-init-e", "shell id"], "gdb -init-eval-command"],
-    [["gdb", "-init-eval", "shell id"], "gdb -init-eval-command"],
-    [["gdb", "-init-eval-c=shell id"], "gdb -init-eval-command"],
-    [["gdb", "--init-e", "shell id"], "gdb --init-eval-command"],
-    [["gdb", "--init-eval-command=shell id"], "gdb --init-eval-command"],
-    [["gdb", "--init-eval=shell id"], "gdb --init-eval-command"],
-    [["gdb", "-init-eval-command=shell id"], "gdb -init-eval-command"],
-    [["gdb", "-eiex", "shell id"], "gdb -eiex"],
-    [["gdb", "-eiex=shell id"], "gdb -eiex"],
-    [["gdb", "-early-init-e", "shell id"], "gdb -early-init-eval-command"],
-    [["gdb", "-early-init-eval", "shell id"], "gdb -early-init-eval-command"],
-    [["gdb", "--early-init-e=shell id"], "gdb --early-init-eval-command"],
-    [["gdb", "--early-init-eval=shell id"], "gdb --early-init-eval-command"],
-    [["gdb", "-early-init-eval-command=shell id"], "gdb -early-init-eval-command"],
+    ...[
+      ["-iex -iex=", "-iex"],
+      ["-ev -eval -eval-c -eval-c= -eval-command -eval-command=", "-eval-command"],
+      ["--ev --eval --eval-c= --eval-command=", "--eval-command"],
+      ["-init-e -init-eval -init-eval-c= -init-eval-command=", "-init-eval-command"],
+      ["--init-e --init-eval-command= --init-eval=", "--init-eval-command"],
+      ["-eiex -eiex=", "-eiex"],
+      ["-early-init-e -early-init-eval -early-init-eval-command=", "-early-init-eval-command"],
+      ["--early-init-e= --early-init-eval=", "--early-init-eval-command"],
+    ].flatMap(([flags, expected]) => evalFlags("gdb", flags, "shell id", `gdb ${expected}`)),
     [["expect", "-c", "spawn id"], "expect -c"],
     [["expect", "-cspawn id"], "expect -c"],
     [["lua", "-eprint(1)"], "lua -e"],
@@ -136,10 +115,7 @@ describe("exec inline eval detection", () => {
     [["osascript", '-edisplay alert "hi"'], "osascript -e"],
     [["awk", "BEGIN { print 1 }"], "awk inline program"],
     [["gawk", "-F", ",", "{print $1}", "data.csv"], "gawk inline program"],
-  ] as const)("detects interpreter eval flags for %j", (argv, expected) => {
-    const hit = detectInterpreterInlineEvalArgv([...argv]);
-    expectInlineEvalDescription(hit, expected);
-  });
+  ] as const)("detects interpreter eval flags for %j", checkInlineEval);
 
   it.each([
     [["awk", 'BEGIN{system("id")}', "/dev/null"], "awk inline program"],
@@ -165,10 +141,7 @@ describe("exec inline eval detection", () => {
     [["sed", "s/.*/id/e", "/dev/null"], "sed inline program"],
     [["gsed", "-e", "s/.*/id/e", "/dev/null"], "gsed -e"],
     [["sed", "-es/.*/id/e", "/dev/null"], "sed -e"],
-  ] as const)("detects command carriers for %j", (argv, expected) => {
-    const hit = detectInterpreterInlineEvalArgv([...argv]);
-    expectInlineEvalDescription(hit, expected);
-  });
+  ] as const)("detects command carriers for %j", checkInlineEval);
 
   it("ignores normal script execution", () => {
     expectNoInlineEval(["python3", "script.py"]);
