@@ -48,10 +48,13 @@ vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../runtime-plugins.js", async () => {
   const { getActivePluginRegistry } = await import("../../../plugins/runtime.js");
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(
+    () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
+  );
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(
-      () => getActivePluginRegistry() ?? createEmptyPluginRegistry(),
-    ),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 vi.mock("../announce/subagent-announce.js", { spy: true });
