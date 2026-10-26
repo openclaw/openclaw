@@ -175,8 +175,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/database-engine/update-preflight.runtime.test-support.ts",
   "plugins/runtime-retention-entrypoint.test-support":
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
-  "plugins/test-helpers/installed-plugin-index":
-    "src/plugins/test-helpers/installed-plugin-index.ts",
   "system-agent/setup-inference-groq-sdk.test-support":
     "src/system-agent/setup-inference-groq-sdk.test-support.ts",
   "agents/auth-profiles/store-scope-cwd-runtime.test-support":
