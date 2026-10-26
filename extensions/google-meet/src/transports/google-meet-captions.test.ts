@@ -33,7 +33,10 @@ async function observe(row = caption()) {
   return { row, page, first: pending(page) };
 }
 
-it("retains correction provenance without reviving superseded source revisions", async () => {
+it.each([
+  ["Actually, wait for approval", false],
+  [words + " after review", true],
+] as const)("retains correction provenance and rejects replay (%s)", async (text, reuseRow) => {
   const { row, page, first } = await observe();
   expect(first.source).toEqual({
     id: expect.stringMatching(/^session-1:epoch-1:\d+$/),
@@ -52,17 +55,22 @@ it("retains correction provenance without reviving superseded source revisions",
   });
   await page.poll();
   expect(pending(page)).toEqual(first);
-  revise(page, row, "Actually, wait for approval");
-  const retired = onlyLine(lines(page));
-  expect(retired).toMatchObject({ text: words, provenance: first.provenance });
-  expect(retired.source).toBeUndefined();
+  revise(page, row, text);
+  if (!reuseRow) {
+    const retired = onlyLine(lines(page));
+    expect(retired).toMatchObject({ text: words, provenance: first.provenance });
+    expect(retired.source).toBeUndefined();
+  }
   const corrected = pending(page);
-  expect(corrected.text).toBe("Actually, wait for approval");
+  expect(corrected.text).toBe(text);
   expect(corrected.source).toEqual({ ...first.source, revision: "2" });
   expect(corrected.provenance?.observationId).not.toBe(first.provenance?.observationId);
   const committed = page.read(true).lines;
+  expect(committed).toHaveLength(reuseRow ? 1 : 2);
   expect(committed.at(-1)?.provenance).toEqual(corrected.provenance);
-  page.show([caption()]);
+  expect(committed.at(-1)?.source).toEqual({ ...first.source, revision: "3", finalized: true });
+  row.textContent = `Alice\n${words}`;
+  page.show([reuseRow ? row : caption()]);
   await page.poll();
   expect(lines(page)).toEqual(committed);
   const replay = historical(page, words);
@@ -93,18 +101,6 @@ it("retires stale duplicates without advancing their shared source", async () =>
   expect(lines(page).map((line) => line.text)).toEqual([words + " after review", words]);
   expect(lines(page)[0]).toEqual(committed);
   expect(lines(page)[1]?.source).toBeUndefined();
-});
-
-it("does not revive a finalized source from a historical prefix in its DOM row", async () => {
-  const { row, page, first } = await observe();
-  revise(page, row, words + " after review");
-  const committed = onlySourcedLine(page.read(true).lines);
-  expect(committed.source).toEqual({ ...first.source, revision: "3", finalized: true });
-  revise(page, row, words);
-  await page.poll();
-  expect(lines(page)).toEqual([committed]);
-  const replay = historical(page, words);
-  expect(page.read(true).lines).toEqual([committed, replay]);
 });
 
 it("preserves old identities at capacity without granting authority to new captions", async () => {
