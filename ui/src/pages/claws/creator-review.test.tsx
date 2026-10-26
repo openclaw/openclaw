@@ -51,6 +51,7 @@ async function mountReview(initialContext: ApplicationContext) {
   });
   const name = () => page.getByLabelText<HTMLInputElement>("Name");
   const publish = () => page.getByRole<HTMLButtonElement>("button", { name: "Publish to ClawHub" });
+  const status = () => page.getByRole("status").textContent;
   await vi.advanceTimersByTimeAsync(0);
   await waitForSolid(() => expect(name().value).toBe("Release Brief"));
   return {
@@ -62,10 +63,7 @@ async function mountReview(initialContext: ApplicationContext) {
       fireEvent.input(name(), { target: { value } });
       await vi.advanceTimersByTimeAsync(350);
     },
-    updating: () =>
-      waitForSolid(() =>
-        expect(page.getByRole("status").textContent).toContain("Updating package preview"),
-      ),
+    updating: () => waitForSolid(() => expect(status()).toContain("Updating package preview")),
   };
 }
 
@@ -79,12 +77,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("shows a held review without discarding the edited name or accepted package", async () => {
+it.each([false, true])("holds review edits (retry=%s)", async (retry) => {
   const { context, request } = createReviewContext();
   const page = await mountReview(context);
+  if (retry) {
+    request.mockRejectedValueOnce(new Error("Review unavailable. Try again."));
+    await page.edit("Engineering Brief");
+    await waitForSolid(() =>
+      expect(page.getByRole("alert").textContent).toContain("Review unavailable"),
+    );
+  }
   const pending = createDeferred<ClawsDraftsReviewResult>();
   request.mockImplementationOnce(() => pending.promise);
-  await page.edit("Engineering Brief");
+  if (retry) {
+    fireEvent.click(page.getByRole("button", { name: "Refresh review" }));
+  } else {
+    await page.edit("Engineering Brief");
+  }
   await page.updating();
   expect(page.name().value).toBe("Engineering Brief");
   expect(page.publish().disabled).toBe(true);
@@ -93,24 +102,7 @@ it("shows a held review without discarding the edited name or accepted package",
   await waitForSolid(() => expect(page.publish().disabled).toBe(false));
   expect(page.name().value).toBe("Engineering Brief");
   expect(page.getByText("Portable instructions").isConnected).toBe(true);
-});
-
-it("keeps a rejected edit and shows loading again while its review retry is held", async () => {
-  const { context, request } = createReviewContext();
-  const page = await mountReview(context);
-  request.mockRejectedValueOnce(new Error("Review unavailable. Try again."));
-  await page.edit("Engineering Brief");
-  await waitForSolid(() =>
-    expect(page.getByRole("alert").textContent).toContain("Review unavailable"),
-  );
-  const pending = createDeferred<ClawsDraftsReviewResult>();
-  request.mockImplementationOnce(() => pending.promise);
-  fireEvent.click(page.getByRole("button", { name: "Refresh review" }));
-  await page.updating();
-  expect(page.name().value).toBe("Engineering Brief");
-  pending.resolve({ ...reviewed, displayName: "Engineering Brief" });
-  await waitForSolid(() => expect(page.queryByRole("alert")).toBeNull());
-  expect(page.publish().disabled).toBe(false);
+  expect(page.queryByRole("alert")).toBeNull();
 });
 
 it("shows the replacement context while the old review is pending and ignores its late error", async () => {
