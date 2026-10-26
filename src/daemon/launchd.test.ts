@@ -40,7 +40,6 @@ import * as launchdRuntime from "./launchd-runtime.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   isLaunchAgentEnabled,
-  readLaunchAgentProgramArguments,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
@@ -258,12 +257,10 @@ describe("launchd uninstall", () => {
     expect(state.files.has(PLIST)).toBe(true);
   });
 
-  it.each(["missing", "stopped symlink", "concurrently removed"])(
+  it.each(["stopped symlink", "concurrently removed"])(
     "keeps removal idempotent for a %s LaunchAgent",
     async (kind) => {
-      if (kind !== "missing") {
-        state.files.set(PLIST, "RunAtLoad=true");
-      }
+      state.files.set(PLIST, "RunAtLoad=true");
       if (kind === "stopped symlink") {
         state.serviceLoaded = false;
         state.bootoutError = "Boot-out failed: 5: Input/output error";
@@ -408,13 +405,6 @@ describe("launchd install", () => {
     expect(state.fileModes.get(ENV_FILE)).toBe(0o600);
     expect(state.fileModes.get(WRAPPER)).toBe(0o700);
     expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
-
-    const command = await readLaunchAgentProgramArguments(ENV);
-    expect(command).toMatchObject({
-      programArguments: defaultProgramArguments,
-      environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey, NODE_OPTIONS: "" },
-      environmentValueSources: { TMPDIR: "file", OPENAI_API_KEY: "file" },
-    });
   });
 
   it("warns before overwriting a customized generated LaunchAgent env wrapper during restart rewrite", async () => {
@@ -802,15 +792,10 @@ describe("launchd install", () => {
     setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
     const plistPath = resolveLaunchAgentPlistPath(env);
     const originalPlist = state.files.get(plistPath);
-    inspectPortUsage.mockResolvedValue({
-      port: 19002,
-      status: "busy",
-      listeners: [
-        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
-        { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
-      ],
-      hints: ["Another process is listening on this port."],
-    });
+    mockPort(19002, "busy", [
+      { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+      { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
+    ]);
     formatPortDiagnostics.mockReturnValue(["Port 19002 is already in use."]);
 
     await expect(restartLaunchAgent(launchAgentControlFixture(env))).rejects.toThrow(

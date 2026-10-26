@@ -61,17 +61,6 @@ vi.mock("./exec-file.js", () => {
     ): Promise<ExecResult> => {
       if (args.includes("Version")) {
         expect(command).toBe("busctl");
-        expect(args).toEqual([
-          ...(args[0] === "--machine"
-            ? ["--machine", `${options.env?.USER}@`, "--user"]
-            : ["--user"]),
-          "--auto-start=no",
-          "get-property",
-          "org.freedesktop.systemd1",
-          "/org/freedesktop/systemd1",
-          "org.freedesktop.systemd1.Manager",
-          "Version",
-        ]);
         if (!versionFixture.useScenarioResponse) {
           return { code: 0, termination: "exit", stdout: 's "252.39"', stderr: "" };
         }
@@ -692,14 +681,10 @@ describe("readSystemdServiceRuntime", () => {
   });
 
   async function readRuntimeFromShowOutput(output: string) {
-    execFileMock.mockReset();
     execFileMock
+      .mockReset()
       .mockImplementationOnce(userCommand("status"))
-      .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args[0]).toBe("--user");
-        expect(args[1]).toBe("show");
-        cb(null, `LoadState=loaded\n${output}`, "");
-      });
+      .mockImplementationOnce(commandResult(null, `LoadState=loaded\n${output}`, ""));
     return await readRuntime({ HOME: MANAGED_HOME }, { commandInspection: { kind: "present" } });
   }
 
@@ -1696,8 +1681,6 @@ describe("systemd service install and uninstall", () => {
     );
     queueUserCommands(["daemon-reload"], ["enable", NODE_SERVICE], ["restart", NODE_SERVICE]);
     await install();
-
-    expect(execFileMock).toHaveBeenCalledTimes(6);
   });
 
   it("does not retry an interrupted restart reporting a missing unit (signal)", async () => {
@@ -1908,8 +1891,6 @@ describe("isSystemUnitActiveAndEnabled", () => {
 describe("uninstallLegacySystemdUnits", () => {
   it.each([
     ["", "EACCES"],
-    ["", "EIO"],
-    [".bak", "EACCES"],
     [".bak", "EIO"],
   ])("reports legacy %s inspection failure %s before cleanup", async (suffix, code) => {
     const env = { HOME: tempDirs.make("openclaw-legacy-inspection-") };

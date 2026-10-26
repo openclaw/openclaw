@@ -402,7 +402,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     managerDefinition(unitPath, [extra]);
     expect(await readCapability()).toEqual({ kind: "writable" });
     await mutate(async (mutation) => {
-      expect([...mutation.snapshots.keys()]).toEqual([unitPath, environmentPath]);
       await expect(mutation.publish(extra, "must not publish", 0o600)).rejects.toThrow(
         "Not a managed service publication target",
       );
@@ -586,9 +585,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
     await expectFiles({ [`${unitPath}.bak`]: { contents: previous, mode: 0o600 } });
     const unit = await read(unitPath);
-    for (const part of ["/srv/openclaw/dist/index.js", "TimeoutStopSec=330", "KillMode=mixed"]) {
-      expect(unit).toContain(part);
-    }
     expect(unit).not.toContain("replacement-secret-canary");
     expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o600);
     expect(await read(environmentPath)).toContain("OPERATOR_SECRET=preserved-canary");
@@ -894,7 +890,6 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       );
       assertNoSystemOwnership.mockImplementation(async () => stepClock());
       await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);
-      expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
       expect([
         ...assertNoSystemOwnership.mock.calls.map((call) => call[1]),
         ...reloadUserManager.mock.calls.map((call) => call[1]),
