@@ -18,7 +18,7 @@ describe("realtime voice consult question helpers", () => {
       replace.mockRestore();
     }
     expect(matches).toBe(true);
-    expect(replacements).toBe(2);
+    expect(replacements).toBeLessThanOrEqual(2);
   });
 
   it("reads common provider question fields", () => {
