@@ -56,7 +56,7 @@ export function useStreamFixture() {
         server.close(() => done());
       });
     },
-    gateway: async (kind: "desktop" | "portal", contextPath = "") => {
+    gateway: async (_kind: "portal", contextPath = "") => {
       const peer: {
         socket?: WebSocket;
         headers: Array<string | undefined>;
@@ -70,7 +70,7 @@ export function useStreamFixture() {
       }
       const wss = new WebSocketServer({
         server,
-        path: `${contextPath.replace(/\/$/u, "")}/node-${kind}/attach`,
+        path: `${contextPath.replace(/\/$/u, "")}/node-portal/attach`,
       });
       wss.on("connection", (ws, request) => {
         peer.socket = ws;
@@ -78,9 +78,7 @@ export function useStreamFixture() {
           request.headers[name]?.toString(),
         );
         ws.on("message", (data, binary) => {
-          if (kind === "portal") {
-            expect(binary).toBe(true);
-          }
+          expect(binary).toBe(true);
           assert(Buffer.isBuffer(data), "expected stream frame buffer");
           peer.frames.push(data);
         });

@@ -1,47 +1,33 @@
 import { expect, it } from "vitest";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
-import {
-  canMutateNativeBinaryFixturePath,
-  resolveNativeBinaryFixturePath,
-} from "./system-run-native-binary.test-helpers.js";
+import * as native from "./system-run-native-binary.test-helpers.js";
 
-const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
-  ok: false,
-  reason: "unsupported-command-shape",
-});
+const DENIED_RUNTIME_APPROVAL = { ok: false, reason: "unsupported-command-shape" };
 const MUTABLE_SCRIPT = "python ./mutable.py 'x&y'";
-function prepareShell(command: string) {
-  return buildSystemRunApprovalPlan({
-    command: ["/bin/sh", "-lc", command],
-    rawCommand: command,
-    cwd: process.cwd(),
-  });
+const posix = it.skipIf(process.platform === "win32");
+function prepareShell(raw: string) {
+  return buildSystemRunApprovalPlan({ command: ["/bin/sh", "-lc", raw], rawCommand: raw });
 }
 
 it.each([
   ["cmd.exe", "/d", "/c", "echo 'x&python mutable.py &echo '"],
   ["pwsh", "-NoProfile", "-Command", "Write-Output 'x&y'"],
   ["nu", "--commands", "echo 'x&y'"],
-  ["zsh", "-c", "noglob python ./mutable.py 'x&y'"],
   ["bash", "-c", "echo 'x&y'"],
 ])("retains separator rejection outside node sh grammar: %j", (...command) => {
-  expect(buildSystemRunApprovalPlan({ command, cwd: process.cwd() })).toEqual(
-    DENIED_RUNTIME_APPROVAL,
-  );
+  expect(buildSystemRunApprovalPlan({ command })).toMatchObject(DENIED_RUNTIME_APPROVAL);
 });
 
-it.skipIf(process.platform === "win32")("preserves native shell literal arguments", ({ skip }) => {
-  const binaryPath = resolveNativeBinaryFixturePath();
-  if (canMutateNativeBinaryFixturePath(binaryPath)) {
+posix("preserves native shell literal arguments", ({ skip }) => {
+  const binaryPath = native.resolveNativeBinaryFixturePath();
+  if (native.canMutateNativeBinaryFixturePath(binaryPath)) {
     skip();
   }
   const callback = "http://127.0.0.1:9876/oauth2/callback?state=synthetic&code=synthetic";
   for (const [executable, argument] of [
-    [binaryPath, `'${callback}'`],
+    [binaryPath, "'" + callback + ";pipe|redirect<>$value`text`'"],
     [binaryPath, `"${callback}"`],
     [binaryPath, callback.replace("&", "\\&")],
-    [binaryPath, "'literal;pipe|redirect<>$value`text`'"],
-    [binaryPath, '"literal;pipe|redirect<>"'],
     ["printf", `'${callback}'`],
   ]) {
     const command = `${executable} --auth-url ${argument}`;

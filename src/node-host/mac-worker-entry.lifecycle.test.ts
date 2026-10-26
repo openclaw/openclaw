@@ -49,6 +49,7 @@ afterEach(() => {
   Object.assign(process, originalProcess);
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  expect(fixture.exit).not.toHaveBeenCalled();
 });
 
 it("passes the desktop preference and drains resources before finalizing exit", async () => {
@@ -67,21 +68,17 @@ it("passes the desktop preference and drains resources before finalizing exit", 
   });
 
   const entry = import("./mac-worker-entry.js");
-  try {
-    await awaitGateBeforeSettlement(
-      cleanupGate.entered,
-      entry,
-      "worker entry completed before releasing its resources",
-    );
-    expect(fixture.exit).not.toHaveBeenCalled();
-  } finally {
+  await awaitGateBeforeSettlement(
+    cleanupGate.entered,
+    entry,
+    "worker entry completed before releasing its resources",
+  ).finally(async () => {
     cleanupGate.release();
     await entry;
-  }
+  });
 
   expect(fixture.worker).toHaveBeenCalledWith({ desktopSharingEnabled: true });
   expect(process.exitCode).toBe(143);
-  expect(fixture.exit).not.toHaveBeenCalled();
 });
 
 it("reports bootstrap failure and finalizes an unsuccessful exit", async () => {
@@ -93,5 +90,4 @@ it("reports bootstrap failure and finalizes an unsuccessful exit", async () => {
   expect(fixture.worker).not.toHaveBeenCalled();
   expect(stderr).toHaveBeenCalledWith("worker bootstrap failed\n");
   expect(process.exitCode).toBe(1);
-  expect(fixture.exit).not.toHaveBeenCalled();
 });
