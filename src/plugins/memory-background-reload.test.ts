@@ -252,9 +252,6 @@ it("retires live watchers and starts successor indexing without a search or turn
       }
     });
     expect(subscriptions).toHaveLength(1);
-    await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
-    expect.soft(subscriptions[0]!.signal.aborted, "retired watch subscription").toBe(true);
-
     const successor = registryHost();
     const current = loadMemory(successor, config);
     instances.push(current.instance);
@@ -269,6 +266,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     await service.start(context);
     await withinTest(successorWatching, signal);
     expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[0]!.signal.aborted).toBe(false);
+    await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
+    expect.soft(subscriptions[0]!.signal.aborted, "retired watch subscription").toBe(true);
     expect(subscriptions[1]!.signal.aborted).toBe(false);
     await writeMemory(
       state.workspaceDir,
