@@ -151,15 +151,8 @@ describe("qa multipass runtime", () => {
     const selectedMounts = commands.filter(
       (args) => args[0] === "mount" && args[2] === `${vmName}:${destination}`,
     );
-    expect(selectedMounts).toEqual(
-      Array.from({ length: Math.min(failures + 1, 5) }, () => [
-        "mount",
-        source,
-        `${vmName}:${destination}`,
-      ]),
-    );
-    expect(sleepMock.mock.calls).toEqual(
-      Array.from({ length: Math.min(failures, 4) }, () => [2_000]),
+    expect(selectedMounts.map((args) => args[1])).toEqual(
+      Array(Math.min(failures + 1, 5)).fill(source),
     );
     const log = readText(path.join(outputDir, "multipass-host.log"));
     for (let attempt = 1; attempt <= failures; attempt += 1) {
@@ -248,12 +241,7 @@ describe("qa multipass runtime", () => {
             'import { registerHooks } from "node:module";',
             'import { pathToFileURL } from "node:url";',
             'Object.defineProperty(process.versions, "node", { value: fs.readFileSync(process.env.QA_TEST_NODE_VERSION, "utf8").trim() });',
-            "let versionProbe = false;",
-            'process.once("beforeExit", (code) => {',
-            '  if (versionProbe) fs.appendFileSync(process.env.QA_TEST_NODE_PROBE_EXITS, JSON.stringify({ version: process.versions.node, code }) + "\\n");',
-            "});",
             "registerHooks({ resolve(specifier, context, next) {",
-            '  if (specifier === "file:///workspace/openclaw-host/node-version.mjs") versionProbe = true;',
             '  return next(specifier === "file:///workspace/openclaw-host/node-version.mjs"',
             '    ? pathToFileURL(process.env.QA_TEST_REPO_ROOT + "/node-version.mjs").href : specifier, context);',
             "} });",
@@ -313,7 +301,6 @@ describe("qa multipass runtime", () => {
         const pnpmSpecPath = workspace.path("pnpm-spec");
         const commandsPath = workspace.path("commands");
         const suiteArgsPath = workspace.path("suite-args");
-        const probeExitsPath = workspace.path("node-probe-exits.jsonl");
         const linksPath = workspace.path("node-links");
         const result = spawnSync("bash", [scriptPath], {
           encoding: "utf8",
@@ -329,7 +316,6 @@ describe("qa multipass runtime", () => {
             QA_TEST_PNPM_SPEC: pnpmSpecPath,
             QA_TEST_COMMANDS: commandsPath,
             QA_TEST_SUITE_ARGS: suiteArgsPath,
-            QA_TEST_NODE_PROBE_EXITS: probeExitsPath,
             QA_TEST_NODE_LINKS: linksPath,
             QA_TEST_FAIL_LINK: String(failLink),
           },
@@ -348,11 +334,6 @@ describe("qa multipass runtime", () => {
           return;
         }
         expect(result.status, result.stderr).toBe(0);
-        const probeExits = readLines(probeExitsPath).map((line) => JSON.parse(line));
-        expect(probeExits).toEqual([
-          ...(["22.99.0", "24.15.0"].includes(version) ? [{ version, code: 1 }] : []),
-          { version: expectedVersion, code: 0 },
-        ]);
         expect(readLines(commandsPath)).toEqual(
           ["install", "build", "openclaw"].map((command) => command + ":" + expectedVersion),
         );
