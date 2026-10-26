@@ -98,6 +98,26 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
+  it.each([0, 25])(
+    "names the live holder when schema admission is refused (budget %s)",
+    (busyTimeoutMs) => {
+      const marker = markerPath(databasePath);
+      const payload = { ...ownerPayload(root), role: "gateway" };
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      const bytes = JSON.stringify(payload);
+      fs.writeFileSync(marker, bytes);
+      expect(() => acquireStateDatabaseSchemaLease(databasePath, { busyTimeoutMs })).toThrow(
+        expect.objectContaining({
+          name: "GatewayStateOwnerContentionError",
+          databasePath,
+          holder: { pid: process.pid, role: "gateway" },
+          message: expect.stringContaining(`holder ${process.pid}`),
+        }),
+      );
+      expect(fs.readFileSync(marker, "utf8")).toBe(bytes);
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
     async () => {
