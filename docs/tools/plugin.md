@@ -199,8 +199,8 @@ Key policy rules:
   plugins before running doctor cleanup if you want stale ids removed.
 - `plugins.deny` wins over allow and per-plugin enablement.
 - A non-empty `plugins.allow` restricts which plugins can load, with activation
-  exceptions for selected slot owners and explicitly enabled bundled chat
-  channels. Plugin-owned tools outside the allowlist stay unavailable even
+  exceptions for the selected memory plugin, context-engine plugins whose id
+  matches the selected engine id, and explicitly enabled bundled chat channels. Plugin-owned tools outside the allowlist stay unavailable even
   when `tools.allow` includes `"*"`; plugin activation and tool availability
   are separate policy decisions.
 - `plugins.entries.<id>.enabled: false` disables one plugin while keeping its
@@ -213,10 +213,13 @@ Key policy rules:
 - Bundled plugins follow their built-in default-on/default-off metadata
   unless config explicitly overrides it.
 - `plugins.slots.<slot>` (`memory` or `contextEngine`) picks one plugin for an
-  exclusive category. Slot selection counts as explicit activation and
-  enables the selected plugin for that slot even when `plugins.allow` omits
-  it or the plugin would otherwise be opt-in. This includes the implicit
-  `memory-core` selection when `plugins.slots.memory` is unset. To turn off
+  exclusive category. Selecting a memory plugin counts as explicit activation
+  and enables it even when `plugins.allow` omits it or it would otherwise be
+  opt-in. Context-engine selection has the same allowlist exception only when
+  the plugin id matches the selected engine id; a differently named owner must
+  be independently enabled or allowlisted and included in any non-empty
+  `plugins.allow` list. The memory exception includes the implicit `memory-core`
+  selection when `plugins.slots.memory` is unset. To turn off
   memory plugins, set `plugins.slots.memory: "none"`; to block `memory-core`
   specifically, use `plugins.deny: ["memory-core"]` or
   `plugins.entries.memory-core.enabled: false`. Global disable, deny, explicit

@@ -14,7 +14,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
   "plugins.allow":
-    "Optional allowlist of plugin IDs; a non-empty list restricts loading, except for selected slot owners (including the default memory-core selection) and explicitly enabled bundled chat channels. Plugin-owned tools outside the allowlist remain unavailable. Use plugins.deny or plugins.entries.<id>.enabled: false to block a plugin regardless of slot selection.",
+    "Optional allowlist of plugin IDs; a non-empty list restricts loading, except for the selected memory plugin (including the default memory-core selection), equal-ID context-engine plugins, and explicitly enabled bundled chat channels. Differently named context-engine owners must be independently enabled or allowlisted and included in any non-empty allowlist. Plugin-owned tools outside the allowlist remain unavailable. Use plugins.deny or plugins.entries.<id>.enabled: false to block a plugin regardless of slot selection.",
   "plugins.deny":
     "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
   "plugins.load":
