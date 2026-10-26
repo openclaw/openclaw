@@ -10,12 +10,6 @@ import { add, remove, update } from "./ops-mutations.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-mutation-completion" });
 const guarded = { commitGuard: () => {} };
-const makeInput = () =>
-  cronTestInput({
-    name: "mutation completion",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "run" },
-  });
 
 let storePath: string;
 let state: ReturnType<typeof createCronRegressionState>;
@@ -39,7 +33,7 @@ async function complete<T>(method: string, action: () => Promise<T>, committed: 
 
 it("records actual mutations while leaving declaration replay, rejection, and absent removal unmarked", async () => {
   const input = {
-    ...makeInput(),
+    ...cronTestInput(),
     declarationKey: "plugin:test:completion",
     payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["*"] },
   };
@@ -86,7 +80,7 @@ it("leaves completion unmarked when the native commit fails", async () => {
       END;
     `);
   try {
-    await expect(completion.run(() => add(state, makeInput(), guarded))).rejects.toThrow(
+    await expect(completion.run(() => add(state, cronTestInput(), guarded))).rejects.toThrow(
       "FOREIGN KEY constraint failed",
     );
     expect((await loadCronStore(storePath)).jobs).toHaveLength(0);
