@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { classifyGatewaySecret } from "../../ui/src/lib/gateway-secret-shape.ts";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
@@ -23,6 +23,7 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 
 const options = { env: {}, networkInterfaces: () => ({}) };
 const localPassword = "synthetic-local-password";
+beforeEach(() => vi.mocked(issueDevicePairSetupBootstrapToken).mockClear());
 
 type OriginCase = [
   NonNullable<Parameters<typeof resolvePairingGatewayUrl>[0]["gateway"]>,
@@ -86,43 +87,37 @@ it("preserves Tailscale Funnel ahead of publicOrigin for device pairing", async 
   expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
 });
 
-describe("trusted-proxy pairing setup", () => {
-  beforeEach(() => vi.mocked(issueDevicePairSetupBootstrapToken).mockClear());
-
-  it.each<[string, NodeJS.ProcessEnv, string | undefined, boolean]>([
-    ["TLS without shared secret", {}, undefined, false],
-    ["ambient password", { OPENCLAW_GATEWAY_PASSWORD: localPassword }, undefined, false],
-    ["configured password", {}, localPassword, false],
-    ["limited plaintext LAN", {}, undefined, true],
-  ])("preserves trusted-proxy setup: %s", async (_name, env, password, limited) => {
-    const url = limited ? "ws://192.168.1.20:18789" : "wss://gateway.example.test";
-    const result = await resolvePairingSetupFromConfig(
-      {
-        gateway: {
-          bind: "custom",
-          customBindHost: "127.0.0.1",
-          auth: { mode: "trusted-proxy", ...(password ? { password } : {}) },
-        },
+it.each<[string, NodeJS.ProcessEnv, string | undefined, boolean]>([
+  ["TLS without shared secret", {}, undefined, false],
+  ["ambient password", { OPENCLAW_GATEWAY_PASSWORD: localPassword }, undefined, false],
+  ["configured password", {}, localPassword, false],
+  ["limited plaintext LAN", {}, undefined, true],
+])("preserves trusted-proxy setup: %s", async (_name, env, password, limited) => {
+  const url = limited ? "ws://192.168.1.20:18789" : "wss://gateway.example.test";
+  const result = await resolvePairingSetupFromConfig(
+    {
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "trusted-proxy", ...(password ? { password } : {}) },
       },
-      { env, publicUrl: url },
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      authLabel: "trusted-proxy",
-      setupId: "setup-123",
-      expiresAtMs: 123,
-      urlSource: "plugins.entries.device-pair.config.publicUrl",
-      access: limited ? "limited" : "full",
-      accessDowngraded: limited,
-    });
-    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith({
-      profile: limited
-        ? PAIRING_SETUP_BOOTSTRAP_PROFILE
-        : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-    if (result.ok) {
-      expect(result.payload).toEqual({ url, bootstrapToken: "bootstrap-123", expiresAtMs: 123 });
-    }
+    },
+    { env, publicUrl: url },
+  );
+  expect(result).toEqual({
+    ok: true,
+    authLabel: "trusted-proxy",
+    setupId: "setup-123",
+    expiresAtMs: 123,
+    urlSource: "plugins.entries.device-pair.config.publicUrl",
+    access: limited ? "limited" : "full",
+    accessDowngraded: limited,
+    payload: { url, bootstrapToken: "bootstrap-123", expiresAtMs: 123 },
+  });
+  expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith({
+    profile: limited
+      ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+      : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
 });
 
