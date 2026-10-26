@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -71,30 +70,26 @@ describe("createEmbeddedLobsterRunner", () => {
   });
 
   it("runs inline pipelines with file-like arguments through the embedded runtime", async () => {
-    const raw = { ...success, protocolVersion: 1 };
-    runRequest.mockResolvedValue({ ...raw, output: [{ hello: "world" }] });
+    runRequest.mockResolvedValue({ ...success, protocolVersion: 1, output: [{ hello: "world" }] });
     const pipeline = "exec --json=true cat data.json";
     const envelope = await run({ pipeline });
     expect(runRequest).toHaveBeenCalledExactlyOnceWith({ pipeline, ctx });
     expect(envelope).toEqual({ ...success, output: [{ hello: "world" }] });
   });
 
-  it("surfaces missing workflow path errors", async () => {
-    const cwd = tempDirs.make("openclaw-lobster-runner-");
-    await expect(run({ pipeline: "missing.lobster", cwd })).rejects.toMatchObject({
-      code: "ENOENT",
-      path: path.join(cwd, "missing.lobster"),
-    });
-    expect(runRequest).not.toHaveBeenCalled();
-  });
-
-  it("returns a parse error when workflow args are invalid JSON", async () => {
-    const { cwd } = await createWorkflow();
-    await expect(run({ pipeline: "workflow.lobster", argsJson: "{bad", cwd })).rejects.toThrow(
-      "run --args-json must be valid JSON",
-    );
-    expect(runRequest).not.toHaveBeenCalled();
-  });
+  it.each(["missing.lobster", "workflow.lobster"])(
+    "rejects invalid workflow request: %s",
+    async (pipeline) => {
+      const { cwd } = await createWorkflow();
+      const rejection = expect(run({ pipeline, argsJson: "{bad", cwd })).rejects;
+      if (pipeline === "missing.lobster") {
+        await rejection.toMatchObject({ code: "ENOENT", path: path.join(cwd, pipeline) });
+      } else {
+        await rejection.toThrow("run --args-json must be valid JSON");
+      }
+      expect(runRequest).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects an input request without a resumable checkpoint", async () => {
     runRequest.mockResolvedValue({ ...success, status: "needs_input" });
@@ -137,13 +132,9 @@ describe("createEmbeddedLobsterRunner", () => {
   it("aborts long-running embedded work", async () => {
     runRequest.mockImplementation(
       ({ ctx: context }) =>
-        new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => resolve(success), 500);
+        new Promise((_resolve, reject) => {
           context?.signal?.addEventListener("abort", () => {
-            clearTimeout(timeout);
-            reject(
-              toErrorObject(context.signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
-            );
+            reject(context.signal?.reason);
           });
         }),
     );

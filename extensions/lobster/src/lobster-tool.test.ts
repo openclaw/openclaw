@@ -47,6 +47,10 @@ describe("lobster plugin tool", () => {
     vi.stubEnv("LOBSTER_STATE_DIR", dir);
     return dir;
   };
+  const inputStep = (id: string, prompt: string, responseSchema: object, defaults?: object) => ({
+    id,
+    input: { prompt, responseSchema, ...(defaults ? { defaults } : {}) },
+  });
 
   it("resumes real pipeline input, preserves invalid answers, and still handles approvals", async () => {
     stateDir("openclaw-lobster-input-");
@@ -59,9 +63,8 @@ describe("lobster plugin tool", () => {
     await expect(resume(token, { responseJson: '{"decision":123}' })).rejects.toThrow(
       /schema validation/,
     );
-    const second = await resume(token, {
-      responseJson: '{"decision":"approve","feedback":"Looks good"}',
-    });
+    const responseJson = '{"decision":"approve","feedback":"Looks good"}';
+    const second = await resume(token, { responseJson });
     expect(second).toMatchObject({ status: "needs_approval" });
     const approved = await resume(resumeToken(second, "requiresApproval"), { approve: true });
     expect(approved).toMatchObject({
@@ -83,25 +86,17 @@ describe("lobster plugin tool", () => {
       JSON.stringify({
         steps: [
           { id: "prepare", pipeline: "state.get seed | state.set prepared" },
-          {
-            id: "review",
-            input: {
-              prompt: "Review draft?",
-              responseSchema: {
-                type: "object",
-                properties: { feedback: { type: "string" } },
-                required: ["feedback"],
-              },
-              defaults: { feedback: "" },
+          inputStep(
+            "review",
+            "Review draft?",
+            {
+              type: "object",
+              properties: { feedback: { type: "string" } },
+              required: ["feedback"],
             },
-          },
-          {
-            id: "confirm",
-            input: {
-              prompt: "Which label?",
-              responseSchema: { type: "string" },
-            },
-          },
+            { feedback: "" },
+          ),
+          inputStep("confirm", "Which label?", { type: "string" }),
           { id: "finish", pipeline: "state.get prepared" },
         ],
       }),
@@ -150,23 +145,23 @@ describe("lobster plugin tool", () => {
   });
 
   it("normalizes numeric string run limits before invoking the runner", async () => {
-    const result = { ok: true, status: "ok", output: [], requiresApproval: null };
-    const runner = { run: vi.fn().mockResolvedValue(result) };
-
+    const runner = {
+      run: vi
+        .fn()
+        .mockResolvedValue({ ok: true, status: "ok", output: [], requiresApproval: null }),
+    };
     vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
     tool = createLobsterTool();
-    await tool.execute("call-string-limits", {
+    const params = {
       action: "run",
       pipeline: "noop",
       argsJson: '{"since_hours":1}',
       timeoutMs: "1500",
       maxStdoutBytes: "4096",
-    });
-
+    };
+    await tool.execute("call-string-limits", params);
     expect(runner.run).toHaveBeenCalledWith({
-      action: "run",
-      pipeline: "noop",
-      argsJson: '{"since_hours":1}',
+      ...params,
       cwd: process.cwd(),
       timeoutMs: 1500,
       maxStdoutBytes: 4096,
@@ -176,11 +171,7 @@ describe("lobster plugin tool", () => {
   it.each<[string, Record<string, unknown>, RegExp]>([
     ["missing action", {}, /action required/],
     ["unknown action", { action: "explode" }, /Unknown action/],
-    [
-      "absolute cwd",
-      { action: "run", pipeline: "noop", cwd: "/tmp" },
-      /cwd must be a relative path/,
-    ],
+    ["absolute cwd", { action: "run", cwd: "/tmp" }, /cwd must be a relative path/],
     ["escaping cwd", { action: "run", pipeline: "noop", cwd: "../../etc" }, /must stay within/],
   ])("rejects %s", async (_name, params, error) => {
     await expect(tool.execute("invalid", params)).rejects.toThrow(error);
