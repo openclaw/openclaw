@@ -1,6 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
 import { inspect } from "node:util";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   EvaluatedModuleNode as ViteEvaluatedModuleNode,
   EvaluatedModules as ViteEvaluatedModules,
@@ -521,9 +522,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     const executions = internals.workerState.moduleExecutionInfo;
     const failed = new Set<RunnerTestFile>();
     const recordFailure = (phase: string, error: unknown) => {
+      // Preserve nested failure messages independently of redacted stack locations.
+      const summary = formatErrorMessage(error);
       const detail = inspect(error, { depth: null, customInspect: false, colors: false });
       for (const file of files) {
-        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${detail}`;
+        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${summary}\n${detail}`;
         file.result ??= { state: "fail" };
         file.result.state = "fail";
         (file.result.errors ??= []).push({
