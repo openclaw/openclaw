@@ -71,6 +71,22 @@ export function resolveDraftDefaultModelTarget(params: {
   );
 }
 
+export function resolveDraftAccessProgram(
+  params: Parameters<typeof resolveDraftDefaultModelTarget>[0] & {
+    model: string;
+    agentRuntime?: string;
+  },
+) {
+  const selected = resolveDraftModelTarget(
+    params.model,
+    undefined,
+    params.catalog,
+    params.agentRuntime,
+  );
+  return (selected?.entry ?? resolveDraftDefaultModelTarget(params)?.entry)
+    ?.cyberAccessProgramDefault;
+}
+
 export function resolveDraftModelControls(params: {
   model: string;
   selection: DraftModelControlSelection;

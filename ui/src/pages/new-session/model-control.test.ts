@@ -766,7 +766,7 @@ it.each(["configured", null, "last-used"] as const)(
 it.each([undefined, "daybreak_blue"] as const)(
   "commits the displayed first-use Access choice (%s)",
   async (configured) => {
-    const model = {
+    const model: ModelCatalogEntry = {
       ...luna,
       availableAccessPrograms: {
         cyber: [

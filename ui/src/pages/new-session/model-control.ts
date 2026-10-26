@@ -35,6 +35,7 @@ import {
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
   resolveDraftModelControls,
+  resolveDraftAccessProgram,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
@@ -446,12 +447,18 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   accessProgramForSubmission(): CyberAccessProgram | undefined {
-    return this.renderProps({
-      agent: this.pendingAgent,
-      agentId: this.agentId,
-      context: this.pendingContext,
-      sending: false,
-    }).requestedAccessProgram;
+    return (
+      this.cyberAccessProgram ??
+      (this.ownsMetadata() && this.metadataState.status === "ready"
+        ? resolveDraftAccessProgram({
+            model: this.effectiveModel,
+            agentRuntime: this.agentRuntime,
+            agent: this.pendingAgent,
+            defaults: this.pendingContext?.sessions.state.result?.defaults,
+            ...this.metadataState,
+          })
+        : undefined)
+    );
   }
 
   modelForSubmission(): string {
