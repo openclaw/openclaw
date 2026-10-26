@@ -61,10 +61,14 @@ export async function prepareRequesterRestartRecovery(params: {
   if (recovered?.status === "ready") {
     return { outcome: "ready", source: recovered.source };
   }
-  const outcome = await finishDelegatedRestartRecovery({
+  const settlement = {
     ...params,
     reason: recovered?.reason ?? "the original completion cohort is no longer available",
-  });
+  };
+  if (!entry.spawnedBy) {
+    return await settleInterruptedRestartRecovery(settlement);
+  }
+  const outcome = await tombstoneMainRestartRecoveryWithNotice(settlement);
   return {
     outcome: outcome === "notice_failed" ? "failed" : outcome === "skipped" ? "changed" : "settled",
   };
