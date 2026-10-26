@@ -634,6 +634,8 @@ const repositoryScriptEntries = [
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
   "scripts/perf/branch-rotation-measure.ts!",
   "scripts/perf/branch-rotation-measure-preload.ts!",
+  // The plugin scope census is loaded by the documented stress --gateway-preload option.
+  "scripts/perf/plugin-scope-attribution-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   // The standalone build guide invokes this builder by path.
