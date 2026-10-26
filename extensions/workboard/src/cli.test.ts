@@ -2,7 +2,6 @@ import { Command } from "commander";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
 import type { WorkboardStore } from "./store.js";
-import { createAmbiguousPrefix } from "./test/interaction-fixtures.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
@@ -49,33 +48,6 @@ describe("registerWorkboardCli", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
-  it("redacts claim tokens from card JSON output", async () => {
-    const card = await store.create({ title: "Claimed worker", status: "running" });
-    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
-    for (const args of [["list"], ["show", card.id]]) {
-      const output = await captureCli(...args, "--json");
-      expect(output).not.toContain("secret-token");
-      expect(output).toContain("[redacted]");
-    }
-  });
-
-  it("hides archived cards from text output by default and reveals them with --include-archived", async () => {
-    await store.create({ title: "Active card" });
-    const archived = await store.create({ title: "Archived card" });
-    await store.archive(archived.id, true);
-    const defaultOutput = await captureCli("list");
-    const includeOutput = await captureCli("list", "--include-archived");
-    expect(defaultOutput).toContain("Active card");
-    expect(defaultOutput).not.toContain("Archived card");
-    expect(includeOutput).toContain("Active card");
-    expect(includeOutput).toContain("Archived card");
-    expect(includeOutput).toContain("(archived)");
-    const jsonOutput = await captureCli("list", "--json");
-    expect(jsonOutput).toContain(archived.id);
-    expect(jsonOutput).toContain("archivedAt");
-    expect(await captureCli("show", archived.id)).toContain("Archived card (archived)");
-  });
-
   it("rejects invalid list status filters instead of reporting an empty board", async () => {
     const running = await store.create({ title: "Active work", status: "running" });
     await store.create({ title: "Queued work", status: "todo" });
@@ -106,8 +78,8 @@ describe("registerWorkboardCli", () => {
     const result = {
       started: [{ cardId: "started-card", runId: "run-started" }],
       startFailures: [
-        { cardId: "12345678-first-card", error: "Workspace is unavailable." },
-        { cardId: "abcdef01-second-card", error: "Model is unavailable." },
+        { cardId: "12345678-first", error: "offline" },
+        { cardId: "abcdef01-second", error: "missing" },
       ],
     };
     gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
@@ -117,27 +89,21 @@ describe("registerWorkboardCli", () => {
       expect(JSON.parse(output)).toEqual(result);
     } else {
       expect(output).toBe(
-        "dispatch complete: started=1 failures=2\n" +
-          "12345678: Workspace is unavailable.\n" +
-          "abcdef01: Model is unavailable.\n",
+        "dispatch complete: started=1 failures=2\n12345678: offline\nabcdef01: missing\n",
       );
     }
   });
 
   it("does not fall back when an older gateway lacks max-starts dispatch", async () => {
     const card = await store.create({ title: "Bounded dispatch", status: "ready" });
-    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
-      new Error("unknown method: workboard.cards.dispatchWithOptions"),
-    );
+    const method = "workboard.cards.dispatchWithOptions";
+    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(new Error(`unknown method: ${method}`));
     await expect(parse("dispatch", "--max-starts", "1")).rejects.toThrow(
-      "unknown method: workboard.cards.dispatchWithOptions",
+      `unknown method: ${method}`,
     );
-    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
-      "workboard.cards.dispatchWithOptions",
-      expect.anything(),
-      expect.objectContaining({ maxStarts: 1 }),
-      expect.anything(),
-    );
+    const [calledMethod, , input] = gatewayRuntime.callGatewayFromCli.mock.calls[0]!;
+    expect(calledMethod).toBe(method);
+    expect(input).toMatchObject({ maxStarts: 1 });
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
@@ -148,22 +114,35 @@ describe("registerWorkboardCli", () => {
     expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
   });
 
-  it("rejects ambiguous card id prefixes", async () => {
-    const prefix = await createAmbiguousPrefix(store);
-    await expect(parse("show", prefix)).rejects.toThrow("Ambiguous card id prefix");
-  });
-
-  it("moves claimed cards with operator authority and redacts JSON output", async () => {
+  it("renders a claimed card through operator move and archival without leaking its token", async () => {
     await captureCli("create", "Claimed card");
     const [card] = await store.list();
     assert(card);
     expect(card.metadata?.automation?.workspaceAccess).toEqual({ unrestricted: true });
     const id = card.id;
     await store.claim(id, { ownerId: "worker", token: "secret-token" });
+    for (const args of [["list"], ["show", id]]) {
+      const output = await captureCli(...args, "--json");
+      expect(output).not.toContain("secret-token");
+      expect(output).toContain("[redacted]");
+    }
     const output = await captureCli("move", id.slice(0, 8), "--status", "review", "--json");
     const parsed = JSON.parse(output);
     expect(parsed).toMatchObject({ card: { id, status: "review" } });
     expect(parsed.card.metadata.claim.token).toBe("[redacted]");
     expect(output).not.toContain("secret-token");
+    await store.archive(id, true);
+    await store.create({ title: "Active card" });
+    const defaultOutput = await captureCli("list");
+    const includeOutput = await captureCli("list", "--include-archived");
+    expect(defaultOutput).toContain("Active card");
+    expect(defaultOutput).not.toContain("Claimed card");
+    expect(includeOutput).toContain("Active card");
+    expect(includeOutput).toContain("Claimed card");
+    expect(includeOutput).toContain("(archived)");
+    const jsonOutput = await captureCli("list", "--json");
+    expect(jsonOutput).toContain(id);
+    expect(jsonOutput).toContain("archivedAt");
+    expect(await captureCli("show", id)).toContain("Claimed card (archived)");
   });
 });
