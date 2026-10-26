@@ -8,7 +8,8 @@ const observation = vi.hoisted(() => ({
   intersect: undefined as IntersectionObserverCallback | undefined,
   resize: undefined as (() => void) | undefined,
 }));
-vi.mock("../../../lib/reactive/observers.ts", () => ({
+vi.mock("../../../lib/reactive/observers.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/reactive/observers.ts")>()),
   observeResize: (_elements: readonly Element[], callback: () => void) => {
     observation.resize = callback;
     return () => {

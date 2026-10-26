@@ -10,7 +10,10 @@ import type { createMicrophoneMeter } from "./microphone-meter.ts";
 import type { RealtimeTalkStatus } from "./session.ts";
 
 const renderer = vi.hoisted(() => ({ create: vi.fn<typeof createMicrophoneMeter>() }));
-vi.mock("./microphone-meter.ts", () => ({ createMicrophoneMeter: renderer.create }));
+vi.mock("./microphone-meter.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./microphone-meter.ts")>()),
+  createMicrophoneMeter: renderer.create,
+}));
 beforeEach(() => {
   renderer.create.mockReset();
   renderer.create.mockImplementation(() => ({ setLevel: vi.fn(), dispose: vi.fn() }));
