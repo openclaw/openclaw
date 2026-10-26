@@ -38,8 +38,10 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+// mock-isolation: Command fixtures supply audit results without inspecting the host or live services.
 vi.mock("../security/audit.js", () => ({ runSecurityAuditCore: mocks.runSecurityAuditCore }));
 
+// mock-isolation: Command fixtures supply fix receipts without changing host permissions or files.
 vi.mock("../security/fix.js", () => ({ fixSecurityFootguns: mocks.fixSecurityFootguns }));
 
 // mock-isolation: Audit fixtures resolve secrets locally without connecting to a live Gateway.

@@ -4,12 +4,14 @@ import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.rost
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
+// mock-isolation: Route warnings use synthetic profiles, never the operator's credential store.
 vi.mock("../../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: vi.fn().mockReturnValue({ profiles: {}, usageStats: {} }),
   resolveAuthProfileOrder: vi.fn().mockReturnValue([]),
   resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(null),
 }));
 
+// mock-isolation: Eligibility is fixed for route-policy proof without probing real credentials.
 vi.mock("../../../agents/auth-profiles/credential-state.js", () => ({
   evaluateStoredCredentialEligibility: vi
     .fn()

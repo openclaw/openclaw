@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import "../agents/ai-transport-runtime-host.js";
@@ -64,21 +63,29 @@ it("sends no request for another operator's session but lets its owner reach the
     const { claim, listener, releaseListener } = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
-        createServer(async (request, response) => {
+        createServer((request, response) => {
           const recorded: RecordedRequest = {
             url: request.url,
             authorization: request.headers.authorization,
-            body: JSON.parse(await text(request)),
+            body: undefined,
           };
           requests.push(recorded);
-          writeOpenAiResponsesSse(response, [
-            {
-              id: "fork-transport-response",
-              object: "chat.completion.chunk",
-              model: "fork-model",
-              choices: [{ index: 0, delta: { content: "fork-ok" }, finish_reason: "stop" }],
-            },
-          ]);
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            recorded.body = JSON.parse(body);
+            writeOpenAiResponsesSse(response, [
+              {
+                id: "fork-transport-response",
+                object: "chat.completion.chunk",
+                model: "fork-model",
+                choices: [{ index: 0, delta: { content: "fork-ok" }, finish_reason: "stop" }],
+              },
+            ]);
+          });
         }),
     });
     const lifetime = new AbortController();
