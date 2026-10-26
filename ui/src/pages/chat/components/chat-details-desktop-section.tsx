@@ -37,18 +37,6 @@ export function animateDetailsDesktopEntrance(shell: HTMLElement) {
   };
 }
 
-export type ChatDetailsDesktopSectionProps = {
-  section: ChatDetailsDesktopSectionId;
-  title: string;
-  expanded: boolean;
-  presented: boolean;
-  animateContentResize?: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-  onRevealMotionChange?: (active: boolean) => void;
-  metadata?: JSX.Element;
-  children: JSX.Element;
-};
-
 /** Shared desktop reveal; callers retain disclosure choice and native content/chrome. */
 export function createDetailsDesktopReveal(
   read: () => readonly [expanded: boolean, presented: boolean, animateContentResize?: boolean],
@@ -168,7 +156,17 @@ export function createDetailsDesktopReveal(
 }
 
 /** Desktop section chrome; the caller owns the choice and the leaf owns its data. */
-export function ChatDetailsDesktopSection(props: ChatDetailsDesktopSectionProps) {
+export function ChatDetailsDesktopSection(props: {
+  section: ChatDetailsDesktopSectionId;
+  title: string;
+  expanded: boolean;
+  presented: boolean;
+  animateContentResize?: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  onRevealMotionChange?: (active: boolean) => void;
+  metadata?: JSX.Element;
+  children: JSX.Element;
+}) {
   // Closed sections need only their heading; retain content after its first reveal.
   const [contentMounted] = createSignal((previous = false) => previous || props.expanded);
   const reveal = createDetailsDesktopReveal(
