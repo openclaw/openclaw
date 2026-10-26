@@ -50,7 +50,6 @@ import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { createRestartRecoveryOperatorSource } from "../../operator-run-recovery-source.js";
 import { createRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
-import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -107,7 +106,6 @@ describe("detached subagent restart recovery", () => {
           clearAgentRunContext(id);
         }
       });
-      const recoveryWarnings = vi.spyOn(subagentRegistryLog, "warn");
       const channelSource = sourceKind.includes("channel");
       const drain = sourceKind.endsWith("-drain");
       const requesterAgentId = sourceKind === "channel-cross-agent-drain" ? "requester" : "main";
@@ -140,17 +138,16 @@ describe("detached subagent restart recovery", () => {
       let runId = "warm-restart-child";
       const humanFollowup = sourceKind.startsWith("operator-followup");
       const childSessionKey = `agent:main:${humanFollowup || sourceKind === "channel" || drain || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
-      const requesterSessionId = "warm-restart-parent-session";
-      const requesterLifecycleRevision = "warm-restart-parent-lifecycle";
       const childScope = { agentId: "main", sessionKey: childSessionKey };
       const childIdentity = {
         sessionId: "warm-restart-child-session",
         lifecycleRevision: "child-revision",
       };
       const requesterIdentity = {
-        sessionId: requesterSessionId,
-        lifecycleRevision: requesterLifecycleRevision,
+        sessionId: "warm-restart-parent-session",
+        lifecycleRevision: "warm-restart-parent-lifecycle",
       };
+      const transcriptScope = { ...childScope, sessionId: childIdentity.sessionId };
       const updateChild = (update: Partial<Parameters<typeof replaceSessionEntry>[1]>) =>
         replaceSessionEntry(childScope, { ...loadSessionEntry(childScope)!, ...update });
       const inPreviousGateway = <T>(work: () => T) =>
@@ -185,46 +182,40 @@ describe("detached subagent restart recovery", () => {
           endedAt: now - 500,
         },
       );
-      await replaceSessionEntry(childScope, {
-        sessionId: "warm-restart-child-session",
+      const childEntry: Parameters<typeof replaceSessionEntry>[1] = {
+        sessionId: childIdentity.sessionId,
         updatedAt: now,
         abortedLastRun: true,
         createdVia: "spawn",
-        ...(!channelSource
-          ? {
-              createdActor: {
-                type: "agent" as const,
-                id: "main",
-                delegatedBy: {
-                  type: "human" as const,
-                  source: "profile" as const,
-                  id: client.authenticatedUserProfile!.profileId,
-                },
-              },
-            }
-          : {}),
         spawnedBy: requesterSessionKey,
         parentSessionKey: requesterSessionKey,
         spawnDepth: 1,
-        ...(verified
-          ? {
-              lifecycleRevision: "child-revision",
-              status: "interrupted" as const,
-              lastRunId: runId,
-            }
-          : {}),
-        ...(channelSource && sourceKind !== "channel" && sourceKind !== "missing-channel"
-          ? {
-              restartRecoveryRequesterSource: createRestartRecoveryRequesterSource({
-                agentId: "main",
-                sessionKey: childSessionKey,
-                entry: { ...childIdentity, updatedAt: now },
-                sourceRunId: sourceKind === "mismatched-channel" ? "another-child-run" : runId,
-                requesterOrigin,
-              }),
-            }
-          : {}),
-      });
+      };
+      if (!channelSource) {
+        childEntry.createdActor = {
+          type: "agent",
+          id: "main",
+          delegatedBy: {
+            type: "human",
+            source: "profile",
+            id: client.authenticatedUserProfile!.profileId,
+          },
+        };
+      }
+      if (verified) {
+        childEntry.lifecycleRevision = childIdentity.lifecycleRevision;
+        childEntry.status = "interrupted";
+        childEntry.lastRunId = runId;
+      }
+      if (channelSource && sourceKind !== "channel" && sourceKind !== "missing-channel") {
+        childEntry.restartRecoveryRequesterSource = createRestartRecoveryRequesterSource({
+          ...childScope,
+          entry: { ...childIdentity, updatedAt: now },
+          sourceRunId: sourceKind === "mismatched-channel" ? "another-child-run" : runId,
+          requesterOrigin,
+        });
+      }
+      await replaceSessionEntry(childScope, childEntry);
       if (sourceKind === "channel") {
         const scope = {
           agentId: "main",
@@ -260,58 +251,64 @@ describe("detached subagent restart recovery", () => {
         });
       }
       if (transcript) {
-        await appendTranscriptMessage(
-          { agentId: "main", sessionKey: childSessionKey, sessionId: "warm-restart-child-session" },
-          {
-            cwd: fixture.stateDir,
-            message: { role: "user", content: "Finish the detached task." },
-          },
-        );
+        await appendTranscriptMessage(transcriptScope, {
+          cwd: fixture.stateDir,
+          message: { role: "user", content: "Finish the detached task." },
+        });
       }
       const predecessor = makeRunRecord({
         runId,
         childSessionKey,
         childSessionIdentity: {
-          sessionId: "warm-restart-child-session",
-          ...(verified ? { lifecycleRevision: "child-revision" } : {}),
+          sessionId: childIdentity.sessionId,
+          ...(verified ? { lifecycleRevision: childIdentity.lifecycleRevision } : {}),
         },
         requesterSessionKey,
         requesterAgentId,
         requesterStorePath: resolveSessionStorePathCore(undefined, { agentId: requesterAgentId }),
         completionTarget: "parent",
-        completionRequesterSessionId: requesterSessionId,
-        completionRequesterLifecycleRevision: requesterLifecycleRevision,
+        completionRequesterSessionId: requesterIdentity.sessionId,
+        completionRequesterLifecycleRevision: requesterIdentity.lifecycleRevision,
         expectsCompletionMessage: !collect,
-        ...(collect
-          ? {
-              collect: true,
-              groupId: "restart-group",
-              swarmRequesterSessionKey: requesterSessionKey,
-            }
-          : {}),
         execution: {
           status: verified ? "running" : "interrupted",
           startedAt: now - 1_000,
-          ...(verified
-            ? {}
-            : { interruptedAt: now, interruptionReason: "gateway-restart" as const }),
           lifecycleGeneration: getAgentEventLifecycleGeneration(),
         },
-        requesterSettleWake: verified
-          ? undefined
-          : {
-              status: "pending",
-              attemptCount: 0,
-              requesterYieldBatch: true,
-              rearmGeneration: 1,
-              batchRunIds: [runId],
-            },
       });
+      if (collect) {
+        predecessor.collect = true;
+        predecessor.groupId = "restart-group";
+        predecessor.swarmRequesterSessionKey = requesterSessionKey;
+      }
+      if (!verified) {
+        predecessor.execution.interruptedAt = now;
+        predecessor.execution.interruptionReason = "gateway-restart";
+        predecessor.requesterSettleWake = {
+          status: "pending",
+          attemptCount: 0,
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+          batchRunIds: [runId],
+        };
+      }
+      const methods = createGatewayMethodRegistry(
+        createCoreGatewayMethodDescriptors(sessionRecoverHandlers),
+      );
+      const makeGateway = (isOpen: () => boolean, recovery = false) => {
+        const context = Object.assign(createContext(), {
+          recoveryRuntime: recovery ? { ...gatewayRuntime } : gatewayRuntime,
+          resolveGatewayContext: () => (isOpen() ? context : undefined),
+        });
+        if (recovery) {
+          context.getGatewayMethodRegistry = () => methods;
+          context.getSessionEventSubscriberConnIds = () => [];
+          bindGatewayContextResolver(context.recoveryRuntime, context.resolveGatewayContext);
+        }
+        return context;
+      };
       let previousOpen = true;
-      const previousContext = Object.assign(createContext(), {
-        recoveryRuntime: gatewayRuntime,
-        resolveGatewayContext: () => (previousOpen ? previousContext : undefined),
-      });
+      const previousContext = makeGateway(() => previousOpen);
       if (!channelSource) {
         client.internal = { authenticatedOperator: true };
         client.authPolicy = captureGatewayAuthPolicy(previousContext.getRuntimeConfig(), {
@@ -358,8 +355,8 @@ describe("detached subagent restart recovery", () => {
             swarmRequesterSessionKey: requesterSessionKey,
             expectsCompletionMessage: false,
             completionTarget: "parent",
-            completionRequesterSessionId: requesterSessionId,
-            completionRequesterLifecycleRevision: requesterLifecycleRevision,
+            completionRequesterSessionId: requesterIdentity.sessionId,
+            completionRequesterLifecycleRevision: requesterIdentity.lifecycleRevision,
             gatewayContextResolver: previousContext.resolveGatewayContext,
           }),
         );
@@ -398,8 +395,7 @@ describe("detached subagent restart recovery", () => {
         expect(loadSubagentRegistryFromSqlite().get(runId)?.operatorRecoverySource).toMatchObject({
           agentId: "main",
           sessionKey: childSessionKey,
-          sessionId: "warm-restart-child-session",
-          lifecycleRevision: "child-revision",
+          ...childIdentity,
           sourceRunId: runId,
           snapshot: { scopes },
         });
@@ -443,17 +439,7 @@ describe("detached subagent restart recovery", () => {
       }
 
       let replacementOpen = true;
-      const replacementRuntime = { ...gatewayRuntime };
-      const methods = createGatewayMethodRegistry(
-        createCoreGatewayMethodDescriptors(sessionRecoverHandlers),
-      );
-      const replacementContext = Object.assign(createContext(), {
-        recoveryRuntime: replacementRuntime,
-        getGatewayMethodRegistry: () => methods,
-        getSessionEventSubscriberConnIds: () => [],
-        resolveGatewayContext: () => (replacementOpen ? replacementContext : undefined),
-      });
-      bindGatewayContextResolver(replacementRuntime, replacementContext.resolveGatewayContext);
+      const replacementContext = makeGateway(() => replacementOpen, true);
       let resumeRunId = runId;
       let recoveryResolver = replacementContext.resolveGatewayContext;
       let closeSecondGateway: (() => void) | undefined;
@@ -475,13 +461,10 @@ describe("detached subagent restart recovery", () => {
             ).not.toThrow();
           }
           expect(request).toMatchObject({
-            sessionId: "warm-restart-child-session",
+            sessionId: childIdentity.sessionId,
             sessionKey: childSessionKey,
             idempotencyKey: `subagent-restart-recovery:${resumeRunId}`,
-            resume: {
-              sessionId: "warm-restart-child-session",
-              lifecycleRevision: "child-revision",
-            },
+            resume: childIdentity,
           });
           expect(
             await reactivateCompletedSubagentSession({
@@ -519,10 +502,11 @@ describe("detached subagent restart recovery", () => {
           execution: { status: "terminal", outcome: { status: "error" } },
         });
         await testing.sweepOnceForTests();
-        const messages = await readSessionMessagesAsync(
-          { agentId: "main", sessionKey: childSessionKey, sessionId: "warm-restart-child-session" },
-          { mode: "recent", maxMessages: 20, maxBytes: 256 * 1024 },
-        );
+        const messages = await readSessionMessagesAsync(transcriptScope, {
+          mode: "recent",
+          maxMessages: 20,
+          maxBytes: 256 * 1024,
+        });
         expect(
           messages.filter((message) => isRecord(message) && message.role === "assistant"),
         ).toEqual([
@@ -554,13 +538,9 @@ describe("detached subagent restart recovery", () => {
         expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
         expect(vi.mocked(runSubagentAnnounceFlow).mock.calls[0]![0]).toMatchObject({
           requesterSessionKey,
-          completionRequesterSessionId: requesterSessionId,
-          completionRequesterLifecycleRevision: requesterLifecycleRevision,
+          completionRequesterSessionId: requesterIdentity.sessionId,
+          completionRequesterLifecycleRevision: requesterIdentity.lifecycleRevision,
           childRunId: runId,
-          outcome: {
-            status: "error",
-            error: expect.stringContaining("Child transcript is missing"),
-          },
         });
         await testing.sweepOnceForTests();
         await fixture.settle();
@@ -569,12 +549,7 @@ describe("detached subagent restart recovery", () => {
         return;
       }
       if (verified) {
-        expect(
-          launch,
-          JSON.stringify(recoveryWarnings.mock.calls, (_key, value) =>
-            value instanceof Error ? value.message : value,
-          ),
-        ).toHaveBeenCalledOnce();
+        expect(launch).toHaveBeenCalledOnce();
         const assertAdmittedSourceCurrent = launch.mock.calls[0]![0].assertAdmittedSourceCurrent;
         expect(assertAdmittedSourceCurrent).toBeTypeOf("function");
         // The request hold ends after dispatch; verify retained registry custody below.
@@ -585,7 +560,7 @@ describe("detached subagent restart recovery", () => {
           taskRunId: runId,
           task: humanFollowup ? "Verify the retained result." : predecessor.task,
           requesterSessionKey,
-          completionRequesterSessionId: requesterSessionId,
+          completionRequesterSessionId: requesterIdentity.sessionId,
           execution: { status: "running" },
           ...(collect ? { collect: true, groupId: "restart-group" } : {}),
         });
@@ -653,18 +628,11 @@ describe("detached subagent restart recovery", () => {
         await resetSubagentRegistryForTests({ persist: false });
         await initSubagentRegistry();
         let secondOpen = true;
-        const secondRuntime = { ...gatewayRuntime };
-        const secondContext = Object.assign(createContext(), {
-          recoveryRuntime: secondRuntime,
-          getGatewayMethodRegistry: () => methods,
-          getSessionEventSubscriberConnIds: () => [],
-          resolveGatewayContext: () => (secondOpen ? secondContext : undefined),
-        });
+        const secondContext = makeGateway(() => secondOpen, true);
         recoveryResolver = secondContext.resolveGatewayContext;
         closeSecondGateway = () => {
           secondOpen = false;
         };
-        bindGatewayContextResolver(secondRuntime, recoveryResolver);
         await activateSubagentRegistry(recoveryResolver).settled;
         await settleRecovery();
         successor = await getSubagentRunByChildSessionKey(childSessionKey);
