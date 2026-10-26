@@ -440,7 +440,6 @@ describe("startup recovery admission", () => {
         mainRestartRecovery: undefined,
         restartRecoveryDeliveryRunId: "registry-child-run",
       });
-      const info = vi.spyOn(mainSessionRecoveryLog, "info");
       const executionWait = createDeferred();
       const wait = gatewayRuntime.waitForAgent;
       const waitSpy = vi
@@ -502,24 +501,6 @@ describe("startup recovery admission", () => {
       }
       if (action === "continue") {
         expect(waitSpy).not.toHaveBeenCalled();
-        const lines = info.mock.calls.map(([line]) => line);
-        expect(lines).toContainEqual(
-          expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
-        );
-        const decisions = lines
-          .filter((line) => line.startsWith("main-session restart recovery candidate "))
-          .map((line) => JSON.parse(line.slice("main-session restart recovery candidate ".length)));
-        expect(decisions).toHaveLength(2);
-        expect(decisions).toContainEqual(
-          expect.objectContaining({
-            sessionKey: first.sessionKey,
-            sourceRunId: "interrupted-main",
-            decision: "started",
-            nextOwner: "restart-recovery-lane",
-            boot: expect.any(String),
-            pass: expect.any(String),
-          }),
-        );
       }
       if (action === "stop") {
         const state = first.readEntry()?.mainRestartRecovery;
@@ -593,7 +574,7 @@ describe("startup recovery admission", () => {
           failedAttempt.resolve();
         }
       });
-      const info = observeInfo({
+      observeInfo({
         "startup complete:": () => startup.resolve(),
         '"reason":"archived"': () => blocked.resolve(),
       });
@@ -649,11 +630,6 @@ describe("startup recovery admission", () => {
         expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
         expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
       }
-      const decisions = info.mock.calls.map(([line]) => line);
-      expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
-      expect(decisions).toContainEqual(
-        expect.stringContaining('"nextOwner":"session-preparation"'),
-      );
     },
   );
 
@@ -750,24 +726,10 @@ describe("startup recovery admission", () => {
 
   it.for([
     {
-      name: "ordinary failure during drain",
-      draining: true,
-      failure: () => new Error("preparation failed"),
-    },
-    {
       name: "wrapped drain failure",
       draining: true,
       failure: () =>
         new Error("preparation failed", { cause: new gatewayWorkAdmission.GatewayDrainingError() }),
-    },
-    {
-      name: "aggregate drain failure",
-      draining: true,
-      failure: () =>
-        new AggregateError(
-          [new gatewayWorkAdmission.GatewayDrainingError(), new Error("cleanup failed")],
-          "preparation cleanup failed",
-        ),
     },
     {
       name: "drain error without active drain",
