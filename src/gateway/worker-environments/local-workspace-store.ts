@@ -104,19 +104,22 @@ export function withLocalWorkspaceStore<T>(
         const leases = [...(inherited?.leases ?? []), lease];
         return withOpenClawStateLeasesWorkerAdmission(leases, context, async (authority) => {
           let active = true;
+          const assertOwner = params.workerAuthority
+            ? params.workerAuthority.assertCurrent
+            : params.assertCurrent;
           const assertHost = () => {
             captured.admission.assertCurrent();
             authority.assertCurrent();
             if (!active) {
               throw new Error("Local workspace custody has ended");
             }
-            (params.workerAuthority
-              ? params.workerAuthority.assertCurrent
-              : params.assertCurrent)?.();
+            assertOwner?.();
           };
           const assertCurrent = () => {
             assertHost();
-            params.assertCurrent?.();
+            if (params.assertCurrent !== assertOwner) {
+              params.assertCurrent?.();
+            }
           };
           try {
             return await runOpenClawStateWorkerOperation(
@@ -164,8 +167,12 @@ export function withLocalWorkspaceStore<T>(
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const assertWrite = () => {
-                    assertHost();
-                    guard.assertCurrent?.();
+                    if (guard.assertCurrent !== assertHost) {
+                      assertHost();
+                    }
+                    if (guard.assertCurrent !== assertOwner) {
+                      guard.assertCurrent?.();
+                    }
                   };
                   try {
                     const acknowledged = await withOpenClawStateLeasesWorkerAdmission(
