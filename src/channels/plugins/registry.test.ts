@@ -11,6 +11,7 @@ import {
   resolveChannelPluginRegistration,
 } from "./registry.js";
 
+// mock-isolation: This fixture owns fallback channels without loading real bundled plugins.
 vi.mock("./bundled.js", () => ({
   getBundledChannelPlugin: (id: string) =>
     id === "fallback" ? { id, meta: { label: id } } : undefined,

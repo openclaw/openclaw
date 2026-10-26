@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { resolveQuestionOverGateway } from "./question-gateway-resolver.js";
 
 const gateway = vi.hoisted(() => vi.fn());
+// mock-isolation: Exercise resolver authorization and outcomes without real Gateway connections.
 vi.mock("../gateway/call.js", () => ({ callGateway: gateway }));
 const id = "ask_0123456789abcdef0123456789abcdef";
 const request = { cfg: {}, questionId: id, optionValue: "Production", senderId: "telegram:42" };
