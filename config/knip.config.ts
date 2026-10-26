@@ -512,6 +512,7 @@ const repositoryScriptEntries = [
   "scripts/perf/ui-streaming-render-measure.ts!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
+  "scripts/perf/archive-canonical-worker-measure.ts!",
   "scripts/perf/attempt-stream-repair-measure.ts!",
   "scripts/perf/config-health-read-measure.ts!",
   "scripts/perf/context-engine-lifecycle-bench.ts!",
