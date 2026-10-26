@@ -16,31 +16,19 @@ import {
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
   getProviderHttpMocks();
 
-let videoProvider: VideoGenerationProvider;
-let captured: ReturnType<typeof capturePluginRegistration>;
+const { default: plugin } = await import("./index.js");
+const captured = capturePluginRegistration(plugin);
+const videoProvider = captured.videoGenerationProviders[0];
+if (!videoProvider) {
+  throw new Error("expected Alibaba video generation provider");
+}
 const authChoice = "alibaba-model-studio-api-key";
-const videoRequest = {
-  provider: "alibaba",
-  model: "wan2.6-t2v",
-  prompt: "animate this shot",
-  cfg: {},
-};
-
-beforeAll(async () => {
-  const { default: plugin } = await import("./index.js");
-  captured = capturePluginRegistration(plugin);
-  const provider = captured.videoGenerationProviders[0];
-  if (!provider) {
-    throw new Error("expected Alibaba video generation provider");
-  }
-  videoProvider = provider;
-});
+const videoRequest = { provider: "alibaba", prompt: "animate this shot", cfg: {} };
 
 installProviderHttpMockCleanup();
 
@@ -80,16 +68,15 @@ it("registers media-only API-key onboarding alongside video generation", async (
   expect(choice?.method).toMatchObject({ id: "api-key", starterModel: undefined });
   expect(choice?.wizard?.onboardingScopes).toEqual(["image-generation"]);
   const resolveApiKey = vi.fn(async () => ({ key: "alibaba-test-key", source: "flag" as const }));
-  expect(
-    await choice?.method.validateNonInteractive?.({
-      authChoice,
-      config: {},
-      baseConfig: {},
-      opts: { alibabaModelStudioApiKey: "alibaba-test-key" },
-      runtime: createRuntimeEnv(),
-      resolveApiKey,
-    }),
-  ).toBe(true);
+  const valid = await choice?.method.validateNonInteractive?.({
+    authChoice,
+    config: {},
+    baseConfig: {},
+    opts: { alibabaModelStudioApiKey: "alibaba-test-key" },
+    runtime: createRuntimeEnv(),
+    resolveApiKey,
+  });
+  expect(valid).toBe(true);
   expect(resolveApiKey).toHaveBeenCalledWith({
     provider: "alibaba",
     flagValue: "alibaba-test-key",
@@ -143,9 +130,9 @@ it.each([
 it("rejects a resolved Coding Plan API key before submitting a Wan request", async () => {
   resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "sk-sp-qwen-coding-plan-key" });
 
-  await expect(videoProvider.generateVideo(videoRequest)).rejects.toThrow(
-    /Standard DashScope endpoint.*same-region Standard API key/i,
-  );
+  await expect(
+    videoProvider.generateVideo({ ...videoRequest, model: "wan2.6-t2v" }),
+  ).rejects.toThrow(/Standard DashScope endpoint.*same-region Standard API key/i);
 
   expect(postJsonRequestMock).not.toHaveBeenCalled();
 });
