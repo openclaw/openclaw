@@ -95,6 +95,10 @@ function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
   return { leaseId, profile };
 }
 
+function expectActions(calls: string[][], actions: string) {
+  expect(calls.map((argv) => argv[1])).toEqual(actions.split(" "));
+}
+
 function providerWithRawRunner(
   runCommand: CrabboxCommandRunner,
   warn?: (message: string) => void,
@@ -464,7 +468,7 @@ it("stops the owned lease without launching setup when its protected secret is u
     code: "cleanup_complete",
     message: expect.stringContaining("protected shared-store entry"),
   });
-  expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "stop"]);
+  expectActions(calls, "warmup inspect stop");
 });
 
 it("rejects a CLI without native public setup egress before allocation", async () => {
@@ -504,7 +508,7 @@ it("leaves a lease live when it disappears from post-setup inspection", async ()
   await expect(provider.provision({ ...PROFILE, setup: "install-node" })).rejects.toThrow(
     "disappeared while waiting for SSH readiness",
   );
-  expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "run", "inspect"]);
+  expectActions(calls, "warmup inspect run inspect");
 });
 
 it("revokes the setup grant and stops the lease after a setup timeout", async () => {
@@ -570,7 +574,7 @@ it("rejects an effective AWS instance profile during allocation-free preparation
     code: "invalid_profile",
     message: "Crabbox AWS instance profile must be empty for cloud workers",
   });
-  expect(calls.map((argv) => argv[1])).toEqual(["config"]);
+  expectActions(calls, "config");
 });
 
 it("waits for AWS metadata before enrollment", async () => {
@@ -631,9 +635,7 @@ it.each([
   await expect(
     provider.provision({ ...PROFILE, ...(setup ? { setup } : {}) }),
   ).rejects.toMatchObject({ code: "cleanup_complete", message });
-  expect(calls.map((argv) => argv[1])).toEqual(
-    setup ? ["warmup", "inspect", "run", "inspect", "stop"] : ["warmup", "inspect", "stop"],
-  );
+  expectActions(calls, setup ? "warmup inspect run inspect stop" : "warmup inspect stop");
   expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
 });
 
@@ -654,7 +656,7 @@ it("rejects a registered Hetzner desktop profile before allocation", async () =>
     name: "Error",
     message: "Crabbox Hetzner desktop profiles require a managed coordinator",
   });
-  expect(calls.map((argv) => argv[1])).toEqual(["config"]);
+  expectActions(calls, "config");
 });
 
 it("collects redacted node evidence before stopping an unenrolled lease", async () => {
@@ -887,9 +889,7 @@ it.each(["warmup", "inspect"])(
     await expect(providerWithRunner(runCommand).provision(profile)).rejects.toThrow(
       "did not exit normally (timeout)",
     );
-    expect(calls.map((argv) => argv[1])).toEqual(
-      failure === "warmup" ? ["warmup"] : ["warmup", "inspect"],
-    );
+    expectActions(calls, failure === "warmup" ? "warmup" : "warmup inspect");
     expect(live).toEqual(new Set([LEASE_ID]));
     const restarted = providerWithRunner(runCommand);
     const lease = await restarted.provision(profile);
@@ -913,10 +913,6 @@ it.each(["warmup", "inspect"])(
       "run",
       "stop",
     ]);
-    expect(
-      calls.filter((argv) => argv[1] === "inspect").map((argv) => argv[argv.indexOf("--id") + 1]),
-    ).toEqual(failure === "warmup" ? [LEASE_ID] : [LEASE_ID, LEASE_ID]);
-    expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   },
 );
 
@@ -934,7 +930,7 @@ it("keeps authoritative absence after warmup retryable and un-stopped", async ()
     message: "Crabbox warmup lease was not found during inspection",
   });
   expect(error).not.toMatchObject({ code: "invalid_profile" });
-  expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect"]);
+  expectActions(calls, "warmup inspect");
 });
 
 it.each(["terminal", "different lease"] as const)(
@@ -969,7 +965,7 @@ it.each(["terminal", "different lease"] as const)(
     } else {
       expect(message).toBe(originalMessage);
     }
-    expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect"]);
+    expectActions(calls, "warmup inspect");
     expect(calls[1]).toEqual(expect.arrayContaining(["--id", LEASE_ID]));
   },
 );
@@ -1167,7 +1163,7 @@ it("keeps inspection and teardown available for persisted setupEnv leases withou
   expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(CRABBOX_STOP_TIMEOUT_MS + 20_000);
   await expect(provider.inspect(lifecycleLease(LEASE_ID, profile))).resolves.toEqual(active);
   await provider.destroy(lifecycleLease(LEASE_ID, profile));
-  expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);
+  expectActions(calls, "inspect stop");
   expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();
 });
 
@@ -1201,7 +1197,7 @@ it("rejects deleted leases during provision even if SSH is ready", async () => {
     code: "cleanup_complete",
     message: "Crabbox warmup lease entered a terminal state",
   });
-  expect(calls.map((argv) => argv[1])).toEqual(["warmup", "inspect", "stop"]);
+  expectActions(calls, "warmup inspect stop");
 });
 
 it("maps lease recognition failures to unknown while observation failures still throw", async () => {

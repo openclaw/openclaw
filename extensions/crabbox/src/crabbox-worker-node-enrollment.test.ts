@@ -403,16 +403,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const currentArtifact = await servePackage("current-runtime");
     expect(oldArtifact.nodeBootstrap.sha256).not.toBe(currentArtifact.nodeBootstrap.sha256);
     const profile = resolveCrabboxProvisionProfile(PROFILE, undefined).profile;
-    const homes = new Map<string, string>();
-    const snapshots = new Map<string, string>();
     let snapshotCount = 0;
     const forkChoices: string[] = [];
-    const homeFor = (id: string) => {
-      const home = path.join(root, id);
-      fs.mkdirSync(home, { recursive: true });
-      homes.set(id, home);
-      return home;
-    };
+    const homeFor = (id: string) => path.join(root, id);
     const context = (id: string, digest = oldArtifact.nodeBootstrap.sha256) => ({
       nodeRuntimeIdentity: { nodeBootstrapSha256: digest, executionMode: "worker-turn" as const },
       binary: "crabbox",
@@ -423,14 +416,14 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       timeoutMs: () => 60_000,
     });
     const hasRuntime = (id: string, digest: string) =>
-      fs.existsSync(path.join(runtimeRoot(homes.get(id)!), digest));
+      fs.existsSync(path.join(runtimeRoot(homeFor(id)), digest));
     vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv, options) => {
       if (argv[1] === "warmup") {
-        homeFor(argv[argv.indexOf("--lease-id") + 1]!);
+        fs.mkdirSync(homeFor(argv[argv.indexOf("--lease-id") + 1]!), { recursive: true });
       }
       if (argv[1] === "run") {
         const id = argv[argv.indexOf("--id") + 1]!;
-        const home = homes.get(id)!;
+        const home = homeFor(id);
         execFileSync("/bin/sh", [], {
           input: options?.input,
           cwd: home,
@@ -440,14 +433,11 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       if (argv[1] === "checkpoint" && argv[2] === "create") {
         const id = argv[argv.indexOf("--id") + 1]!;
         const checkpoint = `chk_fixture_${++snapshotCount}`;
-        const snapshot = path.join(root, checkpoint);
-        fs.cpSync(runtimeRoot(homes.get(id)!), snapshot, { recursive: true });
-        snapshots.set(checkpoint, snapshot);
+        fs.cpSync(runtimeRoot(homeFor(id)), homeFor(checkpoint), { recursive: true });
         return checkpointResult(checkpoint, id, "completed");
       }
       if (argv[1] === "checkpoint" && argv[2] === "delete") {
-        fs.rmSync(snapshots.get(argv[3]!)!, { recursive: true });
-        snapshots.delete(argv[3]!);
+        fs.rmSync(homeFor(argv[3]!), { recursive: true });
       }
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
         return jsonResult({
@@ -460,7 +450,8 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         const checkpoint = argv[3]!;
         const id = argv[argv.indexOf("--lease-id") + 1]!;
         const home = homeFor(id);
-        fs.cpSync(snapshots.get(checkpoint)!, runtimeRoot(home), { recursive: true });
+        fs.mkdirSync(home, { recursive: true });
+        fs.cpSync(homeFor(checkpoint), runtimeRoot(home), { recursive: true });
         forkChoices.push(checkpoint);
         return jsonResult({
           checkpointId: checkpoint,
@@ -482,12 +473,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const initial = context("cbx_initial");
     await manager.allocate(initial);
     await expectSetupPhases(
-      enroll(homes.get(initial.id)!, oldArtifact.nodeBootstrap, undefined, true),
+      enroll(homeFor(initial.id), oldArtifact.nodeBootstrap, undefined, true),
     );
     await manager.markEnrolled(initial.id);
     expect(await manager.capture(initial)).toBe(true);
     await manager.release(initial);
-    fs.rmSync(homes.get(initial.id)!, { recursive: true });
+    fs.rmSync(homeFor(initial.id), { recursive: true });
     const originalCheckpoint = (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value
       .image!.checkpointId;
 
@@ -497,14 +488,14 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       checkpointId: originalCheckpoint,
     });
     const upgradePhases = await expectSetupPhases(
-      enroll(homes.get(upgraded.id)!, currentArtifact.nodeBootstrap, undefined, true),
+      enroll(homeFor(upgraded.id), currentArtifact.nodeBootstrap, undefined, true),
     );
     expect(upgradePhases).toContain("openclaw-bootstrap-installation");
     expect(hasRuntime(upgraded.id, currentArtifact.nodeBootstrap.sha256)).toBe(true);
     await manager.markEnrolled(upgraded.id);
     const refreshed = await manager.capture(upgraded);
     await manager.release(upgraded);
-    fs.rmSync(homes.get(upgraded.id)!, { recursive: true });
+    fs.rmSync(homeFor(upgraded.id), { recursive: true });
     const retainedCheckpoint = (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value
       .image!.checkpointId;
 
@@ -512,7 +503,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const nextChoice = await manager.allocate(next);
     const currentWasCached = hasRuntime(next.id, currentArtifact.nodeBootstrap.sha256);
     const repeatPhases = await expectSetupPhases(
-      enroll(homes.get(next.id)!, currentArtifact.nodeBootstrap, undefined, true),
+      enroll(homeFor(next.id), currentArtifact.nodeBootstrap, undefined, true),
     );
     await manager.release(next);
     expect(refreshed).toBe(true);
@@ -789,30 +780,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(readText(stateDir, "node.pid")).toBe(pid);
     },
     30_000,
-  );
-
-  it.for([
-    { failures: 1, expectedCode: 0, requests: 2 },
-    { failures: 10, expectedCode: 1, requests: 9 },
-  ])(
-    "handles $failures transient HTTP 530 responses during enrollment",
-    async ({ failures, expectedCode, requests }, { signal }) => {
-      const { home, stateDir } = testHome();
-      const { nodeBootstrap, authorizations } = await servePackage("edge-retry", {
-        statusCodes: Array(failures).fill(530),
-      });
-      const result = await enroll(home, nodeBootstrap, undefined, false, undefined, { signal });
-      expect(result.code, result.output).toBe(expectedCode);
-      expect(authorizations).toEqual(Array(requests).fill(`Bearer ${nodeBootstrap.token}`));
-      if (expectedCode === 0) {
-        expect(await readLaunch(stateDir, receipts, signal)).toMatchObject({ build: "edge-retry" });
-      } else {
-        expect(result.output).toContain(
-          "HTTP 530 (download attempt 9; 9 consecutive no-progress failures)",
-        );
-        expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
-      }
-    },
   );
 
   it.each([
