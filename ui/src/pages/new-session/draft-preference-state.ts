@@ -70,6 +70,28 @@ export class DraftPreferenceState {
     },
   ) {}
 
+  static forChat(context: ApplicationContext, changed: () => void): DraftPreferenceState {
+    return new DraftPreferenceState(
+      () => {
+        const gateway = context.gateway;
+        const snapshot = gateway.snapshot;
+        return {
+          source: gateway,
+          client: snapshot.client,
+          gatewayUrl: gateway.connection.gatewayUrl,
+          recoveryScope: snapshot.hello?.auth?.recoveryScope ?? "",
+          bootId: snapshot.hello?.server?.bootId ?? "",
+          connected: snapshot.phase === "connected",
+          connectionEpoch: 0,
+          data: undefined,
+          pendingPlacementSessionKey: "",
+          agentsHydrated: true,
+        };
+      },
+      { changed, onAdoptAgentDefaults: () => {} },
+    );
+  }
+
   get loading(): boolean {
     return this.preferenceModeValue === "loading";
   }
@@ -186,13 +208,13 @@ export class DraftPreferenceState {
     return this.preparePreferenceWrite(agentId, workspace, { worktreeName: "" }, expected);
   }
 
-  persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {
+  persistPreference(agentId: string, workspace: string | undefined, patch: NewSessionPreference) {
     return this.preparePreferenceWrite(agentId, workspace, patch)?.();
   }
 
   private preparePreferenceWrite(
     agentIdValue: string,
-    workspace: string,
+    workspace: string | undefined,
     patch: NewSessionPreference,
     expected?: SubmittedWorktreePreference,
   ): ((consume?: () => void) => void | Promise<void>) | undefined {
@@ -225,7 +247,9 @@ export class DraftPreferenceState {
         source.snapshot.hello?.server?.bootId === bootId &&
         source.snapshot.selfUser?.id === profileId,
       );
-    const nextPatch = accepted ? patch : { workspace, ...patch };
+    const nextPatch = accepted
+      ? patch
+      : { ...(workspace === undefined ? {} : { workspace }), ...patch };
     const matchSubmitted = (current: NewSessionPreference | null | undefined) => {
       if (!expected) {
         return "match";
@@ -235,7 +259,7 @@ export class DraftPreferenceState {
         current.worktreeName !== expected.worktreeName ||
         current.worktree !== true ||
         (current.workspace ?? workspace) !== workspace ||
-        resolveNewSessionFolderPreference(current, workspace).folder !== expected.folder ||
+        resolveNewSessionFolderPreference(current, workspace ?? "").folder !== expected.folder ||
         (current.projectId ?? "") !== (expected.projectId ?? "")
       ) {
         return "superseded";

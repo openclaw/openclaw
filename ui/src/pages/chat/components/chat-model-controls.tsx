@@ -544,6 +544,14 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const selectedContextWindow =
       contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
     const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
+    const accessProgramModel = resolveModelRuntimeEntry(
+      catalog.entry(currentOverride || defaultModel),
+      triggerRuntime,
+    );
+    const effectiveAccessProgram =
+      !retired && !uninitialized && !props.modelSwitching
+        ? accessProgramModel?.cyberAccessProgramDefault
+        : undefined;
     const accessPrograms =
       props.connected &&
       catalogState.hasSnapshot &&
@@ -551,32 +559,25 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       !retired &&
       !uninitialized &&
       !props.modelSwitching
-        ? (resolveModelRuntimeEntry(catalog.entry(currentOverride || defaultModel), triggerRuntime)
-            ?.availableAccessPrograms?.cyber ?? [])
-        : [];
+        ? accessProgramModel?.availableAccessPrograms?.cyber
+        : undefined;
+    const hasAccessSelection =
+      props.requestedAccessProgram !== undefined || effectiveAccessProgram !== undefined;
     const showAccessProgram =
       Boolean(props.onAccessProgramSelect) &&
-      accessPrograms.some((program) => program !== "standard");
+      (hasAccessSelection || accessPrograms?.some((program) => program !== "standard"));
     const accessProgramDisabled =
-      commonDisabled || Boolean(props.accessProgramMutationDisabledReason);
+      commonDisabled || !hasResolvableModel || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
       commonDisabled ||
-      !hasResolvableModel ||
-      ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
-        (!showAccessProgram || accessProgramDisabled));
+      (!(showAccessProgram && hasAccessSelection) &&
+        (!hasResolvableModel ||
+          ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
+            (!showAccessProgram || accessProgramDisabled))));
     // Keep the effort control mounted but hidden until its catalog resolves.
-    const reserveEffortPicker = !hasResolvableModel;
+    const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
       model: {
-        accessProgramRecovery:
-          props.requestedAccessProgram !== undefined &&
-          !showAccessProgram &&
-          props.onAccessProgramSelect
-            ? {
-                disabled: accessProgramDisabled,
-                onClear: (sessionKey) => props.onAccessProgramSelect?.(null, sessionKey),
-              }
-            : undefined,
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
@@ -630,6 +631,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           showAccessProgram && props.onAccessProgramSelect
             ? {
                 requested: props.requestedAccessProgram,
+                previous: props.daybreakAccessProgram,
+                effectiveAccessProgram,
                 programs: accessPrograms,
                 disabled: accessProgramDisabled,
                 sessionKey: props.sessionKey,

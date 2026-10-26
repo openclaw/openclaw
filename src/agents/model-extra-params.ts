@@ -1,5 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -119,4 +121,25 @@ export function resolveAliasedParamValue(
     }
   }
   return resolved;
+}
+
+/** Projects authored inheritance only; absent or invalid settings do not name a provider default. */
+export function resolveConfiguredCyberAccessProgram(
+  params: Parameters<typeof resolveModelExtraParamSources>[0],
+): CyberAccessProgram | undefined {
+  const { defaultParams, modelParams, agentModelParams, agentParams } =
+    resolveModelExtraParamSources(params);
+  const programs = asOptionalRecord(
+    resolveAliasedParamValue(
+      [defaultParams, modelParams, agentModelParams, agentParams],
+      ["accessPrograms"],
+    ),
+  );
+  if (!programs || Object.keys(programs).some((key) => key !== "cyber")) {
+    return undefined;
+  }
+  const cyber = programs.cyber;
+  return cyber === "standard" || cyber === "daybreak_blue" || cyber === "daybreak_red"
+    ? cyber
+    : undefined;
 }

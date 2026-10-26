@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
+import {
+  hasAuthoredProviderRequestParams,
+  resolveConfiguredCyberAccessProgram,
+} from "./model-extra-params.js";
 
 const modelKey = "openai/fixture-model";
 const options = { nativeContextManagement: true };
@@ -66,4 +69,41 @@ describe("native context management tuning", () => {
       );
     }
   });
+});
+
+it("resolves inherited access configuration without merging objects or inventing defaults", () => {
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { models: { [modelKey]: {} } },
+      entries: { fixture: { models: { [modelKey]: {} } } },
+    },
+  };
+  const read = () =>
+    resolveConfiguredCyberAccessProgram({
+      config,
+      agentId: "fixture",
+      provider: "openai",
+      modelId: "fixture-model",
+    });
+  expect(read()).toBeUndefined();
+  config.agents!.defaults!.params = { accessPrograms: { cyber: "daybreak_blue" } };
+  expect(read()).toBe("daybreak_blue");
+  config.agents!.defaults!.models![modelKey].params = { accessPrograms: { cyber: "daybreak_red" } };
+  expect(read()).toBe("daybreak_red");
+  config.agents!.entries!.fixture.models![modelKey].params = {
+    accessPrograms: { cyber: "standard" },
+  };
+  expect(read()).toBe("standard");
+  config.agents!.entries!.fixture.params = { accessPrograms: { cyber: "daybreak_blue" } };
+  expect(read()).toBe("daybreak_blue");
+  for (const accessPrograms of [
+    {},
+    undefined,
+    null,
+    { cyber: "future" },
+    { cyber: "daybreak_blue", extra: true },
+  ]) {
+    config.agents!.entries!.fixture.params = { accessPrograms };
+    expect(read()).toBeUndefined();
+  }
 });
