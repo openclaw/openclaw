@@ -66,6 +66,7 @@ This page is an index. Each section below moved to a child page, and every ancho
 - <a id="%2Floop-chat-shortcut"></a><a id="/loop-chat-shortcut"></a>[`/loop` chat shortcut](/automation/cron-jobs/schedules#%2Floop-chat-shortcut)
 - <a id="day-of-month-and-day-of-week-use-or-logic"></a>[Day-of-month and day-of-week use OR logic](/automation/cron-jobs/schedules#day-of-month-and-day-of-week-use-or-logic)
 - <a id="event-triggers-condition-watchers"></a><a id="event-triggers-(condition-watchers)"></a>[Event triggers (condition watchers)](/automation/cron-jobs/schedules#event-triggers-condition-watchers)
+- <a id="shell-precheck"></a>[Shell precheck](/automation/cron-jobs/schedules#shell-precheck)
 
 ### Payload and execution sections
 

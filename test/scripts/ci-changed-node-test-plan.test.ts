@@ -1323,7 +1323,12 @@ describe("CI changed Node test plan", () => {
     expect(selectedJobs.length).toBeGreaterThan(0);
     const envScratch = argvTempDirs.make("changed-wide-owner-env-");
     for (const job of selectedJobs) {
-      for (const group of job.groups ?? []) {
+      // The lint inventory is a policy companion with its own serial tooling runner.
+      const changedGroups =
+        job.groups?.filter(
+          (group) => !group.includePatterns?.includes(lintSuppressionInventoryTest),
+        ) ?? [];
+      for (const group of changedGroups) {
         const ownerJob = expectDefined(
           full.find((candidate) =>
             candidate.groups.some((owner) => owner.shard_name === group.shard_name),

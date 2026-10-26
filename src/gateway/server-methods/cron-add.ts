@@ -100,7 +100,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   let execPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
   let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
   try {
-    assertCronModelJobAllowed(client, cfg, jobCreate);
+    assertCronModelJobAllowed(client, cfg, jobCreate, undefined, { create: true });
     capture = resolveCronCreatorAuthorityCapture(callerScope);
     execPolicy = resolveCronStreamExecPolicy(
       client,
@@ -155,7 +155,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     assertMutationCurrent?.();
     capture?.assertCurrent();
     creatorOptions?.assertInferenceSelectionCurrent?.();
-    assertCronModelJobAllowed(client, cfg, jobCreate);
+    assertCronModelJobAllowed(client, cfg, jobCreate, undefined, { create: true });
     creatorOptions?.assertOperatorSourceCurrent?.();
     creator.assertCurrent();
     execPolicy?.assertCurrentSource?.();

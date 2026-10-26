@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CRON_PRECHECK_AGENT_AUTHORING_ERROR } from "../../cron/job-precheck.js";
 import {
   CRON_STREAM_EXEC_AUTHORITY_ERROR,
   CronStreamExecApprovalRequiredError,
@@ -271,6 +272,9 @@ export function assertNoCronShellExecution(value: unknown): void {
     throw new Error(
       "automation on-exit schedules cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
+  }
+  if ("precheck" in value && value.precheck != null) {
+    throw new Error(CRON_PRECHECK_AGENT_AUTHORING_ERROR);
   }
   // Stream argv has a separate Gateway exec and persistent approval check below;
   // keep it out of this blanket operator-only payload/schedule prohibition.

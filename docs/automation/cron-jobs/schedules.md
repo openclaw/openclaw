@@ -348,7 +348,7 @@ Removing or disabling a job during condition evaluation cancels that evaluation 
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 
 <Warning>
-Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
+Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. A shell precheck is a separate host command and follows `tools.exec` plus exec approvals. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
 </Warning>
 
 Create a watcher from a local script file (`-` reads the script from stdin). The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument:
@@ -361,3 +361,24 @@ openclaw automations add \
   --message "Respond to the CI status change" \
   --session isolated
 ```
+
+## Shell precheck
+
+An `at`, `every`, or `cron` job can store a host shell precheck. The scheduler runs that command before the condition trigger and the payload. Exit code 0 means there is work and the job continues. Exit code 2 records a skipped run with summary `precheck-no-work` and does not start the model turn. Any other exit, a timeout, or a signal is an error and also skips the payload.
+
+```bash
+openclaw automations add \
+  --name "Inbox poll" \
+  --every 15m \
+  --precheck "inbox-has-mail" \
+  --precheck-timeout-seconds 30 \
+  --message "Process new mail" \
+  --session isolated \
+  --announce
+```
+
+`--clear-precheck` removes it. The command is capped at 16,384 characters and the timeout at 120 seconds. Override the exit codes with `workExitCodes` and `noWorkExitCodes` on the Gateway job; the two lists cannot share a code.
+
+The command runs through the same `tools.exec` security, ask, and allowlist rules as an interactive `exec` call on the gateway host. `security: "deny"`, an allowlist miss, and `ask: "always"` (including a job pinned to ask-always) block the spawn. A headless run cannot raise an approval prompt, so a command that still needs approval fails closed. A `toolsAllow` list that does not include `exec` or `*` blocks the precheck before the exec tool is built. `cron.triggers.enabled: false` disables the precheck and does not start the payload.
+
+Forced and due manual runs do not skip this gate. Clear the precheck when an operator wants the payload to run anyway. Agent turns cannot create or edit the command; use the CLI or Gateway API, and omit `precheck` when editing other fields. Each run reads the current exec policy, so tightening `tools.exec` or exec approvals blocks a command that was saved earlier.

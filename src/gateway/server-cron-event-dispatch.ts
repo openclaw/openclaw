@@ -34,6 +34,18 @@ export async function admitGatewayCronOccurrence(
   return await admitScheduledOccurrence({ cfg, job, agentId, trigger: "cron" });
 }
 
+/** Runs the stored shell probe with the live exec policy. The exec tool stays lazy. */
+export async function runGatewayCronPrecheck(
+  request: Parameters<NonNullable<CronServiceDeps["runJobPrecheck"]>>[0],
+  readConfig: () => OpenClawConfig,
+) {
+  const { runCronJobPrecheck } = await import("../cron/job-precheck-run.js");
+  return await runCronJobPrecheck({
+    ...request,
+    config: readConfig(),
+  });
+}
+
 export async function runGatewayCronSessionEvent(
   request: Parameters<NonNullable<CronServiceDeps["runSessionEvent"]>>[0],
   resolveTarget: ResolveCronTarget,

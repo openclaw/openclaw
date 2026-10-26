@@ -29,6 +29,7 @@ export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     activeHours: job.activeHours,
     idleOnly: job.idleOnly,
     trigger: job.trigger,
+    precheck: job.precheck,
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
     toolsAllowProvenance: job.toolsAllowProvenance,

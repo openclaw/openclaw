@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
+import { coerceStoredCronPrecheck } from "../job-precheck.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -39,6 +40,7 @@ import {
   assertExecutionPolicy,
   assertFailureDestinationSupport,
   assertPacingSupport,
+  assertPrecheckSupport,
   assertScriptPayloadSupport,
   assertExternalSourceScheduleSupport,
   assertSupportedJobSpec,
@@ -137,6 +139,12 @@ function validateFullJob(
       : context.kind === "patch"
         ? context.patch.trigger != null
         : context.input.trigger !== undefined;
+  const precheckTouched =
+    context.kind === "create"
+      ? job.precheck !== undefined
+      : context.kind === "patch"
+        ? context.patch.precheck != null
+        : context.input.precheck !== undefined;
   const scriptTouched =
     context.kind === "create"
       ? job.payload.kind === "script"
@@ -153,6 +161,7 @@ function validateFullJob(
       cronConfig,
       validateAuthoredTrigger: triggerTouched,
     });
+    assertPrecheckSupport(job, { cronConfig, requireEnabled: precheckTouched });
     assertScriptPayloadSupport(job, {
       cronConfig,
       requireEnabled: scriptTouched,
@@ -254,6 +263,7 @@ export function createJob(
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
+    ...(input.precheck ? { precheck: coerceStoredCronPrecheck(input.precheck) } : {}),
     state: {
       ...initialState,
       ...(schedule.kind === "stream"
@@ -348,6 +358,13 @@ export function applyJobPatch(
       delete job.trigger;
     } else {
       job.trigger = structuredClone(patch.trigger);
+    }
+  }
+  if ("precheck" in patch) {
+    if (patch.precheck == null) {
+      delete job.precheck;
+    } else {
+      job.precheck = coerceStoredCronPrecheck(patch.precheck);
     }
   }
   if ("pacing" in patch) {
@@ -540,6 +557,11 @@ export function applyDeclarativeJobSpec(
     job.trigger = structuredClone(input.trigger);
   } else {
     delete job.trigger;
+  }
+  if (input.precheck) {
+    job.precheck = coerceStoredCronPrecheck(input.precheck);
+  } else {
+    delete job.precheck;
   }
   if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
     if (previousToolsAllow !== undefined) {

@@ -11,6 +11,7 @@ import type { ReplyOperationObservation } from "../../sessions/reply-operation-s
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { CronJobPrecheckResult, CronJobPrecheckRunRequest } from "../job-precheck.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
@@ -270,6 +271,8 @@ export type CronServiceDeps = {
     job: CronJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
+  /** Host shell probe. Missing while a job has a precheck fails closed before the payload. */
+  runJobPrecheck?: (params: CronJobPrecheckRunRequest) => Promise<CronJobPrecheckResult>;
   runScriptJob?: (params: {
     occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;

@@ -269,7 +269,7 @@ The tool/action allowlist alone cannot distinguish an ordinary Agent-turn schedu
 
 `scope: "caller"` withholds administrative automation grants from model turns, including conversations started by administrators or configured channel owners and restored continuations. Existing caller ownership and visibility checks still apply.
 
-`allowCommandJobs: false` rejects model creation, conversion, editing, enablement and manual execution of command jobs and on-exit command watchers. The Gateway checks the stored job as well as the requested change, so a patch that omits the payload kind cannot bypass the restriction. Ordinary Agent-turn schedules remain available. Use `cron.triggers.enabled: false` separately to disable streams, script payloads, condition triggers and event sources; that setting also applies to humans.
+`allowCommandJobs: false` rejects model creation, conversion, editing, enablement and manual execution of command jobs and on-exit command watchers. The Gateway checks the stored job as well as the requested change, so a patch that omits the payload kind cannot bypass the restriction. Ordinary Agent-turn schedules remain available. Use `cron.triggers.enabled: false` separately to disable streams, script payloads, condition triggers, event sources, and shell prechecks; that setting also applies to humans.
 
 These automation fields affect model-directed calls. Direct authorized human UI, CLI and RPC administration remains available. Omit the fields to retain existing conversational administrator management. Changes follow the Gateway restart contract above.
 

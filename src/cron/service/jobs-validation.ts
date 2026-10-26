@@ -7,6 +7,7 @@ import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { assertCronActiveHours } from "../active-hours.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
+import { isCronPrecheckScheduleKind, parseCronJobPrecheck } from "../job-precheck.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
@@ -176,6 +177,27 @@ export function assertTriggerSupport(
   }
   if (opts?.validateAuthoredTrigger) {
     assertCronScriptSyntax(job.trigger.script, "trigger script");
+  }
+}
+
+export function assertPrecheckSupport(
+  job: Pick<CronJob, "schedule" | "precheck">,
+  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+) {
+  if (job.precheck == null) {
+    return;
+  }
+  const parsed = parseCronJobPrecheck(job.precheck);
+  if (!parsed.ok) {
+    throw new Error(parsed.reason);
+  }
+  if (!isCronPrecheckScheduleKind(job.schedule.kind)) {
+    throw new Error("cron precheck requires an at, every, or cron schedule");
+  }
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron shell prechecks are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
 }
 

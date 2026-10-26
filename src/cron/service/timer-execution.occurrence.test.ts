@@ -25,6 +25,8 @@ const EXECUTOR_ADMISSION = {
   runSessionEvent: "occurrence",
   // Consumes the occurrence; a command is not an agent run and mints no context.
   runCommandJob: "occurrence",
+  // Host precheck runs before payload executors and does not receive the occurrence.
+  runJobPrecheck: "not-admitted",
   // Script notify/wake and producer events enter ordinary session admission.
   enqueueSystemEvent: "not-admitted",
   enqueueSessionEvent: "not-admitted",
@@ -120,6 +122,7 @@ describe("scheduled occurrence admission", () => {
         "runCommandJob",
         "runCronFailureRepair",
         "runIsolatedAgentJob",
+        "runJobPrecheck",
         "runSchedulerOwned",
         "runScriptJob",
         "runSessionEvent",

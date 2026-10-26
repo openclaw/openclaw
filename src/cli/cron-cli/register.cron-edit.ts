@@ -15,6 +15,7 @@ import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
+  assignCronPrecheckPatch,
   parseCronDeliveryPolicyOptions,
   registerCronMutationOptions,
   resolveCronExecutionPolicyOptions,
@@ -98,6 +99,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-active-hours", "Remove the entire execution window", false)
       .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
+      .option("--clear-precheck", "Remove the host shell precheck", false)
       .option(
         "--clear-thinking",
         "Remove the per-job thinking override (restore normal cron thinking precedence)",
@@ -309,6 +311,8 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.trigger = { ...existing.trigger, once: true };
           }
+
+          await assignCronPrecheckPatch(opts, patch, readExistingCronJob);
 
           const scheduleRequest = resolveCronEditScheduleRequest(opts);
           if (scheduleRequest.kind === "direct") {

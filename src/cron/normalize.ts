@@ -13,6 +13,7 @@ import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
 import { normalizeCronInferenceBinding } from "./inference-binding.js";
+import { canonicalCronPrecheck } from "./job-precheck.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -393,6 +394,12 @@ export function normalizeCronJobInput(
     } else {
       delete next.trigger;
     }
+  }
+
+  // Keep a present invalid precheck. Dropping it would persist a job that runs
+  // with no probe after the authoring request failed to describe one.
+  if ("precheck" in base) {
+    next.precheck = base.precheck === null ? null : canonicalCronPrecheck(base.precheck);
   }
 
   if (isRecord(base.delivery)) {

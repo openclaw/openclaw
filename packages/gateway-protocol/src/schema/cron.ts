@@ -189,6 +189,23 @@ const CronTriggerSchema = closedObject({
   once: Type.Optional(Type.Boolean()),
 });
 
+const CronPrecheckExitCodeSchema = Type.Integer({ minimum: 0, maximum: 255 });
+
+/**
+ * Host shell probe evaluated before a scheduled payload. Exit-code sets stay
+ * disjoint at the cron service; the wire schema only bounds each list.
+ */
+const CronPrecheckSchema = closedObject({
+  command: Type.String({ minLength: 1, maxLength: 16_384 }),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
+  workExitCodes: Type.Optional(
+    Type.Array(CronPrecheckExitCodeSchema, { minItems: 1, maxItems: 8 }),
+  ),
+  noWorkExitCodes: Type.Optional(
+    Type.Array(CronPrecheckExitCodeSchema, { minItems: 1, maxItems: 8 }),
+  ),
+});
+
 /** Optional dynamic-cadence bounds stored with a cron job. */
 export const CronPacingSchema = Type.Object(
   {
@@ -512,6 +529,7 @@ export const CronJobSchema = closedObject({
   activeHours: Type.Optional(CronActiveHoursSchema),
   idleOnly: Type.Optional(Type.Boolean()),
   trigger: Type.Optional(CronTriggerSchema),
+  precheck: Type.Optional(CronPrecheckSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
@@ -600,6 +618,7 @@ export const CronAddParamsSchema = closedObject({
   activeHours: Type.Optional(CronActiveHoursSchema),
   idleOnly: Type.Optional(Type.Boolean()),
   trigger: Type.Optional(CronTriggerSchema),
+  precheck: Type.Optional(CronPrecheckSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
@@ -643,6 +662,7 @@ const CronJobPatchSchema = closedObject({
   activeHours: Type.Optional(Type.Union([CronActiveHoursSchema, Type.Null()])),
   idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
+  precheck: Type.Optional(Type.Union([CronPrecheckSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),

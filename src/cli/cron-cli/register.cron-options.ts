@@ -1,10 +1,14 @@
 import type { Command } from "commander";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { assertCronActiveHours } from "../../cron/active-hours.js";
+import {
+  CRON_PRECHECK_MAX_COMMAND_LENGTH,
+  CRON_PRECHECK_MAX_TIMEOUT_SECONDS,
+} from "../../cron/job-precheck.js";
 import type { CronDeliveryPatch, CronJob, CronJobPatch } from "../../cron/types.js";
 import { collectOption } from "../program/helpers.js";
 import { CronCliError } from "./cron-cli-error.js";
-import { getCronChannelOptions } from "./shared.js";
+import { getCronChannelOptions, parseCronIntegerOption } from "./shared.js";
 
 export function registerCronMutationOptions(command: Command, mode: "add" | "edit"): Command {
   const create = mode === "add";
@@ -49,6 +53,8 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--exact", "Disable cron staggering (set stagger to 0)", create ? false : undefined)
     .option("--trigger-script <path|->", "Condition script file, or - for stdin")
     .option("--trigger-once", "Disable after the first successful triggered run", false)
+    .option("--precheck <command>", "Host shell precheck; exit 0 runs the job and exit 2 skips it")
+    .option("--precheck-timeout-seconds <n>", "Precheck wall-clock timeout seconds (1-120)")
     .option("--system-event <text>", "System event payload (main session)")
     .option("--message <text>", "Agent message payload")
     .option(
@@ -112,6 +118,70 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
         : "Do not fail job if delivery fails (also implies --announce when used alone)",
       create ? false : undefined,
     );
+}
+
+export function readCronPrecheckCliOptions(opts: Record<string, unknown>): {
+  command?: string;
+  timeoutSeconds?: number;
+} {
+  const command = typeof opts.precheck === "string" ? opts.precheck : undefined;
+  if (command !== undefined && command.trim().length === 0) {
+    throw new CronCliError("--precheck must not be blank");
+  }
+  if (command !== undefined && command.length > CRON_PRECHECK_MAX_COMMAND_LENGTH) {
+    throw new CronCliError(
+      `--precheck must be at most ${CRON_PRECHECK_MAX_COMMAND_LENGTH} characters`,
+    );
+  }
+  const timeoutSeconds = parseCronIntegerOption(
+    opts.precheckTimeoutSeconds,
+    "--precheck-timeout-seconds",
+  );
+  if (timeoutSeconds !== undefined && timeoutSeconds > CRON_PRECHECK_MAX_TIMEOUT_SECONDS) {
+    throw new CronCliError(
+      `--precheck-timeout-seconds must be from 1 to ${CRON_PRECHECK_MAX_TIMEOUT_SECONDS}.`,
+    );
+  }
+  return {
+    ...(command !== undefined ? { command } : {}),
+    ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+  };
+}
+
+export async function assignCronPrecheckPatch(
+  opts: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  readExisting: () => Promise<Pick<CronJob, "precheck">>,
+): Promise<void> {
+  const precheckCli = readCronPrecheckCliOptions(opts);
+  const hasPrecheckFlag =
+    precheckCli.command !== undefined || precheckCli.timeoutSeconds !== undefined;
+  if (opts.clearPrecheck && hasPrecheckFlag) {
+    throw new CronCliError("Use --clear-precheck or precheck options, not both");
+  }
+  if (opts.clearPrecheck) {
+    patch.precheck = null;
+    return;
+  }
+  if (precheckCli.command !== undefined) {
+    patch.precheck = {
+      command: precheckCli.command,
+      ...(precheckCli.timeoutSeconds !== undefined
+        ? { timeoutSeconds: precheckCli.timeoutSeconds }
+        : {}),
+    };
+    return;
+  }
+  if (precheckCli.timeoutSeconds === undefined) {
+    return;
+  }
+  const existing = await readExisting();
+  if (!existing.precheck) {
+    throw new CronCliError(
+      "--precheck-timeout-seconds requires an existing precheck or --precheck",
+    );
+  }
+  patch.precheck = { ...existing.precheck, timeoutSeconds: precheckCli.timeoutSeconds };
 }
 
 export async function resolveCronExecutionPolicyOptions(
