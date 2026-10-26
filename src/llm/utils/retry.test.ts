@@ -78,13 +78,7 @@ describe("isRetryableAssistantError", () => {
 
   it("keeps provider refusals terminal despite transient text", () =>
     expectRetry("HTTP 503 temporary provider response", false, {
-      diagnostics: [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: "anthropic", category: "cyber" },
-        },
-      ],
+      diagnostics: [{ type: "provider_refusal", timestamp: 0 }],
     }));
 
   it.each<[string | undefined, boolean, Partial<AssistantMessage>?]>([
@@ -99,10 +93,7 @@ describe("isRetryableAssistantError", () => {
     ["provider connection closed", true, { errorCode: "UND_ERR_HEADERS_TIMEOUT" }],
     ["model model-x-500-preview not found", false],
     ["invalid api key sk-example502value", false],
-    [
-      "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
-      true,
-    ],
+    ["OpenAI API error (500): 500 server error", true],
     ["500 request timed out", true, { errorType: "invalid_request_error" }],
     ["529 Overloaded", true, { errorType: "invalid_request_error" }],
   ])("applies retry evidence for %s (%j)", (text, expected, overrides) =>
