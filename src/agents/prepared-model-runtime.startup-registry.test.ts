@@ -36,7 +36,6 @@ import {
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "./agent-scope-config.js";
-import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
 import {
   createPreparedInboundRegistryLoader,
@@ -405,8 +404,6 @@ it.each(["inbound", "selected", "inspection"] as const)(
     });
   },
 );
-
-
 it("dispatches registerFull commands when a multi-agent Gateway has no defaults.workspace", async () => {
   useNoBundledPlugins();
   const mainWorkspace = tempDirs.make("openclaw-unscoped-main-");
@@ -483,29 +480,30 @@ it("dispatches registerFull commands when a multi-agent Gateway has no defaults.
       cache: false,
       throwOnLoadError: true,
     });
-    prepareOwnedPluginLoadContext({ config, workspaceDir: fallbackWorkspace }, process.env, root, metadata, true);
+    prepareOwnedPluginLoadContext(
+      { config, workspaceDir: fallbackWorkspace },
+      process.env,
+      root,
+      metadata,
+      true,
+    );
     const attached = getPluginRuntimeLoadContext(root);
     if (!attached) throw new Error("expected the admitting Gateway load context");
     setPluginRuntimeLoadContext(root, { ...attached, workspaceDir: undefined });
     bindPluginRegistryGatewayOwner(root, { current: () => root });
     let inbound: PluginRegistry | undefined;
-    let refused: PluginRegistry | undefined;
     try {
       expect(metadata.workspaceDir).toBe(fallbackWorkspace);
       expect(getPluginRuntimeLoadContext(root)?.workspaceDir).toBeUndefined();
       expect(root.commands.map((entry) => entry.command.name)).toEqual(["fullonly"]);
       inbound = loadInbound(metadata, root);
-      const dispatched = await withPluginRuntimeRegistryScope(inbound, () => handlePluginCommand(commandParams, true));
+      const dispatched = await withPluginRuntimeRegistryScope(inbound, () =>
+        handlePluginCommand(commandParams, true),
+      );
       expect(dispatched?.reply?.text).toBe("full-only-command");
       expect(dispatched?.shouldContinue).toBe(false);
-      const mismatched = getPluginRuntimeLoadContext(root);
-      if (!mismatched) throw new Error("expected the admitting Gateway load context");
-      setPluginRuntimeLoadContext(root, { ...mismatched, workspaceDir: "/tmp/other-gateway-workspace" });
-      refused = loadInbound(metadata, root);
-      await expect(withPluginRuntimeRegistryScope(refused, () => handlePluginCommand(commandParams, true))).resolves.toBeNull();
     } finally {
-      if (refused && refused !== root) await disposePluginRegistryInstances(refused);
-      if (inbound && inbound !== root && inbound !== refused) await disposePluginRegistryInstances(inbound);
+      if (inbound && inbound !== root) await disposePluginRegistryInstances(inbound);
       await disposePluginRegistryInstances(root);
     }
   });

@@ -59,35 +59,6 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
   });
 }
 
-/**
- * Multi-agent configs without agents.defaults.workspace leave the admitting
- * Gateway unbound to one workspace. Startup still stamps the fallback default
- * workspace onto that Gateway's published snapshot, and prepared turns compare
- * against the snapshot. Those are one inventory; a concrete mismatch is not.
- */
-function admitsPreparedGatewayWorkspace(
-  registry: PluginRegistry,
-  metadataSnapshot: PluginMetadataSnapshot,
-): boolean {
-  const loadContext = getPluginRuntimeLoadContext(registry);
-  if (!loadContext) {
-    return false;
-  }
-  if (loadContext.workspaceDir === metadataSnapshot.workspaceDir) {
-    return true;
-  }
-  if (loadContext.workspaceDir !== undefined) {
-    return false;
-  }
-  const gatewaySnapshot = loadContext.metadataSnapshot;
-  return (
-    gatewaySnapshot === metadataSnapshot ||
-    (gatewaySnapshot?.index !== undefined &&
-      gatewaySnapshot.index === metadataSnapshot.index &&
-      gatewaySnapshot.workspaceDir === metadataSnapshot.workspaceDir)
-  );
-}
-
 /** Gateway-hosted prepared loads borrow unchanged instances from the live Gateway registry. */
 function resolveLendingGatewayRegistry(
   input: PreparedInboundRegistryInput,
@@ -100,10 +71,7 @@ function resolveLendingGatewayRegistry(
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   // The loader checks each borrowed plugin's source, manifest and activation;
   // global instances can remain identical across workspace registries.
-  const registry = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
-  return registry && admitsPreparedGatewayWorkspace(registry, metadataSnapshot)
-    ? registry
-    : undefined;
+  return requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
 }
 
 /** Loads generic plugin facts without acquiring model, catalog, or credential state. */
