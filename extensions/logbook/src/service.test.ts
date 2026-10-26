@@ -19,21 +19,14 @@ async function makeService(params: {
   const invoke = vi.fn(async (args: { nodeId: string; command: string }) =>
     params.invoke ? await params.invoke(args) : framePayload,
   );
-  const runtime = {
-    nodes: {
-      list: async () => ({
-        nodes: (params.nodeIds ?? ["capture-node"]).map((nodeId) => ({
-          nodeId,
-          commands: ["logbook.snapshot"],
-        })),
-      }),
-      invoke,
-    },
-  };
+  const nodes = (params.nodeIds ?? ["capture-node"]).map((nodeId) => ({
+    nodeId,
+    commands: ["logbook.snapshot"],
+  }));
   const service = await fixture.startService(
     { captureEnabled: true },
     {
-      runtime: runtime as never,
+      runtime: { nodes: { list: async () => ({ nodes }), invoke } } as never,
       fullConfig: (params.fullConfig ?? {}) as never,
       logger: { ...quietLogger, warn },
       dataDir: fixture.makeDir(),
@@ -46,37 +39,24 @@ async function makeService(params: {
   return { service, invoke, tick, analyze, warn };
 }
 
-it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
+const invalidImage = "logbook.snapshot returned invalid image payload";
+it.each([
+  [
+    { error: "logbook.snapshot is not supported on linux" },
+    "logbook.snapshot is not supported on linux",
+  ],
+  [{ format: "jpeg", base64: "not-base64!" }, invalidImage],
+  [{ format: "jpeg", base64: ["ZmFrZQ=="] }, invalidImage],
+])("rejects bad capture %j and rotates to the next node", async (payload, error) => {
   const { service, invoke, tick } = await makeService({
     nodeIds: ["a-broken", "b-working"],
-    invoke: async ({ nodeId }) => {
-      if (nodeId === "a-broken") {
-        return { payload: { error: "logbook.snapshot is not supported on linux" } };
-      }
-      return framePayload;
-    },
+    invoke: async ({ nodeId }) => (nodeId === "a-broken" ? { payload } : framePayload),
   });
-
   await tick();
+  expect(await service.status()).toMatchObject({ pendingFrames: 0, lastCaptureError: error });
   await tick();
   expect(invoke.mock.calls.map(([call]) => call.nodeId)).toEqual(["a-broken", "b-working"]);
   expect((await service.status()).lastCaptureError).toBeUndefined();
-});
-
-it.each([
-  ["malformed string", "not-base64!"],
-  ["array", ["ZmFrZQ=="]],
-])("rejects a %s snapshot payload before storing a frame", async (_label, base64) => {
-  const { service, tick } = await makeService({
-    invoke: async () => ({ payload: { format: "jpeg", base64 } }),
-  });
-
-  await tick();
-
-  expect(await service.status()).toMatchObject({
-    pendingFrames: 0,
-    lastCaptureError: "logbook.snapshot returned invalid image payload",
-  });
 });
 it.each([false, true])("warns only for pending work, with frames batched: %s", async (batched) => {
   const { service, tick, analyze, warn } = await makeService({});
@@ -85,17 +65,10 @@ it.each([false, true])("warns only for pending work, with frames batched: %s", a
   await tick();
   if (batched) {
     const store = (service as unknown as { store: LogbookStore }).store;
-    const frame = expectDefined((await store.unbatchedActiveFrames(1))[0], "captured frame");
+    const { id, capturedAtMs } = expectDefined((await store.unbatchedActiveFrames(1))[0], "frame");
     await store.createBatch(
-      batchInput(
-        [frame.id],
-        frame.capturedAtMs,
-        frame.capturedAtMs + 1000,
-        dayKeyFor(frame.capturedAtMs),
-      ),
+      batchInput([id], capturedAtMs, capturedAtMs + 1000, dayKeyFor(capturedAtMs)),
     );
-    expect(await store.countUnbatchedActiveFrames()).toBe(0);
-    expect(await store.nextPendingBatch()).not.toBeNull();
   }
   await analyze();
   await analyze();
