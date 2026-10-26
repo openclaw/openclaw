@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ResponseError, ResponseErrorEvent } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import {
   requestBody,
@@ -75,59 +75,57 @@ function expectTiers(result: Awaited<ReturnType<typeof fixture>>, tiers: string[
   expect(result.rejected).toEqual(tiers.slice(0, -1));
 }
 
-describe("Responses service-tier recovery", () => {
-  it("recovers HTTP and streamed tier rejections without changing input", async () => {
-    const result = await fixture((attempt) => {
-      if (attempt === 1) {
-        return Response.json({ error: rejection }, { status: 400 });
-      }
-      return sse(attempt === 2 ? [created, failed()] : [complete]);
-    });
-    expect(result.error).toBeUndefined();
-    expectTiers(result, ["ultrafast", "priority", "default"]);
-    for (const body of result.bodies) {
-      expect(body.input).toEqual([{ role: "user", content: "Hello" }]);
+it("recovers HTTP and streamed tier rejections without changing input", async () => {
+  const result = await fixture((attempt) => {
+    if (attempt === 1) {
+      return Response.json({ error: rejection }, { status: 400 });
     }
-    expect(result.events).toEqual([created, complete]);
+    return sse(attempt === 2 ? [created, failed()] : [complete]);
   });
+  expect(result.error).toBeUndefined();
+  expectTiers(result, ["ultrafast", "priority", "default"]);
+  for (const body of result.bodies) {
+    expect(body.input).toEqual([{ role: "user", content: "Hello" }]);
+  }
+  expect(result.events).toEqual([created, complete]);
+});
 
-  it.each([
-    failed({ code: "invalid_prompt", message: rejection.message } satisfies ResponseError),
-    {
-      type: "error",
-      code: null,
-      param: "service_tier",
-      message: rejection.message,
-      sequence_number: 1,
-    } satisfies ResponseErrorEvent,
-  ])("recovers the SDK $type error contract", async (event) => {
-    const result = await fixture((attempt) => sse([attempt > 1 ? complete : event]));
-    expect(result.error).toBeUndefined();
-    expectTiers(result, ["ultrafast", "priority"]);
-  });
+it.each([
+  failed({ code: "invalid_prompt", message: rejection.message } satisfies ResponseError),
+  {
+    type: "error",
+    code: null,
+    param: "service_tier",
+    message: rejection.message,
+    sequence_number: 1,
+  } satisfies ResponseErrorEvent,
+])("recovers the SDK $type error contract", async (event) => {
+  const result = await fixture((attempt) => sse([attempt > 1 ? complete : event]));
+  expect(result.error).toBeUndefined();
+  expectTiers(result, ["ultrafast", "priority"]);
+});
 
-  it("recovers a native SDK error event and stops after Standard", async () => {
-    const result = await fixture(() => sse([{ type: "error", error: rejection }]));
-    expect(result.error).toBeDefined();
-    expectTiers(result, ["ultrafast", "priority", "default"]);
-  });
+it("recovers a native SDK error event and stops after Standard", async () => {
+  const result = await fixture(() => sse([{ type: "error", error: rejection }]));
+  expect(result.error).toBeDefined();
+  expectTiers(result, ["ultrafast", "priority", "default"]);
+});
 
-  it("does not send a retry after cancellation during rejection observation", async () => {
-    const controller = new AbortController();
-    const result = await fixture(() => sse([failed()]), {
-      signal: controller.signal,
-      onRejected: () => controller.abort(),
-    });
-    expect(result.bodies).toHaveLength(1);
-    expect(result.error).toBeDefined();
+it("does not send a retry after cancellation during rejection observation", async () => {
+  const controller = new AbortController();
+  const result = await fixture(() => sse([failed()]), {
+    signal: controller.signal,
+    onRejected: () => controller.abort(),
   });
+  expect(result.bodies).toHaveLength(1);
+  expect(result.error).toBeDefined();
+});
 
-  it("leaves custom endpoint policy unchanged", async () => {
-    const result = await fixture(() => sse([failed()]), { native: false });
-    expect(result.bodies).toHaveLength(1);
-  });
+it("leaves custom endpoint policy unchanged", async () => {
+  const result = await fixture(() => sse([failed()]), { native: false });
+  expect(result.bodies).toHaveLength(1);
+});
 
-  it("does not replay unrelated failures", () => {
-    expect(nextTier("ultrafast", { status: 503, error: rejection })).toBeUndefined();
-  });
+it("does not replay unrelated failures", () => {
+  expect(nextTier("ultrafast", { status: 503, error: rejection })).toBeUndefined();
 });
