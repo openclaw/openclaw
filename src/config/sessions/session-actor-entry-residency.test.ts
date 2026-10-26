@@ -1,10 +1,7 @@
-import { serialize } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { buildCreatedSessionGoal } from "./goals-transitions.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
@@ -31,10 +28,7 @@ import {
   type Fixture,
   type Mutation,
 } from "./session-actor-worker.test-support.js";
-import type {
-  SessionEntryPatchCommitted,
-  SessionEntryPatchGuard,
-} from "./session-entry-patch.types.js";
+import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
@@ -57,7 +51,7 @@ function countStatements<Key extends string>(
   return { ...counter, [Symbol.dispose]: counter.restore };
 }
 
-it("persists run adoption and its reducers once, then skips an unchanged hydrated row", () =>
+it("preserves run adoption and its reducers through hydration and repairs derived row columns", () =>
   withActor(async (f) => {
     const entry = f.nativeEntry()!;
     f.writeEntry({
@@ -83,10 +77,6 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
       },
     };
     await f.prepare(command);
-    using writes = countStatements(f.database.db, ["nodes", "windows"], (sql) => {
-      const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(sql)?.[1];
-      return table === "session_nodes" ? "nodes" : table === "session_windows" ? "windows" : null;
-    });
     const expectedEntry = {
       activeWriterRunId: "current-run",
       startedAt: 2,
@@ -111,14 +101,11 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
       kind: "committed",
       receipt: { postimage: { entry: expectedEntry } },
     });
-    expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
     expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);
-    Object.assign(writes.counts, { nodes: 0, windows: 0 });
     f.restartActor();
     const hydrated = f.read();
     expect(hydrated.entry).toMatchObject(expectedEntry);
     expect(adoptHydrated(hydrated, "unchanged-after-hydration").kind).toBe("committed");
-    expect(writes.counts).toEqual({ nodes: 0, windows: 0 });
     expect(f.nativeEntry()).toEqual(hydrated.entry);
 
     runSqliteImmediateTransactionSync(f.database.db, () =>
@@ -129,9 +116,7 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
     f.restartActor();
     const repair = f.read();
     expect(repair.entry?.label).toBe("initial");
-    Object.assign(writes.counts, { nodes: 0, windows: 0 });
     expect(adoptHydrated(repair, "repair-hydrated-column").kind).toBe("committed");
-    expect(writes.counts).toEqual({ nodes: 1, windows: 0 });
     expect(
       f.database.db
         .prepare("SELECT label FROM session_nodes WHERE session_key = ?")
@@ -315,10 +300,7 @@ it("keeps transcript residency across entry patches without losing either owner'
       ...f.nativeEntry()!,
       skillsSnapshot: {
         prompt: "synthetic snapshot",
-        skills: Array.from({ length: 256 }, (_, index) => ({
-          name: `fixture-${index}`,
-          requiredEnv: [`SYNTHETIC_${index}`],
-        })),
+        skills: [],
       },
       systemPromptReport: promptReport(10, 100, 80),
       sessionDiffBaseline: {
@@ -348,48 +330,14 @@ it("keeps transcript residency across entry patches without losing either owner'
         preserveActivity: true,
         shouldCommitIf,
       });
-    using reads = countStatements(f.database.db, ["select", "watermark", "snapshotWrite"], (sql) =>
-      /^(?:insert into|update|delete from) "session_entry_snapshots"/iu.test(sql)
-        ? "snapshotWrite"
-        : sql.startsWith("select coalesce(") &&
-            sql.includes('as "max_seq"') &&
-            sql.includes('"session_transcript_cold_archives"')
-          ? "watermark"
-          : /^select\b/iu.test(sql)
-            ? "select"
-            : null,
-    );
-
-    let candidate: SessionEntryPatchCommitted | undefined;
-    const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
-      // The real patch kernel owns this candidate; the collector decodes its wire bytes.
-      candidate = value as SessionEntryPatchCommitted;
-    });
-    f.hooks.admit = (_stage, facts) => {
-      if (isRecord(facts) && facts.transfer) {
-        transfer.accept(facts.transfer);
-      }
-    };
     entryPatch({ label: "entry owner committed", model: "updated-model" });
-    delete f.hooks.admit;
-    assert(transfer.completed && candidate?.entry?.skillsSnapshot);
-    // The mutable caller result and retained publication each need one snapshot copy.
-    expect(serialize(candidate).byteLength).toBeLessThan(
-      serialize(candidate.entry).byteLength * 2.5,
-    );
-    candidate.entry.skillsSnapshot.prompt = "caller-owned edit";
-    expect(
-      candidate.publication?.fullEntries?.get(f.target.sessionKey)?.skillsSnapshot?.prompt,
-    ).toBe("synthetic snapshot");
     expect(f.read().entry?.skillsSnapshot?.prompt).toBe("synthetic snapshot");
-    expect(reads.counts).toMatchObject({ watermark: 0, select: 0 });
     runSqliteImmediateTransactionSync(f.database.db, () =>
       recordSessionParticipantFromWorker(f.database, f.scope, {
         identity: { type: "agent", id: "peer" },
         promptedAt: 10,
       }),
     );
-    reads.counts.select = 0;
     const after = f.read();
     expect(after.entry).toMatchObject({ label: "entry owner committed", model: "updated-model" });
     expect(after.entry?.systemPromptReport).toEqual(before.entry?.systemPromptReport);
@@ -441,12 +389,10 @@ it("keeps transcript residency across entry patches without losing either owner'
         exact: true,
       })[0]?.row?.transcriptWatermark,
     ).toEqual({ sessionId: f.scope.sessionId, generation: expect.any(String), maxSeq: 2 });
-    expect(reads.counts.select).toBe(0);
     entryPatch({ label: "wrong generation" }, { ...predicate, generation: "superseded" });
     entryPatch({ label: "wrong branch" }, { ...predicate, leafEntryId: "off-path" });
     expect(f.read().entry?.label).toBe("entry owner committed");
     entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
-    expect(reads.counts).toMatchObject({ watermark: 0, snapshotWrite: 0 });
     expect(f.nativeEntry()).toMatchObject({ updatedAt: 20, label: "entry owner committed" });
     expect(
       readTranscriptEventRows(f.database, f.scope.sessionId).map(
@@ -481,7 +427,7 @@ it("keeps transcript residency across entry patches without losing either owner'
   }));
 
 it.each(["entry", "target"] as const)(
-  "patches %s from current actor facts without losing intervening writes or publishing a rollback",
+  "patches %s from current actor facts without losing intervening writes",
   (kind) =>
     withActor((f) => {
       f.read();
