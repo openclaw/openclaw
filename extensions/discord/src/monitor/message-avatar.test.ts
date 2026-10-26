@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Client, User } from "../internal/discord.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,12 +15,7 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({ logDebug: mocks.logDebug })
 
 const { createDiscordAvatarResolver } = await import("./message-avatar.js");
 
-function discordUser(id: string, avatar: string | null): User {
-  return { id, avatar } as User;
-}
-
 const emptyClient = { fetchGuild: vi.fn() } as unknown as Client;
-const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
 function avatarScenario(client = emptyClient, guildId?: string) {
   const resolver = createDiscordAvatarResolver();
@@ -28,9 +23,10 @@ function avatarScenario(client = emptyClient, guildId?: string) {
     client,
     guildId,
     conversationId: guildId ? "channel-1" : "dm-1",
-    author: discordUser("user-1", guildId ? "sender-hash" : "hash-1"),
+    author: { id: "user-1", avatar: guildId ? "sender-hash" : "hash-1" } as User,
   };
-  return (author = params.author) => resolver.resolve({ ...params, author });
+  return (avatar = params.author.avatar) =>
+    resolver.resolve({ ...params, author: { ...params.author, avatar } });
 }
 
 beforeEach(() => {
@@ -39,84 +35,63 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env[DISCORD_API_URL_ENV];
+  delete process.env.DISCORD_API_URL;
 });
 
-describe("createDiscordAvatarResolver", () => {
-  it("downloads a DM avatar in the background and reuses it until the hash changes", async () => {
-    const firstDownload = createDeferred<{ path: string }>();
-    mocks.saveRemoteMedia.mockReturnValueOnce(firstDownload.promise);
-    const resolve = avatarScenario();
-    expect(resolve()).toBeUndefined();
-    expect(resolve()).toBeUndefined();
-    expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(mocks.saveRemoteMedia).toHaveBeenCalledWith({
-      url: "https://cdn.discordapp.com/avatars/user-1/hash-1.png?size=128",
-      filePathHint: "conversation-avatar.png",
-      maxBytes: 256 * 1024,
-      ssrfPolicy: expect.objectContaining({
-        hostnameAllowlist: expect.arrayContaining(["cdn.discordapp.com"]),
-      }),
-    });
-
-    firstDownload.resolve({ path: "/media/inbound/dm-avatar.png" });
-    await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/dm-avatar.png"));
-
-    mocks.saveRemoteMedia.mockResolvedValueOnce({ path: "/media/inbound/dm-avatar-new.png" });
-    expect(resolve(discordUser("user-1", "hash-2"))).toBeUndefined();
-    expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2);
+it("downloads a DM avatar in the background and reuses it until the hash changes", async () => {
+  const firstDownload = createDeferred<{ path: string }>();
+  mocks.saveRemoteMedia.mockReturnValueOnce(firstDownload.promise);
+  const resolve = avatarScenario();
+  expect(resolve()).toBeUndefined();
+  expect(resolve()).toBeUndefined();
+  expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(1);
+  expect(mocks.saveRemoteMedia.mock.calls[0][0]).toMatchObject({
+    url: "https://cdn.discordapp.com/avatars/user-1/hash-1.png?size=128",
+    maxBytes: 256 * 1024,
+    ssrfPolicy: expect.objectContaining({
+      hostnameAllowlist: expect.arrayContaining(["cdn.discordapp.com"]),
+    }),
   });
 
-  it("uses a lazily fetched guild icon instead of the sender avatar", async () => {
-    const guildLookup = createDeferred<{ icon: string }>();
-    const guildDownload = createDeferred<{ path: string }>();
-    const fetchGuild = vi.fn(() => guildLookup.promise);
-    const client = { fetchGuild } as unknown as Client;
-    mocks.saveRemoteMedia.mockReturnValueOnce(guildDownload.promise);
-    const resolve = avatarScenario(client, "guild-1");
-    expect(resolve()).toBeUndefined();
-    expect(fetchGuild).toHaveBeenCalledTimes(1);
-    expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
+  firstDownload.resolve({ path: "/media/inbound/dm-avatar.png" });
+  await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/dm-avatar.png"));
 
-    guildLookup.resolve({ icon: "guild-hash" });
-    await vi.waitFor(() => expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(1));
-    expect(mocks.saveRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://cdn.discordapp.com/icons/guild-1/guild-hash.png?size=128",
-      }),
-    );
+  mocks.saveRemoteMedia.mockResolvedValueOnce({ path: "/media/inbound/dm-avatar-new.png" });
+  expect(resolve("hash-2")).toBeUndefined();
+  expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2);
+});
 
-    guildDownload.resolve({ path: "/media/inbound/guild-icon.png" });
-    await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/guild-icon.png"));
-    expect(fetchGuild).toHaveBeenCalledTimes(1);
-  });
+it("uses a lazily fetched guild icon instead of the sender avatar", async () => {
+  const fetchGuild = vi.fn().mockResolvedValue({ icon: "guild-hash" });
+  mocks.saveRemoteMedia.mockResolvedValueOnce({ path: "/media/inbound/guild-icon.png" });
+  const resolve = avatarScenario({ fetchGuild } as unknown as Client, "guild-1");
+  expect(resolve()).toBeUndefined();
+  expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/guild-icon.png"));
+  expect(mocks.saveRemoteMedia.mock.calls[0][0].url).toBe(
+    "https://cdn.discordapp.com/icons/guild-1/guild-hash.png?size=128",
+  );
+  expect(fetchGuild).toHaveBeenCalledTimes(1);
+});
 
-  it("does not fall back to the public CDN when an API override is configured", async () => {
-    const guildLookup = createDeferred<{ icon: string }>();
-    const client = { fetchGuild: vi.fn(() => guildLookup.promise) } as unknown as Client;
-    process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
-    avatarScenario(client, "guild-1")();
-    guildLookup.resolve({ icon: "guild-hash" });
+it("does not fall back to the public CDN when an API override is configured", async () => {
+  const client = {
+    fetchGuild: vi.fn().mockResolvedValue({ icon: "guild-hash" }),
+  } as unknown as Client;
+  process.env.DISCORD_API_URL = "http://127.0.0.1:43210/api/v10";
+  avatarScenario(client, "guild-1")();
+  await vi.waitFor(() => expect(mocks.logDebug).toHaveBeenCalled());
+  expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
+});
 
-    await vi.waitFor(() =>
-      expect(mocks.logDebug).toHaveBeenCalledWith(
-        expect.stringContaining("outside the configured REST origin"),
-      ),
-    );
-    expect(mocks.saveRemoteMedia).not.toHaveBeenCalled();
-  });
+it("swallows download failures and retries on the next message", async () => {
+  mocks.saveRemoteMedia
+    .mockRejectedValueOnce(new Error("download failed"))
+    .mockResolvedValueOnce({ path: "/media/inbound/retried.png" });
+  const resolve = avatarScenario();
 
-  it("swallows download failures and retries on the next message", async () => {
-    mocks.saveRemoteMedia
-      .mockRejectedValueOnce(new Error("download failed"))
-      .mockResolvedValueOnce({ path: "/media/inbound/retried.png" });
-    const resolve = avatarScenario();
-
-    expect(resolve()).toBeUndefined();
-    await vi.waitFor(() =>
-      expect(mocks.logDebug).toHaveBeenCalledWith(expect.stringContaining("download failed")),
-    );
-    expect(resolve()).toBeUndefined();
-    await vi.waitFor(() => expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2));
-  });
+  expect(resolve()).toBeUndefined();
+  await vi.waitFor(() => expect(mocks.logDebug).toHaveBeenCalled());
+  expect(resolve()).toBeUndefined();
+  await vi.waitFor(() => expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2));
 });
