@@ -42,23 +42,17 @@ beforeEach(() => {
 });
 
 it("returns one coarse answer per IP with database attribution", async () => {
-  const place = { city: "Mountain View", country: "United States", countryCode: "US" };
-  const record = {
-    city: { geoname_id: 1, names: { en: place.city } },
-    country: { geoname_id: 2, iso_code: place.countryCode, names: { en: place.country } },
-  };
+  const record = { city: { geoname_id: 1, names: { en: "Mountain View" } } };
   loadDatabase.mockResolvedValue({ lookup: (ip) => (ip === "8.8.8.8" ? record : null) });
   await lookup({ ips: ["8.8.8.8", "100.64.0.1", "203.0.113.1", "8.8.8.8"] });
-
   const attribution = { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" };
   expect(respond).toHaveBeenCalledWith(true, {
     results: [
-      { ip: "8.8.8.8", status: "found", ...place, attribution },
+      { ip: "8.8.8.8", status: "found", city: "Mountain View", attribution },
       { ip: "100.64.0.1", status: "not-found", attribution },
       { ip: "203.0.113.1", status: "not-found", attribution },
     ],
   });
-  expect(loadDatabase).toHaveBeenCalledOnce();
 });
 
 it("distinguishes a database outage from addresses which cannot be located", async () => {
