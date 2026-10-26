@@ -599,17 +599,11 @@ describe("gateway connection state", () => {
         verify(true);
         replaceSessionEntrySync(scope, humanEntry(sharedKey, "draft", "other-owner", 2));
         verify(false);
-        replaceSessionEntrySync(scope, {
-          sessionId: sharedKey,
-          updatedAt: 3,
-          visibility: "shared",
-        });
+        const replace = (visibility: "shared" | "draft", updatedAt: number) =>
+          replaceSessionEntrySync(scope, { sessionId: sharedKey, updatedAt, visibility });
+        replace("shared", 3);
         peers[0]!.send.mockImplementationOnce(() => {
-          replaceSessionEntrySync(scope, {
-            sessionId: sharedKey,
-            updatedAt: 4,
-            visibility: "draft",
-          });
+          replace("draft", 4);
         });
         state.broadcast("presence", { presence: listSystemPresence() });
         const trailing = JSON.parse(String(peers[2]!.send.mock.lastCall?.[0]));
