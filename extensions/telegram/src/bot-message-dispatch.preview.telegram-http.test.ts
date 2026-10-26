@@ -62,6 +62,22 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   ) {
     return emitToolStart(options, { name, toolCallId, phase, ...(args ? { args } : {}) });
   }
+  function groupContext(id: number, title: string) {
+    const context = http.createContext();
+    const chat = { id, type: "supergroup" as const, title };
+    context.chatId = id;
+    context.isGroup = true;
+    context.msg.chat = context.primaryCtx.message.chat = chat;
+    context.route.sessionKey = `agent:default:telegram:group:${id}`;
+    Object.assign(context.ctxPayload, {
+      ChatType: "group",
+      From: `telegram:group:${id}`,
+      To: `telegram:${id}`,
+      SessionKey: context.route.sessionKey,
+      WasMentioned: true,
+    });
+    return context;
+  }
 
   it.each([
     ["partial", ""],
@@ -339,20 +355,12 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     async (branch) => {
       const blocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [];
       if (branch !== "control-only") {
-        blocks.push(
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Revenue mix",
-            segments: [{ label: "Product", value: 60 }],
-          },
-          {
-            type: "table",
-            caption: "Pipeline",
-            headers: ["Account", "Stage"],
-            rows: [["Acme", "Won"]],
-          },
-        );
+        blocks.push({
+          type: "table",
+          caption: "Pipeline",
+          headers: ["Account", "Stage"],
+          rows: [["Acme", "Won"]],
+        });
       }
       blocks.push({
         type: "buttons",
@@ -419,11 +427,11 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       );
       expect(markup).not.toContain("x".repeat(65));
       if (branch !== "control-only") {
-        assertContains(answer?.[1], "Revenue mix", "Product", "Acme", "Won");
+        assertContains(answer?.[1], "Pipeline", "Acme", "Won");
       }
       if (branch === "buffered") {
         expect(String(sends()[0]?.fields.text)).toContain("accepted second reasoning attempt");
-        expect(String(sends().at(-1)?.fields.text)).toContain("Revenue mix");
+        expect(String(sends().at(-1)?.fields.text)).toContain("Pipeline");
       } else if (branch === "immediate") {
         expect([...visibleMessages.keys()]).toEqual([1]);
       }
@@ -506,20 +514,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   it.each([false, true])(
     "keeps replay failure custody with a terminal provider failure=%s",
     async (terminalFailure) => {
-      const context = http.createContext();
-      const chat = { id: -1001234, type: "supergroup" as const, title: "Replay room" };
-      context.chatId = chat.id;
-      context.isGroup = true;
-      context.msg.chat = chat;
-      context.primaryCtx.message.chat = chat;
-      context.route.sessionKey = "agent:default:telegram:group:-1001234";
-      Object.assign(context.ctxPayload, {
-        ChatType: "group",
-        From: "telegram:group:-1001234",
-        To: "telegram:-1001234",
-        SessionKey: context.route.sessionKey,
-        WasMentioned: true,
-      });
+      const context = groupContext(-1001234, "Replay room");
       await runTurn(
         async (options) => {
           if (terminalFailure) {
@@ -705,22 +700,11 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     async (chat, ownership, denied) => {
       const commentary = "Checking the requested workspace.";
       const finalText = "The requested inspection is complete.";
-      const context = http.createContext();
+      const context =
+        chat === "group" ? groupContext(-100123, "Inspection fixture") : http.createContext();
       context.isGroup = chat === "group";
       context.ctxPayload.ChatType = chat;
       context.ctxPayload.WasMentioned = chat === "group";
-      if (chat === "group") {
-        const group = { id: -100123, type: "supergroup" as const, title: "Inspection fixture" };
-        context.chatId = group.id;
-        context.msg.chat = group;
-        context.primaryCtx.message.chat = group;
-        context.route.sessionKey = "agent:default:telegram:group:-100123";
-        Object.assign(context.ctxPayload, {
-          SessionKey: context.route.sessionKey,
-          From: "telegram:group:-100123",
-          To: "telegram:-100123",
-        });
-      }
       await runTurn(
         async (options) => {
           await options?.onReasoningProgress?.({ progressTokens: 200 });

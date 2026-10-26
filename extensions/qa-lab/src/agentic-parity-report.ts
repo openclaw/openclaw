@@ -4,11 +4,8 @@ import {
   formatRuntimeCacheCount,
   formatRuntimeCacheHitPercent,
   summarizeRuntimeParityCacheUsage,
+  type QaRuntimeParityCacheUsage,
 } from "./agentic-parity-cache-usage.js";
-import type {
-  QaRuntimeParityReport,
-  QaRuntimeParityScenarioReport,
-} from "./agentic-parity-runtime-report-contract.js";
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
@@ -22,7 +19,11 @@ import {
   formatRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
-import type { RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
+import type {
+  RuntimeParityDrift,
+  RuntimeParityResult,
+  RuntimeParityUsagePolicy,
+} from "./runtime-parity.js";
 import {
   isRuntimeParityResultPass,
   normalizeRuntimePair,
@@ -54,15 +55,33 @@ type QaRuntimeParitySuiteScenario = QaReportScenario & {
   runtimeParity?: RuntimeParityResult;
 };
 
-type QaAgenticParityScenarioComparison = {
-  name: string;
-  candidateStatus: "pass" | "fail" | "skip" | "missing";
-  baselineStatus: "pass" | "fail" | "skip" | "missing";
-  candidateDetails?: string;
-  baselineDetails?: string;
-};
-
 type QaAgenticParityComparison = ReturnType<typeof buildQaAgenticParityComparison>;
+
+type QaRuntimeParityReport = ReturnType<typeof buildQaRuntimeParityReport>;
+
+type QaRuntimeParityScenarioReport = {
+  name: string;
+  status: "pass" | "fail";
+  runtimeParityUsage: RuntimeParityUsagePolicy;
+  drift: RuntimeParityDrift | "missing";
+  driftDetails?: string;
+  openclawStatus: "pass" | "fail" | "skip" | "missing";
+  codexStatus: "pass" | "fail" | "skip" | "missing";
+  openclawTokens: number;
+  codexTokens: number;
+  openclawUsage: QaRuntimeParityCacheUsage | null;
+  codexUsage: QaRuntimeParityCacheUsage | null;
+  openclawCacheDiagnostics?: RuntimeParityCacheDiagnostics;
+  codexCacheDiagnostics?: RuntimeParityCacheDiagnostics;
+  openclawToolCalls: number;
+  codexToolCalls: number;
+  openclawWallClockMs: number | null;
+  codexWallClockMs: number | null;
+  openclawBootstrapWallClockMs?: number;
+  codexBootstrapWallClockMs?: number;
+  fasterRuntime: RuntimeId | "tie" | null;
+  speedupPercent: number | null;
+};
 
 const UNINTENDED_STOP_PATTERNS = [
   /incomplete turn/i,
@@ -260,18 +279,11 @@ export function buildQaAgenticParityComparison(params: {
       const baseline = baselineByName.get(name);
       const candidateStatus = requiredCoverageStatus(candidate);
       const baselineStatus = requiredCoverageStatus(baseline);
-      const comparison: QaAgenticParityScenarioComparison = {
-        name,
-        candidateStatus,
-        baselineStatus,
-      };
-      if (candidate?.details) {
-        comparison.candidateDetails = candidate.details;
-      }
-      if (baseline?.details) {
-        comparison.baselineDetails = baseline.details;
-      }
-      return comparison;
+      return Object.assign(
+        { name, candidateStatus, baselineStatus },
+        candidate?.details ? { candidateDetails: candidate.details } : {},
+        baseline?.details ? { baselineDetails: baseline.details } : {},
+      );
     });
 
   const failures: string[] = [];
@@ -281,7 +293,7 @@ export function buildQaAgenticParityComparison(params: {
   const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) =>
     comparisonByName.get(name)!,
   );
-  const hasCoverageGap = (scenario: QaAgenticParityScenarioComparison) =>
+  const hasCoverageGap = (scenario: (typeof scenarioComparisons)[number]) =>
     [scenario.candidateStatus, scenario.baselineStatus].some(
       (status) => status === "missing" || status === "skip",
     );
@@ -398,9 +410,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
   return lines.join("\n");
 }
 
-export function buildQaRuntimeParityReport(params: {
-  summary: QaParitySuiteSummary;
-}): QaRuntimeParityReport {
+export function buildQaRuntimeParityReport(params: { summary: QaParitySuiteSummary }) {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const providerMode = params.summary.run?.providerMode;
   const requiresLiveUsage = providerMode?.startsWith("live-") === true;

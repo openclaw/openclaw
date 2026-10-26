@@ -10,10 +10,11 @@ import {
 } from "../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
-import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
 import {
@@ -125,6 +126,14 @@ export function createEmbeddedFallbackEntryRunner({
 
 export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
+  const provider = (id: string, model: string, name: string) => ({
+    api: "openai-responses" as const,
+    [apiKeyField]: `${id}-test-key`, // pragma: allowlist secret
+    baseUrl: `https://example.com/${id}`,
+    models: [
+      modelDefinition(model, { name, reasoning: false, contextWindow: 16_000, maxTokens: 2048 }),
+    ],
+  });
   return {
     agents: {
       defaults: {
@@ -137,38 +146,8 @@ export function makeModelFallbackConfig(primaryProvider = "openai"): OpenClawCon
     },
     models: {
       providers: {
-        [primaryProvider]: {
-          api: "openai-responses",
-          [apiKeyField]: `${primaryProvider}-test-key`, // pragma: allowlist secret
-          baseUrl: `https://example.com/${primaryProvider}`,
-          models: [
-            {
-              id: "mock-1",
-              name: "Mock 1",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 16_000,
-              maxTokens: 2048,
-            },
-          ],
-        },
-        groq: {
-          api: "openai-responses",
-          [apiKeyField]: "groq-test-key", // pragma: allowlist secret
-          baseUrl: "https://example.com/groq",
-          models: [
-            {
-              id: "mock-2",
-              name: "Mock 2",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 16_000,
-              maxTokens: 2048,
-            },
-          ],
-        },
+        [primaryProvider]: provider(primaryProvider, "mock-1", "Mock 1"),
+        groq: provider("groq", "mock-2", "Mock 2"),
       },
     },
   } satisfies OpenClawConfig;
@@ -198,16 +177,7 @@ export async function withModelFallbackWorkspace<T>(
 
 export async function writeFallbackAuthStore(
   agentDir: string,
-  usageStats?: Record<
-    string,
-    {
-      lastUsed?: number;
-      cooldownUntil?: number;
-      disabledUntil?: number;
-      disabledReason?: AuthProfileFailureReason;
-      failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
-    }
-  >,
+  usageStats?: AuthProfileStore["usageStats"],
   options?: { primaryProvider?: string },
 ) {
   const primaryProvider = options?.primaryProvider ?? "openai";

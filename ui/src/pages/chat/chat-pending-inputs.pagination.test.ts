@@ -29,7 +29,7 @@ import {
   readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import {

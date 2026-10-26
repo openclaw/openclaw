@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
+import type { SynologyInboundMessage } from "./inbound-context.js";
 import { validateToken, authorizeUserForDmWithIngress, sanitizeInput } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 import {
@@ -97,19 +98,6 @@ function pickAlias(record: Record<string, unknown>, aliases: string[]): string |
   return undefined;
 }
 
-function parseQueryParams(req: IncomingMessage): Record<string, unknown> {
-  try {
-    const url = new URL(req.url ?? "", "http://localhost");
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of url.searchParams.entries()) {
-      out[key] = value;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 function parseJsonBody(body: string): Record<string, unknown> {
   if (!body.trim()) {
     return {};
@@ -140,40 +128,6 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
     return bearerMatch[1].trim();
   }
   return auth;
-}
-
-// Token precedence is body, query, then headers.
-function parseRawEvent(
-  req: IncomingMessage,
-  body: string,
-): {
-  rawEvent: SynologyWebhookRawEvent;
-  token: string | undefined;
-} {
-  const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
-
-  let bodyFields: Record<string, unknown>;
-  if (contentType.includes("application/json")) {
-    bodyFields = parseJsonBody(body);
-  } else if (contentType.includes("application/x-www-form-urlencoded")) {
-    bodyFields = querystring.parse(body);
-  } else {
-    // Fallback for clients with missing/incorrect content-type.
-    // Try JSON first, then form-urlencoded.
-    try {
-      bodyFields = parseJsonBody(body);
-    } catch {
-      bodyFields = querystring.parse(body);
-    }
-  }
-
-  const queryFields = parseQueryParams(req);
-  const headerToken = extractTokenFromHeaders(req);
-
-  return {
-    rawEvent: { bodyFields, queryFields },
-    token: pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken,
-  };
 }
 
 function parsePayload(
@@ -222,10 +176,7 @@ export interface WebhookHandlerDeps {
 
 export async function processSynologyWebhookIngressEvent(params: {
   account: ResolvedSynologyChatAccount;
-  deliver: (
-    msg: import("./inbound-context.js").SynologyInboundMessage,
-    lifecycle: SynologyIngressLifecycle,
-  ) => Promise<unknown>;
+  deliver: (msg: SynologyInboundMessage, lifecycle: SynologyIngressLifecycle) => Promise<unknown>;
   log?: WebhookHandlerDeps["log"];
   rawEvent: SynologyWebhookRawEvent;
   lifecycle: SynologyIngressLifecycle;
@@ -371,15 +322,48 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         return;
       }
 
-      let raw: ReturnType<typeof parseRawEvent>;
+      let parsedRawEvent: SynologyWebhookRawEvent;
+      let parsedToken: string | undefined;
       try {
-        raw = parseRawEvent(req, body);
+        // Token precedence is body, query, then headers.
+        const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
+
+        let bodyFields: Record<string, unknown>;
+        if (contentType.includes("application/json")) {
+          bodyFields = parseJsonBody(body);
+        } else if (contentType.includes("application/x-www-form-urlencoded")) {
+          bodyFields = querystring.parse(body);
+        } else {
+          // Fallback for clients with missing/incorrect content-type.
+          // Try JSON first, then form-urlencoded.
+          try {
+            bodyFields = parseJsonBody(body);
+          } catch {
+            bodyFields = querystring.parse(body);
+          }
+        }
+
+        let queryFields: Record<string, unknown>;
+        try {
+          const url = new URL(req.url ?? "", "http://localhost");
+          queryFields = {};
+          for (const [key, value] of url.searchParams.entries()) {
+            queryFields[key] = value;
+          }
+        } catch {
+          queryFields = {};
+        }
+        const headerToken = extractTokenFromHeaders(req);
+
+        parsedRawEvent = { bodyFields, queryFields };
+        parsedToken =
+          pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken;
       } catch (err) {
         log?.warn("Failed to parse webhook payload", err);
         respondJson(res, 400, { error: "Invalid request body" });
         return;
       }
-      const payload = parsePayload(raw.rawEvent, raw.token);
+      const payload = parsePayload(parsedRawEvent, parsedToken);
       if (!payload) {
         respondJson(res, 400, { error: "Missing required fields (token, user_id, text)" });
         return;
@@ -437,7 +421,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         respondJson(res, 429, { error: "Rate limit exceeded" });
         return;
       }
-      rawEvent = raw.rawEvent;
+      rawEvent = parsedRawEvent;
     } finally {
       // Only bound the pre-auth request pipeline; async reply delivery is outside webhook ingress.
       requestLifecycle.release();

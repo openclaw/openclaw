@@ -4,22 +4,15 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
-import { buildChatMarkdown } from "../../pages/chat/export.ts";
-import { loadCompleteChatHistory } from "../chat/complete-history.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError } from "../format-error.ts";
 import { reserveExternalWindowForDeferredNavigation } from "../open-external-url.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import { showToast } from "../toast.ts";
-import {
-  resolveSessionNavigationAgentId,
-  resolveSessionPreferredFaceForKey,
-  sessionNavigationTarget,
-} from "./route-navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { resolveSessionPreferredFaceForKey, sessionNavigationTarget } from "./route-navigation.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionOrganizationSharedEnglish();
 
 type SessionNavigationActionKind =
   | "copy-session-id"
@@ -31,7 +24,7 @@ type SessionNavigationActionKind =
   | "split-right"
   | "split-below";
 
-type SessionNavigationTarget<TRouteId extends string> = {
+export type SessionNavigationTarget<TRouteId extends string> = {
   context: ApplicationContext<TRouteId>;
   session: Pick<GatewaySessionRow, "key" | "sessionId">;
   agentId?: string;
@@ -59,46 +52,6 @@ export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | un
     requiredScope: "operator.read",
     sessionScope: true,
   }).allowed;
-}
-
-async function copySessionMarkdown<TRouteId extends string>(
-  params: SessionNavigationTarget<TRouteId>,
-): Promise<boolean> {
-  const { context, session } = params;
-  const gateway = context.gateway;
-  const client = gateway.snapshot.client;
-  const access = readSessionMethodAccess(gateway.snapshot, {
-    method: "chat.history",
-    requiredScope: "operator.read",
-    sessionScope: true,
-  });
-  if (!access.allowed || !client) {
-    throw new Error(access.allowed ? t("sessionsView.actionRequiresConnection") : access.reason);
-  }
-  const agentId =
-    parseAgentSessionKey(session.key)?.agentId ??
-    resolveSessionNavigationAgentId(context, params.agentId);
-  const hello = gateway.snapshot.hello;
-  const isCurrent = () =>
-    params.isCurrent() &&
-    gateway.snapshot.client === client &&
-    gateway.snapshot.phase === "connected" &&
-    gateway.snapshot.hello === hello;
-  const messages = await loadCompleteChatHistory({
-    client,
-    sessionKey: session.key,
-    sessionId: session.sessionId,
-    agentId,
-    isCurrent,
-  });
-  const assistantName =
-    context.agents.state.agentsList?.agents.find((agent) => agent.id === agentId)?.name ??
-    "OpenClaw";
-  const markdown = buildChatMarkdown(messages, assistantName);
-  if (!markdown) {
-    throw new Error(t("chat.commandResults.emptyExport"));
-  }
-  return copyToClipboard(markdown, isCurrent);
 }
 
 export async function runSessionNavigationAction<TRouteId extends string>(
@@ -129,10 +82,24 @@ export async function runSessionNavigationAction<TRouteId extends string>(
       return;
     }
     if (kind === "copy-markdown" || kind === "copy-session-id") {
-      const copied =
-        kind === "copy-markdown"
-          ? await copySessionMarkdown(params)
-          : await copyToClipboard(params.session.sessionId ?? "");
+      let copied: boolean;
+      if (kind === "copy-markdown") {
+        const gateway = params.context.gateway;
+        const { client, hello } = gateway.snapshot;
+        const isCurrent = params.isCurrent;
+        const target = {
+          ...params,
+          isCurrent: () =>
+            isCurrent() &&
+            params.context.gateway === gateway &&
+            gateway.snapshot.client === client &&
+            gateway.snapshot.hello === hello,
+        };
+        const { copySessionMarkdown } = await import("./session-menu-markdown.runtime.ts");
+        copied = await copySessionMarkdown(target);
+      } else {
+        copied = await copyToClipboard(params.session.sessionId ?? "");
+      }
       showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
       return;
     }

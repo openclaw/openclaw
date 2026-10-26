@@ -20,6 +20,7 @@ import { createRuntimeEnv as testRuntime } from "openclaw/plugin-sdk/plugin-test
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { FakeWebSocket, mattermostPostEvent } from "./monitor-websocket.test-support.js";
@@ -708,17 +709,12 @@ describe("mattermost inbound user posts", () => {
         response.end(JSON.stringify({ message: "unknown loopback endpoint" }));
       });
       const websocket = new WebSocketServer({ server, path: "/api/v4/websocket" });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected a Mattermost loopback TCP address");
-      }
+      const port = await listenOnLoopback(server);
 
       const abortController = new AbortController();
       mockState.abortController = abortController;
       const verboseDebug = vi.fn();
-      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const baseUrl = `http://127.0.0.1:${port}`;
       const config = mattermostConfig(
         {
           baseUrl,

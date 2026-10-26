@@ -9,6 +9,7 @@ import {
   createClaudeCliBackends,
   testing as cliBackendsTesting,
 } from "./cli-backends.test-support.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -47,15 +48,7 @@ afterEach(() => {
 const request = { agentId: "main", provider: "fixture", model: "model" };
 const custom: OpenClawConfig = {
   plugins: { enabled: false },
-  models: {
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        baseUrl: "https://custom.invalid/v1",
-        models: [],
-      },
-    },
-  },
+  ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
 };
 
 it.each([

@@ -9,6 +9,7 @@ import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtim
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const ssrfMocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
@@ -783,21 +784,6 @@ describe("OpenAI model-account credential ownership", () => {
   });
 });
 
-async function listenLoopbackServer(server: Server): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {
     server.close(() => resolve());
@@ -812,7 +798,7 @@ async function withLoopbackTokenResponse(
     res.writeHead(200, { "content-type": "application/json" });
     res.end(body);
   });
-  const port = await listenLoopbackServer(server);
+  const port = await listenOnLoopback(server);
   const release = vi.fn(async () => undefined);
   try {
     ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ init, signal }) => ({

@@ -26,6 +26,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
+import { makeClaimInput } from "./worker-environments/placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
@@ -217,16 +218,9 @@ it("records historical recovery failures while preserving the live pending-resul
   }
   harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
   harness.markEnvironmentNodeDeviceId("workspace-recovery-worker-node");
-  const claim = await placements.claimTurn({
-    ...REQUEST,
-    claimId: "workspace-recovery-claim",
-    runId: "workspace-recovery-run",
-    owner: {
-      kind: "worker",
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-    },
-  });
+  const claim = await placements.claimTurn(
+    makeClaimInput(active, "workspace-recovery-claim", "workspace-recovery-run"),
+  );
   await placements.markWorkspaceResultPending(claim);
   await placements.handoffWorkspaceResultRecovery(claim);
   const { reportFailure } = await createHandlers(REQUEST);

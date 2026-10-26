@@ -2,6 +2,7 @@ import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { sessionStorageStatus } from "../pages/config/session-storage.test-support.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -31,20 +32,10 @@ const agentStorage = (
   embeddedArchiveBytes,
 });
 
-const storage: SessionsStorageStatusResult = {
-  agents: [
-    agentStorage("main", 240, 760, 734003200, 10485760, 125829120, 10485760),
-    agentStorage("research", 60, 140, 314572800, 0, 41943040),
-  ],
-  maintenance: {
-    running: false,
-    lastStartedAt: null,
-    lastCompletedAt: null,
-    lastError: null,
-    archivedTranscripts: 0,
-    externalizedTranscripts: 0,
-  },
-};
+const storage: SessionsStorageStatusResult = sessionStorageStatus([
+  agentStorage("main", 240, 760, 734003200, 10485760, 125829120, 10485760),
+  agentStorage("research", 60, 140, 314572800, 0, 41943040),
+]);
 function snapshot(enabled = false, afterDays = 30, hash = "storage-e2e") {
   const config = { session: { maintenance: { coldStorage: { enabled, afterDays } } } };
   return { ...configSnapshot(config, hash), appliedConfigHash: hash };

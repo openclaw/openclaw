@@ -390,6 +390,7 @@ export { value as "openclaw:async-commonjs" };`
           throw new Error("Plugin source view has been disposed");
         }
         let filename = outputs.get(source);
+        let entry = filename && sources.get(filename);
         if (
           !filename &&
           isPathInside(root, source) &&
@@ -401,9 +402,9 @@ export { value as "openclaw:async-commonjs" };`
           filename = path.join(directory, `module-${outputs.size}.js`);
           fs.writeFileSync(filename, "", { flag: "wx", mode: 0o600 });
           outputs.set(source, filename);
-          sources.set(filename, { source });
+          entry = { source };
+          sources.set(filename, entry);
         }
-        const entry = filename && sources.get(filename);
         // Resolution may inspect a source before executing it. Only compilation fixes its mode.
         if (filename && entry && !formats.has(filename)) {
           entry.mode = mode ?? entry.mode ?? "native";

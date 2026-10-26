@@ -1,9 +1,6 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import {
-  isHostNoticePayload,
-  isReplyPayloadTerminalContent,
-  retainSilentFinalPayloads,
-} from "../reply-payload.js";
+import { hasPendingAutomationContinuation } from "../../cron/automation-result.js";
+import { isHostNoticePayload, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -28,10 +25,7 @@ export function resolveAutomationReplyState(
     !terminalFailurePayload;
   const authoredSilence =
     successfulTerminal && result.meta?.terminalReply?.disposition === "silent";
-  const pendingContinuation =
-    result.meta?.yielded === true ||
-    result.meta?.continuationPending === true ||
-    (result.meta?.pendingToolCalls?.length ?? 0) > 0;
+  const pendingContinuation = hasPendingAutomationContinuation(result.meta);
   const automationNoChange =
     successfulTerminal &&
     !pendingContinuation &&
@@ -51,19 +45,6 @@ export function resolveAutomationReplyState(
     automationNoChange,
     reasoningPayloadsEnabled,
   };
-}
-
-/** Structured no_change suppresses unsent content; ordinary silence retains its media contract. */
-export function selectAutomationReplyPayloads(
-  payloads: ReplyPayload[],
-  noChange: boolean,
-  quiet: boolean,
-): ReplyPayload[] {
-  return noChange
-    ? payloads.filter((payload) => payload.isError)
-    : quiet
-      ? retainSilentFinalPayloads(payloads)
-      : payloads;
 }
 
 /** Reasoning can accompany an automation's deliverable result, never replace it. */

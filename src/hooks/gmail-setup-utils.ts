@@ -271,9 +271,6 @@ export async function ensureTailscaleEndpoint(params: {
 export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
   const candidates = gogCredentialsPaths();
   for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
     try {
       const raw = fs.readFileSync(candidate, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;

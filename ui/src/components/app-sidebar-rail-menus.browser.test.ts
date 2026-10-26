@@ -25,6 +25,10 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     onTestFinished(() => page.viewport(viewport.width, viewport.height));
     await page.viewport(1280, 900);
+    const pointerParking = document.createElement("div");
+    pointerParking.style.cssText = "position:fixed;right:0;bottom:0;width:32px;height:32px";
+    document.body.append(pointerParking);
+    await page.elementLocator(pointerParking).hover();
     const { sidebar, provider } = await mountSidebar(
       createGatewayHarness(createTestGatewayClient(createGatewayRequestMock())).gateway,
       createSessions("main", ["agent:main:main"]),
@@ -139,6 +143,9 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
       };
       onTestFinished(stop);
       try {
+        // Escape belongs to an active tooltip first; test menu dismissal without one.
+        await page.elementLocator(pointerParking).hover();
+        await expect.poll(() => document.querySelector("openclaw-tooltip[open]")).toBeNull();
         record("before-keyboard");
         await userEvent.keyboard("{Escape}");
         record("after-keyboard", {

@@ -131,16 +131,31 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
-  it("does not synchronously measure a closed desktop frame during mounting", async () => {
-    const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
-    try {
-      const { frame, panel } = await fixture(props(), 600, false, "desktop");
-      expect(panel.hidden).toBe(true);
-      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(0);
-    } finally {
-      measurement.mockRestore();
-    }
-  });
+  it.each([undefined, "desktop"] as const)(
+    "reserves automatic Details before the first resize delivery (presentation: %s)",
+    async (nativePresentation) => {
+      vi.stubGlobal("ResizeObserver", undefined);
+      try {
+        await page.viewport(1700, 900);
+        const { conversation, panel } = await fixture(
+          props(),
+          1320,
+          false,
+          nativePresentation,
+          true,
+        );
+        expect(panel.hidden).toBe(false);
+        expect(getComputedStyle(conversation).right).toBe(
+          nativePresentation === "desktop" ? "313px" : "300px",
+        );
+        if (nativePresentation === "desktop") {
+          expect(panel.querySelector(".chat-details-session")).toBeNull();
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it.each(["transcript paint", "explicit open"] as const)(
     "holds automatic content until %s and retains it through later hydration",
@@ -306,6 +321,8 @@ describe("chat Details presentation", () => {
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;
     const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
+    // The scroll owner applies its initial gutter measurement before the first paint.
+    await new Promise(requestAnimationFrame);
     expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
     expect(navigation.textContent).toContain("+3");
     expect(navigation.textContent).toContain("−1");

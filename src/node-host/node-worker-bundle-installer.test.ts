@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import * as timers from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
@@ -766,6 +767,27 @@ describe("node worker bundle installer", () => {
     await expect(
       fs.readFile(path.join(bundleDirectory(fixture), "bootstrap-receipt.json"), "utf8"),
     ).resolves.toContain(fixture.input.build.bundleHash);
+  });
+
+  it("prewarms a downloaded worker with the standalone executable's generic runtime", async () => {
+    const marker = path.join(root, "generic-worker-prewarmed");
+    const fixture = await bundleFixture({
+      bundlePrewarm: 1,
+      workerSource: `import fs from "node:fs";
+if (process.env.BUN_BE_BUN !== "1") throw new Error("downloaded worker needs generic runtime");
+fs.writeFileSync(${JSON.stringify(marker)}, process.execPath);
+`,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root).href);
+    try {
+      await expect(installation(fixture, served.gatewayUrl).ensure()).resolves.toEqual(
+        fixture.input.build,
+      );
+      await expect(fs.readFile(marker, "utf8")).resolves.toBe(process.execPath);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("shares an in-flight prewarmed bundle check without sharing cancellation or later trust", async () => {

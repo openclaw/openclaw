@@ -27,11 +27,13 @@ function appendChunks(
   stream: ReturnType<typeof createAssistantVisibleStreamText>,
   text: string,
   size: number,
+  onChunk?: (visible: string, prefix: string) => void,
 ): string {
   let visible = stream.text;
   for (let offset = 0; offset < text.length; offset += size) {
     const result = stream.append(text.slice(offset, offset + size));
     visible = result.delta === null ? result.text : visible + result.delta;
+    onChunk?.(visible, text.slice(0, offset + size));
   }
   return visible;
 }
@@ -168,16 +170,9 @@ it.each([1, 3, 5, 7])(
       "Visible reply.",
     ].join("\n");
     const stream = createAssistantVisibleStreamText();
-    let visible = stream.text;
-    let prefix = "";
-
-    for (let offset = 0; offset < source.length; offset += size) {
-      const chunk = source.slice(offset, offset + size);
-      prefix += chunk;
-      const result = stream.append(chunk);
-      visible = result.delta === null ? result.text : visible + result.delta;
-      expect(visible).toBe(sanitizeAssistantVisibleStreamText(prefix));
-    }
+    const visible = appendChunks(stream, source, size, (chunkVisible, prefix) => {
+      expect(chunkVisible).toBe(sanitizeAssistantVisibleStreamText(prefix));
+    });
 
     expect(visible).toBe("Visible reply.");
     expect(stream.text).toBe("Visible reply.");
@@ -197,16 +192,9 @@ it.each([1, 3, 7])("keeps a carrier reflowed across 257 spaces at %i-character d
       "Visible reply.",
     ].join("\n");
     const stream = createAssistantVisibleStreamText();
-    let visible = stream.text;
-    let prefix = "";
-
-    for (let offset = 0; offset < source.length; offset += size) {
-      const chunk = source.slice(offset, offset + size);
-      prefix += chunk;
-      const result = stream.append(chunk);
-      visible = result.delta === null ? result.text : visible + result.delta;
-      expect(visible, JSON.stringify(pad)).toBe(sanitizeAssistantVisibleStreamText(prefix));
-    }
+    const visible = appendChunks(stream, source, size, (chunkVisible, prefix) => {
+      expect(chunkVisible, JSON.stringify(pad)).toBe(sanitizeAssistantVisibleStreamText(prefix));
+    });
 
     expect(visible, JSON.stringify(pad)).toBe("Visible reply.");
     expect(stream.text, JSON.stringify(pad)).toBe("Visible reply.");

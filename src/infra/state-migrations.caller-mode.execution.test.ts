@@ -39,30 +39,6 @@ async function reloadStateDirFixtureGraph() {
   modules = await loadFixtureGraph();
 }
 
-function writeLegacyDoctorSources(stateDir: string): { execPath: string } {
-  const execPath = path.join(stateDir, "exec-approvals.json");
-  fs.writeFileSync(
-    execPath,
-    `${JSON.stringify({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss" },
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
-    })}\n`,
-  );
-  return { execPath };
-}
-
-function writeLegacyDoctorAndTuiSources(
-  stateDir: string,
-  tuiValue: unknown,
-): { execPath: string; tuiPath: string } {
-  const { execPath } = writeLegacyDoctorSources(stateDir);
-  const tuiPath = path.join(stateDir, "tui", "last-session.json");
-  fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
-  fs.writeFileSync(tuiPath, `${JSON.stringify(tuiValue)}\n`);
-  return { execPath, tuiPath };
-}
-
 function snapshotSqliteArtifacts(databasePath: string): Record<string, string | undefined> {
   return Object.fromEntries(
     ["", "-wal", "-shm"].map((suffix) => {
@@ -190,7 +166,7 @@ describe("legacy state migration caller execution", () => {
       fs.unlinkSync(extensions);
       fs.mkdirSync(extensions);
       fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = extensions;
-      const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
+      const { execPath } = modules.helpers.writeLegacyDoctorSources(fixture.stateDir);
       const plan = caller === "preflight" ? await planFixture(fixture) : undefined;
       const detected = caller === "direct" ? await detectFixture(fixture) : undefined;
       const controller = new AbortController();
@@ -330,7 +306,7 @@ describe("legacy state migration caller execution", () => {
 
   it("executes and receipts Doctor-owned exec and TUI migrations from the same mode", async () => {
     const fixture = await makeFixture();
-    const { execPath, tuiPath } = writeLegacyDoctorAndTuiSources(fixture.stateDir, {
+    const { execPath, tuiPath } = modules.helpers.writeLegacyDoctorAndTuiSources(fixture.stateDir, {
       terminal: { sessionKey: "agent:main:tui:execute", updatedAt: 100 },
     });
     const result = await modules.doctor.autoMigrateLegacyState(doctorOptions(fixture));
@@ -360,7 +336,7 @@ describe("legacy state migration caller execution", () => {
         OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       },
     );
-    const { execPath } = writeLegacyDoctorSources(legacyStateDir);
+    const { execPath } = modules.helpers.writeLegacyDoctorSources(legacyStateDir);
 
     const result = await modules.doctor.autoMigrateLegacyState(
       doctorOptions({ env, homeDir: root }),
@@ -397,7 +373,7 @@ describe("legacy state migration caller execution", () => {
     );
     const configPath = path.join(legacyStateDir, "openclaw.json");
     fs.writeFileSync(configPath, "{}\n");
-    writeLegacyDoctorSources(legacyStateDir);
+    modules.helpers.writeLegacyDoctorSources(legacyStateDir);
 
     const plan = await modules.doctor.planLegacyStateMigrationsReadOnly({
       mode: "doctor",
@@ -450,7 +426,7 @@ describe("legacy state migration caller execution", () => {
       }
       return publish(options);
     });
-    const { execPath } = writeLegacyDoctorSources(legacyStateDir);
+    const { execPath } = modules.helpers.writeLegacyDoctorSources(legacyStateDir);
     const result = await modules.doctor.autoMigrateLegacyState(
       doctorOptions({ env, homeDir: root }),
     );
@@ -609,7 +585,7 @@ describe("legacy state migration caller execution", () => {
         fs.writeFileSync(path.join(directory, "settings.json"), "{}\n");
         preserved.push(directory);
       } else {
-        preserved.push(writeLegacyDoctorSources(fixture.stateDir).execPath);
+        preserved.push(modules.helpers.writeLegacyDoctorSources(fixture.stateDir).execPath);
       }
       const plan = await planFixture(fixture);
       const result = await modules.doctor.autoMigrateLegacyState(doctorOptions(fixture, { cfg }));

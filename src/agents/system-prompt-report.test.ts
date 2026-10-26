@@ -142,17 +142,27 @@ describe("buildSystemPromptReport", () => {
     });
   });
 
-  it("reports unnamed complete skill blocks in order", () => {
-    const skillsPrompt = "<skill></skill><skill><name> </name></skill>";
-    const report = makeReport({
-      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
-      skillsPrompt,
-    });
-    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
-    expect(report.skills.entries).toEqual([
-      { name: "(unknown)", blockChars: "<skill></skill>".length },
-      { name: "(unknown)", blockChars: "<skill><name> </name></skill>".length },
-    ]);
+  it.each([
+    [
+      ["<skill></skill>", "<skill><name> </name></skill>"],
+      ["(unknown)", "(unknown)"],
+    ],
+    ...["long-synthetic-skill-name", "技能🦞-long-skill-name", "lone-\ud800-surrogate-name"].map(
+      (name) => [[`<skill><name>  ${name}\n</name></skill>`], [name]] as const,
+    ),
+    [
+      [
+        "<skill><name><invalid/></name><NAME> valid-skill-name-after-markup </NAME><name>later</name></skill>",
+      ],
+      ["valid-skill-name-after-markup"],
+    ],
+  ] as const)("reports complete skill blocks in order: %s", (blocks, names) => {
+    const skillsPrompt = blocks.join("");
+    const report = makeReport({ systemPrompt: `## Skills\n${skillsPrompt}`, skillsPrompt }).skills;
+    expect(report.promptChars).toBe(skillsPrompt.length);
+    expect(report.entries).toEqual(
+      names.map((name, index) => ({ name, blockChars: blocks[index]!.length })),
+    );
   });
 
   it("keeps reporting when a tool schema cannot be stringified", () => {

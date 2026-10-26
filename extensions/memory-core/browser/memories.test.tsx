@@ -110,6 +110,23 @@ const waitMatch = (element: HTMLElement, text: string) =>
   waitForSolid(() => expect(match(element)).toBe(text));
 
 describe("Memory Core indexed-search presentation", () => {
+  it("loads changed locales without replacing the search input or its draft", async () => {
+    const request = vi.fn<Request>().mockResolvedValue(searchResponse([]));
+    const element = createElement(request);
+    const input = element.querySelector<HTMLInputElement>("#memory-search-input")!;
+    typeQuery(element, "Ada");
+    element.update({ locale: "fr" });
+    await waitForSolid(() =>
+      expect(input.placeholder).toBe("Rechercher dans les souvenirs de cet agent"),
+    );
+    expect(element.querySelector("#memory-search-input")).toBe(input);
+    expect(input.value).toBe("Ada");
+    expect(request).not.toHaveBeenCalled();
+    element.update({ locale: "en" });
+    expect(input.placeholder).toBe("Search this agent's memories");
+    expect(input.value).toBe("Ada");
+  });
+
   it.each(["search", "detail"])("ignores retired %s errors before formatting", async (stage) => {
     const pending = deferred<unknown>();
     const request = vi.fn<Request>((method) =>

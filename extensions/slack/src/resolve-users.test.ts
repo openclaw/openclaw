@@ -27,15 +27,18 @@ beforeEach(() => {
   });
 });
 
-it("uses the bounded lookup client when no client is injected", async () => {
-  list.mockResolvedValue({ members: [] });
+it.each(["@missing-user", "", " \t\n "])(
+  "leaves %j unresolved with the bounded lookup client",
+  async (input) => {
+    list.mockResolvedValue({ members: [] });
 
-  const result = await resolve(["@missing-user"]);
+    const result = await resolve([input]);
 
-  expect(result).toEqual([{ input: "@missing-user", resolved: false }]);
-  expect(createClient).toHaveBeenCalledExactlyOnceWith("lookup-fixture");
-  expect(list).toHaveBeenCalledOnce();
-});
+    expect(result).toEqual([{ input, resolved: false }]);
+    expect(createClient).toHaveBeenCalledExactlyOnceWith("lookup-fixture");
+    expect(list).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["person@example.com", "@Person"])(
   "resolves %s by preferring active humans and retaining directory order on ties",

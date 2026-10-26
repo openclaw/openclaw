@@ -128,7 +128,9 @@ async function snapshotStorage(operation: "check" | "legacy" | SidebarRecord[]) 
           );
         }),
         transcript: snapshots.some(
-          (snapshot) => field(snapshot, "snapshot", "deltaCursor") === "warm-reload-cursor",
+          (snapshot) =>
+            field(snapshot, "snapshot", "deltaCursor") === "warm-reload-cursor" &&
+            field(snapshot, "snapshot", "composer", "name") === "Remembered model",
         ),
       },
     };
@@ -200,8 +202,11 @@ suite.define(() => {
         const currentRow = {
           ...sessionRow("warm-reload", "Warm reload conversation"),
           key: sessionKey,
+          model: "warm-model",
+          modelProvider: "openai",
         };
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.
@@ -259,7 +264,12 @@ suite.define(() => {
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
               ...(olderMessages.length ? { totalMessages: olderMessages.length + 1 } : {}),
-              metadata: { models: [] },
+              metadata: {
+                models: [{ id: "warm-model", provider: "openai", name: "Remembered model" }],
+              },
+            },
+            "models.list": {
+              models: [{ id: "warm-model", provider: "openai", name: "Remembered model" }],
             },
           },
         });
@@ -301,6 +311,9 @@ suite.define(() => {
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
+          await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill("A draft before reconnect");
         }
         await waitForPersistedWarmState(page);
         const hello: unknown = await page.evaluate(() =>
@@ -385,6 +398,15 @@ suite.define(() => {
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
+          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          await expect.poll(() => composer.inputValue()).toBe("A draft before reconnect");
+          await expect.poll(() => composer.isEnabled()).toBe(true);
+          await expect
+            .poll(() => page.locator("[data-chat-model-select]").textContent())
+            .toContain("Remembered model");
+          await page.locator("[data-composer-catalog-state=stale]").waitFor({ state: "visible" });
+          await composer.fill("Typing while the Gateway is still connecting");
+          expect(await gateway.getRequests("chat.send")).toEqual([]);
         }
         await capture(`warm-${profile}-before-hello.png`);
 

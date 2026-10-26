@@ -6,7 +6,6 @@ import {
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
-import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import {
   inferToolMetaFromArgsCore,
@@ -147,6 +146,20 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   );
   // Outcome and visibility still belong to the original execution facts.
   return { ...activity, name: call.name };
+}
+
+/** Poll is the only process action that returns an aggregate for one session. */
+function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
+  );
 }
 
 export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem[] };

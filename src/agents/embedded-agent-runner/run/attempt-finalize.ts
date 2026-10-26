@@ -100,7 +100,6 @@ export function finalizeEmbeddedAttempt(
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
-      result.lastToolError !== undefined ||
       hasAsyncActivity(result.toolMetas) ||
       (stopReason !== "toolUse" &&
         (params.hasTerminalOutput ||
@@ -233,6 +232,7 @@ export async function completeEmbeddedAttemptAfterTurn(
     }
     await finalizeHarnessContextEngineTurn({
       ...attempt,
+      abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
       aborted: lifecycleState.aborted,
@@ -493,9 +493,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
       source: "prompt",
       error: createAttemptAbortError(signal),
     });
-    if (!input.runAbortController.signal.aborted) {
-      input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
-    }
+    input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
     void abortActiveSession?.(input.runAbortController.signal.reason);
   };
 
@@ -526,6 +524,11 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     },
     dispose: () => {
       removeListener?.();
+      // Retained abort reasons can keep this controller after its attempt ends.
+      abortActiveSession = undefined;
+      abortRun = undefined;
+      isCompactionPendingOrRetrying = undefined;
+      isCompactionInFlight = undefined;
     },
     setActiveSessionAbort: (abort) => {
       abortActiveSession = abort;

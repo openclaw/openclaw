@@ -54,23 +54,14 @@ export function maintainCronRunHistoryInWorker(
       : [];
   const { nowMs, protectedJobIds } = input.snapshot;
   const protectedJobs = new Set([...protectedJobIds, ...receipts.map((receipt) => receipt.jobId)]);
-  const plan = planCronRunHistoryMaintenance(
-    withReconciliationPayloads(database.db, records, nowMs, protectedJobs),
-    nowMs,
-    protectedJobs,
-  );
-  if (plan.reconciliations.length === 0 && !plan.prune) {
+  const plan = planWithReconciliationPayloads(database.db, records, nowMs, protectedJobs);
+  if (plan.reconciliations.length === 0 && plan.pruneIds.length === 0) {
     return { outcome: { reconciled: 0, pruned: 0, nextSweepAtMs: plan.nextSweepAtMs } };
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => ({
       outcome: {
-        ...applyCronRunHistoryMaintenanceInDatabase(
-          db,
-          plan,
-          nowMs,
-          prepareCronRunReceiptWriteSchema(db),
-        ),
+        ...applyCronRunHistoryMaintenanceInDatabase(db, plan, prepareCronRunReceiptWriteSchema(db)),
         nextSweepAtMs: plan.nextSweepAtMs,
       },
     }),
@@ -84,15 +75,15 @@ export function maintainCronRunHistoryInWorker(
  * shares the row's exact job and run identity. Load full payloads for exactly those rows, by task
  * id, and replan on them; every other row keeps its planning projection.
  */
-function withReconciliationPayloads(
+function planWithReconciliationPayloads(
   db: EngineConnection,
   records: readonly CronRunRecord[],
   nowMs: number,
   protectedJobs: ReadonlySet<string>,
-): readonly CronRunRecord[] {
+) {
   const draft = planCronRunHistoryMaintenance(records, nowMs, protectedJobs);
   if (draft.reconciliations.length === 0) {
-    return records;
+    return draft;
   }
   const runKey = (row: CronRunRecord) => JSON.stringify([row.jobId, row.runId]);
   const reconciledRuns = new Set(
@@ -112,10 +103,11 @@ function withReconciliationPayloads(
       payloads.set(row.id, row);
     }
   }
-  return records.map((row) => {
+  const hydrated = records.map((row) => {
     const full = payloads.get(row.id);
     return full === undefined ? row : { ...row, summary: full.summary, detail: full.detail };
   });
+  return planCronRunHistoryMaintenance(hydrated, nowMs, protectedJobs);
 }
 
 export function scheduleUnownedCronJobsInWorker(

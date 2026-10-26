@@ -86,10 +86,9 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     toast.append(tone);
     const danger = getComputedStyle(tone).color;
     tone.remove();
-    expect(getComputedStyle(toast).color).toBe(danger);
-    expect(getComputedStyle(action).color).toBe(danger);
-    expect(getComputedStyle(dismiss).color).toBe(danger);
-    expect(getComputedStyle(host.querySelector(".app-toast__icon")!).color).toBe(danger);
+    for (const element of [toast, action, dismiss, host.querySelector(".app-toast__icon")!]) {
+      expect(getComputedStyle(element).color).toBe(danger);
+    }
     showToast({ message: "Saved" });
     await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(false));
     expect(getComputedStyle(toast).color).toBe(neutral);

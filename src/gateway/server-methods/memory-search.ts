@@ -229,9 +229,11 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
       captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
     }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
-    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
+    readRebuildWarning = captureMemoryRebuildNotice(
+      await readMemorySearchManagerStatus(manager, { includeCounts: false }),
+    );
     const results = await manager.search(searchQuery, searchOptions);
-    const status = await readMemorySearchManagerStatus(manager);
+    const status = await readMemorySearchManagerStatus(manager, { includeCounts: false });
     const staleness = resolveMemorySearchStaleness(status, agentId);
     const warning = [staleness?.warning, readRebuildWarning()]
       .filter((message): message is string => typeof message === "string")

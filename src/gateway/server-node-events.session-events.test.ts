@@ -2,6 +2,7 @@ import "./server-node-events.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as runtimeSnapshot from "../config/runtime-snapshot.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { NodeEventContext, NodeEventHandlerOptions } from "./server-node-events-types.js";
@@ -32,12 +33,6 @@ function nodeFixture(nodeId: string, overrides: Partial<NodeEventContext> = {}) 
     emit: (event: string, payload: unknown, opts?: NodeEventHandlerOptions) =>
       handleNodeEvent(ctx, nodeId, { event, payloadJSON: JSON.stringify(payload) }, opts),
   };
-}
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 describe("node session event admission", () => {

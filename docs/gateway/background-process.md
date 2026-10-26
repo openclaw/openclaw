@@ -181,6 +181,7 @@ broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
 

@@ -13,14 +13,11 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
-import {
-  readChatPaneMutationAccess,
-  renderChatPaneComposerControls,
-} from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
+import { readChatPaneMutationAccess } from "./chat-pane-session-controls.ts";
 import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
 
@@ -87,26 +84,6 @@ async function captureSpeedRequest(cfg: OpenClawConfig, sessionEntry: GatewaySes
   return requests.at(-1);
 }
 
-type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
-
-function renderControls(
-  state: ChatPageHost,
-  overrides: Partial<Omit<ComposerControlsParams, "state">> = {},
-) {
-  return renderChatPaneComposerControls({
-    state,
-    selectedSession: state.sessionsResult?.sessions[0],
-    agentDefaultModel: undefined,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
-    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
-    ...overrides,
-  });
-}
-
 async function createControlsFixture(
   scope: string,
   sharingRole: GatewaySessionRow["sharingRole"] = "owner",
@@ -142,7 +119,7 @@ async function createControlsFixture(
     ...(globalTarget
       ? {
           assistantAgentId: "work",
-          agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+          agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
           sessionsResultAgentId: globalTarget.rowAgentId,
         }
       : {}),

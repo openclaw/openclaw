@@ -2,8 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCurrentInboundPrompt } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
-import { prepareReplyRunContext } from "./reply/get-reply-run-context.js";
-import { baseParams } from "./reply/get-reply-run.test-support.js";
+import { prepareReadyReply } from "./reply/get-reply-run-context.test-support.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 
 describe("RawBody directive parsing", () => {
@@ -25,16 +24,11 @@ describe("RawBody directive parsing", () => {
     const directives = parseInlineSessionDirectives(sessionCtx.BodyForCommands ?? "", {
       allowStatusDirective: true,
     });
-    const prepared = await prepareReplyRunContext(
-      baseParams({
-        ctx: sessionCtx,
-        sessionCtx: { ...sessionCtx, BodyStripped: directives.cleaned },
-        isNewSession: false,
-      }),
-    );
-    if (prepared.kind !== "ready") {
-      throw new Error("Expected prepared reply context");
-    }
+    const prepared = await prepareReadyReply({
+      ctx: sessionCtx,
+      sessionCtx: { ...sessionCtx, BodyStripped: directives.cleaned },
+      isNewSession: false,
+    });
     const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
     const prompt = buildCurrentInboundPrompt({
       context: envelope.currentInboundContext,
@@ -60,12 +54,7 @@ describe("RawBody directive parsing", () => {
         sourceTool: "sessions_send",
       },
     });
-    const prepared = await prepareReplyRunContext(
-      baseParams({ ctx: sessionCtx, sessionCtx, isNewSession: false }),
-    );
-    if (prepared.kind !== "ready") {
-      throw new Error("Expected prepared reply context");
-    }
+    const prepared = await prepareReadyReply({ ctx: sessionCtx, sessionCtx, isNewSession: false });
     const prompts = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
 
     for (const prompt of [prompts.prefixedCommandBody, prompts.queuedBody]) {

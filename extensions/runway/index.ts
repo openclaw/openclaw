@@ -353,6 +353,7 @@ export default definePluginEntry({
               maxBytes,
               validateBinaryResponse: true,
               metadata: { sourceUrl: url },
+              dispatcherPolicy,
             }),
           );
         }

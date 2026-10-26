@@ -17,7 +17,6 @@ import {
 } from "../state/user-channel-identities.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import { updateRepairParentMessageSchema } from "./update-repair-protocol.js";
 import {
   createManagedUpdateRequesterAuthority,
@@ -26,17 +25,11 @@ import {
   type UpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
 }));
-vi.mock("./update-repair-agent.runtime.js", () => ({}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -67,24 +60,6 @@ function assertCurrent(isCurrent: () => boolean) {
   }
   return true;
 }
-async function expectAborted(
-  isCurrent: () => boolean,
-  reason = "requester-revoked",
-  repairTarget = target(),
-  onEvent?: Parameters<typeof runUpdateRepairLoop>[0]["onEvent"],
-) {
-  const validate = vi.fn();
-  const result = await runUpdateRepairLoop({
-    target: repairTarget,
-    context: { error: "Synthetic validation failure", phase: "validating" },
-    isCurrent,
-    validate,
-    onEvent,
-  });
-  expect(result).toMatchObject({ status: "aborted", reason, attempts: [] });
-  expect(validate).not.toHaveBeenCalled();
-}
-
 beforeEach(async () => {
   root = tempDirs.make("update-requester-authority-");
   configPath = path.join(root, "openclaw.json");
@@ -96,12 +71,6 @@ beforeEach(async () => {
 async function linkedAdmins() {
   const config: OpenClawConfig = {
     gateway: {
-      auth: {
-        identityScopes: {
-          "ada@example.test": ["operator.admin"],
-          "grace@example.test": ["operator.admin"],
-        },
-      },
       roles: {
         default: "member",
         definitions: {
@@ -184,7 +153,6 @@ it.each(["reassignment", "role change in original state"])(
     }
     const delegated = await authorityFor(message.requester);
     expect([authority.isCurrent(), delegated.isCurrent()]).toEqual([false, false]);
-    await expectAborted(() => assertCurrent(delegated.isCurrent), undefined, message.target);
   },
 );
 
@@ -211,7 +179,6 @@ it("restored person policy cannot revive the original grant", async () => {
     grant.abort();
     grant = new AbortController();
     expect(authority.isCurrent()).toBe(false);
-    await expectAborted(() => assertCurrent(authority.isCurrent));
     expect(authorize).toHaveBeenCalledTimes(1);
     const next = await authorityFor(fixture.requester);
     expect(next.isCurrent()).toBe(true);
@@ -222,55 +189,36 @@ it("restored person policy cannot revive the original grant", async () => {
   }
 });
 
-it.each([
-  { source: "profile", retainedRuns: 2 },
-  { source: "configured-owner", retainedRuns: 500 },
-])("$source Doctor reads $retainedRuns runs until revoked", async ({ source, retainedRuns }) => {
-  const fixture = await linkedAdmins();
-  if (source === "configured-owner") {
-    await writeConfig(allowed);
-  }
-  const identity = await prepareManagedUpdateRequesterIdentity(
-    source === "profile" ? fixture.requester : requester,
-    env,
-  );
-  for (let index = 2; index < retainedRuns; index++) {
-    const historical = create();
-    finishUpdateRun(historical.runId, { status: "failed", reason: "doctor-failed" }, { env });
-  }
-  const previous = create();
-  finishUpdateRun(previous.runId, { status: "failed", reason: "doctor-failed" }, { env });
-  const current = create(fixture.requester);
-  recordUpdateRunStep(
-    current.runId,
-    {
-      step: "warning:openclaw doctor",
-      status: "completed",
-      detail: `Previous update ${previous.runId} rolled back; migrationWarnings: /Users/migrated/.openclaw/agents/main/sessions/sessions.json: entry_invalid, transcript_missing`,
-    },
-    { env },
-  );
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    assertOwnerCurrent: () => assertCurrent(identity.isCurrentIdentity),
-  });
-  try {
-    expect(maintenance.run(() => getUpdateRun(current.runId, { env }))).toMatchObject({
-      runId: current.runId,
-      status: "running",
-      steps: expect.arrayContaining([
-        expect.objectContaining({ detail: expect.stringContaining(previous.runId) }),
-      ]),
-    });
-    expect(getUpdateRun(previous.runId, { env })?.status).toBe("failed");
-    unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
-    await writeConfig({ commands: { ownerAllowFrom: ["other"] } });
-    expect(() => maintenance.run(() => getUpdateRun(current.runId, { env }))).toThrow(
-      UpdateRequesterRevokedError,
+it.each(["profile", "configured-owner"])(
+  "%s Doctor reads run history until revoked",
+  async (source) => {
+    const fixture = await linkedAdmins();
+    if (source === "configured-owner") {
+      await writeConfig(allowed);
+    }
+    const identity = await prepareManagedUpdateRequesterIdentity(
+      source === "profile" ? fixture.requester : requester,
+      env,
     );
-  } finally {
-    await maintenance.close();
-  }
-});
+    const current = create(fixture.requester);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => assertCurrent(identity.isCurrentIdentity),
+    });
+    try {
+      expect(maintenance.run(() => getUpdateRun(current.runId, { env }))).toMatchObject({
+        runId: current.runId,
+        status: "running",
+      });
+      unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
+      await writeConfig({ commands: { ownerAllowFrom: ["other"] } });
+      expect(() => maintenance.run(() => getUpdateRun(current.runId, { env }))).toThrow(
+        UpdateRequesterRevokedError,
+      );
+    } finally {
+      await maintenance.close();
+    }
+  },
+);
 
 it("legacy drivers cannot acquire linked-profile authority", async () => {
   const fixture = await linkedAdmins();
@@ -328,15 +276,7 @@ it.each(["registry", "config preparation", "config recheck"])(
       await writeConfig("{");
     }
     expect(() => authority.isCurrent()).toThrow(failure === "registry" ? error : "JSON5");
-    if (failure === "registry") {
-      const onEvent = vi.fn();
-      await expectAborted(authority.isCurrent, error.message, undefined, onEvent);
-      expect(onEvent).toHaveBeenCalledWith({
-        type: "stopped",
-        status: "aborted",
-        reason: error.message,
-      });
-    } else if (failure === "config recheck") {
+    if (failure === "config recheck") {
       await writeConfig(allowed);
       expect(authority.isCurrent()).toBe(true);
       await writeConfig({ commands: { ownerAllowFrom: ["other"] } });

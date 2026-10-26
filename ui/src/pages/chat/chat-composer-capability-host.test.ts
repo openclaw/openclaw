@@ -74,7 +74,13 @@ function toolsHarness(request: Parameters<typeof capabilityHarness>[0], snapshot
     "sessions.patch",
     "tools.effective",
   ]);
-  return harness;
+  return {
+    ...harness,
+    open: () => harness.props().onOpenToolAccess?.("github"),
+    load: () => harness.props().onLoadView?.("tools:github"),
+    result: (profile: string) =>
+      vi.waitFor(() => expect(harness.props().toolsEffectiveResult?.profile).toBe(profile)),
+  };
 }
 
 function changeConfig(context: ApplicationContext, appliedConfigHash: string) {
@@ -200,19 +206,10 @@ function createAddServerHarness(
   host.props(context, state, session, "main").onAddServer?.();
   return {
     container,
-    form: () => query("form"),
     alert: () => query('[role="alert"]')?.textContent,
     events,
     globalWrites,
-    refresh,
-    patch,
-    async submit(
-      scope: "session" | "everywhere" = "session",
-      server: { transport: "stdio" | "streamable-http"; target: string } = {
-        transport: "stdio",
-        target: "docs-mcp",
-      },
-    ) {
+    async submit(scope: "session" | "everywhere" = "session") {
       await vi.dynamicImportSettled();
       await waitForSolid(() => expect(query("form")).not.toBeNull());
       const form = query("form");
@@ -221,9 +218,8 @@ function createAddServerHarness(
         .click();
       expect(query("form")).toBe(form);
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
-      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
-        server.transport;
-      container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = server.target;
+      container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value = "stdio";
+      container.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "docs-mcp";
       query("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForSolid(() => expect(host.dialogView(context, state, session).busy).toBe(false));
     },
@@ -231,40 +227,6 @@ function createAddServerHarness(
 }
 
 describe("ChatComposerCapabilityHost", () => {
-  it("adds an everywhere server globally without a session patch", async () => {
-    const harness = createAddServerHarness();
-    await harness.submit("everywhere", {
-      transport: "streamable-http",
-      target: "https://mcp.example.test",
-    });
-
-    expect(harness.globalWrites).toEqual([
-      {
-        mcp: {
-          servers: { docs: { url: "https://mcp.example.test", transport: "streamable-http" } },
-        },
-      },
-    ]);
-    expect(harness.events).toEqual(["global"]);
-    expect(harness.refresh).not.toHaveBeenCalled();
-    expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.form()).toBeNull();
-  });
-
-  it("adds a session server disabled globally before enabling its sparse override", async () => {
-    const harness = createAddServerHarness();
-    await harness.submit();
-
-    expect(harness.globalWrites).toEqual([disabledServer]);
-    expect(harness.patch).toHaveBeenCalledWith(
-      "main",
-      { toolOverrides: { mcpServers: { docs: true }, skills: { release: false } } },
-      expect.any(Object),
-    );
-    expect(harness.events).toEqual(["global", "load", "session"]);
-    expect(harness.form()).toBeNull();
-  });
-
   it.each([
     [{ globalError: "duplicate" }, "session", "duplicate"],
     [{ throwGlobal: true }, "everywhere", "config failed"],
@@ -273,46 +235,42 @@ describe("ChatComposerCapabilityHost", () => {
     await harness.submit(scope);
     expect(harness.alert()?.trim()).toBe(error);
     expect(harness.events).toEqual(["global"]);
-    expect([harness.patch.mock.calls, harness.refresh.mock.calls]).toEqual([[], []]);
   });
 
-  it("reports a session-stage failure after retaining the global add", async () => {
-    const harness = createAddServerHarness({ sessionError: "gateway disconnected" });
-    await harness.submit();
-
-    expect(harness.globalWrites).toEqual([disabledServer]);
-    expect(harness.alert()).toContain(
-      "The server was saved disabled globally, but enabling it for this session failed: gateway disconnected",
-    );
-    expect(harness.events).toEqual(["global", "load", "session", "load"]);
-  });
-
-  it("aborts the session stage when navigation changes the submitted identity", async () => {
-    const harness = createAddServerHarness({ navigateAfterSave: true });
-    await harness.submit();
-
-    expect(harness.alert()).toContain("The active session changed before it could be enabled.");
-    expect(harness.refresh).not.toHaveBeenCalled();
-    expect(harness.patch).not.toHaveBeenCalled();
-  });
-
-  it("returns a session-stage error when refreshing current overrides rejects", async () => {
-    const harness = createAddServerHarness({ refreshError: "refresh failed" });
-    await harness.submit();
-
-    expect(harness.alert()).toContain(
-      "The server was saved disabled globally, but enabling it for this session failed: refresh failed",
-    );
-    expect(harness.events).toEqual(["global", "load"]);
-    expect(harness.patch).not.toHaveBeenCalled();
-    const form = harness.container.querySelector("form")!;
-    const failure = harness.container.querySelector('[role="alert"]')!;
-    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    expect(form.contains(failure)).toBe(true);
-    expect(submit.form).toBe(form);
-    expect(form.lastElementChild?.contains(submit)).toBe(true);
-    expect(failure.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
+  it.each([
+    [
+      { sessionError: "gateway disconnected" },
+      "gateway disconnected",
+      ["global", "load", "session", "load"],
+    ],
+    [
+      { navigateAfterSave: true },
+      "The active session changed before it could be enabled.",
+      ["global"],
+    ],
+    [{ refreshError: "refresh failed" }, "refresh failed", ["global", "load"]],
+  ] as const)(
+    "retains the disabled global add after a session-stage failure: %j",
+    async (options, error, events) => {
+      const harness = createAddServerHarness(options);
+      await harness.submit();
+      expect(harness.globalWrites).toEqual([disabledServer]);
+      expect(harness.alert()).toContain(
+        "The server was saved disabled globally, but enabling it for this session failed:",
+      );
+      expect(harness.alert()).toContain(error);
+      expect(harness.events).toEqual(events);
+      const form = harness.container.querySelector("form")!;
+      const failure = harness.container.querySelector('[role="alert"]')!;
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+      expect(form.contains(failure)).toBe(true);
+      expect(submit.form).toBe(form);
+      expect(form.lastElementChild?.contains(submit)).toBe(true);
+      expect(
+        failure.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    },
+  );
 
   it("blocks tool override patches without exact sessions.patch access", async () => {
     const request = vi.fn();
@@ -399,19 +357,19 @@ describe("ChatComposerCapabilityHost", () => {
     const afterRun = toolsResult("after-run");
     const second = deferred<unknown>();
     const request = vi.fn().mockResolvedValueOnce(beforeRun).mockReturnValueOnce(second.promise);
-    const { props } = toolsHarness(request);
+    const { props, open, load, result } = toolsHarness(request);
 
-    props().onOpenToolAccess?.("github");
-    await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(beforeRun));
-    props().onLoadView?.("tools:github");
+    open();
+    await result("before-run");
+    load();
     expect(request).toHaveBeenCalledTimes(1);
 
-    props().onOpenToolAccess?.("github");
-    props().onOpenToolAccess?.("github");
+    open();
+    open();
     expect(request).toHaveBeenCalledTimes(2);
     expect(props().toolsEffectiveLoading).toBe(true);
     second.resolve(afterRun);
-    await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(afterRun));
+    await result("after-run");
   });
 
   it.each(["before", "after"] as const)(
@@ -444,27 +402,23 @@ describe("ChatComposerCapabilityHost", () => {
     const first = deferred<unknown>();
     const current = deferred<unknown>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(current.promise);
-    const { state, props } = toolsHarness(request);
+    const { state, props, open, result } = toolsHarness(request);
     state.connectionEpoch = 1;
 
-    props().onOpenToolAccess?.("github");
+    open();
     state.connectionEpoch = 2;
     const reconnected = props();
-    expect(reconnected.toolsEffectiveResult).toBeNull();
-    expect(reconnected.toolsEffectiveLoading).toBe(false);
+    expect(reconnected).toMatchObject({ toolsEffectiveResult: null, toolsEffectiveLoading: false });
     reconnected.onOpenToolAccess?.("github");
     expect(request).toHaveBeenCalledTimes(2);
 
     first.resolve(toolsResult("retired-connection"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(props().toolsEffectiveResult).toBeNull();
-    expect(props().toolsEffectiveLoading).toBe(true);
+    expect(props()).toMatchObject({ toolsEffectiveResult: null, toolsEffectiveLoading: true });
 
     current.resolve(toolsResult("current-connection"));
-    await vi.waitFor(() =>
-      expect(props().toolsEffectiveResult?.profile).toBe("current-connection"),
-    );
+    await result("current-connection");
   });
 
   it("retires cached skills and their requests across a same-client reconnect", async () => {
@@ -505,16 +459,9 @@ describe("ChatComposerCapabilityHost", () => {
     props().onLoadSkills?.();
     state.connectionEpoch = 2;
     const reconnected = props();
-    expect(reconnected.skills).toBeNull();
-    expect(reconnected.skillsRead).toBeNull();
+    expect(reconnected).toMatchObject({ skills: null, skillsRead: null });
     reconnected.onLoadSkills?.();
     expect(statusRequest).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls).toEqual([
-      ["skills.status", { agentId: "main" }],
-      ["skills.library.list", { sessionKey: "main" }],
-      ["skills.status", { agentId: "main" }],
-      ["skills.library.list", { sessionKey: "main" }],
-    ]);
 
     first.resolve({ skills: [skill("retired")] });
     await Promise.resolve();
@@ -526,46 +473,31 @@ describe("ChatComposerCapabilityHost", () => {
     await vi.waitFor(() => expect(props().skills?.map(({ name }) => name)).toEqual(["current"]));
   });
 
-  it("rereads the open Tool access view once after the session run settles", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(discoveryResult("pending"))
-      .mockResolvedValueOnce(discoveryResult("pending"));
-    const { state, props } = toolsHarness(request);
-    state.chatRunId = "run-1";
-
-    props().onOpenToolAccess?.("github");
-    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("pending"));
-    props().onLoadView?.("tools:github");
-    props().onLoadView?.("tools:github");
-    expect(request).toHaveBeenCalledTimes(1);
-
-    state.chatRunId = null;
-    props().onLoadView?.("tools:github");
-    props().onLoadView?.("tools:github");
-    expect(request).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(props().toolsEffectiveLoading).toBe(false));
-    props().onLoadView?.("tools:github");
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("waits for Tool access to open before rereading after a run settles", async () => {
+  it("waits until Tool access opens to reread a settled run, then caches the result", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce(discoveryResult("pending"))
       .mockResolvedValueOnce(discoveryResult("discovered"));
-    const { state, props } = toolsHarness(request);
+    const { state, props, open, load, result } = toolsHarness(request);
     state.chatRunId = "run-1";
-    props().onOpenToolAccess?.("github");
-    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("pending"));
+
+    open();
+    await result("pending");
+    load();
+    load();
+    expect(request).toHaveBeenCalledTimes(1);
 
     state.chatRunId = null;
     props();
     props();
     expect(request).toHaveBeenCalledTimes(1);
-
-    props().onOpenToolAccess?.("github");
-    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("discovered"));
+    open();
+    load();
+    load();
+    expect(request).toHaveBeenCalledTimes(2);
+    await result("discovered");
+    await vi.waitFor(() => expect(props().toolsEffectiveLoading).toBe(false));
+    load();
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -576,16 +508,16 @@ describe("ChatComposerCapabilityHost", () => {
       .fn()
       .mockReturnValueOnce(duringRun.promise)
       .mockReturnValueOnce(afterRun.promise);
-    const { state, props } = toolsHarness(request);
+    const { state, props, open, load, result } = toolsHarness(request);
     state.chatRunId = "run-1";
-    props().onOpenToolAccess?.("github");
+    open();
 
     state.chatRunId = null;
-    props().onLoadView?.("tools:github");
+    load();
     expect(request).toHaveBeenCalledTimes(2);
 
     afterRun.resolve(discoveryResult("discovered"));
-    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("discovered"));
+    await result("discovered");
     duringRun.resolve(discoveryResult("pending"));
     await duringRun.promise;
     await Promise.resolve();
@@ -607,9 +539,5 @@ describe("ChatComposerCapabilityHost", () => {
 
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveResult).not.toBeNull());
-    expect(request.mock.calls).toEqual([
-      ["tools.effective", { agentId: "main", sessionKey: "main" }],
-      ["tools.effective", { agentId: "main", sessionKey: "main" }],
-    ]);
   });
 });

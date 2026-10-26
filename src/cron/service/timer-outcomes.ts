@@ -126,6 +126,9 @@ export function applyJobResult(
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
+  if (result.status === "ok" && result.result && result.result.outcome !== "no_change") {
+    job.state.lastMeaningfulResult = { ...result.result, atMs: result.endedAt };
+  }
   job.state.lastError = result.interruptedByRestart ? STARTUP_INTERRUPTED_ERROR : result.error;
   job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);

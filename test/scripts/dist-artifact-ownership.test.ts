@@ -282,6 +282,8 @@ async function runWithProcesses(
         cwd: root,
         env: {
           ...process.env,
+          CI: "false",
+          OPENCLAW_LINT_TOOL: "oxlint",
           // Synthetic artifact writers do not inspect the host's installed Gateway.
           OPENCLAW_ALLOW_LIVE_DIST_BUILD: "1",
           ...(resourceOwner

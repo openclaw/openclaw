@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
@@ -188,7 +188,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
           }
         }
         captured.nodes = Object.freeze({
-          paired: freezeJsonSnapshot(paired),
+          paired: freezeTrustedJsonSnapshot(paired),
           bindings,
         });
       }

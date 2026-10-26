@@ -1,8 +1,6 @@
 // OpenAI-compatible HTTP tests cover chat completions, streaming, tool calls,
 // session context, auth scopes, and provider error mapping.
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -57,7 +55,9 @@ import {
   readRawChatCompletionStream,
 } from "./http-stream.test-support.js";
 import { registerOpenAiHttpSamplingTests } from "./openai-http.sampling.test-support.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
+import { writeGatewayConfig } from "./test-helpers.config-runtime.js";
 import {
   agentCommandMock,
   getGatewayTestPort,
@@ -90,15 +90,6 @@ async function startSharedSecretServer(port: TestPortClaim, mode: "token" | "pas
       openAiChatCompletionsEnabled: true,
     }),
   );
-}
-
-async function writeGatewayConfig(config: Record<string, unknown>) {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
-  }
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
 function chatRequest(overrides: Record<string, unknown> = {}) {
@@ -3224,14 +3215,7 @@ describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
       async () => {
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const trustedProxyAuth = browserProxyAuth();
         testState.gatewayAuth = trustedProxyAuth;
         try {
           await writeGatewayConfig({

@@ -21,7 +21,7 @@ const messageMetrics = () =>
   );
 afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
 
-function fixture() {
+function fixture(directTaskPort = true) {
   const { port1: port, port2: peer } = new MessageChannel();
   const context = new AsyncLocalStorage<string>();
   const sent: NativeWorkerRequest[] = [];
@@ -30,7 +30,12 @@ function fixture() {
   const runtime: NativeWorkerRuntime = {
     handles,
     service: () => worker.serviceTaskPort(),
-    post: (message) => sent.push(message),
+    post: (message, transfers = []) => {
+      sent.push(message);
+      if (!directTaskPort) {
+        port.postMessage(message, transfers);
+      }
+    },
     refreshReference: () => references.push(worker.needsReference),
     resourceBroker() {
       throw new Error("This fixture owns only a task port");
@@ -38,7 +43,16 @@ function fixture() {
   };
   const worker = context.run(
     "constructor",
-    () => new NativeWorker(runtime, 1, workerUrl, false, false, undefined, port),
+    () =>
+      new NativeWorker(
+        runtime,
+        1,
+        workerUrl,
+        false,
+        false,
+        undefined,
+        directTaskPort ? port : undefined,
+      ),
   );
   worker.on("error", () => {});
   cleanups.push(() => {
@@ -48,6 +62,28 @@ function fixture() {
   });
   return { worker, port, peer, context, sent, handles, runtime, references };
 }
+
+it("uses one captured transfer list for the control envelope and its native send", async () => {
+  const { worker, port, peer, sent } = fixture(false);
+  worker.receive({ type: "created", id: 1, threadId: 105 });
+  const post = vi.spyOn(port, "postMessage");
+  const bytes = new Uint8Array([2, 4, 6]);
+  const transfers = Object.freeze([bytes.buffer]);
+  const received = once(peer, "message");
+
+  worker.postMessage({ bytes }, transfers);
+
+  expect(bytes.byteLength).toBe(0);
+  const [message] = await received;
+  expect(message).toMatchObject({
+    type: "post",
+    id: 1,
+    value: { bytes: new Uint8Array([2, 4, 6]) },
+  });
+  expect(message.transferList[0] === message.value.bytes.buffer).toBe(true);
+  const envelope = sent.find((entry) => entry.type === "post");
+  expect(envelope?.transferList === post.mock.calls[0]?.[1]).toBe(true);
+});
 
 it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
   const { worker, port, peer, context } = fixture();

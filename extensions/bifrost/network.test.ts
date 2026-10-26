@@ -10,6 +10,7 @@ import {
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNoBrowserAuth } from "../test-support/no-browser-auth.test-support.js";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
@@ -78,14 +79,7 @@ async function configure(
     assertCurrent: params.assertCurrent,
     secretInputMode: "plaintext",
     isRemote: false,
-    openUrl: async () => {
-      throw new Error("Unexpected browser auth");
-    },
-    oauth: {
-      createVpsAwareHandlers: () => {
-        throw new Error("Unexpected OAuth");
-      },
-    },
+    ...createNoBrowserAuth(),
   };
   const result = await auth.run(context);
   return {
@@ -109,9 +103,7 @@ describe("Bifrost setup over HTTP", () => {
   });
   afterAll(async () => {
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await server[Symbol.asyncDispose]();
     await claim.release();
   });
 

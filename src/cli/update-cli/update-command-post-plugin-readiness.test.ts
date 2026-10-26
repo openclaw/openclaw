@@ -4,7 +4,7 @@ import {
   recordCommandProcessFailure,
 } from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
-import { processResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 

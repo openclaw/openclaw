@@ -251,8 +251,14 @@ final class RootSidebarModel {
         let selectedIsSnoozed = sessions.contains {
             $0.key == selectedSessionKey && $0.isSnoozed(at: now)
         }
+        // Resolve aliases before keeping the selected automation reachable.
+        let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let browsingSessions = sessions.filter {
+            !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
+                !OpenClawChatSessionListVisibility.isAutomationSession($0))
+        }
         return ChatSessionSidebarModel.sections(
-            sessions: sessions.filter { !$0.isSnoozed(at: now) },
+            sessions: browsingSessions,
             // The shared sidebar otherwise creates a placeholder for a missing selected row.
             currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,

@@ -1,6 +1,8 @@
+import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
@@ -13,7 +15,6 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
-  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -140,12 +141,9 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
   return boundary?.type === "compaction" ? boundary : null;
 }
 
-export function cloneSessionModelContextEntries(
-  header: SessionHeader | null,
-  branch: readonly SessionEntry[],
-): FileEntry[] {
+export function cloneSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
   // Project storage-only payloads before cloning, while isolating mutable manager entries.
-  const events: FileEntry[] = [...(header ? [header] : []), ...branch];
+  const events = [...branch];
   for (let index = 0; index < events.length; index++) {
     const entry = events[index]!;
     if (entry.type === "message") {
@@ -155,7 +153,38 @@ export function cloneSessionModelContextEntries(
       }
     }
   }
-  return structuredClone(events);
+  // Initial model history stays writable even when resident payloads are frozen.
+  return cloneTranscriptView(events, {
+    shareImmutablePayloads: false,
+  });
+}
+
+/** Build initial history using the reader's private messages and equal resident strings. */
+export function buildInitialContext(
+  branch: SessionEntry[],
+  residentEntries: ReadonlyMap<string, SessionEntry>,
+): SessionContext {
+  const reuse = (target: object, source: unknown): void => {
+    if (source === null || typeof source !== "object" || isProxy(source)) {
+      return;
+    }
+    for (const key of Object.keys(target)) {
+      const value: unknown = Reflect.get(target, key);
+      const resident: unknown = Object.getOwnPropertyDescriptor(source, key)?.value;
+      if (typeof value === "string" && value === resident) {
+        Reflect.set(target, key, resident);
+      } else if (value !== null && typeof value === "object") {
+        reuse(value, resident);
+      }
+    }
+  };
+  for (const entry of branch) {
+    // Custom system-prompt metadata can be pooled and frozen; messages stay private.
+    if (entry.type === "message") {
+      reuse(entry, residentEntries.get(entry.id));
+    }
+  }
+  return buildCoreSessionContext(branch);
 }
 
 export function buildSessionContext(

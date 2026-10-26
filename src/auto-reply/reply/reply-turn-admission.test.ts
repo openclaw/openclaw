@@ -210,60 +210,53 @@ it("rejects a reply when deletion commits before admission", async () => {
   await release();
   await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
 });
-it("waits for recovery release before admitting a queued successor", async () => {
-  const storePath = store(interruptedEntry);
-  const owner = owned(await admitStored(storePath));
-  const release = holdRecoveryRelease();
-  owner.complete();
-  await release.started;
-  const successor = observe(admitStored(storePath, { kind: "queued_followup" }));
-  await Promise.resolve();
-  expect(successor.settled).toBe(false);
-  release.release();
-  owned(await successor.promise).complete();
-  await expectRecoveryReleased(storePath);
-});
-it("preserves a source recovery identity after adopting a distinct target session", async () => {
-  const storePath = createSessionStore({
-    [sourceKey]: { sessionId, updatedAt: 100, ...interruptedEntry },
-    [sessionKey]: { sessionId: "target-session", updatedAt: 100 },
-  });
-  const source = owned(await admitStored(storePath, { sessionKey: sourceKey }));
-  const adopted = owned(await adopt(storePath, source, { expectedSessionId: "target-session" }));
-  adopted.updateSessionId("target-session");
-  expect(adopted).toBe(source);
-  expect(adopted).toMatchObject({ key: sessionKey, sessionId: "target-session" });
-  const targets = [sourceKey, sessionKey].map((key) => ({ scope: storePath, identities: [key] }));
-  expect(targets.map(getTerminalSessionWorkAdmissionRelease)).toEqual([false, false]);
-  adopted.freezeAbort();
-  const terminalReleases = targets.map((target) => {
-    const released = getTerminalSessionWorkAdmissionRelease(target);
-    if (released === false) {
-      throw new Error("Committed reply admission is still classified as live");
-    }
-    return released;
-  });
-  const release = holdRecoveryRelease();
-  adopted.complete();
-  await release.started;
-  const successor = observe(admitStored(storePath, { sessionKey: sourceKey }));
-  await Promise.resolve();
-  expect(successor.settled).toBe(false);
-  release.release();
-  await Promise.all(terminalReleases);
-  const next = owned(await successor.promise);
-  expect(next.sessionId).toBe(sessionId);
-  next.complete();
-  await expectRecoveryReleased(storePath, sourceKey);
-});
+it.each(["visible", "queued_followup"] as const)(
+  "retains source recovery until %s admission after adoption",
+  async (kind) => {
+    const storePath = createSessionStore({
+      [sourceKey]: { sessionId, updatedAt: 100, ...interruptedEntry },
+      [sessionKey]: { sessionId: "target-session", updatedAt: 100 },
+    });
+    const source = owned(
+      await admitStored(storePath, {
+        sessionKey: sourceKey,
+        originatingLeafEntryId: "leaf-before-run",
+      }),
+    );
+    const adopted = owned(await adopt(storePath, source, { expectedSessionId: "target-session" }));
+    adopted.updateSessionId("target-session");
+    expect(adopted).toBe(source);
+    expect(adopted.originatingLeafEntryId).toBe("leaf-before-run");
+    expect(adopted).toMatchObject({ key: sessionKey, sessionId: "target-session" });
+    const targets = [sourceKey, sessionKey].map((key) => ({ scope: storePath, identities: [key] }));
+    expect(targets.map(getTerminalSessionWorkAdmissionRelease)).toEqual([false, false]);
+    adopted.freezeAbort();
+    const terminalReleases = targets.map((target) => {
+      const released = getTerminalSessionWorkAdmissionRelease(target);
+      if (released === false) {
+        throw new Error("Committed reply admission is still classified as live");
+      }
+      return released;
+    });
+    const release = holdRecoveryRelease();
+    adopted.complete();
+    await release.started;
+    const successor = observe(admitStored(storePath, { sessionKey: sourceKey, kind }));
+    await Promise.resolve();
+    expect(successor.settled).toBe(false);
+    release.release();
+    await Promise.all(terminalReleases);
+    const next = owned(await successor.promise);
+    expect(next.sessionId).toBe(sessionId);
+    next.complete();
+    await expectRecoveryReleased(storePath, sourceKey);
+  },
+);
 it("admits an explicit reset without reopening its restart tombstone", async () => {
   const archivedAt = Date.now() - 1000;
   const storePath = store({ ...tombstoneEntry, archivedAt, status: "failed" });
   const admitted = owned(
-    await admitStored(storePath, {
-      resetTriggered: true,
-      allowRestartTombstoneReset: true,
-    }),
+    await admitStored(storePath, { resetTriggered: true, allowRestartTombstoneReset: true }),
   );
   expect(entry(storePath)).toMatchObject({
     sessionId,
@@ -393,12 +386,6 @@ it("skips adoption without waiting when the target run slot is owned", async () 
   reservation.complete();
 });
 
-it("binds the originating transcript leaf to the admitted operation", async () => {
-  const admitted = owned(await admit({ originatingLeafEntryId: "leaf-before-run" }));
-  expect(admitted.originatingLeafEntryId).toBe("leaf-before-run");
-  admitted.complete();
-});
-
 it.each([false, true])(
   "rechecks a reset committed before admission, expected-session=%s",
   async (expected) => {
@@ -406,10 +393,7 @@ it.each([false, true])(
     const release = await holdMutation(storePath, () =>
       replaceSessionEntry(
         { sessionKey, storePath },
-        {
-          sessionId: "reset-session",
-          updatedAt: 200,
-        },
+        { sessionId: "reset-session", updatedAt: 200 },
       ),
     );
     const admission = admit({ storePath, expectedSessionId: expected ? sessionId : undefined });

@@ -10,9 +10,9 @@ import {
   collectPreparedModelRuntimeConfiguredRefs,
   prepareConfiguredRuntimeModels,
 } from "../agents/prepared-model-runtime.configured.js";
-import { attachModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import {
   prepareProviderStaticCatalog,
@@ -26,15 +26,7 @@ vi.mock("./provider-discovery.runtime.js", () => ({
 }));
 
 function model(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32_000,
-    maxTokens: 2_048,
-  };
+  return buildCatalogModel(id, { name, contextWindow: 32_000, maxTokens: 2_048 });
 }
 
 function staticProvider(id: string, config: ModelProviderConfig, label = id) {
@@ -42,7 +34,7 @@ function staticProvider(id: string, config: ModelProviderConfig, label = id) {
 }
 
 type RuntimeParams = Parameters<typeof prepareConfiguredRuntimeModels>[0];
-function catalogReader(provider: string, metadata: RuntimeParams["metadataSnapshot"]) {
+function catalogReader(metadata: RuntimeParams["metadataSnapshot"]) {
   const matchesStaticModelId = createStaticModelIdMatcher({
     manifestPlugins: metadata.manifestRegistry.plugins,
   });
@@ -63,22 +55,12 @@ function catalogReader(provider: string, metadata: RuntimeParams["metadataSnapsh
         resolveStaticCatalogModel: () => undefined,
       });
     },
-    expected({ models, ...transport }: ModelProviderConfig) {
-      return models.map((row) => ({
-        provider,
-        modelId: row.id,
-        model: attachModelProviderRequestRouteFacts(
-          { ...row, provider, ...transport },
-          metadata.owners,
-        ),
-      }));
-    },
   };
 }
 
 it("keeps first-match configured precedence and last-entry aggregate precedence", async () => {
   const provider = "catalog-precedence";
-  const reader = catalogReader(provider, createPluginMetadataSnapshotFixture());
+  const reader = catalogReader(createPluginMetadataSnapshotFixture());
   const first: ModelProviderConfig = {
     api: "openai-completions",
     baseUrl: "https://first.example.invalid/v1",
@@ -95,7 +77,18 @@ it("keeps first-match configured precedence and last-entry aggregate precedence"
     ),
   });
   const configured = reader.read(prepared, [{ provider, modelId: "shared-model" }]);
-  expect(configured).toEqual(reader.expected({ ...first, models: first.models.slice(0, 1) }));
+  expect(configured).toMatchObject([
+    {
+      provider,
+      modelId: "shared-model",
+      model: {
+        ...first.models[0],
+        provider,
+        api: first.api,
+        baseUrl: first.baseUrl,
+      },
+    },
+  ]);
   expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ [provider]: last });
 });
 
@@ -120,7 +113,7 @@ it("shares a workspace catalog across configured and implicit agent reads", asyn
   const metadata = createPluginMetadataSnapshotFixture({
     plugins: [{ id: pluginId, providers: [providerId] }],
   });
-  const reader = catalogReader(providerId, metadata);
+  const reader = catalogReader(metadata);
   const agents = Object.fromEntries(
     Array.from({ length: agentCount }, (_, index) => {
       const refs = models
@@ -199,6 +192,18 @@ it("shares a workspace catalog across configured and implicit agent reads", asyn
     contextWindow: 32_000,
   });
   expect(provider.staticCatalog.run).toHaveBeenCalledOnce();
-  expect(materialized).toEqual(reader.expected(providerConfig));
+  expect(materialized).toMatchObject(
+    models.map((row) => ({
+      provider: providerId,
+      modelId: row.id,
+      model: {
+        ...row,
+        provider: providerId,
+        api: providerConfig.api,
+        baseUrl: providerConfig.baseUrl,
+        headers: providerConfig.headers,
+      },
+    })),
+  );
   expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ [providerId]: providerConfig });
 });

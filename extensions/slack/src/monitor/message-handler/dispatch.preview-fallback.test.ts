@@ -1769,14 +1769,10 @@ it.each<{
     name: "configured command truncation",
     progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true, commandText: "raw" },
     events: [
-      {
-        kind: "tool_start",
-        itemId: "exec-call-1",
-        toolCallId: "tool-call-1",
-        name: "bash",
-        phase: "start",
-        args: { command: "1234567890abcdefghijklmnopqrstuvwxyz" },
-      },
+      toolStart(
+        { command: "1234567890abcdefghijklmnopqrstuvwxyz" },
+        { itemId: "exec-call-1", toolCallId: "tool-call-1" },
+      ),
     ],
     updates: [
       planUpdate("Shelling"),

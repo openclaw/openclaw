@@ -1457,7 +1457,9 @@ export async function runGatewayMatrixCell(
     NO_COLOR: "1",
   };
   const startedAt = Date.now();
-  const supervisor = await createGatewayMatrixProcessSupervisor(params.runtime.cwd);
+  const supervisor = await createGatewayMatrixProcessSupervisor(
+    params.runtime.processOwnerBootstrap,
+  );
   const { runCommandWithTimeout } = await import("../../src/process/exec.js");
   const scopeKey = `code-mode-matrix:${randomUUID()}`;
   const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });

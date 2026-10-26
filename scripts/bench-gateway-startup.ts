@@ -13,12 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
+import { isMainModule } from "../src/infra/is-main.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -257,6 +258,14 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "default",
     name: "gateway default",
+    config: BASE_CONFIG,
+  },
+  {
+    id: "pluginMetadataMaintenance",
+    name: "gateway through post-ready plugin metadata refresh",
+    runByDefault: false,
+    completionTracePhase: "startup.maintenance.plugin-registry",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
   },
   {
@@ -2250,7 +2259,7 @@ export const testing = {
   writeConfig,
 };
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   main().catch((err: unknown) => {
     if (err instanceof CliArgumentError) {
       console.error(err.message);

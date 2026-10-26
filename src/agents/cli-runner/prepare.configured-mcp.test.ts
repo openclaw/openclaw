@@ -13,7 +13,6 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveBundleMcpServerInstructions } from "../agent-bundle-mcp-instructions.js";
 import {
@@ -23,8 +22,12 @@ import {
 } from "../agent-bundle-mcp-lifecycle.test-support.js";
 import { setSessionMcpRuntimeScheduler } from "../agent-bundle-mcp-manager-api.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-tools.js";
-import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
+  createClaudeMcpCliBackend,
+  testing as cliBackendsTesting,
+} from "../cli-backends.test-support.js";
+import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
@@ -38,23 +41,7 @@ const PROBE_SERVER_INSTRUCTIONS =
   "x".repeat(2_500) +
   "\nPROBE_TAIL: preserve the complete native guidance.";
 
-const claudeBackend: CliBackendPlugin & { pluginId: string } = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  bundleMcp: true,
-  bundleMcpMode: "claude-config-file",
-  nativeToolMode: "selectable",
-  toolAvailabilityEnforcement: "execution-args",
-  resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-  config: {
-    command: "claude",
-    args: ["--print"],
-    output: "jsonl",
-    jsonlDialect: "claude-stream-json",
-    input: "stdin",
-    sessionMode: "existing",
-  },
-};
+const claudeBackend = createClaudeMcpCliBackend();
 
 async function startProbeServer() {
   const state = { calls: 0 };
@@ -255,22 +242,11 @@ describe("configured MCP servers on CLI turns", () => {
             sourceReplyDeliveryMode: "automatic",
             config,
             ...(completion
-              ? {
-                  trustedInternalHandoff: {
-                    kind: "subagent-completion" as const,
-                    sourceSessionKey: childSessionKey,
-                    sourceSessionId: "configured-mcp-child",
-                    targetSessionKey: sessionTarget.sessionKey,
-                    targetSessionId: sessionTarget.sessionId,
-                    provider: "claude-cli",
-                    model: "opus",
-                  },
-                  inputProvenance: {
-                    kind: "inter_session" as const,
-                    sourceTool: "subagent_announce",
-                    sourceSessionKey: childSessionKey,
-                  },
-                }
+              ? createPersistedCompletionHandoff(
+                  childSessionKey,
+                  "configured-mcp-child",
+                  sessionTarget,
+                )
               : {}),
           });
           try {
