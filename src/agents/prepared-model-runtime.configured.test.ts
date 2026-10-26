@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs as collectRefs,
@@ -8,20 +9,23 @@ import {
 
 const defaults = (value: AgentDefaultsConfig): OpenClawConfig => ({ agents: { defaults: value } });
 const harness = (id: string) => ({ agentRuntime: { id } });
+const provider = (fields: Partial<ModelProviderConfig> = {}): ModelProviderConfig => ({
+  baseUrl: "https://fixture.invalid/v1",
+  models: [],
+  ...fields,
+});
 
 describe("configured runtime provider discovery", () => {
   it("keeps credential-only providers out of static catalog preparation", () => {
     const config: OpenClawConfig = {
       models: {
         providers: {
-          inline: { baseUrl: "https://inline.invalid/v1", apiKey: "fixture-key", models: [] },
-          referenced: {
-            baseUrl: "https://referenced.invalid/v1",
+          inline: provider({ apiKey: "fixture-key" }),
+          referenced: provider({
             apiKey: { source: "file", provider: "fixture", id: "key" },
-            models: [],
-          },
-          blank: { baseUrl: "https://blank.invalid/v1", apiKey: " ", models: [] },
-          unrelated: { baseUrl: "https://unrelated.invalid/v1", models: [] },
+          }),
+          blank: provider({ apiKey: " " }),
+          unrelated: provider(),
         },
       },
     };
@@ -38,15 +42,7 @@ describe("configured runtime provider discovery", () => {
   ] as const)("discovers %s=%s (configured harness: %s)", (field, selection, withHarness) => {
     const config = defaults({ [field]: selection });
     if (withHarness) {
-      config.models = {
-        providers: {
-          fixture: {
-            baseUrl: "https://fixture.invalid/v1",
-            models: [],
-            ...harness("fixture-harness"),
-          },
-        },
-      };
+      config.models = { providers: { fixture: provider(harness("fixture-harness")) } };
     }
     const refs = collectRefs(config, "worker");
     if (!withHarness) {

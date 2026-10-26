@@ -12,7 +12,11 @@ const assistant = (content: unknown[]) => ({ role: "assistant", content });
 const call = (type: string, id = "tool-1") => ({ type, id, name: "gateway", arguments: {} });
 const thinking = { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" };
 const signed = () => [thinking, call("toolCall")];
-const omitted = assistant([text("[tool calls omitted]")]);
+const resultBlock = (value: string) => ({
+  type: "toolResult",
+  toolUseId: "tool-1",
+  content: [text(value)],
+});
 
 function checkToolTurn(content: unknown[], following: unknown[], expected: unknown[], fields = {}) {
   const wrap = (blocks: unknown[]) =>
@@ -77,10 +81,7 @@ it("repairs dangling tool-only turns after abort", () => {
 });
 
 it("prunes only unmatched sibling calls with user-embedded results", () => {
-  const following = user([
-    { type: "toolResult", toolUseId: "tool-1", content: [text("Result 1")] },
-    text("Thanks"),
-  ]);
+  const following = user([resultBlock("Result 1"), text("Thanks")]);
   checkToolTurn(
     [call("toolUse"), call("toolUse", "tool-2"), text("Done")],
     [following],
@@ -102,15 +103,7 @@ it.each(["embedded", "wrong-name"])("rejects signed pairing with %s results", (k
   const embedded = kind === "embedded";
   const content = embedded ? [thinking, call("toolUse")] : signed();
   const following = embedded
-    ? [
-        {
-          role: "user",
-          content: [
-            { type: "toolResult", toolUseId: "tool-1", content: [text("ok")] },
-            text("Continue"),
-          ],
-        },
-      ]
+    ? [user([resultBlock("ok"), text("Continue")])]
     : [textToolResult("tool-1", "exec", "wrong tool", { isError: false }), user("Continue")];
-  checkToolTurn(content, following, omitted.content);
+  checkToolTurn(content, following, [text("[tool calls omitted]")]);
 });

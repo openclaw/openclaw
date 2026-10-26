@@ -26,13 +26,12 @@ export function fixtureCatalog(serverName: string, tools: Tool[], generatedAt = 
     version: 1,
     generatedAt,
     servers: { [serverName]: { serverName, launchSummary: serverName, toolCount: tools.length } },
-    tools: tools.map((tool) => ({
-      serverName,
-      safeServerName: serverName,
-      inputSchema: { type: "object", properties: {} },
-      fallbackDescription: tool.description ?? tool.toolName,
-      ...tool,
-    })),
+    tools: tools.map((tool) =>
+      catalogTool(serverName, tool.toolName, {
+        fallbackDescription: tool.description ?? tool.toolName,
+        ...tool,
+      }),
+    ),
   };
 }
 

@@ -10,6 +10,13 @@ import {
 function toolResult(tool: Partial<Parameters<typeof toolsResult>[0]["tools"][number]>) {
   return { tools: [{ name: "fixture", inputSchema: { type: "object" as const }, ...tool }] };
 }
+function rejectTools(tool: Parameters<typeof toolResult>[0]) {
+  const convert = () => toolsResult(toolResult(tool));
+  expect(convert).toThrow(McpSdkCompatibilityError);
+  expect(convert).toThrow(
+    expect.objectContaining({ code: "MCP_SDK_RESULT_UNREPRESENTABLE", method: "tools/list" }),
+  );
+}
 
 describe("published MCP result compatibility", () => {
   it("preserves complete v1 payloads, metadata, schemas, and cursors", () => {
@@ -63,14 +70,7 @@ describe("published MCP result compatibility", () => {
   it.each([true, false, null, 1, "schema"].map((value) => ({ value })))(
     "rejects scalar schema properties (%j) without changing the schema",
     ({ value }) => {
-      expect(() =>
-        toolsResult(toolResult({ inputSchema: { type: "object", properties: { value } } })),
-      ).toThrow(
-        expect.objectContaining({
-          code: "MCP_SDK_RESULT_UNREPRESENTABLE",
-          method: "tools/list",
-        }),
-      );
+      rejectTools({ inputSchema: { type: "object", properties: { value } } });
     },
   );
 
@@ -85,9 +85,7 @@ describe("published MCP result compatibility", () => {
       _meta: { source: "fixture" },
     };
     expect(toolsResult(result)).toStrictEqual(result);
-    expect(() =>
-      toolsResult(toolResult({ outputSchema: { type: "object", properties: { result: false } } })),
-    ).toThrow(McpSdkCompatibilityError);
+    rejectTools({ outputSchema: { type: "object", properties: { result: false } } });
   });
 
   it("rejects nested fields that a v1 schema would silently strip", () => {
@@ -106,11 +104,6 @@ describe("published MCP result compatibility", () => {
     { type: "object", properties: false },
     { type: "object", required: false },
   ])("rejects an output schema outside the published v1 shape (%j)", (outputSchema) => {
-    expect(() => toolsResult(toolResult({ outputSchema }))).toThrow(
-      expect.objectContaining({
-        code: "MCP_SDK_RESULT_UNREPRESENTABLE",
-        method: "tools/list",
-      }),
-    );
+    rejectTools({ outputSchema });
   });
 });
