@@ -7,6 +7,7 @@ let closeOpenClawStateDatabaseForTest: typeof import("openclaw/plugin-sdk/plugin
 
 const resolveApproval = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Keep Gateway approval resolution synthetic while exercising the real durable queue.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolveApproval,
 }));
