@@ -95,7 +95,9 @@ it.each(["direct-loader-successor", "prepared"] as const)(
     activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
     const gateway = createPluginRegistryOwner(registry, workspaceDir);
     await using cleanup = new AsyncDisposableStack();
-    cleanup.defer(() => gateway.close());
+    cleanup.defer(async () => {
+      await gateway.close();
+    });
     const liveRecord = gateway.registry.plugins.find((record) => record.id === channelId)!;
     const liveInstance = getPluginInstance(liveRecord)!;
     const liveEntry = gateway.registry.channels[0]!;

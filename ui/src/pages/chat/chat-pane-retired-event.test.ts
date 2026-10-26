@@ -2,6 +2,7 @@
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -25,7 +26,7 @@ beforeEach(() => {
 });
 afterEach(resetTranscriptTestDom);
 
-function session(name: string, updatedAt: number, running = false) {
+function session(name: string, updatedAt: number, running = false): GatewaySessionRow {
   return {
     key: `agent:main:${name}`,
     agentId: "main",

@@ -22,7 +22,6 @@ import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/se
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sessionSharePlugin from "../../extensions/session-share/index.js";
-import manifest from "../../extensions/session-share/openclaw.plugin.json" with { type: "json" };
 import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
@@ -456,6 +455,12 @@ describe("session-share node commands", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = commandFixture([]);
       fixture.config.plugins = undefined;
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          new URL("../../extensions/session-share/openclaw.plugin.json", import.meta.url),
+          "utf8",
+        ),
+      ) as { configSchema: Record<string, unknown> };
       expect(
         validateJsonSchemaValue({
           schema: manifest.configSchema,

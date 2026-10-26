@@ -33,8 +33,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
-const reason = "gateway.installation_replaced";
-const installationReplacementWarning = "Installation replaced; draining active work.";
+const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
+const installationReplacementWarning =
+  "Installation replaced: on-disk 2026.9.5 differs from running 2026.9.4; draining active work.";
 const completedAtMs = Date.UTC(2026, 8, 19, 12);
 const historyMessage = `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`;
 const historyTitle = "Previous Gateway installation replacement";

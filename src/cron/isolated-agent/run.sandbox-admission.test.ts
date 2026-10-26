@@ -81,6 +81,12 @@ describe("cron isolated-agent sandbox placement admission", () => {
   }
 
   beforeEach(() => {
+    harness.buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      skills: [],
+      resolvedSkills: [],
+      version: 42,
+    });
     harness.resolveAgentConfigMock.mockImplementation(
       (cfg: OpenClawConfig, id: string) => cfg.agents?.entries?.[id],
     );
