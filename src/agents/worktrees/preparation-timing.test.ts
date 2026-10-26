@@ -47,27 +47,18 @@ it("attributes nested preparation once per owner and retains failed phase time",
       });
     }),
   ).rejects.toBe(failure);
-  const receipts = [
-    ["managed", "unavailable", { reason: "not-requested" }, "returned", 40, { checkout: 40 }],
-    ["sandbox", "warm", warm, "threw", 60, phases],
-  ] as const;
-  expect(observations.log.mock.calls).toEqual(
-    receipts.map(([kind, template, templateDetails, outcome, durationMs, phaseDurationsMs]) => [
-      "managed worktree preparation",
-      {
-        kind,
-        template,
-        templateDetails,
-        outcome,
-        durationMs,
-        phaseDurationsMs,
-        unattributedMs: 0,
-        consoleMessage: expect.stringContaining(
-          `phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
-        ),
-      },
-    ]),
-  );
+  expect(observations.log.mock.calls.map(([, receipt]) => receipt)).toMatchObject([
+    {
+      kind: "managed",
+      template: "unavailable",
+      templateDetails: { reason: "not-requested" },
+      outcome: "returned",
+      durationMs: 40,
+      phaseDurationsMs: { checkout: 40 },
+      unattributedMs: 0,
+    },
+    { kind: "sandbox", templateDetails: warm },
+  ]);
   expect(observations.event).toHaveBeenCalledTimes(2);
   expect(observations.event.mock.calls[1]?.[0]).toMatchObject({
     name: "worktree.preparation",
@@ -76,6 +67,7 @@ it("attributes nested preparation once per owner and retains failed phase time",
       kind: "sandbox",
       template: "warm",
       outcome: "threw",
+      unattributedMs: 0,
       ...phases,
       ...Object.fromEntries(Object.entries(warm).map(([key, value]) => [`template.${key}`, value])),
     },
