@@ -24,11 +24,13 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   runCodexAgentEndHook: vi.fn(),
 }));
+// mock-isolation: Select each rejection path without invoking real recovery or binding writes.
 vi.mock("./run-attempt-state.js", () => ({
   isCodexActiveCompactTurnError: () => recovery.kind === "compact",
   clearCodexBindingAfterInvalidImagePayload: recovery.forbidden,
   shouldUseFreshCodexThreadAfterContextEngineOverflow: () => recovery.kind === "overflow",
 }));
+// mock-isolation: Any binding replacement is forbidden for this reviewed-turn fixture.
 vi.mock("./session-binding.js", () => ({
   assertCodexBindingMayBeReplaced: recovery.forbidden,
   clearCodexBindingForClient: recovery.forbidden,

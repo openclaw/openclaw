@@ -8,6 +8,7 @@ import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js
 import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 
+// mock-isolation: Artifact reconciliation must not install or inspect a real desktop service.
 vi.mock("./computer-use-service.js", () => ({
   ensureCodexComputerUseServiceApp: vi.fn<
     typeof import("./computer-use-service.js").ensureCodexComputerUseServiceApp
@@ -17,6 +18,7 @@ vi.mock("./computer-use-service.js", () => ({
   >(async (params) => params.sourceAppCandidates?.[0]),
 }));
 
+// mock-isolation: The fixture supplies its own marketplace instead of modifying host plugins.
 vi.mock("./computer-use-marketplace.js", () => ({
   ensureCodexManagedBundledMarketplace: vi.fn<typeof ensureCodexManagedBundledMarketplace>(
     async () => undefined,
@@ -26,6 +28,7 @@ vi.mock("./computer-use-marketplace.js", () => ({
   >(async (params) => params.candidates?.[0]),
 }));
 
+// mock-isolation: Observe cache preparation without writing the shared host cache.
 vi.mock("./computer-use-cache.js", () => ({
   ensureCodexComputerUseSharedPluginCache: vi.fn(async () => false),
 }));

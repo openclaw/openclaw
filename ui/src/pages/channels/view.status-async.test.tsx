@@ -58,9 +58,7 @@ function mountChannels(reads: { promise: Promise<unknown> }[], pairing = false) 
   const container = pairing
     ? mounted.container.querySelector<HTMLElement>("#channels-pairing-requests")!
     : mounted.container;
-  const query = <T extends Element = HTMLElement>(selector: string) =>
-    container.querySelector<T>(selector);
-  return { ...fixture, channels, approve, container, query };
+  return { ...fixture, channels, approve, container };
 }
 
 function snapshot(label: string, partial = false): ChannelsStatusSnapshot {
@@ -98,28 +96,30 @@ it.each([false, true])(
     }
     const failed = f.channels.refresh(cached);
     await waitForSolid(() => {
-      expect(f.query(".channels-item__detail")).not.toBeNull();
-      expect(f.query(".settings-loading-skeleton")).toBeNull();
+      expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
+      expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
       if (cached) {
-        expect(f.query(".callout.info")).not.toBeNull();
+        expect(f.container.querySelector(".callout.info")).not.toBeNull();
         expect(document.activeElement).toBe(card);
       }
     });
-    const recommended = f.query(".channels-item__detail");
+    const recommended = f.container.querySelector(".channels-item__detail");
     failure.reject(new Error("Status unavailable"));
     await failed;
     await waitForSolid(() =>
-      expect(f.query(".callout.danger")?.textContent).toBe("Status unavailable"),
+      expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable"),
     );
     if (card) {
       expect(document.activeElement).toBe(card);
       card.click();
-      await waitForSolid(() => expect(f.query("openclaw-modal-dialog")).not.toBeNull());
-      dialog = f.query("openclaw-modal-dialog");
+      await waitForSolid(() =>
+        expect(f.container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
+      );
+      dialog = f.container.querySelector("openclaw-modal-dialog");
     }
     const recovered = f.channels.refresh();
     await waitForSolid(() => {
-      expect(f.query(".callout.danger")?.textContent).toBe("Status unavailable");
+      expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable");
       if (cached) {
         expect(
           Array.from(f.container.querySelectorAll(".callout"), (node) => node.className).slice(
@@ -127,18 +127,20 @@ it.each([false, true])(
             3,
           ),
         ).toEqual(["callout info", "callout warn", "callout danger"]);
-        expect(f.query(".callout.warn")?.textContent).toContain("Slack probe unavailable");
-        expect(f.query("openclaw-modal-dialog")).toBe(dialog);
+        expect(f.container.querySelector(".callout.warn")?.textContent).toContain(
+          "Slack probe unavailable",
+        );
+        expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
       } else {
-        expect(f.query(".callout.info")).toBeNull();
-        expect(f.query(".settings-loading-skeleton")).toBeNull();
-        expect(f.query(".channels-item__detail")).toBe(recommended);
+        expect(f.container.querySelector(".callout.info")).toBeNull();
+        expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+        expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
       }
     });
     recovery.resolve(snapshot("Slack recovered"));
     await recovered;
     await waitForSolid(() => {
-      expect(f.query(".callout.danger")).toBeNull();
+      expect(f.container.querySelector(".callout.danger")).toBeNull();
       expect(f.container.textContent).not.toContain("Slack probe unavailable");
       if (card) {
         expect(card.textContent).toContain("Slack recovered");
@@ -146,9 +148,9 @@ it.each([false, true])(
     });
     if (card) {
       expect(f.container.contains(card)).toBe(true);
-      expect(f.query("openclaw-modal-dialog")).toBe(dialog);
+      expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
     } else {
-      expect(f.query(".channels-item__detail")).toBe(recommended);
+      expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
     }
   },
 );
@@ -159,29 +161,35 @@ it("loads pairing feedback without replacing cached sender controls on failure o
   const recovery = createDeferred<ChannelsPairingListResult>();
   const f = mountChannels([first, failedRefresh, recovery], true);
   const initial = f.channels.refreshPairing();
-  await waitForSolid(() => expect(f.query(".settings-loading-skeleton")).not.toBeNull());
+  await waitForSolid(() =>
+    expect(f.container.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+  );
   expect(f.container.textContent).not.toContain("Alice");
   first.resolve(pairingSnapshot());
   await initial;
   await waitForSolid(() => expect(f.container.textContent).toContain("Alice"));
-  const details = f.query<HTMLDetailsElement>("details")!;
-  const approve = f.query<HTMLButtonElement>('button[aria-label^="Approve "]')!;
+  const details = f.container.querySelector<HTMLDetailsElement>("details")!;
+  const approve = f.container.querySelector<HTMLButtonElement>('button[aria-label^="Approve "]')!;
   details.open = true;
   approve.focus();
 
   const refresh = f.channels.refreshPairing();
   await waitForSolid(() => {
-    expect(f.query<HTMLButtonElement>('button[aria-label="Refresh"]')?.disabled).toBe(true);
-    expect(f.query(".settings-loading-skeleton")).toBeNull();
-    expect(f.query("details")).toBe(details);
+    expect(
+      f.container.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.disabled,
+    ).toBe(true);
+    expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+    expect(f.container.querySelector("details")).toBe(details);
   });
   failedRefresh.reject(new Error("Pairing refresh unavailable"));
   await refresh;
   await waitForSolid(() =>
-    expect(f.query('[role="alert"]')?.textContent).toContain("Pairing refresh unavailable"),
+    expect(f.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Pairing refresh unavailable",
+    ),
   );
   const expectRetained = () => {
-    expect(f.query("details")).toBe(details);
+    expect(f.container.querySelector("details")).toBe(details);
     expect(details.open).toBe(true);
     expect(document.activeElement).toBe(approve);
   };
@@ -193,7 +201,7 @@ it("loads pairing feedback without replacing cached sender controls on failure o
   await recovered;
   await waitForSolid(() => {
     expect(details.textContent).toContain("Alice Updated");
-    expect(f.query('[role="alert"]')).toBeNull();
+    expect(f.container.querySelector('[role="alert"]')).toBeNull();
   });
   expectRetained();
   approve.click();
@@ -209,12 +217,12 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
   failure.reject(new Error("First read failed"));
   await initial;
   await waitForSolid(() =>
-    expect(f.query('[role="alert"]')?.textContent).toContain("First read failed"),
+    expect(f.container.querySelector('[role="alert"]')?.textContent).toContain("First read failed"),
   );
   const retry = f.channels.refreshPairing();
   await waitForSolid(() => {
-    expect(f.query(".settings-loading-skeleton")).not.toBeNull();
-    expect(f.query('[role="alert"]')).toBeNull();
+    expect(f.container.querySelector(".settings-loading-skeleton")).not.toBeNull();
+    expect(f.container.querySelector('[role="alert"]')).toBeNull();
   });
   f.publish({
     ...f.gateway.snapshot,
@@ -222,7 +230,7 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
   });
   await waitForSolid(() => {
     expect(f.container.textContent).toContain("operator.pairing access");
-    expect(f.query(".settings-loading-skeleton")).toBeNull();
+    expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
   });
   retired.resolve(pairingSnapshot());
   await retry;
@@ -236,6 +244,6 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
   await refresh;
   await waitForSolid(() => {
     expect(f.container.textContent).toContain("Alice");
-    expect(f.query('[role="alert"]')).toBeNull();
+    expect(f.container.querySelector('[role="alert"]')).toBeNull();
   });
 });
