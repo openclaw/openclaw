@@ -4,6 +4,7 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { create, providerService } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 
 function createHeldInstaller(
@@ -47,8 +48,8 @@ function createHeldInstaller(
     getTransport: () => transport,
     transfer,
   });
-  const service = support.createService(
-    support.createProvider({
+  const service = providerService(
+    {
       supportedExecutionModes: ["worker-turn"],
       provisionBeforeInstallation: true,
       provision: async () => ({
@@ -57,17 +58,13 @@ function createHeldInstaller(
         sharedHost: false,
       }),
       destroy,
-    }),
+    },
     { ensureNodeWorkerBundle: install },
   );
-  const creation = service
-    .createWithRequest({
-      profileId: "development",
-      idempotencyKey: `held-${boundary}`,
-      executionMode: "worker-turn",
-      signal,
-    })
-    .catch((error: unknown) => ({ error }));
+  const creation = create(service, `held-${boundary}`, {
+    executionMode: "worker-turn",
+    signal,
+  }).catch((error: unknown) => ({ error }));
   return {
     node,
     entered,
@@ -76,7 +73,7 @@ function createHeldInstaller(
     invoke,
     destroy,
     creation,
-    async close() {
+    async [Symbol.asyncDispose]() {
       release.resolve();
       await creation;
       transfer.closeAll();
@@ -97,70 +94,56 @@ describe("node provisioning installer ownership", () => {
     "refuses installation after $change during $boundary",
     async ({ boundary, change }) => {
       const controller = new AbortController();
-      const fixture = createHeldInstaller(boundary, controller.signal);
+      await using fixture = createHeldInstaller(boundary, controller.signal);
       const { creation } = fixture;
-      try {
-        await Promise.race([fixture.entered.promise, creation]);
-        const record = support.testState.store.list()[0]!;
-        if (change === "cancellation") {
-          controller.abort(new DOMException("Provisioning cancelled", "AbortError"));
-        } else if (change === "destroy intent") {
-          await support.testState.store.requestDestroy({
-            environmentId: record.environmentId,
-            state: record.state,
-          });
-        } else {
-          await support.testState.store.transition({
-            environmentId: record.environmentId,
-            from: record.state,
-            to: "ready",
-            patch: {
-              ...support.readyPatch(record.environmentId),
-              leaseId: "replacement-lease",
-              nodeDeviceId: fixture.node.nodeId,
-              sharedHost: false,
-            },
-          });
-        }
-        const replacement = support.testState.store.get(record.environmentId);
-        fixture.release.resolve();
-        expect(await creation).toHaveProperty("error");
-        expect(fixture.grant).not.toHaveBeenCalled();
-        expect(fixture.invoke).not.toHaveBeenCalled();
-        if (change !== "replacement owner") {
-          expect(fixture.destroy).toHaveBeenCalledOnce();
-          expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
-        } else {
-          expect(fixture.destroy).not.toHaveBeenCalled();
-          expect(support.testState.store.get(record.environmentId)).toEqual(replacement);
-        }
-      } finally {
-        await fixture.close();
+      await Promise.race([fixture.entered.promise, creation]);
+      const { environmentId, state } = support.testState.store.list()[0]!;
+      if (change === "cancellation") {
+        controller.abort(new DOMException("Provisioning cancelled", "AbortError"));
+      } else if (change === "destroy intent") {
+        await support.testState.store.requestDestroy({ environmentId, state });
+      } else {
+        await support.testState.store.transition({
+          environmentId,
+          from: state,
+          to: "ready",
+          patch: {
+            ...support.readyPatch(environmentId),
+            leaseId: "replacement-lease",
+            nodeDeviceId: fixture.node.nodeId,
+            sharedHost: false,
+          },
+        });
+      }
+      const replacement = support.testState.store.get(environmentId);
+      fixture.release.resolve();
+      expect(await creation).toHaveProperty("error");
+      expect(fixture.grant).not.toHaveBeenCalled();
+      expect(fixture.invoke).not.toHaveBeenCalled();
+      if (change !== "replacement owner") {
+        expect(fixture.destroy).toHaveBeenCalledOnce();
+        expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
+      } else {
+        expect(fixture.destroy).not.toHaveBeenCalled();
+        expect(support.testState.store.get(environmentId)).toEqual(replacement);
       }
     },
   );
 
   it("drains an admitted installation before destroying its lease", async () => {
-    const fixture = createHeldInstaller("installation");
+    await using fixture = createHeldInstaller("installation");
     let settled = false;
     const creation = fixture.creation.finally(() => {
       settled = true;
     });
-    try {
-      await Promise.race([fixture.entered.promise, creation]);
-      const record = support.testState.store.list()[0]!;
-      await support.testState.store.requestDestroy({
-        environmentId: record.environmentId,
-        state: record.state,
-      });
-      expect(fixture.destroy).not.toHaveBeenCalled();
-      expect(settled).toBe(false);
-      fixture.release.resolve();
-      expect(await creation).toHaveProperty("error");
-      expect(fixture.destroy).toHaveBeenCalledOnce();
-      expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
-    } finally {
-      await fixture.close();
-    }
+    await Promise.race([fixture.entered.promise, creation]);
+    const { environmentId, state } = support.testState.store.list()[0]!;
+    await support.testState.store.requestDestroy({ environmentId, state });
+    expect(fixture.destroy).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    fixture.release.resolve();
+    expect(await creation).toHaveProperty("error");
+    expect(fixture.destroy).toHaveBeenCalledOnce();
+    expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
   });
 });

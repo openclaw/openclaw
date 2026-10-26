@@ -127,12 +127,8 @@ it.each(["diagnostic", "credential revocation"] as const)(
       expect(validateWorkerInferenceTerminalFrame(terminal)).toBe(true);
       expect(providerSignal.aborted).toBe(mutationKind !== "diagnostic");
       if (mutationKind === "diagnostic") {
-        const binding = {
-          runEpoch: request.runEpoch,
-          sessionId: request.sessionId,
-          runId: request.runId,
-          turnId: request.turnId,
-        };
+        const { runEpoch, runId, turnId } = request;
+        const binding = { runEpoch, sessionId: request.sessionId, runId, turnId };
         expect(frames).toEqual([
           inferenceFrame("event", { ...binding, seq: 1, event: delta }),
           inferenceFrame("terminal", { ...binding, seq: 2, outcome: DONE }),
