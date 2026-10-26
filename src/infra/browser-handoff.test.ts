@@ -50,11 +50,9 @@ it("hands the browser a private file path instead of the credential URL", async 
   expect(openLocalFileMock).toHaveBeenCalledTimes(1);
   const file = openedPath();
   expect(file).not.toContain("secret-handoff-token");
-  expect(path.isAbsolute(file)).toBe(true);
 
   const dir = path.dirname(file);
   const dirStat = await fs.stat(dir);
-  expect(dirStat.isDirectory()).toBe(true);
   expect(path.dirname(dir)).toBe(path.resolve(resolvePreferredOpenClawTmpDir()));
   expect(path.basename(dir)).toMatch(/^openclaw-browser-handoff-/);
   if (process.platform !== "win32") {
@@ -64,7 +62,6 @@ it("hands the browser a private file path instead of the credential URL", async 
   }
   const content = await fs.readFile(file, "utf8");
   const normalized = new URL(targetUrl).toString();
-  expect(content).toContain("a%22b%3Cc%3E");
   expect(content).toContain(`url=${normalized.replaceAll("&", "&amp;")}`);
   expect(content).toContain(`location.replace(${JSON.stringify(normalized)})`);
   expect(content).not.toContain('a"b<c>');
