@@ -24,6 +24,7 @@ import {
   renderChatThread,
   mountTestTranscript,
 } from "../test-helpers/chat-transcript-native.tsx";
+import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   contentRows,
@@ -136,7 +137,7 @@ it("reserves only the matching width and appearance, including text scale, width
   expect(reserve(2)).toBe(0);
 });
 
-it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap"])(
+it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "raw-output"])(
   "batches restorable footprints without persisting local disclosures (%s)",
   (control) => {
     const frames: FrameRequestCallback[] = [];
@@ -165,6 +166,10 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap"])(
       : `<details class="${control}"><summary>Details</summary>Synthetic details</details>`;
     container.innerHTML = `<div data-index="0" data-virtual-row-key="row">${content}</div>`;
     const row = container.firstElementChild as HTMLElement;
+    if (control === "raw-output") {
+      render(<RawOutputToggle text={"Synthetic raw output\n".repeat(40)} />, row);
+      flush();
+    }
     const host = { assistantAgentId: "main" };
     const target = { sessionKey: "agent:main:footprints" };
     const cache: ChatMessageCache = new Map();
@@ -217,8 +222,19 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap"])(
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
       expect(write).toHaveBeenCalledTimes(1);
       expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
-      const disclosure = requireElement(row, code ? ".code-block-wrapper" : "details");
-      if (code) {
+      const disclosure = requireElement(
+        row,
+        control === "raw-output"
+          ? ".chat-tool-card__raw-toggle"
+          : code
+            ? ".code-block-wrapper"
+            : "details",
+      );
+      if (control === "raw-output") {
+        disclosure.click();
+        flush();
+        expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+      } else if (code) {
         row.addEventListener("click", handleMarkdownCodeBlockClick);
         requireElement(row, `.${control}`).click();
       } else if (disclosure instanceof HTMLDetailsElement) {
@@ -229,7 +245,10 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap"])(
       frames.shift()!(0);
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
       expect(write).toHaveBeenCalledTimes(1);
-      if (disclosure instanceof HTMLDetailsElement) {
+      if (control === "raw-output") {
+        disclosure.click();
+        flush();
+      } else if (disclosure instanceof HTMLDetailsElement) {
         disclosure.open = false;
       }
       disclosure.classList.remove("is-expanded", "is-wrapped");
@@ -242,6 +261,9 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap"])(
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
       expect(write).toHaveBeenCalledTimes(1);
     } finally {
+      if (control === "raw-output") {
+        render(null, row);
+      }
       layout.disconnect();
       dispose();
     }

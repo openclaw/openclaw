@@ -130,7 +130,7 @@ export class TranscriptLayoutOwner {
               if (
                 !element.isConnected ||
                 element.matches(
-                  ":has(details[open], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
+                  ":has(details[open], .chat-tool-card__raw-toggle[aria-expanded='true'], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
                 )
               ) {
                 return [];
