@@ -11,13 +11,6 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { executeSystemAgentOperation as execute } from "./operations-execute.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
-vi.mock("../commands/doctor.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/doctor.js")>()),
-  doctorCommand: () => {
-    throw new Error("Doctor ran on the host event loop");
-  },
-}));
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("keeps the host responsive while a hosted Doctor process performs synchronous work", async () => {
@@ -29,9 +22,11 @@ it("keeps the host responsive while a hosted Doctor process performs synchronous
   const request = `fetch("http://127.0.0.1:${listener.claim.port}/doctor").then(async response => process.stdout.write(await response.text()));`;
   fs.writeFileSync(
     fixture,
-    `import { execFileSync } from "node:child_process";
-const response = execFileSync(process.execPath, ["-e", ${JSON.stringify(request)}], { encoding: "utf8" });
-process.stdout.write(JSON.stringify({ pid: process.pid, cwd: process.cwd(), response }) + "\\n");
+    `import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+assert.notEqual(process.pid, ${process.pid});
+assert.equal(process.cwd(), ${JSON.stringify(process.cwd())});
+process.stdout.write(execFileSync(process.execPath, ["-e", ${JSON.stringify(request)}]));
 process.stderr.write("doctor diagnostic 🦞\\n");
 `,
   );
@@ -42,11 +37,7 @@ process.stderr.write("doctor diagnostic 🦞\\n");
   const { runtime, lines } = createSystemAgentTestRuntime();
   try {
     await expect(execute({ kind: "doctor" }, runtime)).resolves.toEqual({ applied: false });
-    const report: { pid: number; cwd: string; response: string } = JSON.parse(
-      lines.find((line) => line.startsWith("{")) ?? "",
-    );
-    expect(report.pid).not.toBe(process.pid);
-    expect(report).toMatchObject({ cwd: process.cwd(), response: "host responded 🦞" });
+    expect(lines).toContain("host responded 🦞");
     expect(lines).toContain("doctor diagnostic 🦞");
   } finally {
     doctor.mockRestore();
@@ -60,7 +51,6 @@ it("reports hosted Doctor findings without initializing or repairing operator st
     {
       label: "hosted-doctor-readonly",
       layout: "split",
-      scenario: "external-service",
       // Compiled test workers can still resolve the checkout's source Plugin SDK.
       env: {
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(path.resolve("scripts/tsx.mjs")).href}`,
@@ -86,7 +76,6 @@ it("reports hosted Doctor findings without initializing or repairing operator st
         });
       const before = snapshot();
       const { runtime, lines } = createSystemAgentTestRuntime();
-      // Findings are expected (gateway.mode is unset); nonzero lint is not a repair.
       await expect(execute({ kind: "doctor" }, runtime)).rejects.toThrow("exit 1");
       expect(snapshot()).toEqual(before);
       expect(lines.join("\n")).toContain("core/doctor/gateway-config");
