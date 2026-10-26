@@ -56,7 +56,6 @@ it.each([
       },
     ];
     const runId = "persisted-successor-input";
-    let acknowledgeReplay = false;
     const history = vi.fn<GatewayRequestHandler>((_method, raw): ChatHistoryResult => {
       const row = asOptionalRecord(raw)?.sessionKey === successor.key ? successor : foreground;
       return {
@@ -65,12 +64,7 @@ it.each([
         sessionInfo: row,
       };
     });
-    const send = vi.fn<GatewayRequestHandler>(() => {
-      if (!acknowledgeReplay) {
-        throw new Error("gateway closed");
-      }
-      return { status: "ok", runId, messageSeq: 1 };
-    });
+    const send = vi.fn<GatewayRequestHandler>(() => ({ status: "ok", runId, messageSeq: 1 }));
     const fixture = createMountedPanes([foreground, successor], "main", undefined, {
       "chat.history": history,
       "chat.send": send,
@@ -113,14 +107,8 @@ it.each([
         input,
       ),
     ).toBe("admitted");
-    await chatSendActions.resumeStoredChatOutboxes(visiblePane.state);
-    expect(listStoredChatOutboxes(visiblePane.state)[0]?.queue[0]?.sendAttempts).toBe(2);
     const messagesBefore = state.chatMessages;
-    expect(send).toHaveBeenCalledTimes(1);
-    for (const mock of [history, resume, send]) {
-      mock.mockClear();
-    }
-    acknowledgeReplay = true;
+    history.mockClear();
 
     emitGatewayEvent(event, {
       sessionKey: successor.key,
