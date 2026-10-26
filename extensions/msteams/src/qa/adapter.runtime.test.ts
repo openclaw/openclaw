@@ -127,7 +127,6 @@ it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans 
 
   await adapter.sendInbound({
     ...channelMessage,
-    senderName: "Driver",
     text: "@openclaw qa ingress",
     threadId: "thread-root",
     replyToId: "quoted-parent",
@@ -180,7 +179,6 @@ it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans 
     await adapter.sendInbound({
       ...channelMessage,
       conversation: { id: `qa-${kind}`, kind },
-      text: "qa chat ingress",
     });
     expect(inboundActivity).toMatchObject({ conversation: { conversationType } });
     // Team/channel markers make a personal chat fail the Gateway's scope admission.
