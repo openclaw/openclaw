@@ -5312,7 +5312,6 @@
 ["src/gateway/server/hooks.terminal-target.test.ts","../../config/io.js","356e54841975612bf099a5ab6111da36f767a46ed69c9d86c78af03531b0d518",1]
 ["src/gateway/server/hooks.terminal-target.test.ts","../../cron/isolated-agent.js","a4d2831777c8802d2f8956f120ae1ecffaec9b3930b3ed43dc71097375d508f2",1]
 ["src/gateway/server/ws-connection.load-failure.test.ts","./ws-connection/message-handler.js","27adcf9609e3ed1b8b03ec3ffd94bb83b43d97b2b049de728a01c03d8a7a9b69",1]
-["src/gateway/server/ws-connection.serialized-json.test.ts","./ws-connection/message-handler.js","8ca6237b05f61c830879c3e75104785c3295127bc23ad8f773fd4cf8a43926fe",1]
 ["src/gateway/server/ws-connection/authenticated-request-dispatch.abort.test.ts","./authenticated-request-dispatch.server-methods.runtime.js","d4c6a45c8fbdcbcd719bbc62dd2cafee73f7b2b7d178c1c68797f8fd99f06537",1]
 ["src/gateway/server/ws-connection/authenticated-request-dispatch.connection-liveness.test.ts","./authenticated-request-dispatch.server-methods.runtime.js","07b19cf811645880667303e6b3a39a92c759ca7269bf153febc4fc68d9392c22",1]
 ["src/gateway/server/ws-connection/authenticated-request-dispatch.lifetime.test.ts","../../server-methods/gateway-personal-caller.js","15858b2ef9ee9b638470519c33a64b042bc0d95233241ba1bfed267b20c6fa7f",1]
