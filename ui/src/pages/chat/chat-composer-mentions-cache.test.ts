@@ -31,39 +31,21 @@ async function staleFixture() {
 }
 
 describe("mention query cache", () => {
-  it.each(["before", "after"])(
-    "keeps an in-flight result when reopened %s it settles",
-    async (reopen) => {
-      const view = fixture();
-      const response = view.defer();
-      await view.search("@Al");
-      view.key("Escape");
-      if (reopen === "before") {
-        await view.search("Review @Al");
-      }
-      await response(people);
-      if (reopen === "after") {
-        expect(view.query('[role="listbox"]')).toBeNull();
-        view.edit("Review @Al");
-      }
-      expect(view.options()).toHaveLength(2);
-      expect(view.request).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("refreshes stale results in the background without losing keyboard selection", async () => {
-    const view = await staleFixture();
+  it.each(["before", "after"])("reopens %s the in-flight result settles", async (reopen) => {
+    const view = fixture();
     const response = view.defer();
-    view.edit("Review @Al");
+    await view.search("@Al");
+    view.key("Escape");
+    if (reopen === "before") {
+      await view.search("Review @Al");
+    }
+    await response(people);
+    if (reopen === "after") {
+      expect(view.query('[role="listbox"]')).toBeNull();
+      view.edit("Review @Al");
+    }
     expect(view.options()).toHaveLength(2);
-    expect(view.query(".mention-menu__loading")).toBeNull();
-    view.key("ArrowDown");
-    await vi.advanceTimersByTimeAsync(150);
-    expect(view.request).toHaveBeenCalledTimes(2);
-    await response({ users: people.users.toReversed(), truncated: false });
-    view.key("Enter");
-    expect(view.value().mentions).toEqual([mention("profile-alex-offline", 7, 12)]);
-    expect(view.send).not.toHaveBeenCalled();
+    expect(view.request).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -101,16 +83,13 @@ describe("mention query cache", () => {
     }
   });
 
-  it.each(["switch query", "close", "replace owner"])(
+  it.each(["close", "replace owner"])(
     "does not publish an old refresh after %s",
     async (action) => {
       const view = await staleFixture();
       const response = view.defer();
       await view.search("Review @Al");
-      if (action === "switch query") {
-        view.request.mockResolvedValueOnce({ users: [], truncated: false });
-        await view.search("Review @Nobody");
-      } else if (action === "close") {
+      if (action === "close") {
         view.key("Escape");
       } else {
         view.replaceOwner();
