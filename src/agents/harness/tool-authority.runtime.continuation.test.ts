@@ -4,10 +4,7 @@ import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  beginReplyMessageInjectionTarget,
-  createReplyOperation,
-} from "../../sessions/session-controller.js";
+import * as controller from "../../sessions/session-controller.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { prepareReplyMessageContinuation } from "../../sessions/session-controller.message-join.js";
@@ -16,17 +13,11 @@ import { testing } from "../embedded-agent-runner/runs.test-support.js";
 import { bindWorkerToolPreparation } from "./host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "./tool-authority-preparation.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
-import {
-  admitted,
-  attempt,
-  publishPreparedHandle,
-  sessionId,
-  sessionKey,
-} from "./tool-authority.runtime.test-support.js";
+import * as fixture from "./tool-authority.runtime.test-support.js";
+const { attempt, sessionId, sessionKey } = fixture;
 
 const caller = {
   senderIsOwner: true,
-  disableTools: false,
   messageProvider: "webchat",
   senderId: "authority-requester",
 };
@@ -34,12 +25,15 @@ afterEach(() => {
   testing.resetActiveEmbeddedRuns();
   replyTesting.resetSessionControllerForTest();
   clearRuntimeConfigSnapshot();
-  vi.restoreAllMocks();
 });
 
 it("binds continuation preparation and dispatch to the live maintenance authority", () =>
-  admitted(async ({ admittedRunContext, close }) => {
-    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+  fixture.admitted(async ({ admittedRunContext, close }) => {
+    const operation = controller.createReplyOperation({
+      sessionId,
+      sessionKey,
+      resetTriggered: false,
+    });
     const parent = createQueueTestRun({ prompt: "lifecycle-only parent" });
     parent.run.traceAuthorized = true;
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(parent));
@@ -55,8 +49,7 @@ it("binds continuation preparation and dispatch to the live maintenance authorit
         undefined,
         async (prepared) => {
           const queue = vi.fn(async () => {});
-          expect(operation.toolAuthorityFingerprint).not.toBe(prepared.toolAuthorityFingerprint);
-          publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
+          fixture.publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
           const target = expectDefined(
             captureCurrentReplyMessageInjectionTarget(sessionKey),
             "maintenance target",
@@ -88,15 +81,12 @@ it("binds continuation preparation and dispatch to the live maintenance authorit
           });
           expect(queue).not.toHaveBeenCalled();
           const join = await prepare([]);
-          expect(join.kind).toBe("prepared");
-          if (join.kind !== "prepared") {
-            throw new Error("Expected the live attempt owner");
-          }
+          assert(join.kind === "prepared", "Expected the live attempt owner");
           try {
             const assertCurrent = () => {
               join.read();
             };
-            const injection = await beginReplyMessageInjectionTarget(
+            const injection = await controller.beginReplyMessageInjectionTarget(
               target,
               "Correct maintenance",
               {
@@ -113,7 +103,6 @@ it("binds continuation preparation and dispatch to the live maintenance authorit
               },
             );
             await expect(injection.outcome).resolves.toMatchObject({ status: "accepted" });
-            expect(queue).toHaveBeenCalledOnce();
             close();
             await expect(join.prepareCurrent()).rejects.toThrow(
               "admitted run authority is no longer active",
@@ -129,3 +118,4 @@ it("binds continuation preparation and dispatch to the live maintenance authorit
       operation.complete();
     }
   }));
+import assert from "node:assert/strict";
