@@ -164,6 +164,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   // Scroll the complete line into view; native caret scrolling may show only its glyphs.
+  await textarea.hover();
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
@@ -174,6 +175,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
+  await textarea.hover();
   await page.mouse.wheel(0, -1000);
   await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
   const first = await measure();
