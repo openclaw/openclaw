@@ -332,8 +332,10 @@ describe("diagnostic-events", () => {
     root.child = child;
     Object.freeze(root);
     const received = collectEvents(onPublic);
-    emit({ ...modelStartedEvent(), extra: root });
-    emit({ ...modelStartedEvent(), extra: child });
+    const parentEvent = { ...modelStartedEvent(), extra: root };
+    const childEvent = { ...modelStartedEvent(), extra: child };
+    emit(parentEvent);
+    emit(childEvent);
     leaf.value = "changed";
     await drain();
 
