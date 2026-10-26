@@ -479,7 +479,9 @@ it("dispatches registerFull commands when a multi-agent Gateway has no defaults.
       true,
     );
     const attached = getPluginRuntimeLoadContext(root);
-    if (!attached) throw new Error("expected the admitting Gateway load context");
+    if (!attached) {
+      throw new Error("expected the admitting Gateway load context");
+    }
     setPluginRuntimeLoadContext(root, { ...attached, workspaceDir: undefined });
     bindPluginRegistryGatewayOwner(root, { current: () => root });
     let inbound: PluginRegistry | undefined;
@@ -494,7 +496,9 @@ it("dispatches registerFull commands when a multi-agent Gateway has no defaults.
       expect(dispatched?.reply?.text).toBe("full-only-command");
       expect(dispatched?.shouldContinue).toBe(false);
     } finally {
-      if (inbound && inbound !== root) await disposePluginRegistryInstances(inbound);
+      if (inbound && inbound !== root) {
+        await disposePluginRegistryInstances(inbound);
+      }
       await disposePluginRegistryInstances(root);
     }
   });
