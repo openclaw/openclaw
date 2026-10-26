@@ -263,6 +263,22 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
     case "ui/src/pages/cron/cron-page.tsx":
+    case "ui/src/pages/cron/cron-page-state.ts":
+    case "ui/src/pages/cron/cron-page-presentation.ts":
+    case "ui/src/pages/cron/delivery-conversations.ts":
+    case "ui/src/pages/cron/event-editor.ts":
+    case "ui/src/pages/cron/event-source.ts":
+    case "ui/src/pages/cron/route-model.ts":
+    case "ui/src/pages/cron/run-transcript.tsx":
+    case "ui/src/pages/cron/suggestions.ts":
+    case "ui/src/pages/cron/view-props.ts":
+    case "ui/src/pages/cron/view-controls.tsx":
+    case "ui/src/pages/cron/view-job-status.tsx":
+    case "ui/src/pages/cron/view-jobs-filter.tsx":
+    case "ui/src/pages/cron/view-list.tsx":
+    case "ui/src/pages/cron/view-runs.tsx":
+    case "ui/src/pages/cron/view.tsx":
+      // These modules already load on first visit; detail/editor views stay lazy.
       return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":

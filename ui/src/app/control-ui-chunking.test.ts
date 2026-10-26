@@ -101,6 +101,9 @@ describe("Control UI build chunking", () => {
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content-solid.tsx");
     const devices = modulePath("../pages/devices/devices-page.tsx");
+    const cron = modulePath("../pages/cron/cron-page.tsx");
+    const cronView = modulePath("../pages/cron/view.tsx");
+    const cronDetail = modulePath("../pages/cron/view-detail.tsx");
     const talk = modulePath("../pages/talk/talk-page.tsx");
     const skeleton = modulePath("../components/solid/panel-loading-skeleton.tsx");
     const skeletonStyle = `${modulePath("../styles/panel-loading-skeleton.css")}?inline`;
@@ -121,7 +124,7 @@ describe("Control UI build chunking", () => {
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const talk = () => import(${JSON.stringify(talk)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const cron = () => import(${JSON.stringify(cron)}); export const talk = () => import(${JSON.stringify(talk)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
       ],
       [
         chat,
@@ -133,6 +136,15 @@ describe("Control UI build chunking", () => {
       ],
       [optional, `import ${JSON.stringify(optionalStyle)}; export const panel = "optional-panel";`],
       [devices, 'export const page = "devices-page";'],
+      [
+        cron,
+        `import { view } from ${JSON.stringify(cronView)}; export { detail } from ${JSON.stringify(cronView)}; export function render() { return view(); }`,
+      ],
+      [
+        cronView,
+        `export function view() { return "overview"; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+      ],
+      [cronDetail, 'export const detail = "lazy-editor";'],
       [talk, `export { skeleton } from ${JSON.stringify(skeleton)};`],
       [skeleton, `import css from ${JSON.stringify(skeletonStyle)}; export const skeleton = css;`],
       [skeletonStyle, ".skeleton-fixture { color: purple; }"],
@@ -243,6 +255,14 @@ describe("Control UI build chunking", () => {
     expect(staticImports(pluginChunk.fileName)).toContain(actionChunk.fileName);
     expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
     const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
+    const cronChunk = chunks.find((chunk) => cron in chunk.modules)!;
+    const cronDetailChunk = chunks.find((chunk) => cronDetail in chunk.modules)!;
+    expect(cronView in cronChunk.modules).toBe(true);
+    expect(cronDetailChunk.fileName).not.toBe(cronChunk.fileName);
+    expect(staticImports(cronChunk.fileName)).not.toContain(cronDetailChunk.fileName);
+    expect(cronChunk.dynamicImports).toContain(cronDetailChunk.fileName);
+    expect(staticImports(entryChunk.fileName)).not.toContain(cronChunk.fileName);
+    expect(staticImports(chatChunk.fileName)).not.toContain(cronChunk.fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(actionChunk.fileName);
     const mutationChunk = chunks.find((chunk) => mutations in chunk.modules)!;
     expect(staticImports(entryChunk.fileName)).not.toContain(mutationChunk.fileName);
