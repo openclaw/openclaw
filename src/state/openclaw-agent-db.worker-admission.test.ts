@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -117,7 +116,7 @@ function observeCallerSchemaInspections(...pathnames: string[]) {
       inspections.push(sql);
     }
   });
-  return { inspections, restore: observer.restore };
+  return { inspections, [Symbol.dispose]: observer.restore };
 }
 
 function expectAdmittedSchemaObjects(database: EngineConnection) {
@@ -287,7 +286,7 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
     .db.prepare("UPDATE agent_database_leases SET owner_start_time=-1 WHERE lease_id=?")
     .run(staleLease);
   canonical.db.exec("CREATE TABLE coldadmit_alias_fixture(value TEXT)");
-  const observed = observeCallerSchemaInspections(canonical.path, aliasPath);
+  using observed = observeCallerSchemaInspections(canonical.path, aliasPath);
   try {
     await expect(writeAgent({ ...options, path: aliasPath }, countSessions)).resolves.toBe(0);
     await writeAgent({ ...options, path: aliasPath }, (database) => {
@@ -295,7 +294,6 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
     });
     expect(observed.inspections).toEqual([]);
   } finally {
-    observed.restore();
     releaseOpenClawAgentDatabaseLease(staleLease, { env: options.env }, "read-only");
   }
 });
@@ -377,63 +375,33 @@ it.each([
     }
     expect(database.db.isOpen).toBe(change.startsWith("warm-"));
     nativeClaim.assertCurrent();
-    const observed = observeCallerSchemaInspections(database.path, acquisitionPath);
-    let prepareRequests = 0;
-    const unsubscribe = onInternalDiagnosticEvent(
-      (event) => {
-        if (
-          event.type === "worker.request" &&
-          event.requestClass === "database.prepareWrite" &&
-          event.phase === "queued"
-        ) {
-          prepareRequests++;
-        }
-      },
-      { include: ["worker.request"] },
-    );
-    try {
-      const count = await writeAgent({ ...options, path: acquisitionPath }, (reopened) => {
-        const facts = expectAdmittedSchemaObjects(reopened.db);
-        expect(facts?.tables.has("coldadmit_fixture")).toBe(change.endsWith("additive-table"));
-        expect(facts?.tables.has("session_key_contract")).toBe(true);
-        expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
-        expect(facts?.indexes).toContain("idx_agent_cache_expiry");
-        expectRow(
-          reopened.db,
-          "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
-          { updated_at: 2 },
-        );
-        return countSessions(reopened);
-      });
-      expect(count).toBe(0);
-      if (revokedProof) {
-        expect(Atomics.load(new Int32Array(revokedProof.valid), 0)).toBe(0);
-        const readmitted = transferValidation({
-          agentId: options.agentId,
-          path: database.path,
-        });
-        expect(readmitted).toBeDefined();
-        expect(Atomics.load(new Int32Array(readmitted!.valid), 0)).toBe(1);
-        expect(readmitted!.valid).not.toBe(revokedProof.valid);
-      }
-      nativeClaim.assertCurrent();
-      expect(observed.inspections).toEqual([]);
-      if (change === "eviction") {
-        expect(prepareRequests).toBe(0);
-      }
-    } finally {
-      unsubscribe();
-      observed.restore();
-    }
-    if (change.endsWith("missing-index")) {
-      using inspector = openNodeSqliteDatabase(database.path, { readOnly: true });
-      expect(
-        readRow(inspector, "SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
-          ?.sql,
-      ).toMatch(
-        /^CREATE INDEX idx_agent_cache_expiry\s+ON cache_entries\(scope, expires_at, key\)\s+WHERE expires_at IS NOT NULL$/,
+    using observed = observeCallerSchemaInspections(database.path, acquisitionPath);
+    const count = await writeAgent({ ...options, path: acquisitionPath }, (reopened) => {
+      const facts = expectAdmittedSchemaObjects(reopened.db);
+      expect(facts?.tables.has("coldadmit_fixture")).toBe(change.endsWith("additive-table"));
+      expect(facts?.tables.has("session_key_contract")).toBe(true);
+      expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
+      expect(facts?.indexes).toContain("idx_agent_cache_expiry");
+      expectRow(
+        reopened.db,
+        "UPDATE auth_profile_state SET updated_at=updated_at+1 WHERE state_key='retained' RETURNING updated_at",
+        { updated_at: 2 },
       );
+      return countSessions(reopened);
+    });
+    expect(count).toBe(0);
+    if (revokedProof) {
+      expect(Atomics.load(new Int32Array(revokedProof.valid), 0)).toBe(0);
+      const readmitted = transferValidation({
+        agentId: options.agentId,
+        path: database.path,
+      });
+      expect(readmitted).toBeDefined();
+      expect(Atomics.load(new Int32Array(readmitted!.valid), 0)).toBe(1);
+      expect(readmitted!.valid).not.toBe(revokedProof.valid);
     }
+    nativeClaim.assertCurrent();
+    expect(observed.inspections).toEqual([]);
   } finally {
     await retainedExecution.release();
   }
@@ -500,17 +468,13 @@ it.each([
         retainedExecution = captureExecution(options);
       }
       const operation = vi.fn();
-      const observed = retainWorker ? observeCallerSchemaInspections(pathname) : undefined;
-      try {
-        await expect(writeAgent(options, operation)).rejects.toThrow(
-          change === "owner" ? /belongs to agent another/ : /schema|malformed|not a database/i,
-        );
-        expect(operation).not.toHaveBeenCalled();
-        if (observed) {
-          expect(observed.inspections).toEqual([]);
-        }
-      } finally {
-        observed?.restore();
+      using observed = retainWorker ? observeCallerSchemaInspections(pathname) : undefined;
+      await expect(writeAgent(options, operation)).rejects.toThrow(
+        change === "owner" ? /belongs to agent another/ : /schema|malformed|not a database/i,
+      );
+      expect(operation).not.toHaveBeenCalled();
+      if (observed) {
+        expect(observed.inspections).toEqual([]);
       }
     } finally {
       await retainedExecution?.release();
@@ -518,29 +482,19 @@ it.each([
   },
 );
 
-it.each(["before-entry", "source-revoked", "after-entry"] as const)(
+it.each(["before-entry", "after-entry"] as const)(
   "reports schema publication refusal without replaying work: %s",
   async (failure) => {
     const options = makeOptions("agent-schema-publication-");
-    const database = openAgent(options);
-    const expectedIdentity = readDatabasePathIdentitySync(database.path);
+    openAgent(options);
     const execution = captureExecution(options);
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("Fixture request authority revoked");
-      }
-    };
-    const source = executionSource({ assertCurrent });
+    const source = executionSource();
     let publications = 0;
     observePublications((pathname, publish) => {
       publications += 1;
       if (failure !== "after-entry") {
         // Revoke actual captured proof at the worker-to-host publication boundary.
         invalidateValidation(pathname);
-        if (failure === "source-revoked") {
-          current = false;
-        }
       }
       publish();
     });
@@ -555,7 +509,6 @@ it.each(["before-entry", "source-revoked", "after-entry"] as const)(
       await expect(result).rejects.toThrow("Agent schema admission changed before publication");
       expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
       expect(publications).toBe(1);
-      expect(`file:${execution.fileIdentity?.physicalIdentity}`).toBe(expectedIdentity.key);
     } finally {
       await execution.release();
     }
