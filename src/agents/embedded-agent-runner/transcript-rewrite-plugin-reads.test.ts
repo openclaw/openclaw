@@ -19,8 +19,17 @@ import {
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 const createPersistedRewriteTarget = useTranscriptRewriteTargets(afterEach);
 
-function createToolResultReplacement(toolName: string, text: string, timestamp: number) {
-  return asAppendMessage(makeTextToolResult("call_1", toolName, text, false, timestamp));
+function toolResult(text: string) {
+  return asAppendMessage(makeTextToolResult("call_1", "read", text, false, 3));
+}
+
+function rewriteTool(sessionManager: SessionManager, entryId: string | undefined, text = "short") {
+  return rewriteTranscriptEntriesInSessionManager({
+    sessionManager,
+    replacements: [
+      { entryId: expectDefined(entryId, "tool result entry id"), message: toolResult(text) },
+    ],
+  });
 }
 
 function createRewriteHistory() {
@@ -31,7 +40,7 @@ function createRewriteHistory() {
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       timestamp: 2,
     }),
-    asAppendMessage(createToolResultReplacement("read", "large original result", 3)),
+    toolResult("large original result"),
     asAppendMessage({ role: "assistant", content: createTextContent("summary"), timestamp: 4 }),
   ];
 }
@@ -58,15 +67,7 @@ describe("plugin transcript reads after rewrites", () => {
     };
     const manager = SessionManager.open(target, directory);
     const [userId, callId, toolId, tailId] = appendSessionMessages(manager, createRewriteHistory());
-    await rewriteTranscriptEntriesInSessionManager({
-      sessionManager: manager,
-      replacements: [
-        {
-          entryId: expectDefined(toolId, "tool result entry id"),
-          message: createToolResultReplacement("read", "short", 3),
-        },
-      ],
-    });
+    await rewriteTool(manager, toolId);
     const [toolCopyId, tailCopyId] = manager
       .getBranch()
       .slice(2)
@@ -84,15 +85,7 @@ describe("plugin transcript reads after rewrites", () => {
 
     // A reloaded copy must match its committed row so a later rewrite can chain from it.
     const reopened = SessionManager.open(target, directory);
-    await rewriteTranscriptEntriesInSessionManager({
-      sessionManager: reopened,
-      replacements: [
-        {
-          entryId: expectDefined(toolCopyId, "tool result copy id"),
-          message: createToolResultReplacement("read", "shorter", 3),
-        },
-      ],
-    });
+    await rewriteTool(reopened, toolCopyId, "shorter");
     const [toolSecondCopyId, tailSecondCopyId, plainCopyId] = reopened
       .getBranch()
       .slice(2)
@@ -120,15 +113,7 @@ describe("plugin transcript reads after rewrites", () => {
       throw new Error(`expected visible delta page, got ${drained.kind}`);
     }
     // The rewrite re-appends the cursor's anchor; the reset then closes its window.
-    await rewriteTranscriptEntriesInSessionManager({
-      sessionManager: manager,
-      replacements: [
-        {
-          entryId: expectDefined(toolId, "tool result entry id"),
-          message: createToolResultReplacement("read", "short", 3),
-        },
-      ],
-    });
+    await rewriteTool(manager, toolId);
     await resetSessionEntryLifecycle({
       agentId: target.agentId,
       storePath: target.storePath,

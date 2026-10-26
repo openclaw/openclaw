@@ -1,5 +1,3 @@
-// Provider thinking replay repair tests cover durable transcript cleanup after
-// Anthropic/Bedrock proves a signed thinking block invalid.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
@@ -41,32 +39,16 @@ function branchAssistantContents(sessionManager: SessionManager): unknown[] {
     .map((message) => message.content);
 }
 
+function createSession(assistant: AppendMessage) {
+  const sessionManager = SessionManager.inMemory();
+  sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
+  sessionManager.appendMessage(assistant);
+  return sessionManager;
+}
+
 describe("repairRejectedThinkingReplayInSessionManager", () => {
-  it("strips thinking blocks from active-branch assistant messages and preserves visible content", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(rejectedThinkingAssistant("visible answer"));
-    sessionManager.appendMessage(
-      asAppendMessage({ role: "user", content: "second", timestamp: 3 }),
-    );
-
-    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
-
-    expect(result).toMatchObject({ repaired: true });
-    expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-    ]);
-    expect(branchAssistantContents(sessionManager)).toEqual([
-      [{ type: "text", text: "visible answer" }],
-    ]);
-  });
-
   it("keeps thinking-only assistant turns as omitted-reasoning placeholders", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(rejectedThinkingAssistant());
+    const sessionManager = createSession(rejectedThinkingAssistant());
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
@@ -77,9 +59,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
   });
 
   it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(rejectedThinkingAssistant("first answer"));
+    const sessionManager = createSession(rejectedThinkingAssistant("first answer"));
     sessionManager.appendMessage(
       asAppendMessage({ role: "user", content: "follow-up", timestamp: 3 }),
     );
@@ -101,9 +81,9 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
   });
 
   it("does not rewrite sessions without active-branch thinking blocks", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("visible answer", 2)));
+    const sessionManager = createSession(
+      asAppendMessage(timestampedTextAssistant("visible answer", 2)),
+    );
 
     const beforeLeafId = sessionManager.getLeafId();
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
