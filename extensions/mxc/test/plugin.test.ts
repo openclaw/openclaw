@@ -73,7 +73,7 @@ function createApi(options: Partial<plugin.OpenClawPluginApi> = {}) {
   return {
     original,
     cleanup,
-    register() {
+    register: () => {
       registerMxcPlugin(api);
       return readBackend();
     },

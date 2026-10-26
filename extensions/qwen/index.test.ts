@@ -86,7 +86,12 @@ describe("qwen provider plugin", () => {
     expect(provider.aliases).toBeUndefined();
     expect(provider.envVars).toEqual(["QWEN_TOKEN_PLAN_API_KEY"]);
 
-    const runtimeChoiceIds = provider.auth.map((method) => method.wizard?.choiceId).toSorted();
+    const runtimeChoiceIds = provider.auth
+      .map(({ wizard }) => {
+        assert(wizard?.choiceId, "Qwen auth method missing wizard choice");
+        return wizard.choiceId;
+      })
+      .toSorted();
     expect(runtimeChoiceIds).toEqual(["qwen-token-plan", "qwen-token-plan-cn"]);
     expect(
       manifest.providerAuthChoices
