@@ -67,8 +67,15 @@ it("escapes SSML text and attributes and sends the XML content type", async () =
     voice: `en-US-JennyNeural" xml:lang="evil`,
     lang: `en-US" bad="1`,
   });
-  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-  expect(new Headers(init.headers).get("content-type")).toBe("application/ssml+xml");
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
+  expect(init.method).toBe("POST");
+  expect(Object.fromEntries(new Headers(init.headers))).toMatchObject({
+    "ocp-apim-subscription-key": "fixture-value",
+    "content-type": "application/ssml+xml",
+    "x-microsoft-outputformat": "audio-24khz-48kbitrate-mono-mp3",
+  });
+  expect(init.signal).toBeInstanceOf(AbortSignal);
   expect(init.body).toBe(
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US&quot; bad=&quot;1"><voice name="en-US-JennyNeural&quot; xml:lang=&quot;evil">Tom &amp; "Jerry" &lt;tag&gt;</voice></speak>`,
   );

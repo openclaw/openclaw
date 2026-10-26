@@ -77,18 +77,27 @@ it.each(families)("routes discovered and saved $api models", async (family) => {
       },
     },
   };
+  const discoveryUrls: string[] = [];
   const catalog = await buildOpencodeGoLiveProviderConfig({
     discoveryApiKey: "synthetic-key",
-    fetchGuard: async ({ url }) => ({
-      finalUrl: url,
-      release: async () => {},
-      response: Response.json(
-        url === "https://models.opencode.ai/api.json"
-          ? metadata
-          : { data: [{ id, object: "model" }] },
-      ),
-    }),
+    fetchGuard: async ({ url }) => {
+      discoveryUrls.push(url);
+      assert(
+        url === "https://models.opencode.ai/api.json" || url === root + "/v1/models",
+        `Unexpected discovery URL: ${url}`,
+      );
+      return {
+        finalUrl: url,
+        release: async () => {},
+        response: Response.json(
+          url === "https://models.opencode.ai/api.json"
+            ? metadata
+            : { data: [{ id, object: "model" }] },
+        ),
+      };
+    },
   });
+  expect(discoveryUrls).toContain(root + "/v1/models");
   const row = catalog.models.find((model) => model.id === id);
   expect(row).toMatchObject({ id, api, baseUrl });
   assert(row && row.api && row.contextWindow && row.maxTokens, "Incomplete model");

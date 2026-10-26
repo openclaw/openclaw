@@ -41,7 +41,10 @@ it.each([
       throw new Error("Expected a custom run-failure notice");
     }
     expect(report.selectReport(undefined)).toMatchObject({
+      customType: "run-failed-before-reply",
       content,
+      display: true,
+      excludeFromContext: true,
       details: { runId: "failed-run", error: diagnostic },
     });
     return { ok: true, value: undefined };

@@ -72,5 +72,10 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
         : "This Codex conversation was detached or changed before its message could run.";
     await expect(queued).resolves.toEqual(reply(bindingState === "unchanged" ? "done" : failure));
     expect(resume).toHaveBeenCalledTimes(bindingState === "unchanged" ? 2 : 1);
+    expect(resume).toHaveBeenCalledWith({
+      ...nodeSession,
+      sessionKey: "node-session",
+      prompt: "continue",
+    });
   },
 );

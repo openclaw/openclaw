@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createComponent, flush } from "solid-js";
-import { beforeEach, expect, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -43,6 +43,14 @@ function mountPage(
     switch (method) {
       case "environments.list":
         return { environments: [] };
+      case "projects.list":
+        return {
+          projects: [
+            { id: "app", displayName: "App", repoRoot: "/projects/app", source: "registered" },
+          ],
+        };
+      case "worktrees.list":
+        return { worktrees: [] };
       case "environments.prepare":
         return { environmentId: "build-app", preparationKey: "build-key", reused: false };
       case "environments.destroy":
@@ -124,6 +132,7 @@ export function setupSnapshotTests() {
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     await i18n.setLocale("en");
   });
+  afterEach(() => vi.useRealTimers());
   return mountPage;
 }
 
