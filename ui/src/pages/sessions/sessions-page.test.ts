@@ -73,6 +73,16 @@ function publishRows(managed: ReturnType<typeof createManagedSessions>, rows: Ga
     error: null,
   });
 }
+const emptyDeletion = () => ({ deleted: [], errors: [], preservedWorktrees: [] });
+async function chooseAdvanced(
+  page: Awaited<ReturnType<typeof createRenderedPage>>,
+  row: GatewaySessionRow,
+  action: string,
+) {
+  const menu = await openRowMenu(page, row);
+  await openSubmenu(menu, "Advanced");
+  await selectMenuValue(menu, action);
+}
 async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
   let serverRows = rows;
   const deleteRequest = vi.fn(
@@ -205,9 +215,7 @@ describe("sessions page lifecycle", () => {
     const { page, sessions } = await mountMutation({ deleteMany: vi.fn(() => pending.promise) });
     page.result = sessionsResult([target], 1);
     try {
-      const menu = await openRowMenu(page, target);
-      await openSubmenu(menu, "Advanced");
-      await selectMenuValue(menu, "delete");
+      await chooseAdvanced(page, target, "delete");
       const actions = await waitForConfirmDialogActions();
       expect((await getRenderedModalDialog(document.body)).dialog.open).toBe(true);
       expect(page.querySelector("openclaw-session-menu")).toBeNull();
@@ -224,7 +232,7 @@ describe("sessions page lifecycle", () => {
       expect(page.textContent).not.toContain("Working…");
       expect(page.textContent).toContain("Command fixture");
     } finally {
-      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      pending.resolve(emptyDeletion());
       await fixture.cleanup();
     }
   });
@@ -266,9 +274,7 @@ describe("sessions page lifecycle", () => {
     const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     try {
-      const menu = await openRowMenu(page, target);
-      await openSubmenu(menu, "Advanced");
-      await selectMenuValue(menu, "delete");
+      await chooseAdvanced(page, target, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
       expect(page.textContent).toContain("Working…");
       context.agentSelection.state.scopeId = "reviewer";
@@ -279,19 +285,17 @@ describe("sessions page lifecycle", () => {
         key: "agent:reviewer:new-scope-command",
       });
       page.result = sessionsResult([nextTarget], 2);
-      const nextMenu = await openRowMenu(page, nextTarget);
-      await openSubmenu(nextMenu, "Advanced");
-      await selectMenuValue(nextMenu, "delete");
+      await chooseAdvanced(page, nextTarget, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
       expect(page.textContent).toContain("Working…");
-      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      next.resolve(emptyDeletion());
       await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
       pending.reject(new Error("Old agent deletion failed"));
       await page.updateComplete;
       expect(page.textContent).not.toContain("Old agent deletion failed");
     } finally {
-      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      pending.resolve(emptyDeletion());
+      next.resolve(emptyDeletion());
     }
   });
 
@@ -908,16 +912,6 @@ describe("sessions page plugin actions", () => {
     return { page, row, run, publish, openMenu, actionSelector };
   }
 
-  it("keeps the open menu mounted while a refreshed row updates its actions", async () => {
-    const { page, row, publish, openMenu } = await createPluginSessionMenuPage();
-    const menu = await openMenu();
-    publish([{ ...row, label: "Latest" }]);
-    await page.updateComplete;
-    await menu.updateComplete;
-    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
-    expect(menu.pluginActions[0]?.label).toBe("Review Latest");
-  });
-
   it("keeps the menu mounted and masks stale destinations while a reopened lookup resolves", async () => {
     type Work = Awaited<ReturnType<typeof sessionMenuWork.fetchSessionMenuWork>>;
     const earlier = createDeferred<Work>();
@@ -964,8 +958,13 @@ describe("sessions page plugin actions", () => {
     const { page, row, run, publish, openMenu, actionSelector } =
       await createPluginSessionMenuPage();
     let menu = await openMenu();
-    const current = { ...row, label: "Latest" };
+    publish([{ ...row, label: "Refreshed" }]);
+    await page.updateComplete;
+    await menu.updateComplete;
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(menu.pluginActions[0]?.label).toBe("Review Refreshed");
 
+    const current = { ...row, label: "Latest" };
     publish([current]);
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
