@@ -35,34 +35,20 @@ const egress: ConfiguredModelEgress = {
   hostEnv: { HTTPS_PROXY: "http://openclaw:proxy-password-fixture@127.0.0.1:43210" },
   caBundle: "public-ca-fixture\n",
 };
-const options = {
-  config: {},
-  binary: "crabbox-fixture",
-  id: "cbx_owned",
-  model: "example/example-model",
-  argv: ["node", "test-app.js"],
-  timeoutMs: 60_000,
-};
 function result(stdout = "", code = 0): SpawnResult {
   return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
 }
-async function run(timeout = String(options.timeoutMs / 1000)) {
+async function run(timeout = "60") {
   const program = new Command().exitOverride();
-  registerCrabboxModelRunCommand({ program, config: options.config });
+  registerCrabboxModelRunCommand({ program, config: {} });
   await program.parseAsync(
     [
-      "crabbox",
-      "run",
-      "--binary",
-      options.binary,
-      "--id",
-      options.id,
-      "--model",
-      options.model,
+      ..."crabbox run --binary crabbox-fixture --id cbx_owned --model example/example-model".split(
+        " ",
+      ),
       "--timeout",
       timeout,
-      "--",
-      ...options.argv,
+      ..."-- node test-app.js".split(" "),
     ],
     { from: "user" },
   );
@@ -95,7 +81,7 @@ it("upgrades an outdated executable before capability and credential use", async
   await fs.mkdir(path.dirname(binary), { recursive: true });
   await fs.writeFile(binary, CRABBOX_MIN_VERSION);
   mocks.version.mockImplementation(async ([candidate]: string[]) =>
-    result(candidate === options.binary ? "0.76.0" : CRABBOX_MIN_VERSION),
+    result(candidate === "crabbox-fixture" ? "0.76.0" : CRABBOX_MIN_VERSION),
   );
   nativeResult(result("done"));
 
@@ -106,10 +92,6 @@ it("upgrades an outdated executable before capability and credential use", async
 });
 
 it("delegates one native job with a host-only proxy grant and sentinel-only app environment", async () => {
-  const output = {
-    ...result("API_TOKEN = computeToken()\n", 7),
-    stderr: "sk-abc123456789012345678",
-  };
   let remoteInput = "";
   mocks.run.mockImplementation(async (argv: string[], params: CommandOptions) => {
     if (argv.includes("--help")) {
@@ -129,7 +111,7 @@ it("delegates one native job with a host-only proxy grant and sentinel-only app 
     expect(argv.join(" ")).not.toContain("proxy-password-fixture");
     remoteInput = String(params.input);
     expect(remoteInput).not.toContain("proxy-password-fixture");
-    return output;
+    return { ...result("API_TOKEN = computeToken()\n", 7), stderr: "sk-abc123456789012345678" };
   });
   await run();
   expect(process.exitCode).toBe(7);
