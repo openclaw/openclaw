@@ -1,10 +1,14 @@
 import { AsyncContext } from "../shared/async-context.js";
 
+/** Why a run's plugin runtime is being refreshed: its own plugins tool, or a reload from outside. */
+export type PluginRuntimeRefreshSource = "tool" | "reload";
+
 type Refresh = {
   active: boolean;
   holds: number;
   consumer?: () => boolean;
   requested: boolean;
+  source?: PluginRuntimeRefreshSource;
 };
 
 const refreshScope = new AsyncContext<Refresh>(Symbol.for("openclaw.agentPluginRuntimeRefresh"));
@@ -18,13 +22,17 @@ export function captureAgentPluginRuntimeRefresh() {
         owner.consumer = isCurrent;
       }
     },
-    request: (): boolean => {
+    request: (source: PluginRuntimeRefreshSource = "tool"): boolean => {
       if (!owner?.active || owner.consumer?.() !== true) {
         return false;
       }
       owner.requested = true;
+      // The run's own tool request wins: the continuation should verify that change.
+      owner.source = owner.source === "tool" ? "tool" : source;
       return true;
     },
+    /** Why the pending refresh was requested, while the run still owns it. */
+    requestSource: () => (owner?.active ? owner.source : undefined),
     isRequested: () => owner?.active === true && owner.requested,
     /** True when captured inside an active run's refresh scope. */
     isOwned: () => owner?.active === true,
@@ -65,6 +73,7 @@ export function createAgentPluginRuntimeRefresh() {
       owner.active = false;
       owner.consumer = undefined;
       owner.requested = false;
+      owner.source = undefined;
     }
   };
   return {

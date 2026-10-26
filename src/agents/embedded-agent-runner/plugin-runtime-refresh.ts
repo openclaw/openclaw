@@ -16,6 +16,7 @@ import {
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
+  type PluginRuntimeRefreshSource,
 } from "../plugin-runtime-refresh.js";
 import {
   copyAttemptDeliveryState,
@@ -34,6 +35,13 @@ import { toNormalizedUsage } from "./usage-accumulator.js";
 export type EmbeddedPluginRuntimeRefresh = ReturnType<
   typeof createEmbeddedAgentPluginRuntimeRefresh
 >;
+
+// A reload from outside the run is not a change the model asked for, so it is not asked to verify one.
+function continuationPrompt(source: PluginRuntimeRefreshSource | undefined): string {
+  return source === "reload"
+    ? "A plugin was reloaded while you were working. Continue the current task from the transcript; do not repeat completed actions or the original user request."
+    : "The plugin runtime has been refreshed. Continue the current task from the transcript using the updated tools. Verify the requested change; do not repeat completed actions or the original user request.";
+}
 
 /** The embedded runner owns continuation data; tool controls never import its graph. */
 export function createEmbeddedAgentPluginRuntimeRefresh(
@@ -94,8 +102,7 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
       modelThinkingCapability: undefined,
       modelFallbackAvailability: undefined,
       suppressNextUserMessagePersistence: true,
-      prompt:
-        "The plugin runtime has been refreshed. Continue the current task from the transcript using the updated tools. Verify the requested change; do not repeat completed actions or the original user request.",
+      prompt: continuationPrompt(captureAgentPluginRuntimeRefresh().requestSource()),
     };
     return {
       meta: {

@@ -82,4 +82,20 @@ describe("plugin turn handover", () => {
     expect(pending).toBe(true);
     expect(instance.retainedWorkCount).toBe(1);
   });
+
+  it("marks a handover refresh as a reload unless the run's own tool also asked", () => {
+    const { registry, instance } = createRegistryWithInstance("swap", true);
+    const refresh = createAgentPluginRuntimeRefresh();
+    const sources = refresh.run(() => {
+      const control = captureAgentPluginRuntimeRefresh();
+      control.bindConsumer(() => true);
+      retainRuntimePluginWork([registry], "unknown", captureTurnHandoverRequest([registry]));
+      instance.reserveReplacement();
+      const afterReload = control.requestSource();
+      control.request();
+      return [afterReload, control.requestSource()];
+    });
+
+    expect(sources).toEqual(["reload", "tool"]);
+  });
 });

@@ -40,7 +40,7 @@ export function captureTurnHandoverRequest(
       log.info(`plugin ${pluginId} reload requested; whole-run hold yields to the reload`);
       return "yield";
     }
-    const requested = refresh.request();
+    const requested = refresh.request("reload");
     log.info(
       requested
         ? `plugin ${pluginId} reload requested; turn will continue on the new generation at its next step boundary`
