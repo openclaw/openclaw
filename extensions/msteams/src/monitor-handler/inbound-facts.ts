@@ -12,6 +12,7 @@ import {
   extractMSTeamsQuoteInfo,
   htmlToPlainText,
   normalizeMSTeamsConversationId,
+  normalizeMSTeamsMentionTags,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
@@ -19,16 +20,20 @@ import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 
-function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+function extractTextFromHtmlAttachments(
+  attachments: MSTeamsAttachmentLike[],
+  activity: MSTeamsTurnContext["activity"],
+): string {
   for (const attachment of attachments) {
     const raw = extractHtmlFromAttachment(attachment);
     if (!raw) {
       continue;
     }
     const text = htmlToPlainText(
-      raw
-        .replace(/<at[^>]*>.*?<\/at>/gis, " ")
-        .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
+      normalizeMSTeamsMentionTags(raw, activity, { preserveHtml: true }).replace(
+        /<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis,
+        "$2 $1",
+      ),
     );
     if (text) {
       return text;
@@ -49,10 +54,10 @@ export async function prepareMSTeamsDebounceEntry(params: {
     ? activity.attachments
     : [];
   const rawText = activity.text?.trim() ?? "";
-  // HTML mentions are stripped before decoding so literally typed <at> tags survive.
+  // Normalize mention markup before decoding so literally typed <at> tags survive.
   const text = rawText
-    ? stripMSTeamsMentionTags(rawText)
-    : extractTextFromHtmlAttachments(attachments) ||
+    ? normalizeMSTeamsMentionTags(rawText, activity)
+    : extractTextFromHtmlAttachments(attachments, activity) ||
       stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
   const replyToId = activity.replyToId;
