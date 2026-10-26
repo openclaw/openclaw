@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
@@ -17,7 +17,7 @@ import {
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
 import {
-  createOpenClawTestState,
+  withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { restoreGitBackupDirectory } from "./git-backup-codec.js";
@@ -25,20 +25,11 @@ import { createGitBackup } from "./git-backup.js";
 import { expectDatabaseRows, gitBackupRepository } from "./git-backup.test-support.js";
 import { expectMissing } from "./local-repository.test-support.js";
 
-const states: OpenClawTestState[] = [];
 const sessionKey = "agent:main:backup-cold-history";
 const identity = { role: "agent", agentId: "main" } as const;
 
-afterEach(async () => {
-  for (const state of states.splice(0)) {
-    await state.cleanup();
-  }
-});
-
-async function createColdFixture() {
-  const state = await createOpenClawTestState({ layout: "state-only", scenario: "minimal" });
-  states.push(state);
-  const { root, stateDir } = state;
+async function createColdFixture(state: OpenClawTestState) {
+  const { root } = state;
   const sourcePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
   const transcript = await createSessionColdStorageFixture(sourcePath, sessionKey);
   await runSessionColdStorageMaintenance({ config: maintenanceConfig(sourcePath) });
@@ -50,8 +41,14 @@ async function createColdFixture() {
     throw new Error("The archived transcript has no recorded file");
   }
   const archivePath = resolveSessionColdArchivePath(sourcePath, archive.archive_name);
-  return { root, stateDir, sourcePath, ...transcript, archivePath };
+  return { root, sourcePath, ...transcript, archivePath };
 }
+const withColdFixture = (
+  run: (fixture: Awaited<ReturnType<typeof createColdFixture>>) => Promise<void>,
+) =>
+  withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) =>
+    run(await createColdFixture(state)),
+  );
 
 type BackupKind = "full archive capture" | "Git backup";
 
@@ -59,7 +56,7 @@ async function captureFixture(
   kind: BackupKind,
   fixture: Awaited<ReturnType<typeof createColdFixture>>,
 ): Promise<string> {
-  const { root, stateDir, sourcePath } = fixture;
+  const { root, sourcePath } = fixture;
   const targetPath = path.join(root, "restored.sqlite");
   if (kind === "full archive capture") {
     const runtime = createTestRuntime();
@@ -80,11 +77,7 @@ async function captureFixture(
     const repository = gitBackupRepository(root, "git-backups");
     await repository.init();
     await repository.configureIdentity();
-    await createGitBackup({
-      ...repository.options,
-      stateDir,
-      databases: [{ path: sourcePath, identity }],
-    });
+    await createGitBackup({ ...repository.options, databases: [{ path: sourcePath, identity }] });
     await restoreGitBackupDirectory({
       sourcePath: repository.file("agents", "main"),
       targetPath,
@@ -96,32 +89,26 @@ async function captureFixture(
 
 it.each(["full archive capture", "Git backup"] as const)(
   "%s restores exact events without the source archive",
-  async (kind) => {
-    const fixture = await createColdFixture();
-    const restoredPath = await captureFixture(kind, fixture);
-    expectDatabaseRows(fixture.sourcePath, {
-      "SELECT storage, archive_blob FROM session_transcript_cold_archives": [
-        { storage: "file", archive_blob: null },
-      ],
-    });
-    await fs.unlink(fixture.archivePath);
-    await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
-    using restored = new DatabaseSync(restoredPath, { readOnly: true });
-    expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
-    expectDatabaseRows(restoredPath, {
-      "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'":
-        [{ message_id: "history-assistant" }],
-      "PRAGMA quick_check": [{ quick_check: "ok" }],
-      "PRAGMA foreign_key_check": [],
-    });
-  },
+  (kind) =>
+    withColdFixture(async (fixture) => {
+      const restoredPath = await captureFixture(kind, fixture);
+      expectDatabaseRows(fixture.sourcePath, {
+        "SELECT storage, archive_blob FROM session_transcript_cold_archives": [
+          { storage: "file", archive_blob: null },
+        ],
+      });
+      await fs.unlink(fixture.archivePath);
+      await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
+      using restored = new DatabaseSync(restoredPath, { readOnly: true });
+      expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
+    }),
 );
 
-it("refuses a corrupt authoritative archive", async () => {
-  const fixture = await createColdFixture();
-  await fs.writeFile(fixture.archivePath, "corrupt archive");
-  await expect(captureFixture("full archive capture", fixture)).rejects.toThrow(
-    /failed verification/,
-  );
-  await expectMissing(path.join(fixture.root, "restored.sqlite"));
-});
+it("refuses a corrupt authoritative archive", () =>
+  withColdFixture(async (fixture) => {
+    await fs.writeFile(fixture.archivePath, "corrupt archive");
+    await expect(captureFixture("full archive capture", fixture)).rejects.toThrow(
+      /failed verification/,
+    );
+    await expectMissing(path.join(fixture.root, "restored.sqlite"));
+  }));

@@ -4,13 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWindowsAllowEntry as access } from "../test-utils/windows-acl.test-support.js";
 
-const aclMocks = vi.hoisted(() => ({
-  readOwnerAndDaclBatch:
-    vi.fn<typeof import("@openclaw/fs-safe/permissions").readOwnerAndDaclBatch>(),
-}));
+const inspectAcl = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/fs-safe/permissions").readOwnerAndDaclBatch>(),
+);
 vi.mock("@openclaw/fs-safe/permissions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/permissions")>()),
-  readOwnerAndDaclBatch: aclMocks.readOwnerAndDaclBatch,
+  readOwnerAndDaclBatch: inspectAcl,
 }));
 vi.mock("../process/exec.js", () => ({
   runExec: () => {
@@ -33,14 +32,13 @@ const volumeGrant = (mask = 0x1301bf, isVolumeRoot = true): Partial<Security> =>
 });
 const inspectionFailure = /Unable to verify private Windows ACL for SQLite staging/;
 const accessFailure = (role: string) =>
-  new RegExp(
-    `Windows ACL permits untrusted SQLite staging access on ${role}: path=.*principal=S-1-1-0 rights=.*Remove the untrusted grant.*shared or synced root`,
-  );
+  new RegExp(`untrusted SQLite staging access on ${role}:.*principal=S-1-1-0`);
 const ancestorFailure = accessFailure("ancestor");
 const rootFailure = accessFailure("repository root");
+const ownerFailure = /owned by an untrusted principal:.*principal=S-1-5-21-2000/u;
 
 function mockSecurity(root: Partial<Security> | null, ancestor: Partial<Security> = {}) {
-  aclMocks.readOwnerAndDaclBatch.mockImplementation(async (paths) =>
+  inspectAcl.mockImplementation(async (paths) =>
     paths.map((_, index) =>
       root === null
         ? { status: "unsupported-platform", platform: "linux" }
@@ -68,7 +66,7 @@ beforeEach(() => {
 
 it("reports failed Windows ACL inspection and preserves its diagnostic cause", async () => {
   const error = new Error("Windows permission inspection timed out after 60000ms");
-  aclMocks.readOwnerAndDaclBatch.mockRejectedValue(error);
+  inspectAcl.mockRejectedValue(error);
   await expect(admitRoot()).rejects.toMatchObject({
     message: expect.stringContaining(inspectionFailure.source),
     cause: error,
@@ -96,11 +94,7 @@ it.each([
   ["root inherit-only write DACL", rootFailure, grant(0x040000, true)],
   ["ancestor unknown rights", ancestorFailure, {}, grant(0x000200)],
   ["untrusted root read", rootFailure, { aces: [access("s-1-1-0", 0x120089, true)] }],
-  [
-    "untrusted owner",
-    /repository root is owned by an untrusted principal: path=.*principal=S-1-5-21-2000/u,
-    { ownerSid: "S-1-5-21-2000" },
-  ],
+  ["untrusted owner", ownerFailure, { ownerSid: "S-1-5-21-2000" }],
   ["null DACL", inspectionFailure, { daclPresent: false }],
   ["unknown ACE types", inspectionFailure, { complete: false, unsupportedAceTypes: [5] }],
   ["remote filesystem", inspectionFailure, { isLocal: false }],

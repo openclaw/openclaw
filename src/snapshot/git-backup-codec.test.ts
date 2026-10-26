@@ -28,7 +28,6 @@ const restore = (
 it("restores historical agent data without migration and rejects incompatible version manifests", async () => {
   // Latest stable 2026.10.2 persisted schema 24; pin the shipped data contract.
   const version = 24;
-  const expected = { value: 9_223_372_036_854_775_806n, bytes: "000102FF" };
   withDatabase(sourcePath, (source) => {
     ensureOpenClawAgentSchema(source, "main", sourcePath, version);
     // Deployed schema-24 backups used this older index order (2026.10.2).
@@ -37,20 +36,15 @@ it("restores historical agent data without migration and rejects incompatible ve
         CREATE INDEX idx_agent_trajectory_runtime_run
           ON trajectory_runtime_events(session_id, run_id, seq)
           WHERE run_id IS NOT NULL;
+        UPDATE schema_meta SET app_version = 'historical-app';
       `);
-    source.exec("CREATE TABLE compatibility_probe (value INTEGER, bytes BLOB) STRICT");
-    source
-      .prepare("INSERT INTO compatibility_probe VALUES (?, ?)")
-      .run(expected.value, Buffer.from([0, 1, 2, 255]));
   });
   const identity = { role: "agent", agentId: "main" } as const;
   const manifest = await dump(identity);
   await restore(identity);
   expectDatabaseRows(targetPath, {
     "PRAGMA user_version": [{ user_version: version }],
-    "SELECT CAST(value AS TEXT) AS value, hex(bytes) AS bytes FROM compatibility_probe": [
-      { ...expected, value: expected.value.toString() },
-    ],
+    "SELECT app_version FROM schema_meta": [{ app_version: "historical-app" }],
     "PRAGMA integrity_check": [{ integrity_check: "ok" }],
   });
 
@@ -70,16 +64,16 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     ["\0leading", "text\0suffix", "text\0suffix"],
     ["\nline", "", ""],
     [" space", null, null],
-    ["shared\0left", 9_007_199_254_740_993n, { $int: "9007199254740993" }],
-    ["shared\0right", Buffer.from([0, 255]), { $hex: "00ff" }],
+    ["shared\0left", 9_223_372_036_854_775_806n, { $int: "9223372036854775806" }],
+    ["shared\0right", Buffer.from([0, 1, 2, 255]), { $hex: "000102ff" }],
     ["雪🦀\0尾", 1.25, 1.25],
   ] satisfies [string, SQLInputValue, unknown][];
   const byteQuery =
     'SELECT hex("key") AS key, typeof(value) AS type, hex(value) AS bytes FROM text_values ORDER BY "key"';
   createGlobalDatabase(sourcePath);
   const expectedBytes = withDatabase(sourcePath, (source) => {
-    source.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
     source.exec(`
+      CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT;
       CREATE TABLE quoted_ddl (
         "double;quote" TEXT PRIMARY KEY DEFAULT 'semi;''colon',
         [bracket;quote] TEXT /* ; not a statement boundary */ DEFAULT 'bracket',
@@ -95,9 +89,7 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
       INSERT INTO trigger_values VALUES (1);
     `);
     const insert = source.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
-    for (const [key, value] of rows.toReversed()) {
-      insert.run(key, value);
-    }
+    rows.toReversed().forEach(([key, value]) => insert.run(key, value));
     return source.prepare(byteQuery).all();
   });
 
@@ -109,9 +101,7 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
     .map((line) => JSON.parse(line));
   expect(records).toEqual(rows.map(([key, , value]) => ({ key, value })));
   await restore({ role: "global" });
-  withDatabase(targetPath, (database) => {
-    database.exec("INSERT INTO trigger_values VALUES (1)");
-  });
+  withDatabase(targetPath, (database) => database.exec("INSERT INTO trigger_values VALUES (1)"));
   expectDatabaseRows(targetPath, {
     [byteQuery]: expectedBytes,
     "SELECT * FROM quoted_ddl": [

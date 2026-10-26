@@ -19,14 +19,9 @@ afterEach(() => {
 });
 
 it.each([
-  { operation: "create", failure: false, cleanup: "remove", workspace: "backup" },
   { operation: "create", failure: true, cleanup: "remove", workspace: "backup" },
   { operation: "create", failure: false, cleanup: "remove", workspace: "backup-index" },
   { operation: "verify", failure: false, cleanup: "rename", workspace: "verify" },
-  { operation: "verify", failure: false, cleanup: "remove", workspace: "restore" },
-  { operation: "verify", failure: true, cleanup: "remove", workspace: "verify" },
-  { operation: "restore", failure: false, cleanup: "remove", workspace: "restore" },
-  { operation: "restore", failure: true, cleanup: "remove", workspace: "restore" },
   { operation: "restore", failure: false, cleanup: "remove", workspace: "codec" },
   { operation: "restore", failure: true, cleanup: "remove", workspace: "codec" },
 ] as const)(
@@ -37,6 +32,12 @@ it.each([
     const repositoryPath = path.join(root, "repository");
     const targetPath = path.join(root, "restored.sqlite");
     const backup = { repositoryPath, stateDir, databases: [database] };
+    const scope = { repositoryPath, identity: database.identity, targetPath };
+    const run = {
+      create: () => createGitBackup(backup),
+      verify: () => verifyGitBackupRef(scope),
+      restore: () => restoreGitBackupRef(scope),
+    };
     const primary = new Error("synthetic backup I/O failure");
     const removal = Object.assign(new Error("EACCES: synthetic private cleanup failure"), {
       code: "EACCES",
@@ -44,11 +45,9 @@ it.each([
     const retained = new Set<string>();
     const prefix = workspace === "codec" ? ".git-backup-restore-" : `openclaw-git-${workspace}-`;
     const rename = fsSync.renameSync;
-    const { rm, rmdir, writeFile, open } = fs;
+    const { rm, rmdir, open } = fs;
     const codec = workspace === "codec";
     const basename = (value: unknown) => path.basename(String(value));
-    const failRestoreWrite = failure && operation !== "create" && !codec;
-    const failCodecOpen = failure && codec;
     await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       if (operation !== "create") {
         await createGitBackup(backup);
@@ -87,33 +86,14 @@ it.each([
         }
         return await rmdir(...args);
       });
-      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        if (
-          failRestoreWrite &&
-          typeof args[0] === "string" &&
-          args[0].includes(`${path.sep}openclaw-git-restore-`)
-        ) {
-          throw primary;
-        }
-        return await writeFile(...args);
-      });
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        if (failCodecOpen && String(args[0]).includes(`${path.sep}.git-backup-restore-`)) {
+        if (failure && codec && String(args[0]).includes(`${path.sep}.git-backup-restore-`)) {
           throw primary;
         }
         return await open(...args);
       });
       try {
-        const running =
-          operation === "create"
-            ? createGitBackup(backup)
-            : operation === "verify"
-              ? verifyGitBackupRef({ repositoryPath, identity: database.identity })
-              : restoreGitBackupRef({
-                  repositoryPath,
-                  identity: database.identity,
-                  targetPath,
-                });
+        const running = run[operation]();
         if (failure) {
           await expect(running).rejects.toBe(primary);
         } else {

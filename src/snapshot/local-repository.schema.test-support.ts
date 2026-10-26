@@ -58,15 +58,11 @@ export function createAgentDatabase(databasePath: string, agentId: string): void
 }
 
 export function seedStateLease(databasePath: string): void {
-  withDatabase(databasePath, (database) => {
-    database
-      .prepare(
-        `INSERT INTO state_leases
+  withDatabase(databasePath, (database) =>
+    database.exec(`INSERT INTO state_leases
           (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
-          VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)`,
-      )
-      .run(STATE_LEASE_MARKER);
-  });
+          VALUES ('${STATE_LEASE_MARKER}', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)`),
+  );
 }
 
 export function readGlobalRows(file: string) {

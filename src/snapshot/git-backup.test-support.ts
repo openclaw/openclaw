@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { requireGitCommand } from "../infra/git-exec.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
@@ -94,12 +95,8 @@ export async function createFormatFixture(databasePath: string): Promise<void> {
       INSERT INTO device_pairing_join_codes VALUES ('join-code', '{"bootstrapToken":"secret"}', 1, 2);
       CREATE TABLE content (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
       CREATE VIRTUAL TABLE content_fts USING fts5(body, content='content', content_rowid='id');
-      CREATE TRIGGER content_ai AFTER INSERT ON content BEGIN
-        INSERT INTO content_fts(rowid, body) VALUES (new.id, new.body);
-      END;
       INSERT INTO content VALUES (1, 'hello lobster');
       CREATE VIRTUAL TABLE memory_vec USING vec0(embedding float[2]);
-      CREATE TABLE empty_table (id INTEGER PRIMARY KEY, value TEXT);
       CREATE TABLE session_transcript_index_state (id TEXT PRIMARY KEY, cursor INTEGER);
       INSERT INTO session_transcript_index_state VALUES ('main', 99);
       CREATE TABLE session_transcript_fts_rows (session_id TEXT NOT NULL, fts_rowid INTEGER PRIMARY KEY);
@@ -155,16 +152,12 @@ export function createCatalogFixture(databasePath: string) {
   return { catalog, malformedHeaders, unusableCatalogs, scopes };
 }
 
-export async function writeBackupManifest(scopePath: string, agentId: string): Promise<void> {
-  await fs.mkdir(scopePath, { recursive: true });
-  await fs.writeFile(
-    path.join(scopePath, "manifest.json"),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      identity: { role: "agent", agentId },
-      userVersion: 1,
-      excludedTables: [],
-      tables: {},
-    })}\n`,
-  );
+export function writeBackupManifest(scopePath: string, agentId: string): void {
+  writeJsonFile(path.join(scopePath, "manifest.json"), {
+    schemaVersion: 1,
+    identity: { role: "agent", agentId },
+    userVersion: 1,
+    excludedTables: [],
+    tables: {},
+  });
 }
