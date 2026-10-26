@@ -664,7 +664,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         } else if (entry.kind === "partial") {
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
         } else {
-          throw new Error(`Unsupported test event: ${entry.kind}`);
+          throw new Error("Unsupported test event");
         }
       }
       if (mockedDispatchError) {
