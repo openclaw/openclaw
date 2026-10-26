@@ -45,3 +45,21 @@ export function normalizeExplicitSessionKey(sessionKey: string, ctx: MsgContext)
   }
   return normalized;
 }
+
+/**
+ * Compares two session keys through the same channel-aware canonicalization used for session
+ * identity. Channel plugins may hand the SDK thread ids that keep their original casing
+ * (`normalizeThreadId: (id) => id`), while dispatch keeps the source key and initialization
+ * canonicalizes it; an exact string comparison then misses keys that denote the same session.
+ */
+export function sessionKeysMatchCanonically(
+  left: string | undefined,
+  right: string | undefined,
+  ctx: MsgContext,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    normalizeExplicitSessionKey(left, ctx) === normalizeExplicitSessionKey(right, ctx),
+  );
+}

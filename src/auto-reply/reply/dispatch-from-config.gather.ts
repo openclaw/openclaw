@@ -11,7 +11,7 @@ import type {
   PreparedModelRuntimeLease,
   PreparedReplyDispatchRuntime,
 } from "../../agents/prepared-model-runtime.types.js";
-import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
+import { sessionKeysMatchCanonically } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
   toPluginInboundClaimPair,
@@ -423,11 +423,7 @@ export async function gatherDispatchRequest(
   let preparedSessionBinding = toSessionBinding(sessionStoreEntry);
   let preparedOperationSessionBinding = toSessionBinding(operationSessionStoreEntry);
   const sessionKeysMatch = (left?: string, right?: string) =>
-    Boolean(
-      left &&
-      right &&
-      normalizeExplicitSessionKey(left, ctx) === normalizeExplicitSessionKey(right, ctx),
-    );
+    sessionKeysMatchCanonically(left, right, ctx);
   const notePreparedSession = (binding: ReplySessionBinding) => {
     if (sessionKeysMatch(binding.sessionKey, sessionStoreEntry.sessionKey)) {
       preparedSessionBinding = binding;

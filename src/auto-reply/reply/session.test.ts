@@ -56,6 +56,8 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { lifecycleAdmissionByOperation } from "../../sessions/session-controller.storage.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import {
@@ -847,6 +849,113 @@ describe("initSessionState thread forking", () => {
       warn.mockRestore();
     },
   );
+
+  it("acknowledges the fork transition when the admitting operation key differs only in case", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await makeCaseDir("openclaw-thread-session-mixed-case-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:rocketchat:channel:c1";
+    // A channel that preserves thread-id casing dispatches the source key, while
+    // initialization folds it to the canonical (lowercase) identity.
+    const sourceSessionKey = "agent:main:rocketchat:channel:c1:thread:8p7pGpezBfxCxMg7p";
+    const canonicalSessionKey = "agent:main:rocketchat:channel:c1:thread:8p7pgpezbfxcxmg7p";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-session",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const afterTransition = vi.fn(async () => {});
+    const replyOperation = { key: sourceSessionKey } as unknown as NonNullable<
+      Parameters<typeof initSessionState>[0]["replyOperation"]
+    >;
+    lifecycleAdmissionByOperation.set(replyOperation, { afterTransition } as never);
+
+    try {
+      const result = await initSessionState({
+        ctx: {
+          Body: "Thread reply",
+          SessionKey: sourceSessionKey,
+          ParentSessionKey: parentSessionKey,
+        },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        replyOperation,
+      });
+
+      expect(result.sessionKey).toBe(canonicalSessionKey);
+      expect(result.sessionEntry.forkedFromParent).toBe(true);
+      // Skipping this acknowledgement leaves the admitting reader on the superseded
+      // incarnation, so the first turn fails with SessionEntryChangedDuringReadError.
+      expect(afterTransition).toHaveBeenCalledOnce();
+      const transition = afterTransition.mock.calls[0]?.[0] as
+        | { previous?: { sessionId?: string }; current?: { sessionId?: string } }
+        | undefined;
+      expect(transition?.current?.sessionId).toBe(result.sessionEntry.sessionId);
+      expect(transition?.previous?.sessionId).not.toBe(result.sessionEntry.sessionId);
+    } finally {
+      lifecycleAdmissionByOperation.delete(replyOperation);
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps the admitted reader current across a mixed-case thread fork (real admission)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await makeCaseDir("openclaw-thread-mixed-case-admission-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:rocketchat:channel:c1";
+    const sourceSessionKey = "agent:main:rocketchat:channel:c1:thread:8p7pGpezBfxCxMg7p";
+    const canonicalSessionKey = "agent:main:rocketchat:channel:c1:thread:8p7pgpezbfxcxmg7p";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-session",
+        updatedAt: Date.now(),
+      },
+      // Existing thread row that was never forked: initialization still forks it.
+      [sourceSessionKey]: {
+        sessionId: "preseed-thread-session",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const admission = await admitReplyTurn({
+      agentId: "main",
+      sessionKey: sourceSessionKey,
+      sessionId: "preseed-thread-session",
+      expectedSessionId: "preseed-thread-session",
+      storePath,
+      kind: "visible",
+    });
+    expect(admission.status).toBe("owned");
+    if (admission.status !== "owned") {
+      throw new Error(`expected an owned admission, received ${admission.status}`);
+    }
+
+    try {
+      const result = await initSessionState({
+        ctx: {
+          Body: "Thread reply",
+          SessionKey: sourceSessionKey,
+          ParentSessionKey: parentSessionKey,
+        },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        replyOperation: admission.operation,
+      });
+      expect(result.sessionKey).toBe(canonicalSessionKey);
+      expect(result.sessionEntry.forkedFromParent).toBe(true);
+
+      // The reader was admitted on the parent incarnation; after the fork it must observe
+      // the committed child. On the base it stays stale and this read throws
+      // SessionEntryChangedDuringReadError, which surfaces to the user as
+      // "Embedded agent failed before reply: Session entry changed during read".
+      const reader = getReplyOperationSessionReader(admission.operation);
+      expect(reader).toBeDefined();
+      const read = await reader!.readEntry(() => {});
+      expect(read.entry.sessionId).toBe(result.sessionEntry.sessionId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
