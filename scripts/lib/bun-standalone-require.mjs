@@ -158,8 +158,9 @@ ${
 Bun.plugin({ name: "openclaw-image-exports", setup(build) {
   build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
     requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
-    // A plain export record prevents CommonJS from unwrapping only the default.
-    return { exports: { ...requireImageModule(filename) }, loader: "object" };
+    // Passing require's interop marker back to the loader unwraps only the default.
+    const { __esModule: _interop, ...exports } = requireImageModule(filename);
+    return { exports, loader: "object" };
   });
 }});`
     : ""
