@@ -4,17 +4,19 @@ import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-boots
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../app/navigation-surface.ts";
 import { RouteElements, type RouteElementEvent } from "../app/route-elements.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./app-topbar-solid.tsx";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime-solid.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 
-afterEach(() => {
-  cleanupSolid();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
+
+const queryWithin =
+  (root: ParentNode) =>
+  <T extends Element = HTMLElement>(selector: string) =>
+    root.querySelector<T>(selector);
 
 describe("Solid shell chrome", () => {
   it("updates the topbar's environment and drawer state while retaining its action target", async () => {
@@ -45,8 +47,8 @@ describe("Solid shell chrome", () => {
         prop:onOpenPalette={palette}
       />
     ));
-    const find = (selector: string) => view.container.querySelector<HTMLElement>(selector);
-    const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    const find = queryWithin(view.container);
+    const topbar = find<SolidBridgeElement<object>>("openclaw-app-topbar")!;
     const update = async (write: () => void) => {
       write();
       flush();
@@ -81,9 +83,8 @@ describe("Solid shell chrome", () => {
     status.focus();
     expect(document.activeElement).toBe(status);
     expect(
-      view.container.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>(
-        ".mobile-connection-status openclaw-tooltip",
-      )?.content,
+      find<HTMLElementTagNameMap["openclaw-tooltip"]>(".mobile-connection-status openclaw-tooltip")
+        ?.content,
     ).toBe("Unavailable?[redacted-credential]");
 
     await update(() => setGatewayStatus({ kind: "connected" }));
@@ -124,24 +125,21 @@ describe("Solid shell chrome", () => {
     view.container.addEventListener("openclaw-route-element", (event) =>
       elements.register(event as RouteElementEvent),
     );
+    const find = queryWithin(view.container);
+    const registered = () => elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION);
     for (let mount = 0; mount < 2; mount += 1) {
       setVisible(true);
       flush();
-      const topbar =
-        view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+      const topbar = find<SolidBridgeElement<object>>("openclaw-app-topbar")!;
       await topbar.updateComplete;
-      const toggle = view.container.querySelector<HTMLButtonElement>(".topbar-nav-toggle")!;
-      await waitForSolid(() =>
-        expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
-      );
+      const toggle = find<HTMLButtonElement>(".topbar-nav-toggle")!;
+      await waitForSolid(() => expect(registered()).toEqual([toggle]));
       setVisible(false);
       flush();
       // Reconnect the retired node so isConnected filtering cannot hide a leaked registration.
       view.container.append(toggle);
       try {
-        await waitForSolid(() =>
-          expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
-        );
+        await waitForSolid(() => expect(registered()).toEqual([]));
       } finally {
         toggle.remove();
       }
@@ -159,12 +157,9 @@ describe("Solid shell chrome", () => {
         canGoForward={false}
       />
     ));
-    const backButton = view.container.querySelector<HTMLButtonElement>(
-      ".macos-titlebar-controls__back",
-    )!;
-    expect(
-      view.container.querySelector<HTMLElement>("openclaw-macos-titlebar-controls")?.style.display,
-    ).toBe("contents");
+    const find = queryWithin(view.container);
+    const backButton = find<HTMLButtonElement>(".macos-titlebar-controls__back")!;
+    expect(find("openclaw-macos-titlebar-controls")?.style.display).toBe("contents");
     expect(backButton.disabled).toBe(true);
     expect(view.container.querySelectorAll("button")).toHaveLength(2);
     setCanGoBack(true);
@@ -175,11 +170,7 @@ describe("Solid shell chrome", () => {
     setHistoryOnly(true);
     flush();
     expect(view.container.querySelectorAll("button")).toHaveLength(2);
-    expect(view.container.querySelector<HTMLElement>(".macos-titlebar-controls__back")).toBe(
-      backButton,
-    );
-    expect(
-      view.container.querySelector<HTMLElement>(".macos-titlebar-controls__forward"),
-    ).not.toBeNull();
+    expect(find(".macos-titlebar-controls__back")).toBe(backButton);
+    expect(find(".macos-titlebar-controls__forward")).not.toBeNull();
   });
 });

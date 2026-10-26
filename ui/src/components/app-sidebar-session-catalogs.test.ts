@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
-  SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -26,18 +25,13 @@ const session = (
   canArchive: false,
   ...overrides,
 });
-const host = (sessions: SessionCatalogSession[]): SessionCatalogHost => ({
-  hostId: "gateway:codex",
-  label: "Local Codex",
-  kind: "gateway",
-  connected: true,
-  sessions,
-});
-const catalog = (hosts: SessionCatalogHost[]): SessionCatalog => ({
+const catalog = (sessions: SessionCatalogSession[]): SessionCatalog => ({
   id: "codex",
   label: "Codex",
   capabilities: { continueSession: true, archive: false },
-  hosts,
+  hosts: [
+    { hostId: "gateway:codex", label: "Local Codex", kind: "gateway", connected: true, sessions },
+  ],
 });
 
 describe("formatSidebarTimestamp", () => {
@@ -63,20 +57,18 @@ describe("formatSidebarTimestamp", () => {
 
 it("preserves adopted naming while distinguishing repository and workspace context", () => {
   const source = catalog([
-    host([
-      session("project", {
-        name: "Renamed upstream",
-        sessionKey: "agent:main:adopted-project",
-        cwd: "/work/openclaw",
-        gitBranch: "feature/hovercard",
-      }),
-      session("colored", { color: "cyan" }),
-      session("workspace", { cwd: "/work/release-notes" }),
-      session("pull-request", {
-        cwd: "/work/pull-request",
-        pullRequest: { numbers: [125068], state: "open" },
-      }),
-    ]),
+    session("project", {
+      name: "Renamed upstream",
+      sessionKey: "agent:main:adopted-project",
+      cwd: "/work/openclaw",
+      gitBranch: "feature/hovercard",
+    }),
+    session("colored", { color: "cyan" }),
+    session("workspace", { cwd: "/work/release-notes" }),
+    session("pull-request", {
+      cwd: "/work/pull-request",
+      pullRequest: { numbers: [125068], state: "open" },
+    }),
   ]);
   type LiveRow = Parameters<typeof findCatalogSessionHovercardRow>[0]["liveRow"];
   const find = (id: string, liveRow?: LiveRow) =>
@@ -123,7 +115,7 @@ it.each([
   ["all", ["native", "adopted"]],
 ] as const)("applies shared %s visibility to adopted rows only", (statusFilter, expected) => {
   const row: GatewaySessionRow = { key: "agent:main:adopted", kind: "direct", snoozedUntil: 200 };
-  const local = host([session("native"), session("adopted", { sessionKey: row.key })]);
+  const local = catalog([session("native"), session("adopted", { sessionKey: row.key })]);
   const visibility = projectSidebarArchiveVisibility({
     sessionData: {
       childSessionRowsByParent: {},
@@ -138,12 +130,7 @@ it.each([
     deletionState: () => undefined,
     archiveVisibility: () => undefined,
   });
-  const projected = projectSidebarSessionCatalogs(
-    [catalog([local])],
-    null,
-    [row],
-    visibility.isSessionHidden,
-  );
+  const projected = projectSidebarSessionCatalogs([local], null, [row], visibility.isSessionHidden);
   expect(
     projected.flatMap((entry) =>
       entry.visibleHosts.flatMap((visibleHost) =>
@@ -157,30 +144,29 @@ it.each([false, true])(
   "filters by effective owner, preferring live adopted ownership (adopted=%s)",
   (adopted) => {
     const key = "agent:main:adopted";
-    const hosts = [
-      host(
-        adopted
-          ? [
-              session("adopted", {
-                sessionKey: key,
-                createdActor: { id: "operator:creator", type: "human" },
-              }),
-            ]
-          : ["mine", "theirs"].map((id) =>
-              session(id, { createdActor: { id: "operator:" + id, type: "human" } }),
-            ),
-      ),
-    ];
+    const source = catalog(
+      adopted
+        ? [
+            session("adopted", {
+              sessionKey: key,
+              createdActor: { id: "operator:creator", type: "human" },
+            }),
+          ]
+        : ["mine", "theirs"].map((id) =>
+            session(id, { createdActor: { id: "operator:" + id, type: "human" } }),
+          ),
+    );
     const ownerId = adopted ? "operator:owner" : "operator:mine";
     const liveRows: GatewaySessionRow[] = adopted
       ? [{ key, kind: "direct", updatedAt: 1, owner: { actor: { type: "human", id: ownerId } } }]
       : [];
-    expect(projectSidebarSessionCatalogs([catalog(hosts)], ownerId, liveRows)).toEqual([
-      { ...catalog(hosts), visibleHosts: [{ ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] }] },
+    const local = source.hosts[0]!;
+    expect(projectSidebarSessionCatalogs([source], ownerId, liveRows)).toEqual([
+      { ...source, visibleHosts: [{ ...local, sessions: [local.sessions[0]!] }] },
     ]);
     expect(
       projectSidebarSessionCatalogs(
-        [{ ...catalog(hosts), error: { code: "UNAVAILABLE", message: "Discovery failed" } }],
+        [{ ...source, error: { code: "UNAVAILABLE", message: "Discovery failed" } }],
         "operator:unrelated",
         liveRows,
       ),

@@ -22,12 +22,12 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { waitForConfirmDialogActions, answerConfirmDialog } from "../test-helpers/modal-dialog.ts";
 import {
-  runSessionAction,
-  runBatchSessionAction,
+  runSessionAction as runSession,
+  runBatchSessionAction as runBatch,
   createSessionGroup,
-  renameSessionGroupFromMenu,
-  deleteSessionGroupFromMenu,
-  editSessionGroupDefaults,
+  renameSessionGroupFromMenu as renameGroup,
+  deleteSessionGroupFromMenu as deleteGroup,
+  editSessionGroupDefaults as editDefaults,
 } from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "../lib/toast-host.tsx";
@@ -49,17 +49,25 @@ function failModalPreparation(error: Error, pending?: Promise<void>) {
   };
 }
 
-it.each([
-  "group delete",
-  "batch delete",
-  "cloud worker stop",
-  "session delete",
-  "batch archive",
-  "session rename",
-  "group create",
-  "group rename",
-  "group defaults",
-] as const)("reports %s dialog preparation failure in the sidebar", async (kind) => {
+type DialogAction = (
+  organizer: Parameters<typeof runSession>[0],
+  row: Parameters<typeof runSession>[1],
+) => Promise<unknown>;
+it.each<[string, DialogAction]>([
+  ["group delete", (owner) => deleteGroup(owner, "Drafts")],
+  ["batch delete", (owner, row) => runBatch(owner, { kind: "delete" }, [row], false)],
+  ["cloud worker stop", (owner, row) => runSession(owner, row, { kind: "stop-cloud-worker" })],
+  ["session delete", (owner, row) => runSession(owner, row, { kind: "delete" })],
+  [
+    "batch archive",
+    (owner, row) =>
+      runBatch(owner, { kind: "toggle-archived" }, [{ ...row, hasActiveRun: true }], false),
+  ],
+  ["session rename", (owner, row) => runSession(owner, row, { kind: "rename" })],
+  ["group create", (owner) => createSessionGroup(owner)],
+  ["group rename", (owner) => renameGroup(owner, "Drafts")],
+  ["group defaults", (owner) => editDefaults(owner, "Drafts")],
+])("reports %s dialog preparation failure in the sidebar", async (_kind, run) => {
   const request = createGatewayRequestMock();
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
@@ -90,30 +98,7 @@ it.each([
   const failure = new Error("Synthetic dialog preparation failed");
   const restore = failModalPreparation(failure);
   try {
-    const pending =
-      kind === "group delete"
-        ? deleteSessionGroupFromMenu(organizer, "Drafts")
-        : kind === "batch delete"
-          ? runBatchSessionAction(organizer, { kind: "delete" }, [row], false)
-          : kind === "cloud worker stop"
-            ? runSessionAction(organizer, row, { kind: "stop-cloud-worker" })
-            : kind === "session delete"
-              ? runSessionAction(organizer, row, { kind: "delete" })
-              : kind === "batch archive"
-                ? runBatchSessionAction(
-                    organizer,
-                    { kind: "toggle-archived" },
-                    [{ ...row, hasActiveRun: true }],
-                    false,
-                  )
-                : kind === "session rename"
-                  ? runSessionAction(organizer, row, { kind: "rename" })
-                  : kind === "group create"
-                    ? createSessionGroup(organizer)
-                    : kind === "group rename"
-                      ? renameSessionGroupFromMenu(organizer, "Drafts")
-                      : editSessionGroupDefaults(organizer, "Drafts");
-    await expect(pending).resolves.toBeUndefined();
+    await expect(run(organizer, row)).resolves.toBeUndefined();
     await vi.waitFor(() =>
       expect(sidebar.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
     );

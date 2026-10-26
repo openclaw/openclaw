@@ -24,6 +24,8 @@ async function update(overrides: Partial<SettingsSaveIndicatorProps> = {}) {
 }
 
 const part = (name: string) => indicator.querySelector(`.settings-save-indicator__${name}`);
+const feedback = () => indicator.querySelector('[role="status"]');
+const alert = () => indicator.querySelector('[role="alert"]');
 
 function button(label: string): HTMLButtonElement | undefined {
   return [...indicator.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -48,22 +50,18 @@ describe("settings save indicator", () => {
   it("stays empty while idle", async () => {
     await update();
     expect(indicator.textContent?.trim()).toBe("");
-    expect(indicator.querySelector('[role="status"]')).toBeNull();
+    expect(feedback()).toBeNull();
     await update({ status: "saved" });
     expect(indicator.textContent?.trim()).toBe("");
-  });
-
-  it("renders the shared working claw while saving", async () => {
-    await update({ status: "saving" });
-    expect(indicator.textContent?.trim()).toBe("Saving…");
-    expect(part("claw--saving svg .claw-icon__jaw")).not.toBeNull();
-    expect(part("claw")).toMatchObject({ ariaHidden: "true" });
   });
 
   it.each(["elapsed", "unmounted"] as const)("retires the saved timer when %s", async (end) => {
     vi.useFakeTimers();
     const needsApply = end === "elapsed";
     await update({ status: "saving" });
+    expect(indicator.textContent?.trim()).toBe("Saving…");
+    expect(part("claw--saving svg .claw-icon__jaw")).not.toBeNull();
+    expect(part("claw")).toMatchObject({ ariaHidden: "true" });
     expect(vi.getTimerCount()).toBe(0);
     await update({ status: "saved", needsApply });
     expect(indicator.textContent).toContain("Saved");
@@ -90,10 +88,9 @@ describe("settings save indicator", () => {
     ["rejected", "logging.level: Invalid option", "Settings not applied"],
   ] as const)("explains %s and retries", async (status, lastError, message) => {
     const { onRetry } = await update({ status, lastError });
-    const feedback = indicator.querySelector('[role="status"]');
-    expect(feedback?.textContent).toContain(message);
+    expect(feedback()?.textContent).toContain(message);
     if (status === "error") {
-      expect(feedback).toMatchObject({ title: lastError, ariaLabel: `${message}: ${lastError}` });
+      expect(feedback()).toMatchObject({ title: lastError, ariaLabel: `${message}: ${lastError}` });
     } else {
       expect(indicator.textContent).toContain("Current settings are unchanged.");
       expect(indicator.querySelector("details")?.textContent).toContain(lastError);
@@ -123,10 +120,10 @@ describe("settings save indicator", () => {
     expect(indicator.textContent).toContain("Save failed");
     await update({ status: "error", saving: true, lastError: null });
     expect(indicator.textContent?.trim()).toBe("Saving…");
-    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: "" });
+    expect(feedback()).toMatchObject({ title: "" });
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
-    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: lastError });
+    expect(feedback()).toMatchObject({ title: lastError });
   });
 
   it("applies pending changes and reports the in-flight state", async () => {
@@ -163,14 +160,12 @@ describe("settings save indicator", () => {
     await waitForSolid(() => expect(indicator.textContent).toContain("Saving…"));
     held.reject(new Error("Synthetic retry transport failed"));
     await waitForSolid(() =>
-      expect(indicator.querySelector('[role="alert"]')?.textContent).toContain(
-        "Synthetic retry transport failed",
-      ),
+      expect(alert()?.textContent).toContain("Synthetic retry transport failed"),
     );
     const retry = vi.fn(async () => false);
     await update({ status: "error", onRetry: retry });
     button("Retry")!.click();
     await waitForSolid(() => expect(retry).toHaveBeenCalledOnce());
-    await waitForSolid(() => expect(indicator.querySelector('[role="alert"]')).toBeNull());
+    await waitForSolid(() => expect(alert()).toBeNull());
   });
 });
