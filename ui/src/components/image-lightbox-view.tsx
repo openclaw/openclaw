@@ -160,7 +160,6 @@ function LightboxVideoOriginal(props: { focusableRef: FocusableRef; url: string 
 export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
   const width = image?.width;
   const height = image?.height;
-  // Own only width so reactive updates preserve Panzoom’s transform and interaction styles.
   return typeof width === "number" &&
     Number.isFinite(width) &&
     width > 0 &&
