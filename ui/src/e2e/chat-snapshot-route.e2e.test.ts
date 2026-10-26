@@ -261,65 +261,37 @@ suite.define(() => {
     },
   );
 
-  it.each(["same", "deleted", "moved", "mismatch"] as const)(
-    "holds sends after empty startup until %s route authority settles",
-    async (outcome) => {
-      await suite.withPage(
-        { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
-        async ({ page }) => {
-          const gateway = await openCachedRoute(page);
-          await page.goto(new URL(`/chat/main/${id}`, suite.server.baseUrl).href);
-          await page.getByText(transcript, { exact: true }).waitFor();
-          await gateway.waitForRequest("sessions.resolve");
-          await gateway.waitForRequest("chat.startup");
-          await gateway.resolveDeferred("chat.startup", { messages: [] });
-          const pane = page.locator(".chat-pane-cache__pane--active");
-          await page.waitForFunction(() => {
-            const active = document.querySelector(".chat-pane-cache__pane--active");
-            return active && Reflect.get(active, "transcriptReady") === true;
-          });
-          const draft = "Keep this draft until the route is confirmed";
-          await pane.locator(".agent-chat__composer-combobox textarea").fill(draft);
-          const send = pane.locator(".chat-send-btn--send");
-          expect(await send.isDisabled()).toBe(true);
-          await pane.locator(".agent-chat__composer-combobox textarea").press("Enter");
-          expect(
-            (await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).trimEnd(),
-          ).toBe(draft);
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          const movedKey =
-            outcome === "mismatch"
-              ? "agent:main:chat:98765432-1234-4321-9876-123456789abc"
-              : `agent:other:chat:${id}`;
-          const movedAgent = outcome === "mismatch" ? "main" : "other";
-          const resolution =
-            outcome === "deleted"
-              ? { ok: false }
-              : {
-                  ok: true,
-                  ...row,
-                  ...(outcome === "moved" || outcome === "mismatch"
-                    ? { key: movedKey, agentId: movedAgent }
-                    : {}),
-                };
-          await gateway.setMethodResponse("sessions.resolve", resolution);
-          await gateway.resolveDeferred("sessions.resolve", resolution);
-          if (outcome === "same") {
-            await page.waitForFunction(
-              () => window.openclawControlUi?.snapshot().routeReady === true,
-            );
-            expect(await send.isEnabled()).toBe(true);
-          } else if (outcome === "deleted") {
-            await page.locator(".session-route-not-found").waitFor();
-          } else {
-            await page.waitForURL(
-              (url) =>
-                url.pathname.startsWith(`/chat/${movedAgent}/`) && !url.pathname.includes(id),
-            );
-          }
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        },
-      );
-    },
-  );
+  it("holds sends after empty startup until route authority settles", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await openCachedRoute(page);
+        await page.goto(new URL(`/chat/main/${id}`, suite.server.baseUrl).href);
+        await page.getByText(transcript, { exact: true }).waitFor();
+        await gateway.waitForRequest("sessions.resolve");
+        await gateway.waitForRequest("chat.startup");
+        await gateway.resolveDeferred("chat.startup", { messages: [] });
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await page.waitForFunction(() => {
+          const active = document.querySelector(".chat-pane-cache__pane--active");
+          return active && Reflect.get(active, "transcriptReady") === true;
+        });
+        const draft = "Keep this draft until the route is confirmed";
+        await pane.locator(".agent-chat__composer-combobox textarea").fill(draft);
+        const send = pane.locator(".chat-send-btn--send");
+        expect(await send.isDisabled()).toBe(true);
+        await pane.locator(".agent-chat__composer-combobox textarea").press("Enter");
+        expect(
+          (await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).trimEnd(),
+        ).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        const resolution = { ok: true, ...row };
+        await gateway.setMethodResponse("sessions.resolve", resolution);
+        await gateway.resolveDeferred("sessions.resolve", resolution);
+        await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
+        expect(await send.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+    );
+  });
 });

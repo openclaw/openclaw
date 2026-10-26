@@ -68,7 +68,7 @@ describe("completed subagent payload residency", () => {
     expect(resident.task).toBe(original.task.slice(0, 160));
     expect(resident.completion?.resultText).toBeUndefined();
     expect(resident.completion?.fallbackResultText).toBeUndefined();
-    expect(resident.completion?.terminalReply).toEqual(original.completion?.terminalReply);
+    expect(resident.completion?.terminalReply).toBeUndefined();
     expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
     expect(compactSubagentRunForMemory(resident)).toBe(resident);
 

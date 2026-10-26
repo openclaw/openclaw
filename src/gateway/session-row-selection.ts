@@ -3,6 +3,7 @@ import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-sto
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
   resolveSessionProfileId,
@@ -193,7 +194,7 @@ export function createSessionRowSelection(
   };
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  const update = (id: string, key: string, row?: SelectionTarget) => {
+  const update = (id: string, key: string, row?: SelectionTarget, changeScope?: string) => {
     let group = groups.get(key);
     const oldWinner = winners.get(key);
     const eligible =
@@ -246,6 +247,7 @@ export function createSessionRowSelection(
     const partition = partitionFor(key);
     if (partition) {
       partition.revision = {};
+      recordSessionRowPartitionRevision(changeScope);
       if (winner) {
         partition.entries.set(key, winner.pair);
       } else {
@@ -288,7 +290,7 @@ export function createSessionRowSelection(
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      update(change.id, keyFor(change), change.row);
+      update(change.id, keyFor(change), change.row, change.scope);
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();

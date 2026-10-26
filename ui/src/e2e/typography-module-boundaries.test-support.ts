@@ -130,7 +130,7 @@ export function defineTypographyModuleBoundaryTests(
 
         const genericFonts = await page.evaluate(() => {
           const fixture = document.createElement("div");
-          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd>C</kbd></span>
+          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd class="shortcut-kbd">C</kbd></span>
           <span class="session-menu__shortcut">C</span>`;
           document.body.append(fixture);
           const fonts = Array.from(
@@ -143,7 +143,10 @@ export function defineTypographyModuleBoundaryTests(
             mono: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
           };
         });
-        expect(genericFonts.fonts).toEqual([genericFonts.mono, genericFonts.mono]);
+        expect(genericFonts.fonts).toEqual([
+          expect.stringMatching(/^system-ui,/u),
+          genericFonts.mono,
+        ]);
       },
     );
   });

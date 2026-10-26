@@ -115,7 +115,7 @@ vi.mock("../../../node-sqlite.mjs", async (importOriginal) => {
 
 describe("package runtime compatibility guidance", () => {
   beforeEach(() => {
-    vi.mocked(resolveBunRuntimeInfo).mockResolvedValue(runtimeInfo("1.4.3"));
+    vi.mocked(resolveBunRuntimeInfo).mockResolvedValue(runtimeInfo("1.4.4"));
     stubRuntime({ node: "24.22.1", bun: undefined }, { execPath: path.resolve("/fixture/node") });
   });
   afterEach(() => {
@@ -126,6 +126,18 @@ describe("package runtime compatibility guidance", () => {
     vi.mocked(resolveBunRuntimeInfo).mockReset();
     vi.mocked(resolvePinnedDaemonRuntimePath).mockReset();
     vi.mocked(resolveTargetNodeRuntime).mockReset();
+  });
+
+  it("reports the patched Bun minimum when the selected runtime is unsupported", async () => {
+    stubRuntime({ bun: "1.4.3" });
+    vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
+      ...runtimeInfo("1.4.3"),
+      status: "unsupported",
+    });
+    expect(await preflight()).toEqual({
+      ok: false,
+      error: "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.",
+    });
   });
 
   const processEnv = {
@@ -152,7 +164,7 @@ describe("package runtime compatibility guidance", () => {
         NODE_OPTIONS: "--require /unrelated/preload.cjs",
       };
       stubRuntime(
-        { bun: "1.4.3", node: "24.3.0" },
+        { bun: "1.4.4", node: "24.3.0" },
         {
           env: current ? serviceEnv : processEnv,
           execPath: path.resolve("/fixture/app-runtime"),
@@ -161,7 +173,7 @@ describe("package runtime compatibility guidance", () => {
       if (failed) {
         vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
           status: "probe-failed",
-          error: new Error("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."),
+          error: new Error("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required."),
         });
       }
       const result = await preflight({
@@ -187,7 +199,7 @@ describe("package runtime compatibility guidance", () => {
                 },
               },
             }
-          : { ok: false, error: "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required." },
+          : { ok: false, error: "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required." },
       );
       expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, runtimeEnv);
       if (homebrew) {
@@ -198,7 +210,7 @@ describe("package runtime compatibility guidance", () => {
   );
 
   it("does not offer the current Bun as a fallback for a managed Node service", async () => {
-    stubRuntime({ bun: "1.4.3" }, { execPath: path.resolve("/fixture/app-runtime") });
+    stubRuntime({ bun: "1.4.4" }, { execPath: path.resolve("/fixture/app-runtime") });
     vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
     vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
     const result = await preflight({

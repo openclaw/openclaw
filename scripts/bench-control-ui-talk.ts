@@ -7,7 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import type { BrowserContext, CDPSession, ElementHandle, Page, Request } from "playwright";
+import type {
+  BrowserContext,
+  CDPSession,
+  ElementHandle,
+  JSHandle,
+  Page,
+  Request,
+} from "playwright";
 import {
   TALK_READY_HISTORY_MESSAGE,
   waitForTalkReady,
@@ -17,6 +24,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   installMockGateway,
+  type MockGatewayWindow,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import {
@@ -33,6 +41,7 @@ import {
 } from "./lib/control-ui-talk-fixture.ts";
 const { values } = parseArgs({
   options: {
+    transport: { type: "string", default: "webrtc" },
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
     url: { type: "string" },
@@ -61,6 +70,10 @@ const { values } = parseArgs({
     headed: { type: "boolean", default: false },
   },
 });
+const transport = values.transport;
+if (transport !== "webrtc" && transport !== "gateway-relay") {
+  throw new Error("--transport must be webrtc or gateway-relay");
+}
 const pairs = values.sample ? 1 : Number(values.pairs);
 const durationMs = values.sample ? 1000 : Number(values["duration-ms"]);
 const cpuRates = values["cpu-throttle"].split(",").map(Number);
@@ -121,6 +134,19 @@ if (
 ) {
   throw new Error(
     "--focused-stop requires listening/idle states without --external-transcripts or --frames",
+  );
+}
+if (
+  transport === "gateway-relay" &&
+  (values["startup-latency"] ||
+    values["startup-warm-cache"] ||
+    values["compare-suspend-native-audio"] ||
+    states.some(
+      (state) => !["listening", "speaking", "responding", "idle", "hidden"].includes(state),
+    ))
+) {
+  throw new Error(
+    "PCM relay probe supports listening,speaking,responding,idle,hidden without WebRTC latency/counterfactual probes",
   );
 }
 if (values["startup-warm-cache"] && !values["startup-latency"]) {
@@ -362,6 +388,23 @@ function distribution(samples: number[]) {
       }
     : undefined;
 }
+// Coarse route proof: tolerate host stalls and a two-frame endpoint margin.
+// This is not a real-time latency acceptance band.
+function pcmDeliveryCadence(frames: number, nominalHz: number, seconds: number) {
+  const expectedFrames = nominalHz * seconds;
+  const minFrames = Math.max(2, Math.floor(expectedFrames * 0.6));
+  const maxFrames = Math.ceil(expectedFrames * 1.4) + 2;
+  return {
+    frames,
+    nominalHz,
+    expectedFrames,
+    minFrames,
+    maxFrames,
+    observedHz: frames / seconds,
+    deliveredFraction: frames / expectedFrames,
+    valid: frames >= minFrames && frames <= maxFrames,
+  };
+}
 type Sample = {
   comparison: string;
   side: number;
@@ -535,7 +578,15 @@ try {
     startupProbeContract:
       "Optional browser-local pointerdown records every native play invocation, resolution and rejection, source kind only (no URLs). Legacy top-level timings and legacyFirstPlayUnlock still identify first play, the production gesture-unlock WAV; remoteStream identifies the first MediaStream play separately. readinessWait ends when the existing Stop/audio/all-playback readiness polling succeeds. CPU spans Start click through readiness assertion and protocol work, not just native play. Wrapper returns the exact fixture play promise; no production hooks. Cold-precache-start preserves the old ordering. --startup-warm-cache instead verifies the same worker precache and network quiet before Start; it is a separate warm-cache-settled-start population, not a correction to cold results. Lazy-module requests can still occur at Start and are reported. Existing strict state-window traffic checks remain unchanged. Synthetic transport and muted native audio; no acoustic, provider, or network latency claim.",
     headless: !values.headed,
-    workloadVersion: "precache-settled-v4-native-play-attribution",
+    workloadVersion:
+      transport === "gateway-relay"
+        ? "precache-settled-v5-native-play-attribution-pcm-cancellation"
+        : "precache-settled-v4-native-play-attribution",
+    transport: transport === "gateway-relay" ? transport : undefined,
+    pcmContract:
+      transport === "gateway-relay"
+        ? "Production relay with native audio nodes and callbacks, observed in a declared browser performance.now window enclosing the CPU-metric interval. Cadence bounds (60–140% plus two upper endpoint frames) prove sustained route delivery, not latency acceptance. Native audioprocess entry pairs with mock append receipt; output events pair only with their synchronous native source.start, retaining requested audio time, currentTime, state, sample rate/length and natural completion. Responding means native PCM playback while the UI remains listening, not animated WebRTC responding. Actual DOM status and level are recorded at observation start/end, outside the CPU-metric interval; listening status and valid levels are required. No hardware, acoustic, provider or network latency claim. Post-Stop requires ended tracks, closed contexts and no new owned callbacks/appends/starts over two input block periods. Native instrumentation and synthetic 10 Hz output add disclosed diagnostic overhead. Responding begins only after silent input reaches level zero. Cancellation requests retire matching synthetic output, preserve idle/stale results, and record reason/status; applied cancellations during observation fail the run."
+        : undefined,
     networkContract:
       "Production service workers remain enabled. Before measurement, wait for activation, issue the existing version/precache probe, await the worker's existing preparation promises through its inspector, and verify every boot/deferred inventory URL in its current cache. No worker code or production API is changed. Then wait for 1.5 seconds of browser-context network quiet (70 seconds maximum), including worker and failed/aborted requests. Quiet-window timers end before measurement. Asset GET counters conservatively bracket both Performance.getMetrics endpoint calls. In-flight or new asset GETs invalidate the sample and fail the run; failed samples remain in artifacts.",
     assetHashContract:
@@ -623,7 +674,7 @@ try {
                   gatewayUrl: controlUiBundledGatewayUrl(slot.url),
                 },
               );
-              await installTalkPerfFixture(page, values.counters, suspendNativeAudio);
+              await installTalkPerfFixture(page, values.counters, suspendNativeAudio, transport);
               const gateway = await installMockGateway(page, {
                 serverBuildId: slot.buildId,
                 serverVersion: slot.version,
@@ -633,15 +684,36 @@ try {
                     realtime: {
                       activeProvider: "openai",
                       ready: true,
-                      providers: [{ id: "openai", label: "Synthetic OpenAI" }],
+                      providers: [
+                        {
+                          id: "openai",
+                          label: "Synthetic OpenAI",
+                          ...(transport === "gateway-relay" ? { supportsBargeIn: true } : {}),
+                        },
+                      ],
                     },
                   },
-                  "talk.client.create": {
-                    provider: "openai",
-                    transport: "webrtc",
-                    clientSecret: "synthetic-benchmark",
-                    voiceSessionId: "voice-bench",
-                  },
+                  "talk.client.create":
+                    transport === "gateway-relay"
+                      ? {
+                          provider: "openai",
+                          transport: "gateway-relay",
+                          relaySessionId: "relay-bench",
+                          audio: {
+                            inputEncoding: "pcm16",
+                            inputSampleRateHz: 24_000,
+                            outputEncoding: "pcm16",
+                            outputSampleRateHz: 24_000,
+                          },
+                        }
+                      : {
+                          provider: "openai",
+                          transport: "webrtc",
+                          clientSecret: "synthetic-benchmark",
+                          voiceSessionId: "voice-bench",
+                        },
+                  "talk.session.appendAudio": {},
+                  "talk.session.close": {},
                 },
               });
               cdp = await observation.context.newCDPSession(page);
@@ -652,6 +724,30 @@ try {
               }
               await page.goto(new URL("/chat", slot.url).href);
               await waitForTalkReady(page);
+              if (transport === "gateway-relay") {
+                await page.evaluate(() => {
+                  const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                  mockGateway.setRequestHandler(
+                    "talk.session.cancelOutput",
+                    ({ params, respond }) => {
+                      respond(
+                        window.openclawTalkBench.cancelOutput(
+                          params as Parameters<Window["openclawTalkBench"]["cancelOutput"]>[0],
+                        ),
+                      );
+                    },
+                  );
+                  mockGateway.setRequestHandler(
+                    "talk.session.appendAudio",
+                    ({ params, respond }) => {
+                      window.openclawTalkBench.recordPcmAppend(
+                        params as Parameters<Window["openclawTalkBench"]["recordPcmAppend"]>[0],
+                      );
+                      respond({});
+                    },
+                  );
+                });
+              }
               const waitForPrecacheAndQuiet = async () => {
                 await page.evaluate(async () => {
                   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -845,28 +941,40 @@ try {
                 })
                 .click();
               await gateway.waitForRequest("talk.client.create");
-              await page.waitForFunction(() =>
-                Boolean(window.openclawTalkBench.peer?.remoteDescription),
-              );
-              await page.evaluate(() => {
-                if (!window.openclawTalkBench.peer) {
-                  throw new Error("Synthetic Talk peer was not created");
-                }
-                window.openclawTalkBench.peer.channel.dispatchEvent(new Event("open"));
-              });
-              await page.getByRole("button", { name: "Stop voice input", exact: true }).waitFor();
-              await page.waitForFunction(() => document.querySelector("audio")?.paused === false);
-              const playback = await page.waitForFunction(() => {
-                const attempts = window.openclawTalkBench.playbackStartLatenciesMs;
-                if (!attempts.length || !attempts.every((value) => value >= 0)) {
-                  return undefined;
-                }
-                if (window.talkStartupProbe) {
-                  window.talkStartupProbe.readinessObservedAtMs ??= performance.now();
-                }
-                return attempts;
-              });
-              const playLatenciesMs = await playback.jsonValue();
+              let playLatenciesMs: number[] | undefined = [];
+              let playback: JSHandle<number[] | undefined> | undefined;
+              if (transport === "gateway-relay") {
+                await gateway.waitForRequest("talk.session.appendAudio");
+                await gateway.emitGatewayEvent("talk.event", {
+                  relaySessionId: "relay-bench",
+                  type: "ready",
+                  talkEvent: { type: "session.ready" },
+                });
+                await page.getByRole("button", { name: "Stop voice input", exact: true }).waitFor();
+              } else {
+                await page.waitForFunction(() =>
+                  Boolean(window.openclawTalkBench.peer?.remoteDescription),
+                );
+                await page.evaluate(() => {
+                  if (!window.openclawTalkBench.peer) {
+                    throw new Error("Synthetic Talk peer was not created");
+                  }
+                  window.openclawTalkBench.peer.channel.dispatchEvent(new Event("open"));
+                });
+                await page.getByRole("button", { name: "Stop voice input", exact: true }).waitFor();
+                await page.waitForFunction(() => document.querySelector("audio")?.paused === false);
+                playback = await page.waitForFunction(() => {
+                  const attempts = window.openclawTalkBench.playbackStartLatenciesMs;
+                  if (!attempts.length || !attempts.every((value) => value >= 0)) {
+                    return undefined;
+                  }
+                  if (window.talkStartupProbe) {
+                    window.talkStartupProbe.readinessObservedAtMs ??= performance.now();
+                  }
+                  return attempts;
+                });
+                playLatenciesMs = await playback.jsonValue();
+              }
               let startup: StartupLatency | undefined;
               if (beforeStartup) {
                 const afterStartup = await metrics(cdp);
@@ -949,7 +1057,7 @@ try {
                 playLatenciesMs,
                 startup,
               });
-              await playback.dispose();
+              await playback?.dispose();
               if (compareCss && comparison === "AB" && side === 1) {
                 await page.addStyleTag({ content: compareCss });
               }
@@ -1016,7 +1124,13 @@ try {
                   await page.evaluate(
                     ({ phase, externalTranscripts: external }) =>
                       window.openclawTalkBench.setState(phase, external),
-                    { phase: state, externalTranscripts },
+                    {
+                      phase:
+                        transport === "gateway-relay" && state === "responding"
+                          ? "listening"
+                          : state,
+                      externalTranscripts,
+                    },
                   );
                   if (externalTranscripts) {
                     // Establish a row before hiding so reveal also proves identity retention.
@@ -1063,7 +1177,10 @@ try {
                           ?.getAttribute("data-level") === "0",
                     );
                   }
-                  if (state === "responding") {
+                  if (state === "responding" && transport === "gateway-relay") {
+                    await page.evaluate(() => window.openclawTalkBench.setState("responding"));
+                  }
+                  if (state === "responding" && transport === "webrtc") {
                     await page
                       .locator('.agent-chat__voice-activity[data-status="thinking"]')
                       .waitFor({ state: "visible" });
@@ -1437,6 +1554,134 @@ try {
                       `Talk sample contains background asset traffic: ${JSON.stringify(networkValidity)}`,
                     );
                   }
+                  const pcm =
+                    transport === "gateway-relay"
+                      ? await page.evaluate(async () => {
+                          await window.openclawTalkBench.settlePcmAppends();
+                          return window.openclawTalkBench.readPcm();
+                        })
+                      : undefined;
+                  if (pcm) {
+                    row.pcmCancellations = pcm.cancellations;
+                    if (
+                      pcm.cancellations.some(
+                        (record) => record.observing && record.status === "applied",
+                      )
+                    ) {
+                      throw new Error("Synthetic PCM output was cancelled during observation");
+                    }
+                    row.pcmUi = {
+                      label: state === "responding" ? "Native PCM playback (UI listening)" : state,
+                      expectedStatus: "listening",
+                      atStart: pcm.uiAtStart,
+                      atEnd: pcm.uiAtEnd,
+                    };
+                    if (
+                      [pcm.uiAtStart, pcm.uiAtEnd].some((endpoint) => {
+                        const level = Number(endpoint?.level);
+                        return (
+                          endpoint?.status !== "listening" ||
+                          endpoint.level === null ||
+                          !Number.isFinite(level) ||
+                          level < 0 ||
+                          level > 1 ||
+                          (state !== "speaking" && level !== 0)
+                        );
+                      })
+                    ) {
+                      throw new Error(
+                        "PCM observation did not retain listening UI status and level",
+                      );
+                    }
+                    const seconds = (pcm.endMs - pcm.startMs) / 1000;
+                    const input = pcm.input;
+                    const steps = input
+                      .slice(1)
+                      .map((frame, index) => frame.timestamp! - input[index]!.timestamp!);
+                    const cadence = pcmDeliveryCadence(input.length, 24_000 / 4096, seconds);
+                    const audioClockSpanSeconds = input.length
+                      ? input.at(-1)!.audioTime - input[0]!.audioTime
+                      : 0;
+                    row.pcmInput = {
+                      cadence,
+                      records: input,
+                      audioClockSpanSeconds,
+                      callbackToAppendMs: distribution(
+                        input.map((frame) => frame.appendAtMs! - frame.callbackAtMs),
+                      ),
+                      endpointAppendCount: input.filter((frame) => frame.appendAtMs! > pcm.endMs)
+                        .length,
+                      timestampStepMs: distribution(steps),
+                      timestampTies: steps.filter((step) => step === 0).length,
+                    };
+                    row.pcmWindow = {
+                      startMs: pcm.startMs,
+                      endMs: pcm.endMs,
+                      durationMs: seconds * 1000,
+                      cpuDurationMs: intervalSeconds * 1000,
+                      endpointOverhangMs: seconds * 1000 - intervalSeconds * 1000,
+                    };
+                    if (
+                      !cadence.valid ||
+                      pcm.unmatchedAppends ||
+                      audioClockSpanSeconds <= 0 ||
+                      steps.some((step) => step < 0) ||
+                      input.some(
+                        (frame) =>
+                          frame.length !== 4096 ||
+                          frame.rate !== 24_000 ||
+                          frame.bytes !== 8192 ||
+                          frame.state !== "running" ||
+                          frame.sessionId !== "relay-bench" ||
+                          !Number.isSafeInteger(frame.timestamp) ||
+                          frame.timestamp! < 0 ||
+                          !Number.isFinite(frame.appendAtMs) ||
+                          frame.appendAtMs! < frame.callbackAtMs ||
+                          frame.callbackAtMs < pcm.startMs ||
+                          frame.callbackAtMs > pcm.endMs,
+                      )
+                    ) {
+                      throw new Error("PCM input pairing, cadence or timestamp proof failed");
+                    }
+                    const output = pcm.output;
+                    const outputCadence = pcmDeliveryCadence(output.length, 10, seconds);
+                    row.pcmOutput = {
+                      cadence: outputCadence,
+                      records: output,
+                      eventToScheduleCallMs: distribution(
+                        output.map((frame) => frame.startAtMs! - frame.eventAtMs),
+                      ),
+                      scheduledLeadMs: distribution(
+                        output.map((frame) => Math.max(0, frame.when! - frame.audioTime!) * 1000),
+                      ),
+                      naturalCompletions: output.filter(
+                        (frame) => frame.natural && frame.endedAtMs! <= pcm.endMs,
+                      ).length,
+                    };
+                    if (
+                      state === "responding"
+                        ? !outputCadence.valid ||
+                          !output.some((frame) => frame.natural && frame.endedAtMs! <= pcm.endMs) ||
+                          output.some(
+                            (frame) =>
+                              frame.starts !== 1 ||
+                              frame.length !== 2400 ||
+                              frame.rate !== 24_000 ||
+                              frame.state !== "running" ||
+                              !Number.isFinite(frame.startAtMs) ||
+                              !Number.isFinite(frame.when) ||
+                              !Number.isFinite(frame.audioTime) ||
+                              frame.eventAtMs < pcm.startMs ||
+                              frame.startAtMs! < frame.eventAtMs ||
+                              frame.startAtMs! > pcm.endMs,
+                          )
+                        : output.length !== 0
+                    ) {
+                      throw new Error(
+                        "PCM output correlation, cadence or native-clock proof failed",
+                      );
+                    }
+                  }
                   if (errors.length) {
                     throw new Error(`Page errors: ${errors.join("; ")}`);
                   }
@@ -1574,7 +1819,7 @@ try {
                 } catch (error) {
                   row.status = "failed";
                   row.error = String(error);
-                  await saveTalkFailure(page, prefix, error);
+                  await saveTalkFailure(page, prefix, error, cdp);
                   throw error;
                 } finally {
                   await transcriptRow?.dispose();
@@ -1588,7 +1833,41 @@ try {
                 }
               }
               await page.getByRole("button", { name: "Stop voice input", exact: true }).click();
-              await gateway.waitForRequest("talk.client.close");
+              await gateway.waitForRequest(
+                transport === "gateway-relay" ? "talk.session.close" : "talk.client.close",
+              );
+              if (transport === "gateway-relay") {
+                await page.waitForFunction(
+                  () => {
+                    const value = window.openclawTalkBench.readPcmCleanup();
+                    return (
+                      value.contexts.length >= 2 &&
+                      value.contexts.every((state) => state === "closed") &&
+                      value.tracks.length > 0 &&
+                      value.tracks.every((state) => state === "ended")
+                    );
+                  },
+                  undefined,
+                  { polling: 25 },
+                );
+                const before = await page.evaluate(() => window.openclawTalkBench.readPcmCleanup());
+                // Two native input block periods plus an endpoint margin, outside all CPU windows.
+                await new Promise((resolve) => {
+                  setTimeout(resolve, ((2 * 4096) / 24_000) * 1000 + 50);
+                });
+                const after = await page.evaluate(() => window.openclawTalkBench.readPcmCleanup());
+                await writeFile(
+                  path.join(artifactDir, `${browserPrefix}.pcm-cleanup.json`),
+                  JSON.stringify({ before, after }, null, 2),
+                );
+                if (
+                  after.callbacks !== before.callbacks ||
+                  after.appends !== before.appends ||
+                  after.starts !== before.starts
+                ) {
+                  throw new Error("Native PCM activity continued after Talk cleanup");
+                }
+              }
             } catch (error) {
               await writeFile(
                 path.join(artifactDir, `${browserPrefix}.setup-or-run.error.txt`),

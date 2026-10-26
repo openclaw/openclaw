@@ -213,6 +213,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await record("after-doctor-fix", fixDoctor);
         scaleMigration = requireScaleMigrationProof(context, Date.now() - doctorImportStartedAt);
 
+        // The drill owns a separate store; finish stopped-writer maintenance before
+        // one Gateway serves live inspection and the session lifecycle below.
+        rollbackRestore = await runRollbackRestoreProof(inst, context);
+        await record("after-rollback-restore");
+
         await inst.startGateway();
         await record("after-gateway-start");
 
@@ -222,23 +227,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         const validateDoctor = await runDoctor(inst, "validate", context.storePath);
         await record("after-doctor-validate", validateDoctor);
 
-        const { client, disconnect } = await connectProofClient(
-          inst,
-          context,
-          "sqlite-sessions-transcripts-flip-proof",
-        );
-        await waitForHistoryContains(client, context.resetSessionKey, "legacy hello");
-        await disconnect();
-
-        await inst.stopGateway();
-        // Destructive Doctor maintenance owns the stopped Gateway epoch; inspect/validate stay live.
-        rollbackRestore = await runRollbackRestoreProof(inst, context);
-        await record("after-rollback-restore");
-        await inst.startGateway();
-        await record("after-gateway-restart");
-
         let { client: restartedClient, disconnect: disconnectRestartedClient } =
-          await connectProofClient(inst, context, "sqlite-sessions-transcripts-flip-proof-restart");
+          await connectProofClient(inst, context, "sqlite-sessions-transcripts-flip-proof");
         await waitForHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
         const resetPreludeRunId = await sendGatewayUserMessage(
           restartedClient,

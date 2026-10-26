@@ -26,7 +26,7 @@ import {
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
+import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   SessionRowFactsPending,
@@ -462,7 +462,11 @@ export function createControlUiSessionPrRead(params: {
         projectedTarget,
         projection,
         current,
-        () => createSessionListEntryFilter({ cfg: getRuntimeConfig(), client }),
+        () =>
+          createSessionListEntryFilter(
+            { cfg: getRuntimeConfig(), client },
+            prepareSessionCreatorProfile(profileInput ?? actorProfile),
+          ),
         actorProfile,
       );
       return target
