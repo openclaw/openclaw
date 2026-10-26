@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { materializeMissingBundledDependencies } from "../../scripts/lib/package-bundled-links.mts";
+import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -100,7 +101,13 @@ describe("bundled dependency links", () => {
         await fs.writeFile(path.join(f.store, name), content);
       }
       await f.stage();
-      expect((await fs.readdir(f.destination, { recursive: true })).toSorted()).toEqual(
+      expect(
+        (
+          await listDirectoryTreeStrict(f.destination).then((inventory) =>
+            inventory.map((entry) => entry.relativePath),
+          )
+        ).toSorted(),
+      ).toEqual(
         ["LICENSE", "README.md", "cli.js", "dist", "dist/kept.js", "main.js", "package.json"]
           .map((name) => name.split("/").join(path.sep))
           .toSorted(),

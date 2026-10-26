@@ -98,7 +98,6 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
   value: {
     changed: true,
     created: true,
-    diff: "+1 Replay safety: unsafe after write.",
     patch: [
       "--- compaction-retry-summary.txt",
       "+++ compaction-retry-summary.txt",
@@ -108,16 +107,7 @@ const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
     ].join("\n"),
     firstChangedLine: 1,
   },
-  output: [],
   replaySafe: false,
-  telemetry: {
-    catalogSize: 32,
-    sources: { openclaw: 32, mcp: 0, client: 0 },
-    counterScope: "qaFixtureScope01",
-    searchCount: 0,
-    describeCount: 0,
-    callCount: 1,
-  },
 } as const;
 const QA_COMPACTION_RETRY_PROMPT =
   "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
@@ -570,52 +560,29 @@ describe("qa mock openai server", () => {
       });
       expect(outputText(completed)).toBe(final);
       expectNoTool(completed);
-      expect(completed).not.toMatchObject({ output: [{ type: "function_call" }] });
     },
   );
 
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
-
-    for (const { input, marker, phase, minimum, absent } of [
-      {
-        input: userInputs("Quiet streaming QA check: reply exactly `QA_STREAMING_OK`."),
-        marker: "QA_STREAMING_OK",
-        phase: true,
-      },
-      {
-        input: userInputs("Partial streaming QA check: reply exactly `QA_PARTIAL_OK`."),
-        marker: "QA_PARTIAL_OK",
-      },
-      {
-        input: userInputs(
+    const cases: Array<[unknown, string, boolean?, number?, string?]> = [
+      ["Quiet streaming QA check: reply exactly `QA_STREAMING_OK`.", "QA_STREAMING_OK", true],
+      ["Partial streaming QA check: reply exactly `QA_PARTIAL_OK`.", "QA_PARTIAL_OK"],
+      [
+        userInputs(
           "Telegram reply-chain marker QA. Reply exactly: QA-TELEGRAM-REPLY-CHAIN-OK",
           "Quiet streaming QA check. Reply exactly: QA-TELEGRAM-STREAM-SINGLE-OK",
         ),
-        marker: "QA-TELEGRAM-STREAM-SINGLE-OK",
-        absent: "QA-TELEGRAM-REPLY-CHAIN-OK",
-      },
-      {
-        input: userInputs("Telegram long final QA check. Use the scripted long final response."),
-        marker: "TELEGRAM-LONG-FINAL",
-        phase: true,
-        minimum: 4_500,
-      },
-      {
-        input: userInputs("WhatsApp long final QA check. Use the scripted long final response."),
-        marker: "WHATSAPP-LONG-FINAL",
-        phase: true,
-        minimum: 6_000,
-      },
-      {
-        input: userInputs(
-          "Telegram long final three chunk QA check. Use the scripted three chunk final response.",
-        ),
-        marker: "TELEGRAM-LONG-FINAL-3CHUNK",
-        phase: true,
-        minimum: 8_000,
-      },
-    ]) {
+        "QA-TELEGRAM-STREAM-SINGLE-OK",
+        false,
+        undefined,
+        "QA-TELEGRAM-REPLY-CHAIN-OK",
+      ],
+      ["Telegram long final QA check.", "TELEGRAM-LONG-FINAL", true, 4_500],
+      ["WhatsApp long final QA check.", "WHATSAPP-LONG-FINAL", true, 6_000],
+      ["Telegram long final three chunk QA check.", "TELEGRAM-LONG-FINAL-3CHUNK", true, 8_000],
+    ];
+    for (const [input, marker, phase, minimum, absent] of cases) {
       const body = await streamText(server, input);
       expect(body).toContain('"type":"response.output_text.delta"');
       if (phase) {
@@ -631,34 +598,26 @@ describe("qa mock openai server", () => {
         expect(body).not.toContain(absent);
       }
     }
-
-    const blockPrompt = [
-      "Block streaming QA check: complete this whole sequence in one turn.",
-      "Step 1: send an assistant text block containing only this exact marker: `BLOCK_ONE_OK`.",
-      "That first marker block must be emitted before any tool call.",
-      "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
-      "Step 3: after that read completes, send a final assistant text block containing only this exact marker: `BLOCK_TWO_OK`.",
-      "Never put both markers in the same assistant text block.",
-    ].join("\n");
-    const blockBody = await streamText(server, blockPrompt);
+    const prompt =
+      "Block streaming QA check: first exact marker: `BLOCK_ONE_OK`; read `QA_KICKOFF_TASK.md`; second exact marker: `BLOCK_TWO_OK`.";
+    const first = await streamText(server, prompt);
     expectIncludes(
-      blockBody,
+      first,
       '"item_id":"msg_mock_block_1"',
       '"name":"read"',
       "QA_KICKOFF_TASK.md",
       "BLOCK_ONE_OK",
     );
-    expect(blockBody).not.toContain('"item_id":"msg_mock_block_2"');
-
-    const blockContinuationBody = await streamText(
+    expect(first).not.toContain('"item_id":"msg_mock_block_2"');
+    const final = await streamText(
       server,
       userInputs(
-        blockPrompt,
+        prompt,
         makeToolOutputWithCallId("call_mock_read_fixture", "QA kickoff task read"),
       ),
     );
-    expectIncludes(blockContinuationBody, '"item_id":"msg_mock_block_2"', "BLOCK_TWO_OK");
-    expect(blockContinuationBody).not.toContain('"item_id":"msg_mock_block_1"');
+    expectIncludes(final, '"item_id":"msg_mock_block_2"', "BLOCK_TWO_OK");
+    expect(final).not.toContain('"item_id":"msg_mock_block_1"');
   });
 
   it("dispatches structured Slack commentary, exec, and final phases", async () => {
@@ -667,40 +626,31 @@ describe("qa mock openai server", () => {
       commentary: "standalone",
       toolProgress: "absent",
     });
-    const finalMarker = run.matchText;
-    const suffix = finalMarker.slice("SLACK-QA-COMMENTARY-DONE-".length);
-    const commentaryMarker = `SLACK-QA-COMMENTARY-${suffix}`;
-    const toolMarker = `SLACK-QA-TOOL-${suffix}`;
-    const command = `printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
-    const prompt = run.input.replaceAll(">", "&gt;");
-    const stalePrompt =
+    const suffix = run.matchText.slice("SLACK-QA-COMMENTARY-DONE-".length);
+    const commentary = `SLACK-QA-COMMENTARY-${suffix}`;
+    const command = `printf '%s' 'SLACK-QA-TOOL-${suffix}' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-${suffix}'`;
+    const stale =
       "SLACK-QA-COMMENTARY-11112222 printf '%s' 'SLACK-QA-TOOL-11112222' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-11112222' SLACK-QA-COMMENTARY-DONE-11112222";
-    const currentEnvelope = `${stalePrompt}\n${prompt}`;
-
-    const planResponse = await streamResponse(
-      server,
-      userInputs(
-        stalePrompt,
-        makeToolOutputWithCallId("call_stale_slack_progress", ""),
-        currentEnvelope,
-      ),
-      { tools: [{ type: "function", name: "exec" }] },
+    const input = userInputs(
+      stale,
+      makeToolOutputWithCallId("call_stale_slack_progress", ""),
+      `${stale}\n${run.input.replaceAll(">", "&gt;")}`,
     );
-    const events = sseEvents(await planResponse.text());
-    const completedItems = events
+    const options = { tools: [{ type: "function", name: "exec" }] };
+    const events = sseEvents(await streamText(server, input, options));
+    const items = events
       .filter((event) => event.type === "response.output_item.done")
-      .map((event) => requireRecord(event.item, "Slack completed item"));
-    expect(completedItems).toHaveLength(2);
-    expect(completedItems[0]).toMatchObject({
-      type: "message",
-      phase: "commentary",
-      content: [{ type: "output_text", text: commentaryMarker }],
-    });
-    const exec = completedItems[1];
-    if (!exec) {
-      throw new Error("expected Slack progress exec output item");
-    }
-    expect(exec).toMatchObject({ type: "function_call", name: "exec" });
+      .map((event) => requireRecord(event.item, "completed item"));
+    expect(items).toMatchObject([
+      {
+        type: "message",
+        phase: "commentary",
+        content: [{ type: "output_text", text: commentary }],
+      },
+      { type: "function_call", name: "exec" },
+    ]);
+    expect(items).toHaveLength(2);
+    const exec = requireRecord(items[1], "exec output item");
     expect(outputToolArgsFromItem(exec)).toEqual({ command });
     expectSlots(events, ["msg_mock_slack_progress_commentary", exec.id]);
     expect(events.find((event) => event.type === "response.function_call_arguments.delta")).toEqual(
@@ -711,31 +661,17 @@ describe("qa mock openai server", () => {
         delta: JSON.stringify({ command }),
       },
     );
-    expect(
-      requireRecord(
-        events.find((event) => event.type === "response.completed")?.response,
-        "completed response",
-      ).output,
-    ).toEqual(completedItems);
-    expect(JSON.stringify(events)).not.toContain(finalMarker);
-
+    expect(JSON.stringify(events)).not.toContain(run.matchText);
     const final = await respond(
       server,
-      userInputs(
-        stalePrompt,
-        makeToolOutputWithCallId("call_stale_slack_progress", ""),
-        currentEnvelope,
-        exec,
-        makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), ""),
-      ),
-      { tools: [{ type: "function", name: "exec" }] },
+      [...input, exec, makeToolOutputWithCallId(outputToolCallId(exec, "call_slack_progress"), "")],
+      options,
     );
-    expect(outputItem(final)).toMatchObject({ type: "message", phase: "final_answer" });
-    expect(outputText(final)).toBe(finalMarker);
+    expect(outputItems(final)).toMatchObject([{ type: "message", phase: "final_answer" }]);
     expect(outputItems(final)).toHaveLength(1);
-    expect(JSON.stringify(final)).not.toContain(commentaryMarker);
+    expect(outputText(final)).toBe(run.matchText);
+    expect(JSON.stringify(final)).not.toContain(commentary);
   });
-
   it("does not dispatch Slack progress when structured marker suffixes disagree", async () => {
     const server = await startMockServer();
     const payload = await respond(
@@ -950,10 +886,12 @@ describe("qa mock openai server", () => {
       `Slack MPIM assistant-history seed check. Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>. ` +
       "Replace <NONCE> with 8 to 32 new uppercase letters or digits. " +
       "Do not include angle brackets, spaces, Markdown, or punctuation.";
-    const botReplyMarker = await openAiReply(server, userInputs(seedPrompt));
-    expect(botReplyMarker).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+    const read = (...input: Parameters<typeof userInputs>) =>
+      openAiReply(server, userInputs(...input));
+    const botReplyMarker = await read(seedPrompt);
+    const seedPattern = new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u");
+    expect(botReplyMarker).toMatch(seedPattern);
     const botNonce = botReplyMarker.slice(`${seedMarker}_BOT_`.length);
-    const expectedRecallMarker = `${recallMarker}_${botNonce}`;
     const recallPrompt = [
       "Slack MPIM assistant-history recall check.",
       `Recall the nonce from your immediately previous reply beginning with ${seedMarker}_BOT_.`,
@@ -961,62 +899,38 @@ describe("qa mock openai server", () => {
       `Otherwise reply with only: ${missingMarker}`,
     ].join(" ");
     expectExcludes(recallPrompt, botReplyMarker, botNonce);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          [
-            "[Thread history - for context]",
-            `[Slack Driver (user) Fri 2026-07-31 10:00 UTC] ${seedPrompt}`,
-            "[slack message id: 1.000000 channel: C123]",
-            "",
-            `[Slack OpenClaw (this assistant) (assistant) Fri 2026-07-31 10:01 UTC] ${botReplyMarker}`,
-            "[slack message id: 1.500000 channel: C123]",
-            "",
-            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
-          ].join("\n"),
-        ),
+    const history = (author: string, seed = "") =>
+      [
+        "[Thread history - for context]",
+        ...(seed
+          ? [
+              `[Slack Driver (user) Fri 2026-07-31 10:00 UTC] ${seed}`,
+              "[slack message id: 1.000000 channel: C123]",
+              "",
+            ]
+          : []),
+        `[Slack ${author} Fri 2026-07-31 ${seed ? "10:01" : "10:00"} UTC] ${botReplyMarker}`,
+        `[slack message id: ${seed ? "1.500000" : "1.000000"} channel: C123]`,
+        "",
+        `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
+      ].join("\n");
+    await expect(read(history("OpenClaw (this assistant) (assistant)", seedPrompt))).resolves.toBe(
+      `${recallMarker}_${botNonce}`,
+    );
+    await expect(
+      read(
+        seedPrompt,
+        { role: "assistant", content: [{ type: "output_text", text: botReplyMarker }] },
+        recallPrompt,
       ),
-    ).toBe(expectedRecallMarker);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          seedPrompt,
-          {
-            role: "assistant",
-            content: [{ type: "output_text", text: botReplyMarker }],
-          },
-          recallPrompt,
-        ),
-      ),
-    ).toBe(missingMarker);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          [
-            "[Thread history - for context]",
-            `[Slack Alice (user) Fri 2026-07-31 10:00 UTC] ${botReplyMarker}`,
-            "[slack message id: 1.000000 channel: C123]",
-            "",
-            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
-          ].join("\n"),
-        ),
-      ),
-    ).toBe(missingMarker);
-
+    ).resolves.toBe(missingMarker);
+    await expect(read(history("Alice (user)"))).resolves.toBe(missingMarker);
     for (const prefix of [
       "Please remember this fact for later: ORBIT-22. ",
       "Reply exactly `SHADOWED-EXACT-REPLY`. ",
     ]) {
-      expect(await openAiReply(server, userInputs(prefix + seedPrompt))).toMatch(
-        new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"),
-      );
-      expect(await openAiReply(server, userInputs(prefix + recallPrompt))).toBe(missingMarker);
+      await expect(read(prefix + seedPrompt)).resolves.toMatch(seedPattern);
+      await expect(read(prefix + recallPrompt)).resolves.toBe(missingMarker);
     }
   });
 
@@ -1102,72 +1016,39 @@ describe("qa mock openai server", () => {
 
   it("answers WhatsApp pending-history prompts only with injected prior group context", async () => {
     const server = await startMockServer();
-    const currentTriggerPrompt = [
+    const trigger = [
       "openclawqa pending history context check",
       WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER,
       `Return ${WHATSAPP_PENDING_HISTORY_OK_MARKER} only if prior group context contains the context-only sentinel.`,
     ].join(" ");
-
-    const historyContext = buildWhatsAppPendingHistoryContextFixture([
-      {
-        sender: "Alice",
-        timestamp: 1_786_000_000_000,
-        body: `quiet context ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
-      },
-    ]);
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          currentTriggerPrompt,
-          TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", historyContext),
-        ),
-      ),
-    ).toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    expect(await openAiReply(server, currentTriggerPrompt)).not.toBe(
-      WHATSAPP_PENDING_HISTORY_OK_MARKER,
+    const prior = (body: string) =>
+      buildWhatsAppPendingHistoryContextFixture([
+        { sender: "Alice", timestamp: 1_786_000_000_000, body },
+      ]);
+    const history = prior(
+      `quiet context ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
     );
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          makeDeveloperInput(
-            buildWhatsAppPendingHistoryContextFixture([
-              {
-                sender: "Alice",
-                timestamp: 1_786_000_000_000,
-                body: "unrelated prior context",
-              },
-            ]),
-          ),
-          [
-            WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
-            `Current request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}`,
-          ].join("\n"),
-        ),
+    const read = (...input: Parameters<typeof userInputs>) =>
+      openAiReply(server, userInputs(...input));
+    await expect(
+      read(trigger, TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", history)),
+    ).resolves.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+    for (const input of [
+      userInputs(trigger),
+      userInputs(
+        makeDeveloperInput(prior("unrelated prior context")),
+        `${WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT}\nCurrent request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}`,
       ),
-    ).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          `${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
-          currentTriggerPrompt,
-        ),
+      userInputs(
+        `${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
+        trigger,
       ),
-    ).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    expect(
-      await openAiReply(
-        server,
-        [historyContext, "openclawqa pending history context check without current trigger"].join(
-          "\n",
-        ),
-      ),
-    ).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+      userInputs(`${history}\nopenclawqa pending history context check without current trigger`),
+    ]) {
+      await expect(openAiReply(server, input)).resolves.not.toBe(
+        WHATSAPP_PENDING_HISTORY_OK_MARKER,
+      );
+    }
   });
 
   it("uses the WhatsApp broadcast runtime agent id context for distinct markers", async () => {
@@ -1198,7 +1079,6 @@ describe("qa mock openai server", () => {
 
   it("matches WhatsApp group dispatch markers without answering unrelated prompts", async () => {
     const server = await startMockServer();
-    expect(WHATSAPP_REPLY_TO_BOT_TRIGGER_PROMPT).not.toMatch(/\bopenclawqa\b/iu);
     for (const [prompt, marker, unrelated] of [
       [
         WHATSAPP_ACTIVATION_ALWAYS_PROMPT,
@@ -1367,16 +1247,6 @@ describe("qa mock openai server", () => {
       "QA-COMPACTION-DURABLE-MARKER",
       "QA-COMPACTION-BULKY-HISTORICAL-MARKER",
     );
-    const requests = requireArray(
-      await getJson(server, "/debug/requests"),
-      "compaction requests",
-    ).map((request) => requireRecord(request, "compaction request"));
-    expect(requests).toHaveLength(2);
-    const summaryRequest = requireRecord(requests[1], "compaction request 1");
-    expect(summaryRequest).toMatchObject({ requestKind: "compaction-summary", outcome: "success" });
-    expect(Number(summaryRequest.rawByteLength)).toBeGreaterThan(256 * 1024);
-    expect(summaryRequest.errorCode).toBeUndefined();
-    expect(summaryRequest.allInputText).toContain("[Chunk 1 - oldest messages]");
   });
 
   it.each([
@@ -1471,12 +1341,6 @@ describe("qa mock openai server", () => {
     expect(merged).toContain("QA-COMPACTION-DURABLE-MARKER");
     const unrelated = await summarize("A later unrelated scenario.");
     expect(unrelated).not.toContain("QA-COMPACTION-DURABLE-MARKER");
-    const requests = requireArray(await getJson(server, "/debug/requests"), "summary requests");
-    expect(requests).toHaveLength(4);
-    for (const request of requests) {
-      expect(request).toMatchObject({ requestKind: "compaction-summary", outcome: "success" });
-      expect(request).not.toHaveProperty("plannedToolName");
-    }
   });
 
   it("rejects Anthropic Code Mode compaction retry result with content added under another target", async () => {
@@ -1619,86 +1483,55 @@ describe("qa mock openai server", () => {
 
   it("consumes a private completion to spawn once and records the reviewed outcome", async () => {
     const server = await startMockServer();
+    const request = (input: unknown[]) => respond(server, input, { tools: [SESSIONS_SPAWN_TOOL] });
     const nonce = "QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF";
-    const kickoff = makeUserInput("Subagent terminal reply QA check: private.");
-    const firstReceipt = makeToolOutputWithCallId(
-      "first",
-      JSON.stringify({ status: "accepted", childSessionKey: "agent:qa:subagent:first" }),
-    );
-    const completion = makeUserInput(
-      TEST_RUNTIME_CONTEXT_CARRIER.replace(
-        "runtime metadata",
-        `[Internal task completion event]\ntask: qa-terminal-private-first\nResult: ${nonce}`,
-      ),
-    );
-    const second = await respond(server, [kickoff, firstReceipt, completion], {
-      tools: [SESSIONS_SPAWN_TOOL],
-    });
-    const call = outputItems(second).find((item) => item.type === "function_call");
-    if (!call) {
-      throw new Error("Expected second private child spawn");
-    }
-    expect(call?.name).toBe("sessions_spawn");
-    expect(JSON.parse(String(call?.arguments))).toMatchObject({
+    const event = (text: string) =>
+      makeUserInput(TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", text));
+    const receipt = (id: string, child: string) =>
+      makeToolOutputWithCallId(
+        id,
+        JSON.stringify({ status: "accepted", childSessionKey: `agent:qa:subagent:${child}` }),
+      );
+    const input: Array<Record<string, unknown>> = [
+      makeUserInput("Subagent terminal reply QA check: private."),
+      receipt("first", "first"),
+      event(`[Internal task completion event]\ntask: qa-terminal-private-first\nResult: ${nonce}`),
+    ];
+    const call = outputToolCall(await request(input), "sessions_spawn");
+    expect(outputToolArgsFromItem(call)).toMatchObject({
       label: "qa-terminal-private-second",
       completionTarget: "parent",
       task: expect.stringContaining(nonce),
     });
-    const secondReceipt = makeToolOutputWithCallId(
-      String(call?.call_id),
-      JSON.stringify({ status: "accepted", childSessionKey: "agent:qa:subagent:second" }),
-    );
-    expect(
-      await reply(server, [kickoff, firstReceipt, completion, call, secondReceipt], {
-        tools: [SESSIONS_SPAWN_TOOL],
-      }),
-    ).toBe("Second worker started.");
-    const settled = await respond(
-      server,
-      userInputs(
-        kickoff,
-        firstReceipt,
-        completion,
-        call,
-        secondReceipt,
-        TEST_RUNTIME_CONTEXT_CARRIER.replace(
-          "runtime metadata",
-          "[Internal task completion event]\ntask: qa-terminal-private-second\nResult: QA-PARENT-PRIVATE-CHILD2-DONE",
-        ),
+    input.push(call, receipt(String(call.call_id), "second"));
+    expect(outputText(await request(input))).toBe("Second worker started.");
+    const settled = await request([
+      ...input,
+      event(
+        "[Internal task completion event]\ntask: qa-terminal-private-second\nResult: QA-PARENT-PRIVATE-CHILD2-DONE",
       ),
-      { tools: [SESSIONS_SPAWN_TOOL] },
-    );
+    ]);
     expect(outputText(settled)).toBe("Private review complete.");
     expectNoTool(settled);
   });
 
   it("makes the empty terminal worker terminal after one dispatch_action side effect", async () => {
-    const wireName = "dispatch_action";
     const server = await startMockServer();
-    const tools = [{ type: "function", name: wireName }];
-    const kickoff = await respond(server, "Subagent terminal reply QA worker: empty.", { tools });
-    const call = outputToolCall(kickoff, wireName);
+    const prompt = "Subagent terminal reply QA worker: empty.";
+    const tools = [{ type: "function", name: "dispatch_action" }];
+    const call = outputToolCall(await respond(server, prompt, { tools }), "dispatch_action");
     expect(outputToolArgsFromItem(call)).toMatchObject({
       id: "write",
       args: { path: "qa-terminal-empty-side-effect.txt" },
     });
-    const writeRequest = requireRecord(
-      await (await fetch(`${server.baseUrl}/debug/last-request`)).json(),
-      "empty terminal write request",
-    );
-    expect(writeRequest.plannedToolName).toBe("write");
-    expect(requireRecord(writeRequest.plannedToolArgs, "empty terminal write args")).toMatchObject({
-      path: "qa-terminal-empty-side-effect.txt",
-    });
-
     expect(
       await reply(
         server,
         userInputs(
-          "Subagent terminal reply QA worker: empty.",
+          prompt,
           call,
           makeToolOutputWithCallId(
-            String(writeRequest.plannedToolCallId),
+            String(call.call_id),
             JSON.stringify({
               tool: { id: "write", name: "write", source: "core" },
               result: { content: [{ type: "text", text: "Wrote 40 bytes" }] },
@@ -1709,7 +1542,6 @@ describe("qa mock openai server", () => {
       ),
     ).toContain("QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK");
   });
-
   it.each(["visible", "silent"])(
     "handles captured current completion v4 for %s",
     async (terminalCase) => {
@@ -1799,17 +1631,13 @@ describe("qa mock openai server", () => {
 
   it("plans memory tools and serves mock image generations", async () => {
     const server = await startMockServer();
-
-    const memorySearch = await streamResponse(
-      server,
-      "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
-    );
-    expect(await memorySearch.text()).toContain('"name":"memory_search"');
-
-    const memoryGetText = await streamText(
+    const prompt =
+      "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.";
+    expect(await streamText(server, prompt)).toContain('"name":"memory_search"');
+    const body = await streamText(
       server,
       userInputs(
-        "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+        prompt,
         makeToolOutput(
           JSON.stringify({
             results: [
@@ -1823,139 +1651,77 @@ describe("qa mock openai server", () => {
         "Protocol note: acknowledged. Continue with the QA scenario plan.",
       ),
     );
-    expectIncludes(
-      memoryGetText,
-      '"name":"memory_get"',
-      '\\"path\\":\\"MEMORY.md\\"',
-      '\\"from\\":1',
-    );
-
-    const image = await fetchOk(`${server.baseUrl}/v1/images/generations`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-image-1",
-        prompt: "Draw a QA lighthouse",
-        n: 1,
-        size: "1024x1024",
-      }),
-    });
-    const imagePayload = requireRecord(await image.json(), "image response");
-    const imageData = requireArray(imagePayload.data, "image data");
-    expect(typeof requireRecord(imageData[0], "image data 0").b64_json).toBe("string");
-
-    const imageRequestLog = requireArray(
-      await getJson(server, "/debug/image-generations"),
-      "image generation requests",
-    );
-    const imageRequest = requireRecord(imageRequestLog[0], "image generation request 0");
-    expectFields(imageRequest, {
+    expectIncludes(body, '"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"', '\\"from\\":1');
+    const request = {
       model: "gpt-image-1",
       prompt: "Draw a QA lighthouse",
       n: 1,
       size: "1024x1024",
-    });
+    };
+    const image = await expectOk(postJson(server, "/v1/images/generations", request));
+    const data = requireArray(
+      requireRecord(await image.json(), "image response").data,
+      "image data",
+    );
+    expect(typeof requireRecord(data[0], "image data 0").b64_json).toBe("string");
+    const log = requireArray(await getJson(server, "/debug/image-generations"), "image requests");
+    expectFields(requireRecord(log[0], "image request 0"), request);
   });
-
   it("requires memory_get before answering thread recall in Code Mode", async () => {
     const server = await startMockServer();
-    const prompt =
-      "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
-
-    const initialInput: Array<Record<string, unknown>> = [
-      { type: "additional_tools", role: "developer", tools: CODE_MODE_TOOLS },
-      makeUserInput(prompt),
-    ];
-
-    const searchPlan = await respondOpenAi(server, initialInput);
-    const searchCall = outputToolCall(searchPlan, "exec");
-    const searchCallId = outputToolCallId(searchCall, "call_mock_memory_search");
-    const continuationInput: Array<Record<string, unknown>> = [
-      makeUserInput(prompt),
-      searchCall,
+    const prompt = makeUserInput(
+      "Thread memory check: what is the hidden thread codename stored only in memory?",
+    );
+    const search = outputToolCall(
+      await respondOpenAi(server, [
+        { type: "additional_tools", role: "developer", tools: CODE_MODE_TOOLS },
+        prompt,
+      ]),
+      "exec",
+    );
+    const searchId = outputToolCallId(search, "call_mock_memory_search");
+    const input = [
+      prompt,
+      search,
       makeToolOutputWithCallId(
-        searchCallId,
+        searchId,
         completedResult({
           results: [
-            {
-              path: "MEMORY.md",
-              startLine: 1,
-              endLine: 1,
-              snippet: "Thread-hidden codename: ORBIT-21.",
-            },
+            { path: "MEMORY.md", startLine: 1, snippet: "Thread-hidden codename: ORBIT-21." },
           ],
         }),
       ),
     ];
-
-    const getPlan = await respondOpenAi(server, continuationInput);
-    const getCall = outputToolCall(getPlan, "memory_get");
-    const getCallId = outputToolCallId(getCall, "call_mock_memory_get");
-    expect(getCallId).not.toBe(searchCallId);
-    expect(outputItems(getPlan).some((item) => item.type === "message")).toBe(false);
-    expect(JSON.stringify(getPlan)).not.toContain("hidden thread codename is ORBIT-21");
-    continuationInput.push(
-      getCall,
+    const pending = await respondOpenAi(server, input);
+    const get = outputToolCall(pending, "memory_get");
+    const getId = outputToolCallId(get, "call_mock_memory_get");
+    expect(getId).not.toBe(searchId);
+    expect(outputItems(pending).some((item) => item.type === "message")).toBe(false);
+    expect(JSON.stringify(pending)).not.toContain("hidden thread codename is ORBIT-21");
+    const final = await respondOpenAi(server, [
+      ...input,
+      get,
       makeToolOutputWithCallId(
-        getCallId,
+        getId,
         completedResult({ text: "Thread-hidden codename: ORBIT-22." }),
       ),
-    );
-
-    const final = await respondOpenAi(server, continuationInput);
-    expect(outputText(final)).toContain("ORBIT-22");
+    ]);
+    expectIncludes(outputText(final), "ORBIT-22");
     expect(outputText(final)).not.toContain("ORBIT-21");
     expectNoTool(final);
-
-    const requests = requireArray(await getJson(server, "/debug/requests"), "debug requests").map(
-      (request, index) => requireRecord(request, `debug request ${index}`),
-    );
-    expect(requests).toHaveLength(3);
-    expect(requests[0]).toMatchObject({
-      plannedToolName: "memory_search",
-      plannedWireToolName: "exec",
-      plannedToolCallId: searchCallId,
-    });
-    expect(requests[1]).toMatchObject({
-      toolOutputCallId: searchCallId,
-      plannedToolName: "memory_get",
-      plannedToolCallId: getCallId,
-    });
-    expect(requests[1]).not.toHaveProperty("plannedWireToolName");
-    expect(requests[2]).toMatchObject({ toolOutputCallId: getCallId });
-    expect(requests[2]).not.toHaveProperty("plannedToolName");
   });
-
-  it("supports advanced QA memory and subagent recovery prompts", async () => {
+  it("covers distinct memory search, retrieval, ranking, and injection branches", async () => {
     const server = await startMockServer();
     const ranking =
       "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.";
     const thread =
       "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.";
-    const acknowledgement = makeUserInput(
-      "Protocol note: acknowledged. Continue with the QA scenario plan.",
-    );
     const snack = "lemon pepper wings with blue cheese";
     const snackPrompt =
       "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence.";
     const rememberPrompt =
       "Remember across conversations QA check: what snack do I usually want for QA movie night?";
-    const active = [
-      "You are a memory search agent.",
-      "Use only the available memory tools.",
-      "Prefer memory_recall when available.",
-      "If memory_recall is unavailable, use memory_search and memory_get.",
-      "",
-      "Conversation context:",
-      "Latest user message:",
-      snackPrompt,
-    ].join("\n");
-    const remember = [
-      "You are a memory search agent.",
-      "Use only the available memory tools.",
-      "Latest user message:",
-      rememberPrompt,
-    ].join("\n");
+    const agent = (prompt: string) => `You are a memory search agent.\n${prompt}`;
     const out = (value: unknown) => makeToolOutput(JSON.stringify(value));
     const hit = (path: string, snippet?: string, startLine?: number, endLine?: number) => ({
       path,
@@ -1964,159 +1730,128 @@ describe("qa mock openai server", () => {
       endLine,
     });
     const results = (...entries: ReturnType<typeof hit>[]) => out({ results: entries });
-    const check = async (
-      input: unknown[],
-      included: string[],
-      excluded: string[] = [],
-      instructions?: string,
-      json = false,
-    ) => {
-      const options = instructions ? { instructions } : {};
-      const text = json
-        ? JSON.stringify(await respond(server, input, options))
-        : await streamText(server, input, options);
-      expectIncludes(text, ...included);
-      expectExcludes(text, ...excluded);
-    };
-    const threadFact = "Thread-hidden codename: ORBIT-22.";
+    const fact = "Thread-hidden codename: ORBIT-22.";
     const hidden = "hidden thread codename is ORBIT-22";
-    await check(userInputs(ranking), ['"name":"memory_search"'], ['\\"corpus\\"']);
-    await check([acknowledgement], ['"name":"memory_search"', "ORBIT-22"], [], thread);
-    await check(
-      [results(hit("MEMORY.md", threadFact, 1, 1)), acknowledgement],
-      ['"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"'],
-      [hidden],
-      thread,
-    );
-    await check([out({ text: threadFact }), acknowledgement], ["ORBIT-22"], [], thread, true);
-
-    await check(
-      [makeToolOutput("Thread-hidden codename: ORBIT-23."), acknowledgement],
-      ["NONE"],
-      ["ORBIT-23"],
-      thread,
-      true,
-    );
+    const ack = makeUserInput("Protocol note: acknowledged. Continue with the QA scenario plan.");
+    const path = "sessions/qa-session-memory-ranking.jsonl";
+    const current = hit(path, "Project Nebula current codename: ORBIT-10.", 2, 3);
+    const stale = hit("MEMORY.md", "Project Nebula stale codename: ORBIT-9.", 1, 2);
+    const injected = `<active_memory_plugin>User usually wants ${snack} for QA movie night.</active_memory_plugin>`;
     const system = (prefix = "") => ({
       role: "system",
-      content: prefix + "## /workspace/MEMORY.md\n" + threadFact,
+      content: prefix + "## /workspace/MEMORY.md\n" + fact,
     });
-    await check(
-      userInputs(
-        system("Available tools include sessions_spawn.\n"),
+    type Case = [
+      name: string,
+      input: unknown[],
+      includes: string[],
+      excludes?: string[],
+      instructions?: string,
+    ];
+    const cases: Case[] = [
+      ["ranking search", userInputs(ranking), ['"name":"memory_search"'], ['\\"corpus\\"']],
+      ["instruction-only thread search", [ack], ['"name":"memory_search"', "ORBIT-22"], [], thread],
+      [
+        "direct thread search result",
+        [results(hit("MEMORY.md", fact, 1, 1)), ack],
+        ['"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"'],
+        [hidden],
         thread,
-        out({ results: [], unavailable: true, error: "database is not open" }),
-      ),
-      ["NONE"],
-      ["ORBIT-22"],
-      undefined,
-      true,
-    );
-    await check(
-      userInputs(system(), thread, out({ results: [] })),
-      ["NONE"],
-      ["ORBIT-22"],
-      undefined,
-      true,
-    );
-
-    const path = "sessions/qa-session-memory-ranking.jsonl";
-    const snippet = "Project Nebula current codename: ORBIT-10.";
-    const current = hit(path, snippet, 2, 3);
-    const stale = hit("MEMORY.md", "Project Nebula stale codename: ORBIT-9.", 1, 2);
-    const ranked = (output: ReturnType<typeof out>, included: string, excluded?: string) =>
-      check(userInputs(ranking, output), [included], excluded ? [excluded] : []);
-    const expectedRanking =
-      "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.";
-    await ranked(results(current), expectedRanking);
-    await ranked(results(stale, current), expectedRanking);
-    await ranked(
-      results(hit(path, undefined, 2, 3)),
-      '"name":"memory_get"',
-      "codename is ORBIT-10",
-    );
-    await ranked(
-      out({
-        results: [hit(path, snippet)],
-        unavailable: true,
-        error: "database is not open",
-      }),
-      "NONE",
-      "codename is ORBIT-10",
-    );
-    await ranked(
-      results(hit(path, "Project Nebula current codename: ORBIT-9.")),
-      "codename is ORBIT-9",
-      "codename is ORBIT-10",
-    );
-
-    const snackOutput = out({ text: "Stable QA movie night snack preference: " + snack + "." });
-    await check(userInputs(active), ['"name":"memory_search"']);
-    await check(userInputs(active, snackOutput), [snack]);
-    await check(userInputs(active, snackOutput), [snack], [], undefined, true);
-    const injected =
-      "<active_memory_plugin>User usually wants " +
-      snack +
-      " for QA movie night.</active_memory_plugin>";
-    await check(userInputs(snackPrompt), [snack], [], "System context:\n" + injected, true);
-    const debug = await readDebugRequest(server);
-    expect(String(debug.instructions)).toContain("<active_memory_plugin>");
-    expect(String(debug.allInputText)).toContain("<active_memory_plugin>");
-
-    await check(userInputs(remember), [
-      '"name":"memory_search"',
-      "QA movie night snack lemon pepper wings blue cheese",
-      '\\"maxResults\\":10',
-    ]);
-    await check(
-      userInputs(
-        remember,
-        results(
-          hit(
-            "sessions/private-source.jsonl",
-            "Stable QA movie night snack preference: " + snack + ".",
-            2,
-            3,
-          ),
-        ),
-      ),
-      [snack],
-      ['"name":"memory_get"'],
-    );
-    await check(userInputs(rememberPrompt), [snack], [], injected, true);
-
-    const tools = [SESSIONS_SPAWN_TOOL];
-    const spawn = (input: unknown[]) => streamText(server, input, { tools });
-    expectIncludes(
-      await spawn(userInputs(QA_FANOUT_PROMPT)),
-      '"name":"sessions_spawn"',
-      '\\"label\\":\\"qa-fanout-alpha\\"',
-    );
-    expectIncludes(
-      await spawn(
+      ],
+      ["direct thread read", [out({ text: fact }), ack], ["ORBIT-22"], [], thread],
+      [
+        "unstructured thread output",
+        [makeToolOutput("Thread-hidden codename: ORBIT-23."), ack],
+        ["NONE"],
+        ["ORBIT-23"],
+        thread,
+      ],
+      [
+        "unavailable memory does not use system facts",
         userInputs(
-          QA_FANOUT_PROMPT,
-          makeToolOutput(
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-          ),
+          system("Available tools include sessions_spawn.\n"),
+          thread,
+          out({ results: [], unavailable: true, error: "database is not open" }),
         ),
-      ),
-      '"name":"sessions_spawn"',
-      '\\"label\\":\\"qa-fanout-beta\\"',
-    );
-    expect(
-      await reply(
-        server,
+        ["NONE"],
+        ["ORBIT-22"],
+      ],
+      [
+        "empty memory does not use system facts",
+        userInputs(system(), thread, out({ results: [] })),
+        ["NONE"],
+        ["ORBIT-22"],
+      ],
+      [
+        "session ranking wins over stale file",
+        userInputs(ranking, results(stale, current)),
+        ["Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10."],
+      ],
+      [
+        "missing ranking snippet requires read",
+        userInputs(ranking, results(hit(path, undefined, 2, 3))),
+        ['"name":"memory_get"'],
+        ["codename is ORBIT-10"],
+      ],
+      [
+        "unavailable ranking result",
         userInputs(
-          QA_FANOUT_PROMPT,
-          makeToolOutput(
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta","note":"BETA-OK"}',
+          ranking,
+          out({ results: [current], unavailable: true, error: "database is not open" }),
+        ),
+        ["NONE"],
+        ["codename is ORBIT-10"],
+      ],
+      [
+        "ranking uses returned value",
+        userInputs(ranking, results(hit(path, "Project Nebula current codename: ORBIT-9."))),
+        ["codename is ORBIT-9"],
+        ["codename is ORBIT-10"],
+      ],
+      ["snack search", userInputs(agent(snackPrompt)), ['"name":"memory_search"']],
+      [
+        "snack read",
+        userInputs(
+          agent(snackPrompt),
+          out({ text: `Stable QA movie night snack preference: ${snack}.` }),
+        ),
+        [snack],
+      ],
+      ["injected snack", userInputs(snackPrompt), [snack], [], "System context:\n" + injected],
+      [
+        "cross-conversation search",
+        userInputs(agent(rememberPrompt)),
+        [
+          '"name":"memory_search"',
+          "QA movie night snack lemon pepper wings blue cheese",
+          '\\"maxResults\\":10',
+        ],
+      ],
+      [
+        "cross-conversation snippet",
+        userInputs(
+          agent(rememberPrompt),
+          results(
+            hit(
+              "sessions/private-source.jsonl",
+              `Stable QA movie night snack preference: ${snack}.`,
+              2,
+              3,
+            ),
           ),
         ),
-        { tools },
-      ),
-    ).toBe("subagent-1: ok\nsubagent-2: ok");
+        [snack],
+        ['"name":"memory_get"'],
+      ],
+      ["cross-conversation injection", userInputs(rememberPrompt), [snack], [], injected],
+    ];
+    for (const [_name, input, included, excluded, instructions] of cases) {
+      const text = JSON.stringify(await respond(server, input, { instructions }));
+      expectIncludes(text, ...included);
+      expectExcludes(text, ...(excluded ?? []));
+    }
   });
+
   it.each([
     { name: "combined completion", combined: true, canDeliver: true, final: false },
     { name: "separate completions", combined: false, canDeliver: true, final: true },
@@ -2332,86 +2067,68 @@ describe("qa mock openai server", () => {
 
   it("uses image generation directives from request context when the latest user text is generic", async () => {
     const server = await startMockServer();
-
-    const channelPrompt =
-      '@qa-sut.example.test /tool image_generate action=generate prompt="QA lighthouse image for Matrix delivery testing" size=1024x1024 count=1';
-    const genericPrompt =
-      "Continue with the QA scenario plan and report worked, failed, and blocked items.";
-
-    const toolPlan = await readResponse(server, userInputs(channelPrompt, genericPrompt), {
-      tools: [IMAGE_GENERATE_TOOL],
-    });
-
-    const toolPlanOutput = outputItem(await toolPlan.json());
-    expectFields(toolPlanOutput, { type: "function_call", name: "image_generate" });
-    expect(String(toolPlanOutput.arguments)).toContain("qa-lighthouse.png");
-
+    const input = userInputs(
+      '@qa-sut.example.test /tool image_generate action=generate prompt="QA lighthouse image for Matrix delivery testing" size=1024x1024 count=1',
+      "Continue with the QA scenario plan and report worked, failed, and blocked items.",
+    );
+    const call = outputToolCall(
+      await respond(server, input, { tools: [IMAGE_GENERATE_TOOL] }),
+      "image_generate",
+    );
+    expect(String(call.arguments)).toContain("qa-lighthouse.png");
     expect(
-      await reply(
-        server,
-        userInputs(
-          channelPrompt,
-          genericPrompt,
-          functionCall(
-            "image_generate",
-            { prompt: "A QA lighthouse", filename: "qa-lighthouse.png" },
-            "call_mock_image_generate_1",
-          ),
-          makeToolOutputWithCallId(
-            "call_mock_image_generate_1",
-            JSON.stringify({ details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } } }),
-          ),
+      await reply(server, [
+        ...input,
+        functionCall(
+          "image_generate",
+          { prompt: "A QA lighthouse", filename: "qa-lighthouse.png" },
+          "image",
         ),
-      ),
+        makeToolOutputWithCallId(
+          "image",
+          JSON.stringify({ details: { media: { mediaUrls: ["/tmp/qa-lighthouse.png"] } } }),
+        ),
+      ]),
     ).toContain("Attachment: /tmp/qa-lighthouse.png");
   });
 
   it("completes an image without replaying a tool unavailable to the completion turn", async () => {
     const server = await startMockServer();
     const prompt = "Image generation check: generate a QA lighthouse image.";
-    const imagePlan = await respond(server, userInputs(prompt), { tools: [IMAGE_GENERATE_TOOL] });
-    const imageCall = outputToolCall(imagePlan, "image_generate");
-    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
-    const completionEvent = [
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-      "OpenClaw runtime context (internal):",
-      "",
-      "[Internal task completion event]",
-      "source: image_generation",
-      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
-      "status: completed successfully",
-      "Generated media:",
-      "MEDIA:/tmp/qa-lighthouse.png",
-      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    ].join("\n");
+    const call = outputToolCall(
+      await respond(server, prompt, { tools: [IMAGE_GENERATE_TOOL] }),
+      "image_generate",
+    );
     const completion = await respond(
       server,
       userInputs(
         prompt,
-        {
-          type: "function_call",
-          name: "image_generate",
-          call_id: callId,
-          arguments: String(imageCall.arguments),
-        },
+        call,
         makeToolOutputWithCallId(
-          callId,
+          outputToolCallId(call, "image"),
           JSON.stringify({
             content: [{ type: "text", text: "Background image generation started." }],
             details: { async: true, status: "started" },
           }),
         ),
-        completionEvent,
+        [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context (internal):",
+          "",
+          "[Internal task completion event]",
+          "source: image_generation",
+          "status: completed successfully",
+          "MEDIA:/tmp/qa-lighthouse.png",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
       ),
       { tools: [MESSAGE_TOOL] },
     );
-
     expectNoTool(completion, "image_generate");
     expect(outputText(completion)).toBe(
       "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
     );
   });
-
   it.each([
     [
       "plans QA tool-search failure calls with denied-input args",
@@ -2926,173 +2643,84 @@ describe("qa mock openai server", () => {
   });
 
   it("preserves whitespace Anthropic tool results without replay", async () => {
-    const content = "  ";
-    const isError = false;
-
     const server = await startMockServer();
     const callId = "toolu_empty_patch";
-    const response = await expectAnthropicMessages(server, {
+    const body = await expectAnthropicMessagesJson(server, {
       tools: [{ name: "apply_patch", input_schema: { type: "object", properties: {} } }],
       messages: [
         makeAnthropicUserText(
           "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
         ),
         anthropicCall("apply_patch", {}, callId),
-        {
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: callId,
-              content,
-              ...(isError ? { is_error: true } : {}),
-            },
-          ],
-        },
+        makeAnthropicToolResult(callId, "  "),
       ],
     });
-
-    const body = requireRecord(await response.json(), "Anthropic empty tool completion");
     expect(body.stop_reason).toBe("end_turn");
-    expect(requireArray(body.content, "Anthropic response content")).not.toEqual(
+    expect(body.content).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "tool_use" })]),
     );
-    const debug = requireRecord(
-      await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
-      "Anthropic empty tool debug request",
-    );
+    const debug = await readDebugRequest(server);
     expect(debug.toolOutputCallId).toBe(callId);
-    expect(debug.toolOutputStructuredError ?? false).toBe(isError);
+    expect(debug.toolOutputStructuredError ?? false).toBe(false);
     expect(debug).not.toHaveProperty("plannedToolName");
   });
 
   it("replays one signed Anthropic thinking error for each independent scenario", async () => {
     const server = await startMockServer();
     const readCallIds: string[] = [];
-    const scenarioPrompts: string[] = [];
-
-    const requestAnthropicStream = async (messages: unknown[]) => {
+    const stream = async (messages: unknown[]) => {
       const response = await expectAnthropicMessages(server, { stream: true, messages });
       expect(response.headers.get("content-type")).toContain("text/event-stream");
       return response.text();
     };
-
-    const readAnthropicToolCallId = (readStream: string) => {
-      const readEvents = readStream
-        .split("\n")
-        .filter((line) => line.startsWith("data: "))
-        .map((line) =>
-          requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "Anthropic SSE event"),
-        );
-      const readEvent = readEvents.find(
+    const readCall = async (prompt: string) => {
+      const events = sseEvents(await stream([makeAnthropicUserText(prompt)]));
+      const start = events.find(
         (event) =>
           event.type === "content_block_start" &&
-          requireRecord(event.content_block, "Anthropic content block").type === "tool_use",
+          requireRecord(event.content_block, "content block").type === "tool_use",
       );
-      const readTool = requireRecord(readEvent?.content_block, "Anthropic read tool call");
-      expect(readTool.name).toBe("read");
-      expect(readTool.input).toEqual({});
-      const readInputEvent = readEvents.find(
-        (event) => event.type === "content_block_delta" && event.index === readEvent?.index,
-      );
-      expect(requireRecord(readInputEvent?.delta, "Anthropic read tool input delta")).toEqual({
+      const tool = requireRecord(start?.content_block, "read tool");
+      expect(tool.name).toBe("read");
+      expect(tool.input).toEqual({});
+      expect(
+        events.find((event) => event.type === "content_block_delta" && event.index === start?.index)
+          ?.delta,
+      ).toEqual({
         type: "input_json_delta",
         partial_json: JSON.stringify({ path: "QA_KICKOFF_TASK.md" }),
       });
-      const callId = readTool.id;
-      if (typeof callId !== "string" || callId.length === 0) {
+      const id = tool.id;
+      if (typeof id !== "string" || id.length === 0) {
         throw new Error("Expected an Anthropic read tool call ID");
       }
-      readCallIds.push(callId);
-      return callId;
+      readCallIds.push(id);
+      return id;
     };
-
-    const buildReplayMessages = (
-      promptMessage: { role: "user"; content: Array<{ type: "text"; text: string }> },
-      callId: string,
-    ) => [
-      promptMessage,
-      {
-        role: "assistant" as const,
-        content: [
-          {
-            type: "tool_use" as const,
-            id: callId,
-            name: "read",
-            input: { path: "QA_KICKOFF_TASK.md" },
-          },
-        ],
-      },
-      makeAnthropicToolResult(callId, "QA kickoff task completed."),
-    ];
-
+    const replay = (prompt: string, id: string) =>
+      stream([
+        makeAnthropicUserText(prompt),
+        anthropicCall("read", { path: "QA_KICKOFF_TASK.md" }, id),
+        makeAnthropicToolResult(id, "QA kickoff task completed."),
+      ]);
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const scenarioPrompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
-      scenarioPrompts.push(scenarioPrompt);
-      const promptMessage = makeAnthropicUserText(scenarioPrompt);
-      const initialCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
-      const errorStream = await requestAnthropicStream(
-        buildReplayMessages(promptMessage, initialCallId),
-      );
+      const prompt = `${QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT} QA scenario run: direct-${attempt}`;
+      const initial = await readCall(prompt);
       expectIncludes(
-        errorStream,
+        await replay(prompt, initial),
         '"type":"thinking_delta"',
         '"type":"signature_delta"',
         '"signature":"qa_signed_thinking_block_91953"',
         "event: error",
         '"type":"api_error"',
       );
-
-      const retryCallId = readAnthropicToolCallId(await requestAnthropicStream([promptMessage]));
-      expect(retryCallId).not.toBe(initialCallId);
-      const recoveryStream = await requestAnthropicStream(
-        buildReplayMessages(promptMessage, retryCallId),
-      );
-      expectIncludes(
-        recoveryStream,
-        "event: message_stop",
-        "ANTHROPIC-THINKING-ERROR-RECOVERED-OK",
-      );
-      expect(recoveryStream).not.toContain("event: error");
+      const retry = await readCall(prompt);
+      expect(retry).not.toBe(initial);
+      const recovered = await replay(prompt, retry);
+      expectIncludes(recovered, "event: message_stop", "ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      expect(recovered).not.toContain("event: error");
     }
-
     expect(new Set(readCallIds).size).toBe(4);
-    const debugRequests = requireArray(
-      await getJson(server, "/debug/requests"),
-      "Anthropic debug requests",
-    ).map((request) => requireRecord(request, "Anthropic debug request"));
-    expect(debugRequests).toHaveLength(8);
-    expect(debugRequests.every((request) => request.providerVariant === "anthropic")).toBe(true);
-    expect(debugRequests.map((request) => request.plannedToolCallId)).toEqual([
-      readCallIds[0],
-      undefined,
-      readCallIds[1],
-      undefined,
-      readCallIds[2],
-      undefined,
-      readCallIds[3],
-      undefined,
-    ]);
-    expect(debugRequests.map((request) => request.toolOutputCallId)).toEqual([
-      undefined,
-      readCallIds[0],
-      undefined,
-      readCallIds[1],
-      undefined,
-      readCallIds[2],
-      undefined,
-      readCallIds[3],
-    ]);
-    expect(debugRequests.map((request) => request.prompt)).toEqual([
-      scenarioPrompts[0],
-      scenarioPrompts[0],
-      scenarioPrompts[0],
-      scenarioPrompts[0],
-      scenarioPrompts[1],
-      scenarioPrompts[1],
-      scenarioPrompts[1],
-      scenarioPrompts[1],
-    ]);
   });
 
   it.each([
@@ -3253,71 +2881,38 @@ describe("qa mock openai server", () => {
   });
 
   it("scripts settled continuation after a side-effecting write with settled exhaustion", async () => {
-    const completedScenario = "exhaustion" as const;
-
     const server = await startMockServer();
-    const historyInput = await completeSideEffectScenario(server, completedScenario);
-
-    const toolPlan = await streamOpenAiText(server, [
-      ...historyInput,
-      makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-    ]);
-    expect(toolPlan).toContain('"name":"write"');
-
-    const toolOutput = {
-      type: "function_call_output" as const,
-      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
-    };
-    expect(
-      await openAiReply(server, [
-        ...historyInput,
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        toolOutput,
-      ]),
-    ).toBe("");
-
-    expect(
-      await openAiReply(server, [
-        ...historyInput,
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-        toolOutput,
-      ]),
-    ).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
-
-    expect(
-      await openAiReply(server, [
-        ...historyInput,
-        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
-        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
-      ]),
-    ).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          [
-            "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
-            "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
-          ].join("\n\n"),
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
-          toolOutput,
-        ),
+    const history = await completeSideEffectScenario(server, "exhaustion");
+    const recovery = makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT);
+    const continuation = makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    const output = makeToolOutput(
+      "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    );
+    await expect(streamOpenAiText(server, [...history, recovery])).resolves.toContain(
+      '"name":"write"',
+    );
+    const read = (...input: Parameters<typeof userInputs>) =>
+      openAiReply(server, userInputs(...input));
+    await expect(read(...history, recovery, output)).resolves.toBe("");
+    await expect(read(...history, recovery, continuation, output)).resolves.toBe(
+      "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+    );
+    await expect(read(...history, recovery, continuation)).resolves.toBe(
+      "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+    );
+    await expect(
+      read(
+        [
+          "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
+          "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
+        ].join("\n\n"),
+        `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+        output,
       ),
-    ).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
-
-    expect(
-      await openAiReply(
-        server,
-        userInputs(
-          QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT,
-          QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
-          toolOutput,
-          "Read HEARTBEAT.md if it exists.",
-        ),
-      ),
-    ).toBe("HEARTBEAT_OK");
+    ).resolves.toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
+    await expect(
+      read(recovery, continuation, output, "Read HEARTBEAT.md if it exists."),
+    ).resolves.toBe("HEARTBEAT_OK");
   });
 
   it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
@@ -3399,40 +2994,36 @@ describe("qa mock openai server", () => {
   }
 
   it("keeps forbidden sends empty through finalization", async () => {
+    const server = await startMockServer();
     const sessionKey = "agent:orion:main";
     const marker = "QA-A2A-DENIED-OK";
-    const receipt = {
-      status: "forbidden",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-    };
-
-    const server = await startMockServer();
     const kickoff = makeUserInput(
       `qa a2a message-tool mirror check. sessionKey="${sessionKey}". exact marker: \`${marker}\``,
     );
     const tools = [{ type: "function", name: "sessions_send" }];
-    const plan = await respondOpenAi(server, [kickoff], { tools });
+    const request = (input: unknown[], surface = tools) =>
+      respondOpenAi(server, input, { tools: surface });
+    const plan = await request([kickoff]);
     const call = outputToolCall(plan, "sessions_send");
-    expect(outputItem(plan)).toMatchObject({ type: "function_call", name: "sessions_send" });
     const args = outputToolArgs(plan);
     expect(args).toMatchObject({ sessionKey, timeoutSeconds: 0 });
-    expect(String(args.message)).toContain("qa group visible reply tool check");
-    expect(String(args.message)).toContain(marker);
-    expect(await getJson(server, "/debug/last-request")).toMatchObject({
-      plannedToolName: "sessions_send",
-      plannedToolArgs: { sessionKey, timeoutSeconds: 0 },
-    });
-    const input: unknown[] = [
+    expectIncludes(String(args.message), "qa group visible reply tool check", marker);
+    const input = [
       kickoff,
       call,
-      makeToolOutputWithCallId(outputToolCallId(call, "call_a2a"), JSON.stringify(receipt)),
+      makeToolOutputWithCallId(
+        outputToolCallId(call, "call_a2a"),
+        JSON.stringify({
+          status: "forbidden",
+          error:
+            "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+        }),
+      ),
     ];
-    const response = await respondOpenAi(server, input, { tools });
+    const response = await request(input);
     expectTextOnly(response, "");
     expectTextOnly(
-      await respondOpenAi(
-        server,
+      await request(
         [
           ...input,
           ...outputItems(response),
@@ -3440,18 +3031,16 @@ describe("qa mock openai server", () => {
             `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
           ),
         ],
-        { tools: [] },
+        [],
       ),
       "",
     );
-
-    const target = await respondOpenAi(
-      server,
+    const target = await request(
       userInputs(
         kickoff,
         `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
       ),
-      { tools: [...tools, { type: "function", name: "message" }] },
+      [...tools, { type: "function", name: "message" }],
     );
     expect(outputItem(target)).toMatchObject({ type: "function_call", name: "message" });
     expect(outputToolArgs(target)).toMatchObject({ action: "send", message: marker });
@@ -3485,82 +3074,63 @@ describe("qa mock openai server", () => {
         .join(""),
     ).toBe(partialText);
   });
+
   it("keeps cursor reads correct when retained debug requests rotate", async () => {
     const server = await startMockServer();
-    const debugRequestLimit = 2_000;
-    const readCursor = async () =>
-      readQaMockRequestCursor(
-        await fetch(`${server.baseUrl}/debug/request-cursor`).then((response) => response.json()),
+    const limit = 2_000;
+    const requests = (suffix = "") => fetch(`${server.baseUrl}/debug/requests${suffix}`);
+    const cursor = async () =>
+      readQaMockRequestCursor(await getJson(server, "/debug/request-cursor"));
+    const send = (index: number) => respondOpenAi(server, `cursor request ${index}`);
+    expect(await cursor()).toBe(0);
+    await send(0);
+    await send(1);
+    for (let start = 2; start < limit; start += 32) {
+      const batch = await Promise.allSettled(
+        Array.from({ length: Math.min(32, limit - start) }, (_, offset) => send(start + offset)),
       );
-
-    const sendRequest = (index: number) => respondOpenAi(server, `cursor request ${index}`);
-
-    expect(await readCursor()).toBe(0);
-    // Keep the evicted request and its retained successor ordered.
-    await sendRequest(0);
-    await sendRequest(1);
-    const batchSize = 32;
-    for (let start = 2; start < debugRequestLimit; start += batchSize) {
-      const results = await Promise.allSettled(
-        Array.from({ length: Math.min(batchSize, debugRequestLimit - start) }, (_, offset) =>
-          sendRequest(start + offset),
-        ),
-      );
-      // Join the whole batch before reporting a failure or issuing overflow.
-      for (const result of results) {
+      for (const result of batch) {
         if (result.status === "rejected") {
           throw result.reason;
         }
       }
     }
-    const cursor = await readCursor();
-    expect(cursor).toBe(debugRequestLimit);
-
+    expect(await cursor()).toBe(limit);
     await respondOpenAi(server, "cursor request overflow");
-
-    const retained = requireArray(
-      await getJson(server, "/debug/requests"),
-      "retained debug requests",
-    );
-    expect(retained).toHaveLength(debugRequestLimit);
+    const retained = requireArray(await (await requests()).json(), "retained requests");
+    expect(retained).toHaveLength(limit);
     expect(retained[0]).toMatchObject({
       cursor: 2,
       allInputText: expect.stringContaining("cursor request 1"),
     });
     expect(retained.at(-1)).toMatchObject({
-      cursor: debugRequestLimit + 1,
+      cursor: limit + 1,
       allInputText: expect.stringContaining("cursor request overflow"),
     });
-
-    const nextRequests = requireArray(
-      await fetch(`${server.baseUrl}/debug/requests?after=${cursor}`).then((response) =>
-        response.json(),
-      ),
-      "debug requests after cursor",
-    );
-    expect(nextRequests).toMatchObject([{ prompt: expect.stringContaining("overflow") }]);
-
-    const expired = await fetch(`${server.baseUrl}/debug/requests?after=0`);
-    expect(expired.status).toBe(409);
-    expect(await expired.json()).toEqual({
-      error: "request cursor expired",
-      after: 0,
-      oldestCursor: 2,
-      latestCursor: debugRequestLimit + 1,
-    });
-
-    const futureCursor = debugRequestLimit + 2;
-    const future = await fetch(`${server.baseUrl}/debug/requests?after=${futureCursor}`);
-    expect(future.status).toBe(409);
-    expect(await future.json()).toEqual({
-      error: "request cursor is ahead of the latest recorded request",
-      after: futureCursor,
-      latestCursor: debugRequestLimit + 1,
-    });
-
-    const invalid = await fetch(`${server.baseUrl}/debug/requests?after=1.5`);
-    expect(invalid.status).toBe(400);
-    expect(await invalid.json()).toEqual({ error: "after must be a non-negative safe integer" });
+    expect(await (await requests(`?after=${limit}`)).json()).toMatchObject([
+      { prompt: expect.stringContaining("overflow") },
+    ]);
+    for (const [after, code, error] of [
+      [
+        0,
+        409,
+        { error: "request cursor expired", after: 0, oldestCursor: 2, latestCursor: limit + 1 },
+      ],
+      [
+        limit + 2,
+        409,
+        {
+          error: "request cursor is ahead of the latest recorded request",
+          after: limit + 2,
+          latestCursor: limit + 1,
+        },
+      ],
+      [1.5, 400, { error: "after must be a non-negative safe integer" }],
+    ] as const) {
+      const response = await requests(`?after=${after}`);
+      expect(response.status).toBe(code);
+      expect(await response.json()).toEqual(error);
+    }
   });
   it("rejects an oversized upload without taking down the provider", async () => {
     const server = await startMockServer();

@@ -315,7 +315,7 @@ export function createPageState(
     async () => {
       let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
       if (!config || !Object.hasOwn(config, "tts")) {
-        await context.runtimeConfig.ensureLoaded();
+        await context.runtimeConfig.ensureDisplayLoaded();
         config = currentDisplaySpeechConfig(context.runtimeConfig.state);
       }
       return resolveSpeechTextLimit(config);

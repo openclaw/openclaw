@@ -9,6 +9,9 @@
 .chat-context__segment {
   flex: none;
 }
+.chat-context__total {
+  --context-color: var(--ctx-color, var(--muted));
+}
 .chat-context__messages {
   --context-color: var(--info);
 }
@@ -129,8 +132,8 @@ openclaw-chat-context-panel {
     color: var(--text-strong);
   }
   .chat-context__compact--high {
-    background: var(--accent);
-    color: var(--accent-foreground);
+    background: var(--primary);
+    color: var(--primary-foreground);
     box-shadow: none;
   }
   .chat-context__compact:disabled {

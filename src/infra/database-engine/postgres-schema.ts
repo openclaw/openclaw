@@ -116,8 +116,14 @@ function postgresSchemaFingerprint(
     .map((fact) => JSON.stringify(fact))
     .toSorted()
     .join("\n");
-  // Only the random scratch namespace is renamed; live expressions and literals stay exact.
-  return hash(scratch ? text.replaceAll(scratch.from, scratch.to) : text);
+  if (!scratch) {
+    return hash(text);
+  }
+  // PostgreSQL quotes hyphenated namespaces such as team-reports, unlike the scratch name.
+  const from = JSON.stringify(scratch.from).slice(1, -1);
+  const quotedFrom = JSON.stringify(quote(scratch.from)).slice(1, -1);
+  const to = JSON.stringify(scratch.to).slice(1, -1);
+  return hash(text.replaceAll(`${quotedFrom}.`, `${from}.`).replaceAll(from, to));
 }
 
 export function postgresSchemaSql(
@@ -226,7 +232,10 @@ function verifyPostgresSchemaDefinition(
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
 ): void {
-  const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
+  const fingerprint = postgresSchemaFingerprint(snapshot.catalog, {
+    from: namespace,
+    to: namespace,
+  });
   const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
   db.exec(`CREATE SCHEMA ${quote(scratch)}`);
   try {

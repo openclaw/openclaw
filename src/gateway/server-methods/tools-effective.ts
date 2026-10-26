@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -623,11 +622,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
           );
         }
       } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`);
       }
     },
   ),

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import type { Socket } from "node:net";
+import type { Server, Socket } from "node:net";
 
-export async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
+export async function listenOnLoopback(server: Server): Promise<number> {
   return await new Promise((resolve, reject) => {
     const onError = (err: Error) => reject(err);
     server.once("error", onError);

@@ -331,9 +331,15 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `ef37c31de3d3c5c59243bba51d420f9efda9d689` with WebKit
+The pinned build pairs Bun `807211511f81e0a6639bc9eb41d67120f6b85316` with WebKit
 `a2976f02e69fde8ccc45dc8fb346173f9d63f8a1` in prerelease
-`openclaw-v1.4.4-20261019-ef37c31de3-webkit-a2976f02e6`.
+`openclaw-v1.4.4-20261024-807211511f-webkit-a2976f02e6`.
+
+It restores SNI set with `tlsSocket.setServername()` before connecting, including
+with `autoSelectFamily` ([fork change #197](https://github.com/openclaw/bun/pull/197)).
+The Buffer copy reduction was withdrawn pending a container-neutral design;
+serialization remains unchanged from the previous `ef37c31de3` pin.
+
 It includes 58 upstream Bun commits through `ad4089bf`, including native
 lint/format performance improvements and `--no-script` to bypass package scripts.
 The engine replays the 16 fork patches onto upstream WebKit `87ee10da`.

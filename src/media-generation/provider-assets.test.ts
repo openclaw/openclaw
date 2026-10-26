@@ -1,9 +1,11 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../infra/net/ssrf.js";
+import { createHttp1ProxyAgent } from "../infra/net/undici-runtime.js";
 import { downloadGeneratedVideoAsset } from "./provider-assets.js";
 
 vi.mock("node:dns/promises", { spy: true });
+vi.mock("../infra/net/undici-runtime.js", { spy: true });
 
 describe("downloadGeneratedVideoAsset", () => {
   afterEach(() => {
@@ -50,6 +52,30 @@ describe("downloadGeneratedVideoAsset", () => {
       }),
     ).rejects.toMatchObject({ name: "SsrFBlockedError" });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses configured result transport without admitting private result URLs", async () => {
+    const dispatcherPolicy = {
+      mode: "explicit-proxy",
+      proxyUrl: "http://proxy.example:8080",
+    } as const;
+    vi.mocked<LookupFn>(dnsLookup).mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("synthetic video"));
+    const fetchFn: typeof fetch = (...args) => fetchMock(...args);
+    const params = { ...downloadDefaults, fetchFn, dispatcherPolicy };
+    const asset = await downloadGeneratedVideoAsset({
+      ...params,
+      url: "https://result.example/video.mp4",
+    });
+    expect(asset.buffer).toEqual(Buffer.from("synthetic video"));
+    expect(createHttp1ProxyAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ uri: dispatcherPolicy.proxyUrl }),
+      expect.any(Number),
+    );
+    await expect(
+      downloadGeneratedVideoAsset({ ...params, url: "https://169.254.169.254/video.mp4" }),
+    ).rejects.toMatchObject({ name: "SsrFBlockedError" });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("blocks redirects from public default-download URLs to private targets", async () => {

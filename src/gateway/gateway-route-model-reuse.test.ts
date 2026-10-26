@@ -135,10 +135,10 @@ it(
     let instance: OpenClawTestInstance | undefined;
     let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
     let providerListening = false;
-    const proof = await runQaGatewayTestFixture(
+    await runQaGatewayTestFixture(
       context,
       async ({ signal, verifyCleanup }) => {
-        const head = await verifyBuiltGatewayHead(repoRoot, signal);
+        await verifyBuiltGatewayHead(repoRoot, signal);
         await new Promise<void>((resolve, reject) => {
           server.once("error", reject);
           server.listen(0, "127.0.0.1", () => {
@@ -415,7 +415,7 @@ it(
             { timeout: 30_000 },
           )
           .toBe(true);
-        const afterReload = await turn(PROVIDERS[0], capacityModelId(64));
+        await turn(PROVIDERS[0], capacityModelId(64));
         expect(requests.at(-1)?.maxTokens).toBe("2048");
         expect(gateway.child?.pid).toBe(gatewayPid);
         expect(dynamic[0].prepare).toBeGreaterThan(0);
@@ -423,17 +423,6 @@ it(
         expect(stable[0].resolve).toBeGreaterThan(0);
         expect(stable[1].resolve).toBeLessThan(stable[0].resolve);
         expect(requests).toHaveLength(76);
-        return {
-          head,
-          gatewayPid,
-          stable,
-          dynamic,
-          afterReload,
-          requests: requests.length,
-          responseTextVerified: true,
-          generationHeader: "1024→2048",
-          sameGatewayProcess: true,
-        };
       },
       async () => {
         await client?.stopAndWait({ timeoutMs: 1_000 });
@@ -464,6 +453,5 @@ it(
       },
     );
     context.signal.throwIfAborted();
-    console.info("[route-model-runtime-proof]", JSON.stringify(proof));
   },
 );

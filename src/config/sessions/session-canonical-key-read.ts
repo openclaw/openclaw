@@ -19,7 +19,7 @@ export function isCanonicalSqliteSessionMainKeyCurrent(
       if (readAgentDatabaseSchemaVersion(database.db) !== OPENCLAW_AGENT_SCHEMA_VERSION) {
         return false;
       }
-      return readStoredCanonicalSessionMainKey(database) === canonicalMainKey;
+      return readStoredCanonicalSessionMainKey(database, database.agentId) === canonicalMainKey;
     }, options),
   );
   return result.found && result.value;

@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";

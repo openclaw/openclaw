@@ -3,6 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createMacosAppInstallOwner } from "../commands/test-runtime-config-helpers.js";
 import * as service from "../daemon/service.js";
 import * as exec from "../process/exec.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
@@ -26,12 +27,7 @@ it.each([
     const root = tempDirs.make("openclaw-host-update-cli-");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "state", "openclaw.json"));
-    const installOwner = {
-      schemaVersion: 1,
-      owner: "macos-app",
-      displayName: "OpenClaw.app",
-      updateHint: "Update OpenClaw.app to update this Gateway.",
-    };
+    const installOwner = createMacosAppInstallOwner();
     await fs.writeFile(
       path.join(root, "openclaw-install-owner.json"),
       JSON.stringify(installOwner),

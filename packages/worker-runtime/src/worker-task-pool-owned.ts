@@ -245,9 +245,9 @@ export function prepareWorkerTaskInput<Input, Output>(
   reject: (error: unknown) => void,
   prepareResources?: () => Promise<unknown>,
 ): void {
-  // Execution owns the input now; retaining it on task duplicates the worker's clone.
+  // Release input custody without rebuilding the task's property dictionary.
   const taskInput = task.input!;
-  delete task.input;
+  task.input = undefined;
   const preparation = Promise.withResolvers<void>();
   task.preparation = preparation;
   const finishPreparation = () => {

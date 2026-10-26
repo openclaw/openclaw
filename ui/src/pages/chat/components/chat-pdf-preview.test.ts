@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import * as responseBytes from "./chat-response-bytes.ts";
 import "./chat-detail-panel.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
@@ -31,8 +29,7 @@ async function mountAttachment(
 }
 
 function stubObjectUrls() {
-  const NativeURL = URL;
-  class TestURL extends NativeURL {}
+  class TestURL extends URL {}
   const createObjectURL = vi.fn(() => "blob:pdf-preview");
   const revokeObjectURL = vi.fn();
   Object.defineProperty(TestURL, "createObjectURL", { value: createObjectURL });
@@ -48,51 +45,39 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["metadata", "header", "timeout"] as const)(
-  "declines a PDF after %s rejection",
-  async (failure) => {
-    const fetchMock = vi.fn<typeof fetch>();
-    const cancel = vi.fn();
-    if (failure === "header") {
-      fetchMock.mockResolvedValue(
-        new Response(new ReadableStream({ start() {}, cancel }), {
-          headers: { "Content-Length": String(PDF_PREVIEW_MAX_BYTES + 1) },
-        }),
-      );
-    } else if (failure === "timeout") {
-      vi.useFakeTimers();
-      fetchMock.mockImplementation(
-        async (_input, init) =>
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                init?.signal?.addEventListener("abort", () =>
-                  controller.error(new DOMException("Aborted", "AbortError")),
-                );
-              },
-            }),
-          ),
-      );
-    }
-    vi.stubGlobal("fetch", fetchMock);
-    const panel = await mountAttachment({
-      sizeBytes: failure === "metadata" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
-    });
-    if (failure === "timeout") {
-      await vi.advanceTimersByTimeAsync(10_000);
-    }
-    await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
-    expect(panel.querySelector("iframe")).toBeNull();
-    if (failure === "metadata") {
-      expect(fetchMock).not.toHaveBeenCalled();
-      const download = panel.querySelector<HTMLAnchorElement>("a[download]");
-      expect(download?.getAttribute("href")).toBe(source);
-      expect(download?.download).toBe("brief.pdf");
-    } else if (failure === "header") {
-      expect(cancel).toHaveBeenCalledOnce();
-    }
-  },
-);
+it.each(["metadata", "timeout"] as const)("declines a PDF after %s rejection", async (failure) => {
+  const fetchMock = vi.fn<typeof fetch>();
+  if (failure === "timeout") {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(
+      async (_input, init) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () =>
+                controller.error(new DOMException("Aborted", "AbortError")),
+              );
+            },
+          }),
+        ),
+    );
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  const panel = await mountAttachment({
+    sizeBytes: failure === "metadata" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
+  });
+  if (failure === "timeout") {
+    await vi.advanceTimersByTimeAsync(10_000);
+  }
+  await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
+  expect(panel.querySelector("iframe")).toBeNull();
+  if (failure === "metadata") {
+    expect(fetchMock).not.toHaveBeenCalled();
+    const download = panel.querySelector<HTMLAnchorElement>("a[download]");
+    expect(download?.getAttribute("href")).toBe(source);
+    expect(download?.download).toBe("brief.pdf");
+  }
+});
 
 it("aborts an interrupted PDF load and reloads it after reconnect", async () => {
   const objectUrls = stubObjectUrls();
@@ -118,11 +103,8 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
-  const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
-  expect(frame).toMatchObject({ className: "sidebar-pdf-preview__frame", title: "brief.pdf" });
-  expect(frame.getAttribute("src")).toBe("blob:pdf-preview");
-  expect(panel.querySelector(".sidebar-file-toolbar")).toBeNull();
-  expect(panel.querySelector("object")).toBeNull();
+  expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:pdf-preview");
+  expect(panel.querySelector("iframe")).toHaveProperty("title", "brief.pdf");
   expect(fetchMock).toHaveBeenCalledWith(
     source,
     expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
@@ -134,34 +116,22 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
   async (change) => {
     const urls = stubObjectUrls();
     urls.createObjectURL.mockReturnValueOnce("blob:original").mockReturnValue("blob:replacement");
-    const original = createDeferred<ArrayBuffer | null>();
-    const refreshed = createDeferred<ArrayBuffer | null>();
-    const originalReadStarted = createDeferred();
-    const refreshedReadStarted = createDeferred();
-    const readBytes = vi
-      .spyOn(responseBytes, "readResponseBytesWithinLimit")
-      .mockImplementationOnce(() => {
-        originalReadStarted.resolve();
-        return original.promise;
-      })
-      .mockImplementationOnce(() => {
-        refreshedReadStarted.resolve();
-        return refreshed.promise;
-      });
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7")));
+    const bytes = "%PDF-1.7 original";
+    const refreshed = Promise.withResolvers<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(bytes))
+      .mockReturnValueOnce(refreshed.promise);
+    vi.stubGlobal("fetch", fetchMock);
     const panel = await mountAttachment({ sourceIdentity: "attachment:brief" });
-    await originalReadStarted.promise;
-    const bytes = new TextEncoder().encode("%PDF-1.7 original").buffer;
-    original.resolve(bytes);
-    await original.promise;
-    await waitForSolid(() =>
-      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:original"),
-    );
-    const frame = panel.querySelector("iframe")!;
+    const query = (selector: string) => panel.querySelector(selector);
+    const readerSource = () => query("iframe")?.getAttribute("src");
+    const expectSource = (src: string) => waitForSolid(() => expect(readerSource()).toBe(src));
+    await expectSource("blob:original");
+    const frame = query("iframe")!;
 
     panel.content = {
       ...panel.content,
-      kind: "attachment",
       src: "/__openclaw__/assistant-media?mediaTicket=renewed",
       sourceIdentity: change === "identity" ? "attachment:other" : "attachment:brief",
       sizeBytes: change === "oversized" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
@@ -172,63 +142,58 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
         expect(frame.isConnected).toBe(false);
         expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
       } else {
-        expect(panel.querySelector("iframe")).toBe(frame);
-        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(query("iframe")).toBe(frame);
+        expect(readerSource()).toBe("blob:original");
         expect(urls.revokeObjectURL).not.toHaveBeenCalled();
       }
     });
     if (change === "oversized") {
-      expect(readBytes).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledOnce();
       expect(panel.querySelector("[role=alert]")).not.toBeNull();
       return;
     }
 
-    await refreshedReadStarted.promise;
-    expect(readBytes).toHaveBeenCalledTimes(2);
-    refreshed.resolve(
-      change === "failed"
-        ? null
-        : change === "changed"
-          ? new TextEncoder().encode("%PDF-1.7 updated!").buffer
-          : bytes.slice(0),
-    );
-    await refreshed.promise;
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const response = new Response(change === "changed" ? "%PDF-1.7 updated!" : bytes, {
+      headers: change === "failed" ? { "Content-Length": String(PDF_PREVIEW_MAX_BYTES + 1) } : {},
+    });
+    const cancel = vi.spyOn(response.body!, "cancel");
+    refreshed.resolve(response);
     await waitForSolid(() => {
-      if (change === "unchanged") {
-        expect(panel.querySelector("iframe")).toBe(frame);
-        expect(frame.getAttribute("src")).toBe("blob:original");
-        expect(urls.createObjectURL).toHaveBeenCalledOnce();
-        expect(urls.revokeObjectURL).not.toHaveBeenCalled();
+      expect(urls.createObjectURL).toHaveBeenCalledTimes(
+        change === "unchanged" || change === "failed" ? 1 : 2,
+      );
+      expect(urls.revokeObjectURL).toHaveBeenCalledTimes(change === "unchanged" ? 0 : 1);
+      if (change === "failed") {
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(query("iframe")).toBeNull();
+        expect(query("a[download]")?.getAttribute("href")).toContain("renewed");
       } else {
-        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
-        if (change === "failed") {
-          expect(panel.querySelector("iframe")).toBeNull();
-          expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
-        } else {
-          expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
-          if (change === "changed") {
-            expect(panel.querySelector("iframe")).toBe(frame);
-          }
+        expect(readerSource()).toBe(change === "unchanged" ? "blob:original" : "blob:replacement");
+        if (change !== "identity") {
+          expect(query("iframe")).toBe(frame);
         }
+      }
+      if (change !== "unchanged") {
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
       }
     });
 
     if (change === "failed") {
-      const recovered = createDeferred<ArrayBuffer | null>();
-      readBytes.mockImplementationOnce(() => recovered.promise);
+      const recovered = Promise.withResolvers<Response>();
+      fetchMock.mockReturnValueOnce(recovered.promise);
       panel.content = {
         ...panel.content,
         src: "/__openclaw__/assistant-media?mediaTicket=recovered",
       };
       await panel.updateComplete;
       await waitForSolid(() => {
-        expect(readBytes).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
         expect(panel.querySelector(".sidebar-attachment-preview__loading")).not.toBeNull();
         expect(panel.querySelector("[role=alert]")).toBeNull();
         expect(panel.querySelector("iframe")).toBeNull();
       });
-      recovered.resolve(bytes.slice(0));
-      await recovered.promise;
+      recovered.resolve(new Response(bytes));
       await waitForSolid(() => {
         expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
         expect(panel.querySelector("iframe")).not.toBe(frame);

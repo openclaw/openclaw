@@ -16,6 +16,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -40,6 +41,8 @@ type RpcMetric = {
   offset?: number;
   messages?: number;
   historyBytes?: number;
+  initialHistory?: boolean;
+  historyOk?: boolean;
   resolvedKey?: string;
   resolvedAgentId?: string;
   resolutionOk?: boolean;
@@ -58,6 +61,12 @@ const selectRpc = (metrics: readonly RpcMetric[], method: string, sessionKey?: s
   metrics.filter(
     (metric) =>
       metric.method === method && (sessionKey === undefined || metric.sessionKey === sessionKey),
+  );
+const selectStartupHistory = (metrics: readonly RpcMetric[], sessionKey: string) =>
+  metrics.filter(
+    (metric) =>
+      (metric.method === "chat.startup" || metric.initialHistory) &&
+      metric.sessionKey === sessionKey,
   );
 const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
   [owner.gatewayToken, owner.hookToken].reduce(
@@ -139,18 +148,6 @@ suite.define(() => {
       }
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
-    const call = (method: string, params: Record<string, unknown> = {}) =>
-      cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
-    const syntheticViewer = await call("users.list");
-    expect(
-      Array.isArray(syntheticViewer.profiles) &&
-        syntheticViewer.profiles.some(
-          (profile) =>
-            isRecord(profile) &&
-            profile.id === "gateway-owner" &&
-            profile.displayName === "Synthetic Viewer",
-        ),
-    ).toBe(true);
     const sessions = [
       { key: selectedKey, label: "Synthetic loading proof", count: transcriptLength },
       { key: homeKey, label: "Synthetic Home", count: transcriptLength },
@@ -190,6 +187,16 @@ suite.define(() => {
           },
         );
         setupClient = client;
+        const syntheticViewer = await client.request("users.list", {}, { signal });
+        expect(
+          Array.isArray(syntheticViewer.profiles) &&
+            syntheticViewer.profiles.some(
+              (profile) =>
+                isRecord(profile) &&
+                profile.id === "gateway-owner" &&
+                profile.displayName === "Synthetic Viewer",
+            ),
+        ).toBe(true);
         for (const session of sessions) {
           signal.throwIfAborted();
           const created = await client.request(
@@ -213,16 +220,11 @@ suite.define(() => {
             {
               config,
               messages: Array.from({ length: session.count }, (_, index) => ({
-                message: {
-                  role: index % 2 === 0 ? "user" : "assistant",
-                  content: [
-                    {
-                      type: "text",
-                      text: `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
-                    },
-                  ],
-                  timestamp: 1_780_000_000_000 + index * 1000,
-                },
+                message: chatMessage(
+                  index % 2 === 0 ? "user" : "assistant",
+                  `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
+                  { timestamp: 1_780_000_000_000 + index * 1000 },
+                ),
               })),
             },
           );
@@ -282,8 +284,8 @@ suite.define(() => {
         const waitForStartupCommit = async (sessionKey: string, pane: Locator) => {
           await expect
             .poll(() =>
-              selectRpc(rpc, "chat.startup", sessionKey).some(
-                (metric) => metric.receivedMs !== undefined,
+              selectStartupHistory(rpc, sessionKey).some(
+                (metric) => metric.receivedMs !== undefined && metric.historyOk === true,
               ),
             )
             .toBe(true);
@@ -308,16 +310,28 @@ suite.define(() => {
               return;
             }
             const params = isRecord(frame.params) ? frame.params : {};
+            const initialHistory =
+              frame.method === "sessions.messages.subscribe" && isRecord(params.initialHistory)
+                ? params.initialHistory
+                : undefined;
+            const historyParams = initialHistory ?? params;
             const metric: RpcMetric = {
               requestId: frame.id,
               method: frame.method,
               sentMs: Date.now() - startedAt,
-              ...(typeof params.sessionKey === "string" ? { sessionKey: params.sessionKey } : {}),
+              ...(typeof params.sessionKey === "string"
+                ? { sessionKey: params.sessionKey }
+                : initialHistory && typeof params.key === "string"
+                  ? { sessionKey: params.key }
+                  : {}),
+              ...(initialHistory ? { initialHistory: true } : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
-              ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
-              ...(typeof params.maxBytes === "number" ? { maxBytes: params.maxBytes } : {}),
-              ...(typeof params.offset === "number" ? { offset: params.offset } : {}),
+              ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
+              ...(typeof historyParams.maxBytes === "number"
+                ? { maxBytes: historyParams.maxBytes }
+                : {}),
+              ...(typeof historyParams.offset === "number" ? { offset: historyParams.offset } : {}),
             };
             rpc.push(metric);
             pending.set(frame.id, metric);
@@ -338,9 +352,16 @@ suite.define(() => {
             metric.receivedMs = Date.now() - startedAt;
             metric.responseBytes = Buffer.byteLength(payload);
             const body = isRecord(frame.payload) ? frame.payload : {};
-            if (Array.isArray(body.messages)) {
-              metric.messages = body.messages.length;
-              metric.historyBytes = Buffer.byteLength(JSON.stringify(body.messages));
+            const initialHistory = isRecord(body.initialHistory) ? body.initialHistory : undefined;
+            const history = metric.initialHistory
+              ? initialHistory?.ok === true && isRecord(initialHistory.payload)
+                ? initialHistory.payload
+                : undefined
+              : body;
+            metric.historyOk = frame.ok === true && history !== undefined;
+            if (Array.isArray(history?.messages)) {
+              metric.messages = history.messages.length;
+              metric.historyBytes = Buffer.byteLength(JSON.stringify(history.messages));
             }
             if (metric.method === "sessions.resolve" && typeof body.key === "string") {
               metric.resolvedKey = body.key;
@@ -501,7 +522,7 @@ suite.define(() => {
           nextOffset += messages;
         }
         expect(nextOffset).toBe(transcriptLength);
-        const selectedStartup = selectRpc(startupMetrics, "chat.startup", selectedKey)[0];
+        const selectedStartup = selectStartupHistory(startupMetrics, selectedKey)[0];
         expect(selectedStartup).toBeDefined();
         expect(olderHistoryRequests(startupMetrics)).toHaveLength(0);
         const resolutions = selectRpc(startupMetrics, "sessions.resolve");
@@ -513,10 +534,10 @@ suite.define(() => {
           resolvedKey: selectedKey,
           resolvedAgentId: "main",
         });
-        expect(selectRpc(startupMetrics, "chat.startup", selectedKey)).toHaveLength(1);
+        expect(selectStartupHistory(startupMetrics, selectedKey)).toHaveLength(1);
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
-        const homeStartup = selectRpc(startupMetrics, "chat.startup", homeKey)[0];
+        const homeStartup = selectStartupHistory(startupMetrics, homeKey)[0];
         expect(homeStartup?.sentMs).toBeGreaterThanOrEqual(selectedStartup?.receivedMs ?? Infinity);
         expect(selectRpc(startupMetrics, "chat.history", homeKey)).toHaveLength(0);
         expect(selectRpc(startupMetrics, "agent.identity.get")).toHaveLength(1);

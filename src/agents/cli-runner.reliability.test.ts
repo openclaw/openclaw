@@ -48,7 +48,6 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import * as sleepModule from "../utils/sleep.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createLifecycleHooks, setHookRunnerForTest } from "./cli-runner.hooks.test-support.js";
 import { runPreparedCliAgent as runPreparedCliAgentCore } from "./cli-runner.js";
@@ -66,6 +65,7 @@ import {
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
+import { createPreparedCliContext } from "./cli-runner/prepared-context.test-support.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { persistCliSessionBindingResult } from "./cli-session-store.js";
@@ -139,56 +139,39 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     serialize: true,
   };
   const runId = params?.runId ?? "run-2";
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      sessionId: "s1",
-      sessionKey: params?.sessionKey,
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
+  return createPreparedCliContext(
+    {
       provider,
       model,
-      thinkLevel: "low",
-      timeoutMs: 1_000,
       runId,
+      sessionId: "s1",
+      sessionKey: params?.sessionKey,
+      thinkLevel: "low",
       lane: params?.lane,
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
-    ...captureCliRunStartTime(),
-    workspaceDir: "/tmp",
-    backendResolved: {
+    {
       id: provider,
       config: backend,
       bundleMcp: false,
       pluginId: provider === "claude-cli" ? "anthropic" : "openai",
     },
-    executionTarget: { kind: "process" },
-    preparedBackend: {
-      backend,
-      env: {},
+    {
+      reusableCliSession: params?.cliSessionId
+        ? { mode: "reuse", sessionId: params.cliSessionId }
+        : { mode: "none" },
+      contextWindowInfo: {
+        tokens: 150_000,
+        referenceTokens: 200_000,
+        source: "modelsConfig",
+      },
+      systemPrompt: "You are a helpful assistant.",
+      ...(params?.openClawHistoryPrompt
+        ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
+        : {}),
     },
-    reusableCliSession: params?.cliSessionId
-      ? { mode: "reuse", sessionId: params.cliSessionId }
-      : { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: model,
-    normalizedModel: model,
-    contextWindowInfo: {
-      tokens: 150_000,
-      referenceTokens: 200_000,
-      source: "modelsConfig",
-    },
-    systemPrompt: "You are a helpful assistant.",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    ...(params?.openClawHistoryPrompt
-      ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
-      : {}),
-    authEpochVersion: 2,
-  };
+  );
 }
 
 function withParams(

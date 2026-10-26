@@ -1,7 +1,9 @@
-import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
+import {
+  ensureSystemPromptCacheBoundary,
+  splitSystemPromptRelocatableBoundary,
+} from "@openclaw/ai/internal/shared";
 import { buildHarnessVisibleReplyGuidance } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -22,9 +24,38 @@ import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { buildInterruptedInputContext } from "../interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
+
+export function finalizeCliSystemPrompt(
+  systemPrompt: string,
+  run: {
+    modelDisplay: string;
+    backendResolved: {
+      textTransforms?: { input?: Parameters<typeof applyPluginTextReplacements>[1] };
+    };
+    params: Pick<RunCliAgentParams, "sessionEntry">;
+  },
+): string {
+  const replaced = applyPluginTextReplacements(
+    systemPrompt,
+    run.backendResolved.textTransforms?.input,
+  );
+  // A blind child's prompt never names its own model.
+  const model = run.params.sessionEntry?.blindPrompt ? undefined : run.modelDisplay;
+  // Identity belongs after the cache boundary even for marker-free hook overrides.
+  // Otherwise idle and active turns would place it on different sides of the prefix.
+  return appendModelIdentitySystemPrompt({
+    systemPrompt:
+      buildModelIdentityPromptLine(model) && replaced.trim().length > 0
+        ? ensureSystemPromptCacheBoundary(replaced)
+        : replaced,
+    model,
+  });
+}
 
 export function buildCliVisibleReplyGuidance(
   params: Pick<
@@ -51,8 +82,7 @@ export function buildCliVisibleReplyGuidance(
   });
 }
 
-/** Current-turn facts stay outside native prompts that are retained across CLI turns. */
-async function buildCliTurnAppendContext(
+export async function prepareCliTurnPromptContext(
   params: Parameters<typeof buildMediaTaskRuntimeContext>[0] & {
     backend: CliBackendConfig;
     isNewSession: boolean;
@@ -61,54 +91,9 @@ async function buildCliTurnAppendContext(
     runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
+    nativeDelegationTools?: readonly string[];
     requesterProfileId?: string;
     configuredTimezone?: string;
-  },
-): Promise<string> {
-  const { resolveSystemPromptUsage } = await import("./helpers.js");
-  const mediaTaskContext = await buildMediaTaskRuntimeContext({
-    capabilityToolNames: params.capabilityToolNames,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    includeEmptySnapshots: true,
-  });
-  const mediaTaskMessage = buildRuntimeContextCustomMessage(mediaTaskContext);
-  const interruptedInputContext = await buildInterruptedInputContext({
-    sessionTarget: params.sessionTarget,
-    capabilityToolNames: params.capabilityToolNames,
-    includeEmptySnapshots: true,
-  });
-  await prepareActiveNodeContext(params.requesterProfileId);
-  return [
-    ...params.context,
-    params.runtimeContextFragments?.length
-      ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
-      : undefined,
-    buildProactiveSubagentOrchestrationSection({
-      enabled: params.thinkLevel === "ultra",
-      hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
-    }).join("\n"),
-    interruptedInputContext
-      ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
-      : undefined,
-    labelRuntimeContextText(
-      buildTemporalContextText({
-        configuredTimezone: params.configuredTimezone,
-        sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
-      }),
-    ),
-    mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
-    // Native-prompt owners and first-only resumes do not receive the current runtime line.
-    resolveSystemPromptUsage(params)
-      ? undefined
-      : buildActiveNodeContextText(params.requesterProfileId),
-  ]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .join("\n\n");
-}
-
-export async function prepareCliTurnPromptContext(
-  params: Parameters<typeof buildCliTurnAppendContext>[0] & {
     prompt: string;
     privateContext: boolean;
     backendId: string;
@@ -141,11 +126,49 @@ export async function prepareCliTurnPromptContext(
     const preparedPrependContext = params.prependContext
       .filter((value): value is string => Boolean(value?.trim()))
       .join("\n\n");
-    const preparedAppendContext = await buildCliTurnAppendContext({
-      ...params,
-      systemPrompt,
-      context: [runtimeFacts?.relocatable, ...params.context, params.deliveryGuidance],
+    const { resolveSystemPromptUsage } = await import("./helpers.js");
+    const mediaTaskContext = await buildMediaTaskRuntimeContext({
+      capabilityToolNames: params.capabilityToolNames,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      includeEmptySnapshots: true,
     });
+    const mediaTaskMessage = buildRuntimeContextCustomMessage(mediaTaskContext);
+    const interruptedInputContext = await buildInterruptedInputContext({
+      sessionTarget: params.sessionTarget,
+      capabilityToolNames: params.capabilityToolNames,
+      includeEmptySnapshots: true,
+    });
+    await prepareActiveNodeContext(params.requesterProfileId);
+    const preparedAppendContext = [
+      runtimeFacts?.relocatable,
+      ...params.context,
+      params.deliveryGuidance,
+      params.runtimeContextFragments?.length
+        ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
+        : undefined,
+      buildProactiveSubagentOrchestrationSection({
+        enabled: params.thinkLevel === "ultra",
+        hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+        nativeDelegationTools: params.nativeDelegationTools,
+      }).join("\n"),
+      interruptedInputContext
+        ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
+        : undefined,
+      labelRuntimeContextText(
+        buildTemporalContextText({
+          configuredTimezone: params.configuredTimezone,
+          sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
+        }),
+      ),
+      mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
+      // Native-prompt owners and first-only resumes do not receive the current runtime line.
+      resolveSystemPromptUsage({ ...params, systemPrompt })
+        ? undefined
+        : buildActiveNodeContextText(params.requesterProfileId),
+    ]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join("\n\n");
     prependContext = preparedPrependContext;
     appendContext = preparedAppendContext;
     const hookSystemPrompt = params.hookResult?.systemPrompt?.trim();
@@ -229,51 +252,29 @@ export async function prepareCliSystemPrompt(
   });
 }
 
-function prependCliSessionResumeUserContext(
-  context: RunCliAgentParams["currentInboundContext"],
-  reusableCliSession: CliReusableSession,
-  preservedTurnsContext: string | undefined,
-): RunCliAgentParams["currentInboundContext"] {
-  const completionContext =
-    reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
-      ? preservedTurnsContext
-      : undefined;
-  const note = [
-    reusableCliSession.mode === "reuse-with-drift"
-      ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
-      : undefined,
-    completionContext,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n\n");
-  if (!note) {
-    return context;
-  }
-  if (!context) {
-    return { text: note };
-  }
-  return {
-    ...context,
-    text: [note, context.text].join("\n\n"),
-    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
-  };
-}
-
 export function createCliCurrentPromptRenderer(
   params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
   reusableCliSession: CliReusableSession,
   notes: {
     sessionGapContext?: string;
-    preservedTurnsContext?: string;
-    writer?: CliHistoryWriter;
   } = {},
 ) {
-  // Missed exchanges are saved conversation text: native reuse alone cannot replay them.
-  const context = prependCliSessionResumeUserContext(
-    params.currentInboundContext,
-    reusableCliSession,
-    notes.writer ? notes.preservedTurnsContext : undefined,
-  );
+  let context = params.currentInboundContext;
+  const note =
+    reusableCliSession.mode === "reuse-with-drift"
+      ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
+      : undefined;
+  if (note) {
+    context = context
+      ? {
+          ...context,
+          text: [note, context.text].join("\n\n"),
+          ...(context.resumableText
+            ? { resumableText: [note, context.resumableText].join("\n\n") }
+            : {}),
+        }
+      : { text: note };
+  }
   return (prompt: string, preferResumableText = false) =>
     composeCliPromptContext(
       annotateInterSessionPromptText(

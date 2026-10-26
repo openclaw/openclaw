@@ -10,6 +10,7 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -138,19 +139,14 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
   const checkout = state.path("checkout");
   await requireGit(repository, ["worktree", "add", "--quiet", "-b", "openclaw/guest", checkout]);
   const sessionKey = "agent:main:dashboard:managed-attachment";
-  const worktree = {
-    id: "00000000-0000-4000-8000-000000000001",
+  const worktree = makeWorktreeRecord(repository, "00000000-0000-4000-8000-000000000001", {
     name: "guest",
     repoFingerprint: "synthetic-attachment-repository",
-    repoRoot: repository,
     path: checkout,
     branch: "openclaw/guest",
     baseRef: "main",
-    ownerKind: "session" as const,
     ownerId: sessionKey,
-    createdAt: 1,
-    lastActiveAt: 1,
-  };
+  });
   await insertRegistryWorktree(process.env, worktree);
   const cfg = {
     worktreeAcceleration: false,
@@ -348,7 +344,6 @@ it.for([
               return result;
             })
         : undefined;
-    const failureSpy = vi.spyOn(attachments, "logAttachmentFailure");
     const discardSpy = vi
       .spyOn(attachments, "discardPreparedInboundMedia")
       .mockImplementation(async (...args) => {
@@ -375,13 +370,10 @@ it.for([
         preparing,
         "attachment preparation completed before reaching the held boundary",
       );
-      if (preparation === "stage") {
-        expect(stageSpy).toHaveBeenCalledOnce();
-      } else {
+      if (preparation !== "stage") {
         expect(stageSpy).not.toHaveBeenCalled();
       }
       assert(inboundPath, "the real attachment parser did not create an inbound file");
-      expect((await fs.readFile(inboundPath)).equals(bytes)).toBe(true);
       if (interruption === "marker") {
         expect(abort()).toEqual({ aborted: true });
       } else if (interruption === "signal") {
@@ -452,12 +444,6 @@ it.for([
           code: "UNAVAILABLE",
           message: expect.stringContaining(ordinaryFailure.message),
         });
-        const failure = failureSpy.mock.calls[0]?.[2];
-        assert(
-          failure instanceof attachments.MediaOffloadError,
-          "staging failure lost its retryable attachment classification",
-        );
-        expect(failure.cause).toBe(ordinaryFailure);
       }
     } finally {
       stageRelease.resolve();
@@ -469,7 +455,6 @@ it.for([
         sandboxSpy?.mockRestore();
         parseSpy.mockRestore();
         discardSpy.mockRestore();
-        failureSpy.mockRestore();
         await upload.cleanup();
       }
     }

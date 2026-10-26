@@ -228,20 +228,21 @@ const blockedPhase = repairDeadline
   ? "plugins"
   : doctorDeadline
     ? "doctor"
-    : scenario === "phase-hang"
+    : scenario === "phase-hang" || scenario === "borrowed-phase"
       ? "configSnapshot"
       : scenario === "completion-hang"
         ? "completionCache"
         : undefined;
-if (blockedPhase || scenario === "borrowed-phase") {
-  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+if (blockedPhase) {
+  // Doctor needs time for native admission; its output markers advance the deadline.
+  // Keep real phase ownership and the short budget for other blocked phases.
   stub(
     "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
 import { UpdateFinalizationLifecycle as RealLifecycle } from ${original("./update-cli/update-finalization-lifecycle.ts")};
 import { startFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
 export class UpdateFinalizationLifecycle extends RealLifecycle {
-  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? ${doctorDeadline ? "30_000" : "1_000"} : super.budget(phase); }
   ${
     scenario === "phase-hang"
       ? `run(phase, operation, outcome, custody) {
@@ -288,7 +289,7 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
         : "output.stdout.includes('Doctor complete.')"
     }) {
       ready = true;
-      ${doctorDeadline ? "advanceFinalizationFixtureClock(1_000);" : "restoreFinalizationFixtureClock();"}
+      ${doctorDeadline ? "advanceFinalizationFixtureClock(30_000);" : "restoreFinalizationFixtureClock();"}
     }
   });
 }`,

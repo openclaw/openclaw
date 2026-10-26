@@ -1,12 +1,33 @@
+import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive, runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import { createMemoryCliHarness } from "./memory-cli.test-support.js";
 import { readMemoryStats } from "./memory-stats.js";
+import { installTmpDirHarness } from "./test-helpers.js";
+
+const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-stats-" });
+
+// Source children do not inherit the host's plugin SDK resolver.
+const sdkHook = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "openclaw/plugin-sdk/file-lock"
+      ? {
+          shortCircuit: true,
+          url: new URL("../../src/plugin-sdk/file-lock.ts", import.meta.url).href,
+        }
+      : nextResolve(specifier, context);
+  },
+});
+afterAll(() => sdkHook.deregister());
 
 const readStats = (dbPath: string) => readMemoryStats({ dbPath }, "main");
 const transport = vi.hoisted(() => ({
   moduleUrl: "",
+  tsconfigPath: undefined as string | undefined,
   onOutput: undefined as ((chunk: Buffer) => void) | undefined,
   controller: new AbortController(),
   pending: new Set<Promise<unknown>>(),
@@ -29,6 +50,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
         [...argv.slice(0, entryIndex), "--input-type=module", "--eval", script],
         {
           ...options,
+          env: { ...process.env, ...options.env, TSX_TSCONFIG_PATH: transport.tsconfigPath },
           onOutputChunk: (chunk) => transport.onOutput?.(chunk),
           signal: transport.controller.signal,
         },
@@ -41,13 +63,14 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 });
 
 // Only the native dependency is fake; the stats command and child lifecycle remain real.
-transport.moduleUrl = `data:text/javascript,${encodeURIComponent(`
+const fixtureModuleUrl = `data:text/javascript,${encodeURIComponent(`
 import { writeSync } from "node:fs";
 function hold() {
   writeSync(2, "ready:" + process.pid + "\\n");
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 }
-export async function connect(mode, options) {
+export async function connect(dbPath, options) {
+  const mode = new URL(dbPath).hostname;
   if (mode === "connect-stall") hold();
   return {
     tableNames: async () => mode === "empty" ? [] : ["memories"],
@@ -70,7 +93,11 @@ export async function connect(mode, options) {
 export async function loadLanceDbModule() { return { connect }; }
 `)}`;
 
+transport.moduleUrl = fixtureModuleUrl;
+
 afterEach(async () => {
+  transport.moduleUrl = fixtureModuleUrl;
+  transport.tsconfigPath = undefined;
   transport.controller.abort();
   await Promise.allSettled(transport.pending);
   transport.controller = new AbortController();
@@ -81,7 +108,7 @@ afterEach(async () => {
 it("runs the registered stats command outside the shared database and keeps agent scope", async () => {
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   const { run, embed } = createMemoryCliHarness({
-    statsSource: { dbPath: "populated", storageOptions: { fixture: "stdin-only" } },
+    statsSource: { dbPath: "fixture://populated", storageOptions: { fixture: "stdin-only" } },
   });
   await run("stats", "--agent", "main's");
 
@@ -90,17 +117,17 @@ it("runs the registered stats command outside the shared database and keeps agen
 });
 
 it("reports an empty database without creating a table", async () => {
-  await expect(readStats("empty")).resolves.toBe(0);
+  await expect(readStats("fixture://empty")).resolves.toBe(0);
 });
 
 it.each([
-  ["legacy", "openclaw doctor --fix"],
-  ["failed", "fixture database unavailable"],
+  ["fixture://legacy", "openclaw doctor --fix"],
+  ["fixture://failed", "fixture database unavailable"],
 ])("preserves the %s database diagnostic", async (dbPath, message) => {
   await expect(readStats(dbPath)).rejects.toThrow(message);
 });
 
-it.each(["connect-stall", "count-stall"])(
+it.each(["fixture://connect-stall", "fixture://count-stall"])(
   "terminates %s before reporting timeout",
   async (dbPath) => {
     const timers = vi.spyOn(globalThis, "setTimeout");
@@ -139,5 +166,51 @@ it("does not claim cancellation succeeded when process cleanup is uncertain", as
     termination: "timeout",
     cleanup: "uncertain",
   });
-  await expect(readStats("unavailable")).rejects.toThrow("process cleanup could not be confirmed");
+  await expect(readStats("fixture://unavailable")).rejects.toThrow(
+    "process cleanup could not be confirmed",
+  );
+});
+
+it("keeps the table lease in the stats child until its native read closes", async () => {
+  transport.tsconfigPath = path.join(getTmpDir(), "tsconfig.json");
+  const configUrl = new URL("../../tsconfig.json", import.meta.url);
+  const config: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
+    await fs.readFile(configUrl, "utf8"),
+  );
+  const paths = Object.fromEntries(
+    Object.entries(config.compilerOptions.paths)
+      .filter(([specifier]) => specifier !== "openclaw/plugin-sdk/*")
+      .map(([specifier, targets]) => [
+        specifier,
+        targets.map((target) => fileURLToPath(new URL(target, configUrl))),
+      ]),
+  );
+  await fs.writeFile(transport.tsconfigPath, JSON.stringify({ compilerOptions: { paths } }));
+  transport.moduleUrl = `data:text/javascript,${encodeURIComponent(`
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+function assertChildLease(dbPath) {
+  const directory = join(dbPath, ".openclaw-custody");
+  const leases = readdirSync(directory).filter((name) => name.startsWith("use-"));
+  if (leases.length !== 1) throw new Error("missing child lease");
+  const lease = JSON.parse(readFileSync(join(directory, leases[0]), "utf8"));
+  if (lease.pid !== process.pid) throw new Error("lease is not child-owned");
+}
+export async function loadLanceDbModule() {
+  return { connect: async (dbPath) => ({
+    tableNames: async () => ["memories"],
+    openTable: async () => ({
+      schema: async () => ({ fields: [{ name: "agentId" }] }),
+      countRows: async () => {
+        assertChildLease(dbPath);
+        return 3;
+      },
+      close() { assertChildLease(dbPath); },
+    }),
+    close() { assertChildLease(dbPath); },
+  }) };
+}
+`)}`;
+  await expect(readStats(getDbPath())).resolves.toBe(3);
+  await expect(fs.readdir(path.join(getDbPath(), ".openclaw-custody"))).resolves.toEqual([]);
 });

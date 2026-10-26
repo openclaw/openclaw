@@ -212,6 +212,41 @@ describe("Solid native popover", () => {
     }
   });
 
+  it("positions above a larger element while its button retains activation and return focus", async () => {
+    const card = document.createElement("section");
+    card.style.cssText = "position:fixed;top:240px;left:160px;width:360px;height:120px";
+    document.body.append(card);
+    let handle!: PopoverHandle;
+    const view = render(() => (
+      <Popover
+        id="card-details"
+        label="Card details"
+        positionAnchor={card}
+        placement="top-end"
+        ref={(value) => (handle = value)}
+      >
+        <input autofocus aria-label="Details value" />
+      </Popover>
+    ));
+    try {
+      const trigger = view.getByRole("button", { name: "Card details" });
+      await userEvent.click(trigger);
+      await phase(handle.overlay.surface, "open");
+      const bounds = handle.overlay.surface.getBoundingClientRect();
+      const cardBounds = card.getBoundingClientRect();
+      expect(bounds.bottom).toBeLessThanOrEqual(cardBounds.top);
+      expect(Math.abs(bounds.right - cardBounds.right)).toBeLessThanOrEqual(1);
+      expect(document.activeElement).toBe(view.getByRole("textbox"));
+      await userEvent.keyboard("{Escape}");
+      await phase(handle.overlay.surface, "hidden");
+      expect(document.activeElement).toBe(trigger);
+      view.unmount();
+      expect(card.style.getPropertyValue("anchor-name")).toBe("");
+    } finally {
+      card.remove();
+    }
+  });
+
   it("returns vetoed controlled values to the accepted native state", async () => {
     const [opened, setOpened] = createSignal(true);
     let rejectShow = true;

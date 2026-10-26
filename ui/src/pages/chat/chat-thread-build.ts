@@ -38,6 +38,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
+import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import {
   hasHandoffToolCall,
   pendingSessionsYield,
@@ -724,6 +725,8 @@ export function buildChatItems(
       : undefined;
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
+  // Keep real user boundaries even when search hides their rows.
+  items = projectRunFailureStreaks(items);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
   return groupMessages(
     projectYields(coalesceToolActivityMessages(items, hidden), complete),

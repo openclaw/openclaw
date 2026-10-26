@@ -255,7 +255,9 @@ Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
 The paired-node file-transfer adapter also connects Skill discovery, resource reads,
 watching and dependency installation through `workspace.skills`. Its native worker
 launcher uses `resolveWorkspaceWorkerArgv("memory" | "skills")` from
-`agent-workspace-runtime`, then appends the operation arguments. Use the same
+`agent-workspace-runtime`, then appends the operation arguments. Worker-thread
+callers use `resolveWorkspaceWorkerUrl` and `resolveWorkspaceWorkerExecArgv` from
+the same owner to keep the declared target separate from loader flags. Use the same
 OpenClaw version on Gateway and node.
 
 This adapter does not implement remote Skill source install/update/remove or

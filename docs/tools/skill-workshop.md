@@ -38,8 +38,9 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
 - **Background review:** after 10 accumulated model iterations in a conversation,
   a background run reviews it and saves anything worth keeping.
   See [Self-learning](/tools/self-learning).
-- **`/learn [request]`:** asks the agent to save a skill now, from the current
-  conversation or from sources you name. See [`/learn`](#learn).
+- **`/learn [request]`:** asks the agent to learn now, from the current
+  conversation or from sources you name. Procedures become skills; facts and
+  preferences go to memory when the memory plugin supports it. See [`/learn`](#learn).
 - **Learn from history:** the Control UI button opens a normal chat
   in which the agent reviews earlier conversations and saves what it finds.
 - **Unused-skill cleanup:** learned skills nobody used for 30 days are archived.

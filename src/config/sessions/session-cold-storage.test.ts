@@ -10,6 +10,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -28,9 +29,11 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { replaceSessionEntry } from "./session-accessor.js";
+import { formatSessionArchiveTimestamp } from "./artifacts.js";
+import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
@@ -41,6 +44,7 @@ import {
   loadTranscriptHeaderSync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
+import { resolveSqliteTranscriptArchiveDirectory } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
@@ -219,6 +223,145 @@ async function embedFixtureArchive(fixture: Fixture) {
 }
 
 describe("cold transcript storage workers", () => {
+  it("reuses cold restoration execution after closing each database lease and preserves every transcript", async () => {
+    const fixture = await createFixture();
+    const storePath = fixture.scope.storePath;
+    const sibling = {
+      ...fixture.scope,
+      sessionKey: "agent:main:second-cold",
+      sessionId: "second-cold",
+    };
+    const siblingEvents = [
+      { type: "session", id: sibling.sessionId },
+      {
+        type: "custom",
+        id: "second-event",
+        customType: "preserved",
+        data: { text: "Second transcript" },
+      },
+    ];
+    replaceSessionEntrySync(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents(sibling, siblingEvents);
+    await waitForSessionTranscriptIndexReconcile(fixture.options);
+    replaceSessionEntrySync(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      db.prepare(
+        "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(sibling.sessionId);
+    }, fixture.options);
+    const original = fixture.snapshot();
+    await expect(
+      runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) }),
+    ).resolves.toEqual({ archivedTranscripts: 2, externalizedTranscripts: 0 });
+    const archiveStarts = () =>
+      getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+        ({ script }) => script === "session-accessor.sqlite-archive.worker.js",
+      )?.started ?? 0;
+    const leases = () =>
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+        .all(storePath);
+    const baselineLeases = leases();
+    const before = archiveStarts();
+    expect(before).toBeGreaterThan(0);
+    for (let sweep = 0; sweep < 3; sweep++) {
+      await expectCounts(maintain(fixture), 0);
+    }
+    expect(archiveStarts()).toBe(before);
+    const first = await loadTranscriptEvents(fixture.scope);
+    expect(first).toHaveLength(3);
+    expect(leases()).toEqual(baselineLeases);
+    expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
+    expect(leases()).toEqual(baselineLeases);
+    expect(fixture.snapshot()).toEqual(original);
+    expect(archiveStarts()).toBe(before);
+    expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
+    expect(archiveStarts()).toBe(before);
+    expect(leases()).toEqual(baselineLeases);
+  });
+
+  it.each([
+    ["enforce", "1h", true],
+    ["warn", "1h", false],
+    ["enforce", false, false],
+  ] as const)(
+    "expires archives without cron or cold storage (mode=%s, retention=%s)",
+    async (mode, retention, expires) => {
+      const fixture = await createFixture();
+      const now = Date.parse("2026-10-01T00:00:00.000Z");
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      replaceSessionEntrySync(fixture.scope, {
+        sessionId: currentId,
+        previousSessionId: historicalId,
+        updatedAt: now,
+      });
+      const expiredAt = now - 2 * 60 * 60 * 1000;
+      const directory = resolveSqliteTranscriptArchiveDirectory(fixture.options);
+      await fs.mkdir(directory, { recursive: true });
+      const archives = [
+        ["expired-delete", "deleted", expiredAt, expiredAt],
+        ["expired-reset", "reset", expiredAt, expiredAt],
+        ["fresh", "deleted", now, now],
+        [historicalId, "reset", expiredAt, expiredAt],
+        ["pending", "reset", expiredAt, null],
+      ] as const;
+      const names = new Map<string, string>();
+      for (const [sessionId, reason, createdAt, publishedAt] of archives) {
+        const name = `${sessionId}.jsonl.${reason}.${formatSessionArchiveTimestamp(createdAt)}`;
+        names.set(sessionId, name);
+        await fs.writeFile(path.join(directory, name), "archive");
+        fixture
+          .database()
+          .prepare(`INSERT INTO session_transcript_archives (
+            session_id, session_key, generation, archive_name, archive_sha256,
+            encoding, reason, created_at, published_at, archive_blob
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(
+            sessionId,
+            `agent:main:${sessionId}`,
+            "retention-generation",
+            name,
+            createHash("sha256").update("archive").digest("hex"),
+            "identity",
+            reason,
+            createdAt,
+            publishedAt,
+            Buffer.from("archive"),
+          );
+      }
+      const legacyName = `legacy.jsonl.deleted.${formatSessionArchiveTimestamp(expiredAt)}`;
+      await fs.writeFile(path.join(directory, legacyName), "legacy archive");
+
+      await runSessionColdStorageMaintenance({
+        config: {
+          agents: { entries: { main: {} } },
+          cron: { enabled: false },
+          session: {
+            store: fixture.scope.storePath,
+            maintenance: {
+              mode,
+              resetArchiveRetention: retention,
+              maxDiskBytes: false,
+              coldStorage: { enabled: false },
+            },
+          },
+        },
+      });
+
+      const expected = expires
+        ? ["fresh", historicalId, "pending"]
+        : ["expired-delete", "expired-reset", "fresh", historicalId, "pending"];
+      expect(
+        rows(fixture, "SELECT session_id FROM session_transcript_archives ORDER BY session_id"),
+      ).toEqual(expected.toSorted().map((session_id) => ({ session_id })));
+      const files = await fs.readdir(directory);
+      for (const [id, name] of names) {
+        expect(files.includes(name), id).toBe(expected.includes(id));
+      }
+      expect(files.includes(legacyName)).toBe(!expires);
+    },
+  );
+
   it("bounds aggregate archive bytes per pass and continues with the remaining large transcript", async () => {
     const root = tempDirs.make("openclaw-cold-byte-budget-");
     const storePath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -424,17 +567,12 @@ describe("cold transcript storage workers", () => {
     const fixture = await createBatchFixture();
     const entered = createDeferred();
     const release = createDeferred();
-    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    const originalWorker = archiveWorkers.prepareSqliteColdArchiveBatch;
     let held = false;
-    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
-      async (params) => {
-        const result = await originalWorker(params);
-        if (
-          !held &&
-          params.expectedMessageType === "done" &&
-          "operation" in params.workerData &&
-          params.workerData.operation === "cold-prepare"
-        ) {
+    vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch").mockImplementation(
+      async (...args) => {
+        const result = await originalWorker(...args);
+        if (!held) {
           held = true;
           entered.resolve();
           await release.promise;
@@ -482,17 +620,16 @@ describe("cold transcript storage workers", () => {
       let prepared = false;
       let revoked = false;
       let closeElapsedMs = 0;
+      const prepare = archiveWorkers.prepareSqliteColdArchiveBatch;
+      vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch").mockImplementation(
+        async (...args) => {
+          const result = await prepare(...args);
+          prepared = true;
+          return result;
+        },
+      );
       vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
         async (params) => {
-          if (
-            params.expectedMessageType === "done" &&
-            "operation" in params.workerData &&
-            params.workerData.operation === "cold-prepare"
-          ) {
-            const result = await originalWorker(params);
-            prepared = true;
-            return result;
-          }
           if (prepared && params.expectedMessageType === "reclaimed") {
             if (params.diagnostics) {
               archiveDiagnostics.push(params.diagnostics);

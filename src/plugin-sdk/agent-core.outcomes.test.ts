@@ -1,7 +1,7 @@
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import {
   createTurnSequenceStream,
+  makeAssistantMessage,
   makeCall,
   makeTool,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
@@ -12,7 +12,6 @@ import {
 } from "../../packages/agent-core/src/internal-hooks.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { wrapToolDefinition } from "../agents/sessions/tools/tool-definition-wrapper.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -158,79 +157,46 @@ it.each(["code", "nested errors"])(
   },
 );
 
+const uncertainWrite = () => new SqliteWorkerError("Unconfirmed write", "outcome-unknown");
+const diskFailure = Object.assign(new Error("Disk full"), { code: "SQLITE_FULL" });
+const unreadableAggregate = new AggregateError([new Error("Sibling"), uncertainWrite()], "Failure");
+Object.defineProperty(unreadableAggregate.errors, Symbol.iterator, {
+  get() {
+    throw new Error("Unreadable diagnostic");
+  },
+});
 it.each([
-  {
-    name: "unknown outcome",
-    failure: new SqliteWorkerError("Synthetic unacknowledged write", "outcome-unknown"),
-    local: true,
-  },
-  {
-    name: "database cancellation",
-    failure: decodePostgresError({
-      name: "error",
-      code: "57014",
-      message: "Synthetic cancellation",
-    }),
-    local: true,
-  },
-  {
-    name: "primary disk failure with uncertain cleanup",
-    failure: (() => {
-      const primary = Object.assign(new Error("Synthetic disk failure"), { code: "SQLITE_FULL" });
-      return new AggregateError(
-        [primary, new SqliteWorkerError("Synthetic unconfirmed cleanup", "outcome-unknown")],
-        "Synthetic operation and cleanup failure",
-        { cause: primary },
-      );
-    })(),
-    local: true,
-  },
-  {
-    name: "unknown outcome with unreadable aggregate diagnostics",
-    failure: (() => {
-      const failure = new AggregateError(
-        [
-          new Error("Synthetic sibling"),
-          new SqliteWorkerError("Unconfirmed write", "outcome-unknown"),
-        ],
-        "Synthetic operation failure",
-      );
-      Object.defineProperty(failure.errors, Symbol.iterator, {
-        get() {
-          throw new Error("Diagnostic access must not replace the original tool failure");
-        },
-      });
-      return failure;
-    })(),
-    local: true,
-  },
-  { name: "ordinary tool failure", failure: new Error("Synthetic tool failure"), local: false },
-  {
-    name: "ordinary SQLite tool contention",
-    failure: Object.assign(new Error("Synthetic plugin database contention"), {
-      code: "SQLITE_BUSY",
-    }),
-    local: false,
-  },
-  {
-    name: "ordinary AbortError tool failure",
-    failure: Object.assign(new Error("Synthetic tool abort"), { name: "AbortError" }),
-    local: false,
-  },
-])("settles accepted tools before reporting $name", async ({ failure, local }) => {
+  ["unknown outcome", uncertainWrite(), true],
+  [
+    "database cancellation",
+    decodePostgresError({ name: "error", code: "57014", message: "Cancelled" }),
+    true,
+  ],
+  [
+    "disk failure with uncertain cleanup",
+    new AggregateError([diskFailure, uncertainWrite()], "Cleanup", { cause: diskFailure }),
+    true,
+  ],
+  ["unreadable aggregate diagnostics", unreadableAggregate, true],
+  ["ordinary failure", new Error("Tool failed"), false],
+  ["SQLite contention", Object.assign(new Error("Busy"), { code: "SQLITE_BUSY" }), false],
+  ["ordinary AbortError", Object.assign(new Error("Aborted"), { name: "AbortError" }), false],
+] as const)("settles accepted tools before reporting %s", async (_name, failure, local) => {
   const siblingStarted = Promise.withResolvers<void>();
   const failureThrown = Promise.withResolvers<void>();
   const releaseSibling = Promise.withResolvers<void>();
   let siblingSettled = false;
-  let requests = 0;
+  const streamFn = vi.fn(
+    createTurnSequenceStream([
+      [makeCall("failing", "fail"), makeCall("sibling", "hold")],
+      [{ type: "text", text: "Continued" }],
+    ]),
+  );
   const agent = new Agent({
     initialState: {
       tools: toToolDefinitions([
         {
-          name: "failing",
-          label: "Failing tool",
-          description: "Synthetic failure",
-          parameters: Type.Object({}),
+          ...makeTool("failing"),
           async execute() {
             await siblingStarted.promise;
             failureThrown.resolve();
@@ -238,10 +204,7 @@ it.each([
           },
         },
         {
-          name: "sibling",
-          label: "Sibling tool",
-          description: "Synthetic accepted work",
-          parameters: Type.Object({}),
+          ...makeTool("sibling"),
           async execute() {
             siblingStarted.resolve();
             await releaseSibling.promise;
@@ -251,28 +214,7 @@ it.each([
         },
       ]).map((definition) => wrapToolDefinition(definition)),
     },
-    streamFn: (model) => {
-      const first = requests++ === 0;
-      const output = createAssistantMessageEventStream();
-      const message = {
-        role: "assistant" as const,
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: first
-          ? [
-              { type: "toolCall" as const, id: "fail", name: "failing", arguments: {} },
-              { type: "toolCall" as const, id: "hold", name: "sibling", arguments: {} },
-            ]
-          : [{ type: "text" as const, text: "Continued" }],
-        stopReason: first ? ("toolUse" as const) : ("stop" as const),
-        timestamp: 0,
-        usage: createZeroUsageFixture(),
-      };
-      output.push({ type: "done", reason: message.stopReason, message });
-      output.end();
-      return output;
-    },
+    streamFn,
   });
   const events: AgentEvent[] = [];
   agent.subscribe((event) => {
@@ -298,15 +240,13 @@ it.each([
   }
   expect(siblingSettled).toBe(true);
   expect(agent.state.isStreaming).toBe(false);
-  expect(requests).toBe(local ? 1 : 2);
-  expect(
-    events.some(
-      (event) =>
-        event.type === "message_end" &&
-        event.message.role === "toolResult" &&
-        event.message.toolCallId === "hold",
-    ),
-  ).toBe(true);
+  expect(streamFn).toHaveBeenCalledTimes(local ? 1 : 2);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "message_end",
+      message: expect.objectContaining({ role: "toolResult", toolCallId: "hold" }),
+    }),
+  );
 });
 
 it("preserves ordinary caller abort behavior", async () => {
@@ -358,20 +298,10 @@ it.each(["before-provider", "after-provider-abort"] as const)(
   "retains a local abort reason %s",
   async (phase) => {
     const failure = new SqliteWorkerError("Synthetic lost connection", "outcome-unknown");
-    const agent: Agent = new Agent({
+    const agent = new Agent({
       streamFn: () => {
         const stream = createAssistantMessageEventStream();
-        const model = agent.state.model;
-        const message = {
-          role: "assistant" as const,
-          content: [],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          stopReason: "aborted" as const,
-          timestamp: Date.now(),
-          usage: createZeroUsageFixture(),
-        };
+        const message = { ...makeAssistantMessage([]), stopReason: "aborted" as const };
         stream.push({ type: "error", reason: "aborted", error: message });
         stream.end();
         return stream;

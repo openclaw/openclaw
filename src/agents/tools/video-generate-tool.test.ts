@@ -1,3 +1,5 @@
+import * as toolSchema from "@openclaw/ai/internal/tool-schema";
+import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
@@ -30,7 +32,7 @@ import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { VideoGenerationProvider } from "../../video-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { configWithDefaults } from "./media-config.test-support.js";
 import * as videoGenerateBackground from "./media-generate-background.js";
 import {
   defineMediaGenerationCancellationTests,
@@ -58,14 +60,6 @@ function videoAsset(bytes: string | Buffer, fileName: string, mimeType = "video/
 
 function savedMedia(fileName: string, size: number, contentType = "video/mp4") {
   return { path: `/tmp/${fileName}`, id: fileName, size, contentType };
-}
-
-function configWithDefaults(
-  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
-): OpenClawConfig {
-  const config = { agents: { defaults } };
-  setRuntimeConfigSnapshot(config, config);
-  return config;
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({ listOperations: vi.fn() }));
@@ -202,7 +196,6 @@ function resetVideoGenerateMocks(providerEnvVars: readonly string[]) {
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
   mediaActivityMocks.listOperations.mockReset();
   mediaActivityMocks.listOperations.mockReturnValue(undefined);
-  resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   probeMediaFilesWithinBudgetMock.mockReset();
   probeMediaFilesWithinBudgetMock.mockImplementation(async (inputs: readonly unknown[]) =>
@@ -238,6 +231,57 @@ describe("createVideoGenerateTool", () => {
     vi.unstubAllEnvs();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([false, true])(
+    "reuses published schemas for reference audio=%s across runs and sessions",
+    (referenceAudioInputs) => {
+      const config: OpenClawConfig = {
+        plugins: { allow: ["external-video"], entries: { "external-video": { enabled: true } } },
+        agents: { defaults: { mediaModels: { video: { primary: "external-video/vid-v1" } } } },
+      };
+      const workspaceDir = "/workspace/video-schema-reuse";
+      setCurrentPluginMetadataSnapshot(
+        createVideoProviderSnapshot({
+          config,
+          workspaceDir,
+          id: "external-video",
+          origin: "bundled",
+          referenceAudioInputs,
+        }),
+        { config, workspaceDir },
+      );
+      const authProfileStore = createAuthStore("external-video");
+      const construct = (sessionId: string) => {
+        const tool = createVideoGenerateTool({ config, workspaceDir, authProfileStore }, true);
+        if (!tool) {
+          throw new Error("expected video_generate tool");
+        }
+        return finalizeAgentTools({
+          tools: [tool],
+          config,
+          hookContext: { sessionId },
+          modelProvider: "openai",
+          modelApi: "openai-responses",
+          wrapBeforeToolCallHook: false,
+        })[0]!;
+      };
+      const cold = construct("video-schema-first");
+      for (const name of ["audioRef", "audioRefs", "audioRoles"]) {
+        if (referenceAudioInputs) {
+          expect(cold.parameters).toHaveProperty(`properties.${name}`);
+        } else {
+          expect(cold.parameters).not.toHaveProperty(`properties.${name}`);
+        }
+      }
+      const bytes = JSON.stringify(cold.parameters);
+      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+
+      for (const sessionId of ["video-schema-first", "video-schema-second", "video-schema-third"]) {
+        expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
+      }
+      expect(publish).not.toHaveBeenCalled();
+    },
+  );
 
   it("exposes video generation for an auth-backed video provider", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
@@ -452,10 +496,6 @@ describe("createVideoGenerateTool", () => {
     const name = "saved-lobster.mp4";
     taskExecutorMocks.createOperation.mockReturnValue({
       taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      task: "friendly lobster surfing",
-      status: "running",
-      createdAt: Date.now(),
     });
     const wakeSpy = wakeCompletion();
     const savedId = "saved-lobster---a1b2c3d4-e5f6-4789-abcd-ef1234567890.mp4";

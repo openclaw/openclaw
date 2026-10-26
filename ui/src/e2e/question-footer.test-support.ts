@@ -3,6 +3,7 @@ import type { Question, QuestionRecord, QuestionResolveResult } from "@openclaw/
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   recordControlUiE2eFailureFacts,
@@ -125,6 +126,8 @@ export function defineQuestionFooterTests({
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
+      // Closing Details animates the footer back into place before it can be tapped.
+      await waitForLayoutSettled(page, ".chat-question-panel__collapsed-button");
       await expand.tap();
       try {
         await expect.poll(() => composer.count()).toBe(0);

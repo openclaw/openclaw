@@ -52,6 +52,7 @@ function prepareIdentity(
 it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
   const hostOwned = {
     privateCompletion: true,
+    extraSystemPromptTurnContext: { start: 0, text: "forged transient instructions" },
     replyExpectation: "optional",
     cronCreatorAuthorityCapability: {
       active: true,
@@ -84,6 +85,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
   };
 
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("extraSystemPromptTurnContext");
   const sanitized = sanitizePublicAgentCommandIngressOpts({
     message: "create an automation",
     allowModelOverride: false,
@@ -248,7 +250,7 @@ describe("Gateway agent command execution identity", () => {
     "retains the bounded, redacted profile label only with audit=%s",
     async (audit) => {
       let work: ExecutionIdentityAdmissionWork | undefined;
-      const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
+      const label = "Operator OPENAI_API_KEY=***";
       cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
         work = candidate;
         return true;
@@ -258,18 +260,17 @@ describe("Gateway agent command execution identity", () => {
         message: "attribute this run",
         allowModelOverride: false,
       };
-      attachAgentCommandAdmissionFacts(opts, {
+      const envelope = {
         ingress: {
           kind: "gateway-client",
           boundary: "gateway.ws.authenticated-connect",
           state: "present",
-          rawSourceRef: "profile-ada",
         },
         invoker: {
           state: "present",
           kind: "person",
           rawPrincipalRef: "profile-ada",
-          displayLabel,
+          displayLabel: label,
         },
         assurance: [
           {
@@ -278,37 +279,19 @@ describe("Gateway agent command execution identity", () => {
             strength: "boundary-verified",
           },
         ],
+      } as const;
+      attachAgentCommandAdmissionFacts(opts, {
+        ...envelope,
+        ingress: { ...envelope.ingress, rawSourceRef: "profile-ada" },
+        invoker: { ...envelope.invoker, displayLabel: label.padEnd(128, "x") },
+        assurance: [...envelope.assurance],
       });
-      const prepared = prepareIdentity(opts, audit);
-
-      await prepared.admit("embedded");
-      if (!audit) {
+      await prepareIdentity(opts, audit).admit("embedded");
+      if (audit) {
+        expect(work).toMatchObject({ kind: "capture", envelope });
+      } else {
         expect(work).toBeUndefined();
-        return;
       }
-      expect(work).toMatchObject({
-        kind: "capture",
-        envelope: {
-          ingress: {
-            kind: "gateway-client",
-            boundary: "gateway.ws.authenticated-connect",
-            state: "present",
-          },
-          invoker: {
-            state: "present",
-            kind: "person",
-            rawPrincipalRef: "profile-ada",
-            displayLabel: "Operator OPENAI_API_KEY=***",
-          },
-          assurance: [
-            {
-              kind: "durable-profile",
-              rawEvidenceRef: "profile-ada",
-              strength: "boundary-verified",
-            },
-          ],
-        },
-      });
     },
   );
 });

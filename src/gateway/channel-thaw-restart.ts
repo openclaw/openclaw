@@ -10,10 +10,6 @@ type ThawRestartManager = Pick<
 
 export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
 
-export type ThawRestartSelection =
-  | { kind: "new-thaw"; pendingTargets?: readonly ThawRestartTarget[] }
-  | { kind: "deferred-retry"; targets: readonly ThawRestartTarget[] };
-
 function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[] {
   return Object.entries(
     manager.getRuntimeSnapshot({ inspectAccounts: false }).channelAccounts,
@@ -34,7 +30,9 @@ function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[
 export async function restartRunningChannelAccounts(
   manager: ThawRestartManager,
   opts: { shouldContinue: () => boolean; onError: (message: string) => void },
-  selection: ThawRestartSelection = { kind: "new-thaw" },
+  selection:
+    | { kind: "new-thaw"; pendingTargets?: readonly ThawRestartTarget[] }
+    | { kind: "deferred-retry"; targets: readonly ThawRestartTarget[] } = { kind: "new-thaw" },
 ): Promise<ThawRestartTarget[]> {
   const targets =
     selection.kind === "new-thaw"

@@ -25,12 +25,12 @@ import "../../../components/tooltip.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+} from "../../../lib/chat/canvas-embed-policy.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -39,7 +39,7 @@ import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
 import type {
   AttachmentSidebarRuntime,

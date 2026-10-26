@@ -4,6 +4,7 @@ import type {
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
@@ -53,7 +54,6 @@ import {
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
   GroupMutationOperation,
-  MutationCoreResult,
   MutationOutcome,
   MutationTarget,
   PreparedPatchTarget,
@@ -80,14 +80,14 @@ export async function executeSessionPatchMutations(params: {
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
-}): Promise<MutationCoreResult> {
+}) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
   try {
     personalModelSelection = await preparePersonalModelSelection(params, params.patch.model);
   } catch (error) {
-    return { ok: false, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
+    return { ok: false as const, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
   }
   const getCurrentConfig = params.context.getRuntimeConfig;
   const cfg = getCurrentConfig();
@@ -95,7 +95,7 @@ export async function executeSessionPatchMutations(params: {
   const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
   const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const callerScopes = client?.connect.scopes ?? [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const discovery = await discoverSessionPatchTargets(cfg, params.targets);
@@ -364,6 +364,10 @@ export async function executeSessionPatchMutations(params: {
                         store: workingStore,
                         ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                       });
+                      const previousModel =
+                        target.fullPatch.model !== undefined && existingEntry
+                          ? resolveSessionModelRef(cfg, existingEntry, target.targetAgentId)
+                          : undefined;
                       const accessError = targetAccessError(
                         existingEntry,
                         target.targetAgentId,
@@ -561,6 +565,9 @@ export async function executeSessionPatchMutations(params: {
                         labelOwners,
                         assertCurrent: assertCommitAllowed,
                       });
+                      if (previousModel) {
+                        replacement.outcome.previousModel = previousModel;
+                      }
                       if (replacement.replacement) {
                         replacements.push(replacement.replacement);
                         if (!existingEntry && params.onCreatedSessionCommitted) {
@@ -630,13 +637,17 @@ export async function executeSessionPatchMutations(params: {
                     recordSessionStatusModelPatchOutcome(outcome.applied);
                   }
                   if (outcome.ok && outcome.applied) {
-                    modelSelection.refreshSessionPatchQueuedSelection({
+                    await patchEffects.applySessionPatchModelEffects({
                       cfg,
                       entry: outcome.entry,
                       patch: target.fullPatch,
+                      previousModel: outcome.previousModel,
                       sessionKey: target.canonicalKey,
                       agentId: target.targetAgentId,
+                      storePath: target.storePath,
+                      env: storage?.env,
                       catalog: (await catalogs.available(target.targetAgentId))?.entries,
+                      assertCurrent: assertCommitAllowed,
                     });
                   }
                 }
@@ -703,7 +714,7 @@ export async function executeSessionPatchMutations(params: {
     outcomes[index] = { ok: false, error };
   }
   return {
-    ok: true,
+    ok: true as const,
     archivedSessionsCommitted,
     cfg,
     outcomes: outcomes as MutationOutcome[],

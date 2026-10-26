@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
@@ -27,6 +28,7 @@ import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import * as sessionLeadingIndicator from "./session-leading-indicator.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { snapshotSessions } from "./sidebar-snapshot-model.ts";
 
@@ -68,12 +70,13 @@ async function mount(rows: GatewaySessionRow[]) {
     createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
   );
   const context = {
-    ...createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "work" }],
-    }),
+    ...createContext(
+      gateway.gateway,
+      sessions.sessions,
+      makeBootRoster({
+        agents: [{ id: "main" }, { id: "work" }],
+      }),
+    ),
     chatSubmissions: createChatSubmissions(),
   };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();
@@ -222,8 +225,10 @@ describe("sidebar projection memo", () => {
     expect(row()?.textContent).not.toContain("Updated while hidden");
     expect(sessions.list).toHaveBeenCalledTimes(reads);
     sidebar.navigationVisible = true;
-    await waitForSolid(() => expect(row()?.textContent).toContain("Updated while hidden"));
-    expect(createdRow()?.textContent).toContain("created-while-hidden");
+    await waitForSolid(() => {
+      expect(row()?.textContent).toContain("Updated while hidden");
+      expect(createdRow()?.textContent).toContain("created-while-hidden");
+    });
   });
 
   it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {
@@ -236,12 +241,7 @@ describe("sidebar projection memo", () => {
       createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
     );
     gateway.publish({ phase: "connecting", client: null, hello: null });
-    const context = createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    });
+    const context = createContext(gateway.gateway, sessions.sessions, makeBootRoster());
     onTestFinished(
       admitSidebarBootScope(gateway.gateway, {
         scope: gateway.gateway.connection.gatewayUrl,
@@ -320,6 +320,7 @@ describe("sidebar projection memo", () => {
     const first = session("first");
     const second = session("second", { owner: { actor: bob } });
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
+    const describeState = vi.spyOn(sessionLeadingIndicator, "describeSessionState");
     const { sidebar, row, publish } = await mount([home, first, second]);
     publish([
       { ...home, lastMessagePreview: "Home after" },
@@ -329,11 +330,24 @@ describe("sidebar projection memo", () => {
     await settleLitElement(sidebar);
     expect(row(first.key)?.textContent).toContain("Renamed first");
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
+    const firstRow = row(first.key);
+    const secondRow = row(second.key);
+    describeState.mockClear();
     await update(sidebar, { activeRouteId: "chat", sessionKey: first.key });
     expect(sidebar.findSidebarSessionByKey(first.key)?.visuallyActive).toBe(true);
+    expect(row(first.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
     await update(sidebar, { sessionKey: second.key });
     expect(sidebar.findSidebarSessionByKey(first.key)?.visuallyActive).toBe(false);
     expect(sidebar.findSidebarSessionByKey(second.key)?.visuallyActive).toBe(true);
+    expect(row(first.key)).toBe(firstRow);
+    expect(row(second.key)).toBe(secondRow);
+    expect(firstRow?.querySelector("a")?.getAttribute("aria-current")).toBeNull();
+    expect(secondRow?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+    expect(describeState).not.toHaveBeenCalled();
+    publish([home, { ...first, hasActiveRun: true, unread: true }, second]);
+    await settleLitElement(sidebar);
+    expect(describeState).toHaveBeenCalled();
+    expect(row(first.key)?.querySelector(".sr-only")?.textContent).toContain("Unread");
   });
 
   it.each([

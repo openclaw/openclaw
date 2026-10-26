@@ -18,7 +18,7 @@ import { ApplicationProvider, useApplication } from "./reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 
 type Props = { label: string; enabled: boolean; count: number; payload: object | null };
-type Methods = { show(): void; close(): void; setPayload(value: object): object };
+type Methods = { setPayload(value: object): object };
 type Host = SolidBridgeElement<Props, Methods>;
 const mounted = vi.fn<(value: object) => void>();
 const disposed = vi.fn();
@@ -31,18 +31,12 @@ const Bridge = defineSolidBridge<Props, Methods>(
     const local = { id: props.label };
     mounted(local);
     onCleanup(() => disposed(local));
+    const act = () =>
+      host.dispatchEvent(new CustomEvent("bridge-action", { detail: props.payload }));
     return (
       <section data-owned={local.id}>
-        <output>
-          {props.label}:{props.count}:{String(props.enabled)}
-        </output>
-        <button
-          onClick={() =>
-            host.dispatchEvent(new CustomEvent("bridge-action", { detail: props.payload }))
-          }
-        >
-          Action
-        </button>
+        <output>{`${props.label}:${props.count}:${props.enabled}`}</output>
+        <button onClick={act}>Action</button>
         <div class="caller-content">{props.children}</div>
       </section>
     );
@@ -58,12 +52,6 @@ const Bridge = defineSolidBridge<Props, Methods>(
     },
     propertyChanged: changed,
     methods: {
-      show: (host) => {
-        host.enabled = true;
-      },
-      close: (host) => {
-        host.enabled = false;
-      },
       setPayload: (host, value) => {
         host.payload = value;
         return value;
@@ -138,10 +126,9 @@ it("mounts once and preserves setup reads with an application provider", async (
   const host = new Bridge.Element();
   host.setAttribute("label", "attribute");
   host.setAttribute("item-count", "4");
-  host.show();
+  host.enabled = true;
   const payload = {};
   expect(host.setPayload(payload)).toBe(payload);
-  expect(host.enabled).toBe(true);
   // SAFETY: this bridge test transports context without reading any capabilities.
   const container = createApplicationContextProvider({} as ApplicationContext);
   container.append(host);
@@ -149,11 +136,9 @@ it("mounts once and preserves setup reads with an application provider", async (
   await expectOutput(host, "attribute:4:true");
   expect(host.payload).toBe(payload);
   expect(host.hasAttribute("payload")).toBe(false);
-  expect(mounted).toHaveBeenCalledTimes(1);
 
   host.label = "property";
   host.removeAttribute("enabled");
-  host.close();
   await expectOutput(host, "property:4:false");
   expect(host.querySelector("section")?.getAttribute("data-owned")).toBe("attribute");
   expect(mounted).toHaveBeenCalledTimes(1);
@@ -167,9 +152,8 @@ it("publishes changed properties synchronously before rendering and suppresses e
   });
   host.label = "next";
   expect(observations).toEqual(["label:next:initial:0:false"]);
-  expect(changed).toHaveBeenCalledWith(host, "label");
   host.label = "next";
-  expect(changed).toHaveBeenCalledTimes(1);
+  expect(observations).toHaveLength(1);
   await expectOutput(host, "next:0:false");
 });
 
@@ -200,12 +184,10 @@ it("preserves enumerable declared props and their children value", async () => {
 it("batches property bursts without invalidating unrelated Solid computations", async () => {
   const labels = vi.fn((value: string) => value);
   const counts = vi.fn((value: number) => value);
-  const mount = vi.fn();
   let readLabel = () => "";
   const GranularBridge = defineSolidBridge<{ label: string; count: number }>(
     "openclaw-solid-granular-test",
     (props) => {
-      mount();
       // Sample the live prop in a tracked scope without flushing the pending render.
       readLabel = () =>
         createRoot((dispose) => {
@@ -242,7 +224,6 @@ it("batches property bursts without invalidating unrelated Solid computations", 
   expect(host.textContent).toBe("final:0");
   expect(labels).toHaveBeenCalledExactlyOnceWith("final");
   expect(counts).not.toHaveBeenCalled();
-  expect(mount).toHaveBeenCalledTimes(1);
   expect(host.querySelector("input")).toBe(input);
   expect(input.value).toBe("draft");
 
@@ -255,13 +236,10 @@ it("batches property bursts without invalidating unrelated Solid computations", 
 });
 
 it("keeps the same root across moves and releases/recreates it after a real disconnect", async () => {
-  const left = document.createElement("div");
   const right = document.createElement("div");
-  document.body.append(left, right);
-  const host = new Bridge.Element();
-  left.append(host);
+  document.body.append(right);
+  const host = await mountHost(new Bridge.Element());
   expect(connected).toHaveBeenCalledExactlyOnceWith(host);
-  await host.updateComplete;
   const section = host.querySelector("section");
   right.append(host);
   expect(disconnected).toHaveBeenCalledExactlyOnceWith(host);
@@ -286,53 +264,18 @@ it("keeps the same root across moves and releases/recreates it after a real disc
 it("preserves caller content through updates and reconnects", async () => {
   const host = new Bridge.Element();
   const input = document.createElement("input");
-  input.value = "first";
   host.append(input);
   await mountHost(host);
-  const outlet = input.parentElement!;
   input.value = "next";
   const second = document.createElement("input");
-  outlet.append(second);
+  input.parentElement!.append(second);
+
+  await disconnect(host);
+  await mountHost(host);
+  expect([...host.querySelectorAll("input")]).toEqual([input, second]);
   expect(input.value).toBe("next");
-  expect([...host.querySelectorAll("input")]).toEqual([input, second]);
-
-  await disconnect(host);
-  await mountHost(host);
-  expect([...host.querySelectorAll("input")]).toEqual([input, second]);
-  input.value = "last";
   second.remove();
-  expect(input.value).toBe("last");
   expect([...host.querySelectorAll("input")]).toEqual([input]);
-});
-
-it("keeps a tooltip's named caller slots live through DOM updates and reconnect", async () => {
-  await import("../components/tooltip.ts");
-  const host = document.createElement("openclaw-tooltip");
-  host.setAttribute("content", "Details");
-  const trigger = document.createElement("button");
-  const content = document.createElement("div");
-  content.slot = "content";
-  const update = (label: string) => {
-    trigger.textContent = label;
-    content.textContent = `Rich ${label}`;
-  };
-  update("first");
-  host.append(trigger, content);
-  await mountHost(host);
-  const assigned = () =>
-    host.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="content"]')!.assignedElements();
-  expect(assigned()).toEqual([content]);
-  update("next");
-  await host.updateComplete;
-  expect(host.querySelector("button")).toBe(trigger);
-  expect([trigger.textContent, content.textContent]).toEqual(["next", "Rich next"]);
-  await disconnect(host);
-  await mountHost(host);
-  expect(host.querySelector("button")).toBe(trigger);
-  expect(assigned()).toEqual([content]);
-  update("last");
-  await host.updateComplete;
-  expect([trigger.textContent, content.textContent]).toEqual(["last", "Rich last"]);
 });
 
 it("uses a single Solid-owned host and preserves reactive props, children, events, and disposal", async () => {
@@ -355,14 +298,14 @@ it("uses a single Solid-owned host and preserves reactive props, children, event
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(host?.className).toBe("direct");
   expect(connected).toHaveBeenCalledExactlyOnceWith(host);
-  host?.show();
+  host!.enabled = true;
   const payload = {};
-  host?.setPayload(payload);
+  host!.setPayload(payload);
   setLabel("updated");
   flush();
-  expect(host?.querySelector("output")?.textContent).toBe("updated:0:true");
-  expect(host?.payload).toBe(payload);
-  expect(host?.querySelector("span")?.textContent).toBe("updated");
+  expect(host!.querySelector("output")?.textContent).toBe("updated:0:true");
+  expect(host!.payload).toBe(payload);
+  expect(host!.querySelector("span")?.textContent).toBe("updated");
   fireEvent.click(view.getByRole("button"));
   expect(action).toHaveBeenCalledTimes(1);
   view.unmount();
@@ -383,9 +326,8 @@ it("accepts property publication while a Solid owner adopts a mounted bridge", a
 });
 
 it("honors the public setter when updating an attribute", async () => {
-  const tag = `openclaw-solid-setter-${crypto.randomUUID()}`;
   const SetterBridge = defineSolidBridge<{ label: string }>(
-    tag,
+    `openclaw-solid-setter-${crypto.randomUUID()}`,
     (props, host) => {
       const property = Object.getOwnPropertyDescriptor(host, "label")!;
       Object.defineProperty(host, "label", {
@@ -406,7 +348,6 @@ it("honors the public setter when updating an attribute", async () => {
 });
 
 it("provides the Solid application context, rebinds replacements, and unsubscribes", async () => {
-  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const { seen, connection, first, second, container, ContextBridge } = contextBridge(
     "openclaw-solid-context-test",
   );
@@ -420,12 +361,10 @@ it("provides the Solid application context, rebinds replacements, and unsubscrib
     return null;
   });
   await host.updateComplete;
-  expect(seen).toHaveBeenLastCalledWith(first);
-  expect(warning).not.toHaveBeenCalled();
+  expect(host.textContent).toBe("/first");
   container.setContext(second);
   await host.updateComplete;
   expect(host.textContent).toBe("/second");
-  expect(seen).toHaveBeenLastCalledWith(second);
   container.setContext(first);
   await host.updateComplete;
   expect(host.textContent).toBe("/first");

@@ -98,6 +98,7 @@
     height: 100%;
     border: 0;
     border-radius: inherit;
+    outline: 0;
     box-shadow: none;
   }
 

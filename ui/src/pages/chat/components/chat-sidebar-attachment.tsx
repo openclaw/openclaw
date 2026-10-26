@@ -2,7 +2,7 @@ import { createMemo, Errored, Loading, Match, onCleanup, refresh, Show, Switch }
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isSvgImageMediaPath, isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
@@ -18,7 +18,7 @@ import {
 } from "./chat-attachment-href.ts";
 import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {

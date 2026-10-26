@@ -48,10 +48,13 @@ across unrelated source revisions. Repeated commands reuse a complete entry.
 The current wrapper can prepare dependencies for older retained workflows without
 changing their binding or executing newer workflow code in their place.
 
-Each entry records its consumer wrapper PIDs. Reuse refreshes its age; each
-materialization sweeps at most four owned entries older than 24 hours, only when
-all recorded consumers have exited. PID reuse may delay cleanup. Failed or
-interrupted staging directories follow the same age and live-creator checks.
+Each entry records its consumer wrapper PIDs. Reuse refreshes its modification
+time; each materialization keeps the four most recently used complete entries
+with no live consumers, plus every entry with a live consumer and the current
+entry. Other unused complete entries are removed regardless of age. Cleanup
+only removes owned, mode-0700 directories with cache entry names. PID reuse may
+delay cleanup. Failed or interrupted staging directories and incomplete entries
+retain a 24-hour grace period and the same live-consumer and live-creator checks.
 The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and
 matching installed packages still take the direct path. Keep any externally

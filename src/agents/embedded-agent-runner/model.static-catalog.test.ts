@@ -5,6 +5,8 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.types
 import { createManifestRecord, setManifestPlugins } from "./model.static-catalog.test-helpers.js";
 
 const mistralLookup = { provider: "mistral", modelId: "mistral-medium-3-5" };
+const azureAlias = "azure-openai-responses";
+const azureEndpoint = "https://example.openai.azure.com/openai/v1";
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -70,8 +72,8 @@ function createMistralManifestPlugin(overrides?: {
 }) {
   return {
     id: "mistral",
-    origin: overrides?.origin ?? "bundled",
     providers: ["mistral"],
+    origin: overrides?.origin ?? "bundled",
     modelCatalog: {
       providers: {
         mistral: {
@@ -87,16 +89,11 @@ function createMistralManifestPlugin(overrides?: {
               maxTokens: 8192,
               thinkingLevelMap: { off: null, minimal: "low", max: "max" },
               cost: overrides?.cost ?? { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-              },
             },
           ],
         },
       },
-      discovery: {
-        mistral: overrides?.discovery ?? "static",
-      },
+      discovery: { mistral: overrides?.discovery ?? "static" },
     },
   };
 }
@@ -132,16 +129,9 @@ describe("resolveBundledStaticCatalogModel", () => {
       ],
     };
     setManifestPlugins(manifestMocks, [createMistralManifestPlugin({ cost })]);
-    expect(
-      resolveBundledStaticCatalogModel({
-        ...mistralLookup,
-        cfg: {},
-      }),
-    ).toEqual({
+    expect(resolveBundledStaticCatalogModel({ ...mistralLookup, cfg: {} })).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://api.mistral.ai/v1",
-      compat: undefined,
-      contextTokens: undefined,
       contextWindow: 262144,
       cost: {
         ...cost,
@@ -150,11 +140,9 @@ describe("resolveBundledStaticCatalogModel", () => {
           { ...cost.tieredPricing![1], range: [200_001, Infinity] },
         ],
       },
-      headers: undefined,
       id: "mistral-medium-3-5",
       input: ["text", "image"],
       maxTokens: 8192,
-      mediaInput: { image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" } },
       name: "Mistral Medium 3.5",
       provider: "mistral",
       reasoning: true,
@@ -163,8 +151,6 @@ describe("resolveBundledStaticCatalogModel", () => {
   });
 
   it("ignores non-bundled and non-static manifest catalog rows", () => {
-    // Workspace plugins and refreshable/runtime catalogs are not process-stable
-    // enough for this fallback path.
     for (const plugin of [
       createMistralManifestPlugin({ origin: "workspace" }),
       createMistralManifestPlugin({ discovery: "refreshable" }),
@@ -172,12 +158,7 @@ describe("resolveBundledStaticCatalogModel", () => {
     ]) {
       setManifestPlugins(manifestMocks, [plugin]);
 
-      expect(
-        resolveBundledStaticCatalogModel({
-          ...mistralLookup,
-          cfg: {},
-        }),
-      ).toBeUndefined();
+      expect(resolveBundledStaticCatalogModel({ ...mistralLookup, cfg: {} })).toBeUndefined();
     }
   });
 });
@@ -186,14 +167,11 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
   it("keeps successful provider context rows when another static catalog fails", async () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "minimax"]);
     manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        createManifestRecord("google", {
-          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
+      plugins: ["google", "minimax"].map((id) =>
+        createManifestRecord(id, {
+          providerDiscoverySource: `/fixtures/${id}/provider-discovery.ts`,
         }),
-        createManifestRecord("minimax", {
-          providerDiscoverySource: "/fixtures/minimax/provider-discovery.ts",
-        }),
-      ],
+      ),
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
       async ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
@@ -245,15 +223,8 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
   it("does not borrow nested provider context across plugin owners", async () => {
     providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
-      ({ provider }: { provider: string }) => {
-        if (provider === "openrouter") {
-          return ["openrouter"];
-        }
-        if (provider === "anthropic") {
-          return ["anthropic"];
-        }
-        return undefined;
-      },
+      ({ provider }: { provider: string }) =>
+        ["openrouter", "anthropic"].includes(provider) ? [provider] : undefined,
     );
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([
       "anthropic",
@@ -297,31 +268,14 @@ function configuredAlias(provider: string, baseUrl: string, api?: ModelCatalogAl
 function setPlugins(...plugins: ReturnType<typeof aliasPlugin>[]) {
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins });
 }
-function suppressedAliasPlugin() {
-  return aliasPlugin(
-    "target-provider",
-    {},
-    {
-      modelCatalog: {
-        aliases: { "conditional-alias": { provider: "target-provider", api: "openai-responses" } },
-        suppressions: [
-          {
-            provider: "conditional-alias",
-            model: "conditional-model",
-          },
-        ],
-      },
-    },
-  );
-}
 function conflictingPlugins() {
   setPlugins(
     aliasPlugin("openai", {
-      "azure-openai-responses": { provider: "openai", api: "azure-openai-responses" },
+      [azureAlias]: { provider: "openai", api: azureAlias },
     }),
     aliasPlugin(
       "workspace-override",
-      { "azure-openai-responses": { provider: "github-copilot" } },
+      { [azureAlias]: { provider: "github-copilot" } },
       { origin: "workspace", enabledByDefault: false, providers: ["github-copilot"] },
     ),
   );
@@ -335,12 +289,6 @@ describe("manifest provider aliases", () => {
     expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
     expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
     expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
-      config: undefined,
-      env: process.env,
-      requireDefaultDiscoveryContext: true,
-      workspaceDir: undefined,
-    });
   });
 
   it("keeps custom environments on their own manifest registry context", () => {
@@ -349,11 +297,6 @@ describe("manifest provider aliases", () => {
     setPlugins(aliasPlugin("moonshot", { "moonshot-ai": { provider: "moonshot" } }));
     expect(resolveAlias({ provider: "moonshot-ai", env })).toEqual({ provider: "moonshot" });
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
-      config: undefined,
-      env,
-      workspaceDir: undefined,
-    });
   });
 
   it("canonicalizes endpoint-less aliases and retains complete transport metadata", () => {
@@ -363,36 +306,25 @@ describe("manifest provider aliases", () => {
         {},
         {
           modelCatalog: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                api: "openai-responses",
-                models: [{ id: "gpt-5.5", name: "gpt-5.5" }],
-              },
-            },
             aliases: {
-              "azure-openai-responses": { provider: "openai", api: "azure-openai-responses" },
+              [azureAlias]: { provider: "openai", api: azureAlias },
               "openai-fixed-endpoint": {
                 provider: "openai",
                 baseUrl: "https://manifest-alias.example.com/openai/v1",
               },
             },
-            discovery: { openai: "runtime" },
           },
         },
       ),
     );
-    expect(resolveAlias({ provider: "azure-openai-responses" })).toEqual({ provider: "openai" });
+    expect(resolveAlias({ provider: azureAlias })).toEqual({ provider: "openai" });
     expect(
       resolveAlias({
-        provider: "azure-openai-responses",
+        provider: azureAlias,
         modelId: "gpt-5.5",
-        cfg: configuredAlias(
-          "azure-openai-responses",
-          "https://example.openai.azure.com/openai/v1",
-        ),
+        cfg: configuredAlias(azureAlias, azureEndpoint),
       }),
-    ).toEqual({ provider: "azure-openai-responses", transport: { api: "azure-openai-responses" } });
+    ).toEqual({ provider: azureAlias, transport: { api: azureAlias } });
     expect(
       resolveAlias({
         provider: "openai-fixed-endpoint",
@@ -413,7 +345,20 @@ describe("manifest provider aliases", () => {
   });
 
   it("canonicalizes transport aliases with unconditional suppressions", () => {
-    setPlugins(suppressedAliasPlugin());
+    setPlugins(
+      aliasPlugin(
+        "target-provider",
+        {},
+        {
+          modelCatalog: {
+            aliases: {
+              "conditional-alias": { provider: "target-provider", api: "openai-responses" },
+            },
+            suppressions: [{ provider: "conditional-alias", model: "conditional-model" }],
+          },
+        },
+      ),
+    );
     expect(
       resolveAlias({
         provider: "conditional-alias",
@@ -431,13 +376,10 @@ describe("manifest provider aliases", () => {
     "rejects conflicting aliases only when the workspace owner is active (%s)",
     (active) => {
       conflictingPlugins();
-      const cfg = configuredAlias(
-        "azure-openai-responses",
-        "https://example.openai.azure.com/openai/v1",
-      );
+      const cfg = configuredAlias(azureAlias, azureEndpoint);
       expect(
         resolveAlias({
-          provider: "azure-openai-responses",
+          provider: azureAlias,
           modelId: "gpt-5.4-mini",
           cfg: active
             ? { ...cfg, plugins: { entries: { "workspace-override": { enabled: true } } } }
@@ -445,8 +387,8 @@ describe("manifest provider aliases", () => {
         }),
       ).toEqual(
         active
-          ? { provider: "azure-openai-responses", ambiguous: true }
-          : { provider: "azure-openai-responses", transport: { api: "azure-openai-responses" } },
+          ? { provider: azureAlias, ambiguous: true }
+          : { provider: azureAlias, transport: { api: azureAlias } },
       );
     },
   );

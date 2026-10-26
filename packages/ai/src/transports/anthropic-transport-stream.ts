@@ -50,23 +50,6 @@ const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 type AnthropicTransportModel = Model<"anthropic-messages">;
 
-function isKimiAnthropicProvider(provider: string | undefined): boolean {
-  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
-}
-
-function buildAnthropicBetaHeader(
-  model: AnthropicTransportModel,
-  betaFeatures: readonly string[],
-  params: { oauth: boolean },
-): string | undefined {
-  if (!isDirectAnthropicModel(model)) {
-    return undefined;
-  }
-  return params.oauth
-    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
-    : betaFeatures.join(",");
-}
-
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
@@ -202,7 +185,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
         // the OpenAI SDK compatibility sanitizer can stall before the text block.
         const fetch =
-          isKimiAnthropicProvider(model.provider) && transportOptions.thinkingEnabled === true
+          /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(model.provider ?? "")) &&
+          transportOptions.thinkingEnabled === true
             ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
             : buildGuardedModelFetch(model);
         const copilot = model.provider === "github-copilot";
@@ -231,7 +215,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (needsInterleavedBeta) {
             betaFeatures.push("interleaved-thinking-2025-05-14");
           }
-          const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: isOAuthToken });
+          const betaHeader = !isDirectAnthropicModel(model)
+            ? undefined
+            : isOAuthToken
+              ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+              : betaFeatures.join(",");
           if (isOAuthToken) {
             const identity = buildAnthropicClaudeCodeIdentity(
               betaHeader,

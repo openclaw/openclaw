@@ -1,12 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import {
-  buildSystemAgentSessionInvalidatedErrorDetails,
-  type SystemAgentChatResult,
-  type SystemChangesListResult,
-} from "@openclaw/gateway-protocol";
+import type { SystemAgentChatResult, SystemChangesListResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../../packages/gateway-protocol/src/system-agent-error-details.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";

@@ -10,9 +10,12 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { projectAgents, projectAgentIdentity } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+  sharedSessionsRevision,
+} from "../lib/reactive/shared-application-projections.ts";
 import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
@@ -251,11 +254,9 @@ export function SidebarAttentionPanel(
   const mentions = projectMentions(mentionSource);
   const gateway = projectGateway(context.gateway);
   const overlays = context.overlays && projectOverlays(context.overlays);
-  const agents = context.agents && projectAgents(context.agents);
-  const sessions = context.sessions && projectOwner(context.sessions, () => undefined);
-  const identities =
-    context.agentIdentity &&
-    projectAgentIdentity({ identities: context.agentIdentity, agentId: null });
+  const agents = context.agents && sharedAgentsProjection(context.agents);
+  const sessions = context.sessions && sharedSessionsRevision(context.sessions);
+  const identities = context.agentIdentity && sharedAgentIdentityProjection(context.agentIdentity);
   const visibleEntries = createMemo(() =>
     props.entries.filter((entry) => sidebarInboxEntryMatchesTab(entry, props.selectedTab)),
   );

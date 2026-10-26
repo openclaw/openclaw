@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../../packages/gateway-client/src/pending-request.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
 import {
   createPcmAudioContext,
@@ -99,12 +100,7 @@ export function createConsultClient() {
   const client = createClient();
   vi.mocked(client["request"]).mockImplementation(async (method) => {
     if (method === "talk.client.toolCall") {
-      return {
-        runId: "run-1",
-        idempotencyKey: "run-1",
-        agentId: "main",
-        agentSessionKey: "agent:main:main",
-      };
+      return consultRunResult();
     }
     return defaultRelayResponse(method);
   });

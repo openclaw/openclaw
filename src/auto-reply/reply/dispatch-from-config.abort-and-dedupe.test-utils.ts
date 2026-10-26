@@ -1,5 +1,6 @@
 // Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
@@ -12,6 +13,7 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
+import { sendPolicySessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   acpMocks,
   agentEventMocks,
@@ -42,6 +44,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
+  createMessageToolOnlyDispatchArgs,
 } from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -53,12 +56,22 @@ const FAST_ABORT_SESSION_MODEL = Object.freeze({
   thinkingLevel: "high" as const,
 });
 
+function createLiveAcpConfig(maxChunkChars: number) {
+  return {
+    acp: {
+      enabled: true,
+      dispatch: { enabled: true },
+      stream: { deliveryMode: "live" as const, coalesceIdleMs: 0, maxChunkChars },
+    },
+  };
+}
+
 function createPersistentAcpSessionEntry() {
   return {
     sessionKey: "agent:codex-acp:session-1",
     storeSessionKey: "agent:codex-acp:session-1",
     cfg: {},
-    storePath: "/tmp/mock-sessions.json",
+    storePath: sessionStoreMocks.resolveSessionStorePathCore(),
     entry: {},
     acp: {
       backend: "acpx",
@@ -110,7 +123,7 @@ function setupResolvedAcpSessionNotice(params: { bound: boolean; messageThreadId
     sessionKey: "agent:codex-acp:session-1",
     storeSessionKey: "agent:codex-acp:session-1",
     cfg: {},
-    storePath: "/tmp/mock-sessions.json",
+    storePath: sessionStoreMocks.resolveSessionStorePathCore(),
     entry: {},
     acp: runtime.runTurn.mock.calls.length > 0 ? resolvedAcp : pendingAcp,
   }));
@@ -249,12 +262,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers verbose tool summaries despite message-tool-only source suppression", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -267,15 +275,9 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "done" } satisfies ReplyPayload;
     };
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "`pwd (agent)`" });
@@ -284,12 +286,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("keeps verbose tool summaries suppressed for room events", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -303,15 +300,9 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "done" } satisfies ReplyPayload;
     };
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
@@ -320,12 +311,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("delivers verbose tool summaries for Discord channel message-tool-only turns", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -339,15 +325,9 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "done" } satisfies ReplyPayload;
     };
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "`pwd (agent)`" });
@@ -634,13 +614,7 @@ describe("dispatchReplyFromConfig", () => {
       runtime,
     });
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(128);
     const dispatcher = createDispatcher();
     const ctx = createPersistentAcpContext("write a test");
     const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
@@ -898,8 +872,8 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const sourceSessionKey = "agent:main:discord:C123";
     const boundSessionKey = "agent:opencode:acp:bound-session";
-    const sourceStorePath = "/tmp/main-sessions.json";
-    const targetStorePath = "/tmp/opencode-sessions.json";
+    const sourceStorePath = sessionStoreMocks.resolveSessionStorePathCore();
+    const targetStorePath = sourceStorePath.replace("mock-sessions", "opencode-sessions");
     const sourceEntry = { sessionId: "source-session-id", updatedAt: Date.now() };
     const targetEntry = { sessionId: "target-session-id", updatedAt: Date.now() };
     const stores: Record<string, Record<string, Record<string, unknown>>> = {
@@ -959,13 +933,7 @@ describe("dispatchReplyFromConfig", () => {
       targetSessionKey === boundSessionKey ? [boundConversationBinding] : [],
     );
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(256);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -1078,13 +1046,7 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     mockPersistentAcpRuntime(runtime);
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(256);
     const dispatcher = createDispatcher();
     const ctx = createPersistentAcpContext("test spacing");
 
@@ -1111,13 +1073,7 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     mockPersistentAcpRuntime(runtime);
 
-    const cfg = {
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
-      },
-    } as OpenClawConfig;
+    const cfg = createLiveAcpConfig(256);
     const dispatcher = createDispatcher();
     const ctx = createPersistentAcpContext("stream this");
 
@@ -1173,7 +1129,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey: "agent:codex-acp:oneshot-1",
       storeSessionKey: "agent:codex-acp:oneshot-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       entry: {},
       acp: {
         backend: "acpx",
@@ -1236,14 +1192,8 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
     );
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
-    let releaseHook!: () => void;
-    const hookRelease = new Promise<void>((resolve) => {
-      releaseHook = resolve;
-    });
+    const { resolve: markHookStarted, promise: hookStarted } = createDeferred();
+    const { resolve: releaseHook, promise: hookRelease } = createDeferred();
     hookMocks.runner.runBeforeDispatch
       .mockImplementationOnce(async () => {
         markHookStarted();

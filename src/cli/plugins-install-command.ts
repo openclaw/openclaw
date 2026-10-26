@@ -368,7 +368,7 @@ async function installHookPackLocal(
       source,
       { ...params, snapshot },
       { expectedPackageKind, beforePersistentApply },
-      lease.assertOwned.bind(lease),
+      lease.assertOwned,
     );
     if (!result.ok) {
       return result;

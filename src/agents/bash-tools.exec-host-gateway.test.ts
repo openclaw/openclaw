@@ -6,11 +6,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import type {
   ExecAllowlistEntry,
   ExecApprovalDecision,
@@ -39,12 +35,14 @@ import {
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
 } from "./bash-tools.exec-types.js";
+import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 type SendExecApprovalFollowupResult =
   typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
@@ -223,12 +221,6 @@ function expectAuthorization(fields: object) {
   });
 }
 
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
 function expectPending(result: GatewayResult) {
   expect(result.pendingResult?.details.status).toBe("approval-pending");
 }
@@ -242,19 +234,6 @@ const completedOutcome = (aggregated = "done"): ExecApprovalFollowupOutcome => (
 
 function requireSentFollowupText(callIndex = 0): string {
   return sendExecApprovalFollowupResultMock.mock.calls[callIndex]?.[1] ?? "";
-}
-
-function captureSecurityEvents(): {
-  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
-  stop: () => void;
-} {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
 }
 
 describe("processGatewayAllowlist", () => {

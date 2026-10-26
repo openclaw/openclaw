@@ -27,6 +27,30 @@ function invokeSynchronousGuard(guard: (() => void) | undefined): void {
   }
 }
 
+/**
+ * Add a synchronous egress check to guarded requests started by run, including
+ * requests a returned stream sends later. It narrows inherited authority only.
+ */
+export function withGuardedFetchBeforeRequest<T>(
+  beforeRequest: (() => void) | undefined,
+  run: () => T,
+): T {
+  if (!beforeRequest) {
+    return run();
+  }
+  const inherited = requestAuthority.getStore();
+  return requestAuthority.run(
+    {
+      assertCurrent: () => inherited?.assertCurrent(),
+      beforeRequest: () => {
+        inherited?.beforeRequest();
+        invokeSynchronousGuard(beforeRequest);
+      },
+    },
+    run,
+  );
+}
+
 /** Carry a host-owned assertion through provider preparation without granting new authority. */
 export async function withGuardedFetchRequestAuthority<T>(
   assertCurrent: (() => void) | undefined,

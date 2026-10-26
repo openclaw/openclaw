@@ -5,7 +5,11 @@ import {
   waitForControlUiFrameLayout,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -296,7 +300,12 @@ suite.define(() => {
           await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
         const fresh = await geometry(page);
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        // Keep cold route coverage for the large-unit fault; other viewports reuse the app.
+        if (largeUnit) {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        } else {
+          await navigateToControlUiSession(page, sessionKey);
+        }
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await expect(textarea).toBeVisible();
         await page.getByText(assistantText).waitFor();

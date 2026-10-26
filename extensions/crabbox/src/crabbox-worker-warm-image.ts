@@ -65,6 +65,14 @@ export function createCrabboxWarmImageManager(dependencies: {
 }) {
   const policy = dependencies.policy ?? resolveCrabboxWarmImagePolicy();
   let store: ReturnType<typeof openCrabboxWarmImageStore> | undefined;
+  // Legacy allocations have no online writer; recovery and migration require stopped owners.
+  let migrationReady = false;
+  const assertMigrationReady = async () => {
+    if (!migrationReady) {
+      await assertCrabboxWarmImageMigrationReady(dependencies.state);
+      migrationReady = true;
+    }
+  };
   const warned = new Set<string>();
   let pausedCaptureSnapshot = "";
   const openStore = () => (store ??= openCrabboxWarmImageStore(dependencies.state));
@@ -632,7 +640,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     },
     maintain: async (context: MaintenanceContext) => {
       assertCurrent(context);
-      await assertCrabboxWarmImageMigrationReady(dependencies.state);
+      await assertMigrationReady();
       await collectImages(
         { ...context, binaries: [...new Set(context.binaries)].toSorted() },
         "maintenance",
@@ -708,7 +716,7 @@ export function createCrabboxWarmImageManager(dependencies: {
 
     startContext: createCrabboxWarmImageStartContext,
     allocate: createCrabboxWarmImageAllocation({
-      state: dependencies.state,
+      assertMigrationReady,
       lookupLease,
       selectAllocation,
       openStore,

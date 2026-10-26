@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
@@ -208,6 +209,16 @@ async function resolveCliProgramArguments(params: {
     );
   }
   const runtimePath = params.runtimePath;
+
+  if (params.runtime === "standalone") {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: runtimePath,
+      entryPath: null,
+      args: params.args,
+      execArgv: [],
+    });
+    return { programArguments: [invocation.command, ...invocation.args] };
+  }
 
   if (params.dev) {
     const repoRoot = resolveRepoRootForDev();

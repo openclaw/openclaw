@@ -12,6 +12,7 @@ import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbo
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import * as globals from "../../globals.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as mediaRoots from "../../media/channel-inbound-roots.js";
 import * as mediaReference from "../../media/media-reference.js";
 import { getMediaDir } from "../../media/store.js";
@@ -24,6 +25,7 @@ import * as processExec from "../../process/exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -35,14 +37,7 @@ import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
 const SCP_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_PATH = "/synthetic/attachments/report with spaces.txt";
-const SUCCESS = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-} satisfies Awaited<ReturnType<typeof processExec.runCommandWithTimeout>>;
+const SUCCESS = createCommandResult();
 
 function mockSuccessfulScp(body: string) {
   return vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
@@ -559,7 +554,11 @@ describe("stageSandboxMedia SCP", () => {
       expect(log).toHaveBeenCalledWith(
         `Blocking attempt to stage media from outside media directory: ${sourcePath}`,
       );
-      expect(await fs.readdir(state.workspaceDir, { recursive: true })).toEqual([]);
+      expect(
+        (await listDirectoryTreeStrict(state.workspaceDir)).map(
+          (walkEntry) => walkEntry.relativePath,
+        ),
+      ).toEqual([]);
       expect([ctx, sessionCtx]).toEqual(before);
     });
   });
@@ -650,7 +649,9 @@ describe("stageSandboxMedia SCP", () => {
 
       expect(resolver).toHaveBeenCalledWith(alias);
       // Disk staging may already be complete; cancellation forbids publishing its facts.
-      const stagedFiles = await fs.readdir(state.workspaceDir, { recursive: true });
+      const stagedFiles = (await listDirectoryTreeStrict(state.workspaceDir)).map(
+        (walkEntry) => walkEntry.relativePath,
+      );
       const copied = stagedFiles.find((file) => file.endsWith("input-alias-source.txt"));
       expect(copied).toBeDefined();
       expect(await fs.readFile(path.join(state.workspaceDir, copied!), "utf8")).toBe(

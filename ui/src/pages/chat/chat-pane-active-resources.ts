@@ -5,15 +5,15 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   desktopSourceForEnvironment,
   loadDesktopEnvironments,
+  resolveChatPaneDesktopTarget,
 } from "../../components/desktop/desktop-source.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import type {
   SessionCapability,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   isSidebarNewTabActive,

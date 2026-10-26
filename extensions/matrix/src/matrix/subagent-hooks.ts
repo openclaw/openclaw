@@ -7,37 +7,13 @@ import {
   resolveBindingKey,
 } from "./thread-bindings-shared.js";
 
-type MatrixSubagentEndedEvent = {
+export async function handleMatrixSubagentEnded(event: {
   targetSessionKey: string;
   targetKind: string;
   accountId?: string;
   reason?: string;
   sendFarewell?: boolean;
-};
-
-type MatrixSubagentDeliveryTargetEvent = {
-  childSessionKey: string;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  expectsCompletionMessage: boolean;
-};
-
-type MatrixDeliveryOrigin = {
-  channel: "matrix";
-  accountId: string;
-  to: string;
-  threadId?: string;
-};
-
-type DeliveryTargetResult = {
-  origin: MatrixDeliveryOrigin;
-};
-
-export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent): Promise<void> {
+}): Promise<void> {
   const accountId = normalizeOptionalString(event.accountId) || undefined;
   // Use the targeted account list when available; fall back to a full scan
   // so bindings are cleaned up even when accountId is absent.
@@ -75,9 +51,25 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
   }
 }
 
-export function handleMatrixSubagentDeliveryTarget(
-  event: MatrixSubagentDeliveryTargetEvent,
-): DeliveryTargetResult | undefined {
+export function handleMatrixSubagentDeliveryTarget(event: {
+  childSessionKey: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  expectsCompletionMessage: boolean;
+}):
+  | {
+      origin: {
+        channel: "matrix";
+        accountId: string;
+        to: string;
+        threadId?: string;
+      };
+    }
+  | undefined {
   if (!event.expectsCompletionMessage) {
     return undefined;
   }

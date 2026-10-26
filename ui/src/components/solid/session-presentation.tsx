@@ -89,20 +89,17 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
     </Show>
   );
 }
-type SessionGlyphRing = "circle" | "pair";
-
 const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
-type SessionGlyphOptions = {
+export function SessionGlyph(props: {
   content: JSX.Element;
   running: boolean;
   queued?: boolean;
   runningLabel?: string;
   circular?: boolean;
   badge?: JSX.Element;
-  ring?: SessionGlyphRing;
+  ring?: "circle" | "pair";
   runVisibility?: SessionRunVisibility;
-};
-export function SessionGlyph(props: SessionGlyphOptions) {
+}) {
   const label = () =>
     props.runningLabel ?? t(props.queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   const glyph = () => (
@@ -218,8 +215,7 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
   );
 }
 
-type SidebarSessionSubtitle = ReturnType<typeof resolveSidebarSessionSubtitle>;
-export function SidebarSessionSubtitle(props: SidebarSessionSubtitle) {
+export function SidebarSessionSubtitle(props: ReturnType<typeof resolveSidebarSessionSubtitle>) {
   const label = () =>
     props.toolName ? `${t("chat.toolCards.tool")}: ${props.toolName}` : undefined;
   return (
@@ -446,7 +442,7 @@ function SessionIcon(props: { icon: string }) {
   );
 }
 
-type SessionLeadingStateProps = {
+export function renderSessionLeadingState(props: {
   session: SidebarRecentSession;
   ownerActor?: SessionCreatedActor | null;
   attribution: "created" | "owned" | "archived";
@@ -455,9 +451,7 @@ type SessionLeadingStateProps = {
   trailingState?: boolean;
   icon?: JSX.Element;
   runVisibility?: SessionRunVisibility;
-};
-
-export function renderSessionLeadingState(props: SessionLeadingStateProps) {
+}) {
   const session = () => props.session;
   const subagentsWorking = createMemo(
     () => !props.trailingState && session().runningChildCount > 0,

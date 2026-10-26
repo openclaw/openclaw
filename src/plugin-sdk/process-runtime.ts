@@ -17,7 +17,12 @@ export { withCommandProcessScope } from "../process/exec-spawn.js";
 export { prepareOomScoreAdjustedSpawn, spawnOomScoreAdjusted } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
 export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+export { resolvePackageRuntimeProcessEntrypointUrl } from "../infra/runtime-process-package-url.js";
 export { createPluginRuntimeProcessEntrypoint } from "../infra/runtime-process-manifest.js";
+export {
+  resolveRuntimeDependencyEntrypointUrl,
+  resolvePluginRuntimeProcessAssetUrl,
+} from "../infra/runtime-process-dependency-url.js";
 export { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 export { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 // Released official plugins retain these exports until their supported hosts

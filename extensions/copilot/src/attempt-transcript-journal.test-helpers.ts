@@ -2,6 +2,8 @@ import path from "node:path";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -202,4 +204,12 @@ export function transcriptMessages(events: unknown[]) {
     };
     return [record];
   });
+}
+
+export function installJournalMessageWriteHook(
+  handler: Parameters<typeof createMockPluginRegistry>[0][number]["handler"],
+) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_message_write", handler }]),
+  );
 }

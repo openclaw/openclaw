@@ -1,11 +1,16 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sql } from "kysely";
-import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
+import {
+  jsonArrayElements,
+  jsonObjectFieldsForScan,
+  jsonScannedValue,
+} from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { scanJsonObjectFields } from "../../state/json-predicate-fields.js";
 import {
   readRecentSessionTranscriptMessageEventsFromProjection,
   readSessionTranscriptBoundedMessageTailPageFromProjection,
@@ -53,11 +58,7 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import {
-  transcriptEventNavigationSql,
-  transcriptEventRunIdSql,
-  transcriptPredicateSql,
-} from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
@@ -137,13 +138,18 @@ export function everySessionTranscriptUserInputFrom(
       endExclusive: end,
     })
       .select(
-        /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.role'),
-          'idempotencyKey', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', ${transcriptEventRunIdSql(projection.database.db, "event")}),
-          'provenance', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.provenance'))`.as(
-          "message_json",
-        ),
+        jsonObjectFieldsForScan(
+          projection.database.db,
+          transcriptEventNavigationSql(projection.database.db, "event"),
+          {
+            message: {
+              role: true,
+              idempotencyKey: true,
+              __openclaw: { runId: true },
+              provenance: true,
+            },
+          },
+        ).as("message_json"),
       )
       .select(
         transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
@@ -160,7 +166,27 @@ export function everySessionTranscriptUserInputFrom(
     for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
       assertTranscriptNavigationValid(row.navigation_valid);
       seen = true;
-      if (!accept(JSON.parse(row.message_json))) {
+      const event = scanJsonObjectFields(row.message_json, ["message"]);
+      const message = event.first.get("message");
+      const fields = scanJsonObjectFields(message?.kind === "object" ? message.text : "{}", [
+        "role",
+        "idempotencyKey",
+        "__openclaw",
+        "provenance",
+      ]).first;
+      const internal = fields.get("__openclaw");
+      const runId = scanJsonObjectFields(internal?.kind === "object" ? internal.text : "{}", [
+        "runId",
+      ]).first.get("runId");
+      // SQL path reads select first members, while selected objects retain JSON.parse semantics.
+      if (
+        !accept({
+          role: jsonScannedValue(fields.get("role")),
+          idempotencyKey: jsonScannedValue(fields.get("idempotencyKey")),
+          __openclaw: { runId: jsonScannedValue(runId) },
+          provenance: jsonScannedValue(fields.get("provenance")),
+        })
+      ) {
         return false;
       }
     }

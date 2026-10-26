@@ -175,7 +175,7 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         // Distinct event deliveries exercise the real Gateway subscription during boot.
         for (let index = 0; index < 24; index += 1) {
           await gateway.emitGatewayEvent("session.suggestion", {

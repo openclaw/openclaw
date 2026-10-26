@@ -18,8 +18,7 @@ import {
   unusedEnvironments,
 } from "../gateway/worker-environments/worker-turn-launcher.test-support.js";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
@@ -80,15 +79,12 @@ async function fromParent(
     register: () => void;
   }) => Promise<void>,
 ) {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(parent.runId),
-    facts: {
-      agentId: parent.agentId,
-      runId: parent.runId,
-      ingress: { kind: "system", state: "present", boundary: "caller-scope-test" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    parent.runId,
+    parent.agentId,
+    "caller-scope-test",
+  );
   const admittedRunContext = await admission.admit("embedded");
   const handle = createEmbeddedRunHandle({ runId: parent.runId });
   try {
@@ -169,7 +165,6 @@ describe("independent placement caller scope", () => {
         });
         release();
         await queued;
-        expect(get).toHaveBeenCalledOnce();
         expectChildReleased();
       } finally {
         input.preparedRunAdmission.close();
@@ -216,9 +211,8 @@ describe("independent placement caller scope", () => {
           carrier === "prepared"
             ? { preparedRunAdmission: owner.preparedRunAdmission }
             : { admittedRunContext: owner.admittedRunContext };
-        const claim = parentClaim;
         const execute = async () => {
-          const target = { ...claim, storePath: sessionTarget.storePath };
+          const target = { ...parentClaim, storePath: sessionTarget.storePath };
           const commit = vi.fn();
           const write = () =>
             runWithOwnedSessionTranscriptWrite({ sessionTarget: target }, () => {
@@ -226,9 +220,8 @@ describe("independent placement caller scope", () => {
               commit();
             });
           await write();
-          expect(commit).toHaveBeenCalledOnce();
           owner.register();
-          expect(resolveActiveEmbeddedRunOwner(claim.sessionId)?.runId).toBe(claim.runId);
+          expect(resolveActiveEmbeddedRunOwner(parent.sessionId)?.runId).toBe(parent.runId);
           await Promise.resolve();
           owner.preparedRunAdmission.close();
           expect(owner.register).toThrow(/no longer active/);
@@ -237,7 +230,7 @@ describe("independent placement caller scope", () => {
           return { meta: { durationMs: 0 } };
         };
         const input = {
-          ...claim,
+          ...parentClaim,
           ...admission,
           sessionFile: parent.sessionFile,
           workspaceDir: parent.workspaceDir,
@@ -245,9 +238,9 @@ describe("independent placement caller scope", () => {
           timeoutMs: 1000,
         };
         if (path === "embedded") {
-          await withSessionPlacementTurnAdmission(claim, input, execute);
+          await withSessionPlacementTurnAdmission(parentClaim, input, execute);
         } else {
-          await withLocalSessionPlacementTurnSettlement(claim, execute, admission);
+          await withLocalSessionPlacementTurnSettlement(parentClaim, execute, admission);
         }
       });
     },

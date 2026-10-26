@@ -13,6 +13,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createPluginEnabledGatewayTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 // Registered in gatewayDatabaseWorkerTestFiles: only that project's forked pool gives this Gateway a
@@ -20,15 +21,7 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 it("continuation-skip stops re-sending workspace instructions on the next turn", async () => {
   const state = await createOpenClawTestState({
     label: "continuation-skip-bootstrap",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const sentinel = `BSKIP-${randomUUID()}`;
   const requests: string[] = [];

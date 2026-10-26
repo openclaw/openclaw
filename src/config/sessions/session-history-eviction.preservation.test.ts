@@ -140,13 +140,11 @@ describe("SQLite historical session preservation", () => {
     async (encoding) => {
       const target = resolveSqliteTargetFromSessionStorePath(storePath);
       fs.mkdirSync(path.dirname(target.path), { recursive: true });
-      const seed = new DatabaseSync(target.path);
-      try {
+      {
+        using seed = new DatabaseSync(target.path);
         seed.exec(
           `PRAGMA encoding='${encoding}'; CREATE TABLE encoding_probe(value TEXT); DROP TABLE encoding_probe;`,
         );
-      } finally {
-        seed.close();
       }
       const sessionKey = "agent:main:raw-identity-history";
       const now = Date.now();
@@ -167,12 +165,9 @@ describe("SQLite historical session preservation", () => {
       // CAST preserves the raw stored identity; normal TEXT rebinding can normalize it.
       owner.db
         .prepare(
-          "UPDATE session_nodes SET current_session_id = CAST(? AS TEXT), entry_json = CAST(? AS TEXT), updated_at = ? WHERE session_key = ?",
+          "UPDATE session_nodes SET current_session_id = CAST(? AS TEXT), entry_json = CAST(? AS TEXT), updated_at = ?, entry_valid = 1 WHERE session_key = ?",
         )
         .run(identity, entry, now, sessionKey);
-      owner.db
-        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-        .run(sessionKey);
       const readBytes = () =>
         database()
           .db.prepare(

@@ -4,8 +4,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
+import { constants, performance, PerformanceObserver } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   bindOperatorModelExecution,
   createAdmittedRunOperatorAuthority,
@@ -46,6 +48,8 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "20000" },
     warmup: { type: "string", default: "5000" },
     scenario: { type: "string", default: "all" },
+    "counts-only": { type: "boolean", default: false },
+    "timing-only": { type: "boolean", default: false },
     "sampling-interval": { type: "string", default: "32768" },
     "start-at": { type: "string" },
     output: { type: "string" },
@@ -57,10 +61,27 @@ function positiveInteger(value: string, label: string): number {
   assert(Number.isSafeInteger(number) && number > 0, `${label} must be a positive integer`);
   return number;
 }
+assert(!(values["counts-only"] && values["timing-only"]), "Select one measurement mode");
 const iterations = positiveInteger(values.iterations, "iterations");
 const warmup = positiveInteger(values.warmup, "warmup");
 const samplingInterval = positiveInteger(values["sampling-interval"], "sampling-interval");
-assert(globalThis.gc, "Run Node with --expose-gc");
+assert(values["counts-only"] || globalThis.gc, "Run Node with --expose-gc");
+const authorityCounts = (
+  globalThis as typeof globalThis & {
+    [key: symbol]:
+      | {
+          active: boolean;
+          counts: Record<string, number>;
+          callers: Record<string, number>;
+          installed: Record<string, Record<string, number>>;
+        }
+      | undefined;
+  }
+)[Symbol.for("openclaw.benchmark.authorityCounts")];
+assert(
+  !values["counts-only"] || authorityCounts,
+  "--counts-only requires --import <authority-counts-preload.mjs> from the Gateway count pass",
+);
 
 const pluginId = "synthetic-authority-policy";
 const email = "operator@authority.example.test";
@@ -340,6 +361,42 @@ function summarizeProfile(root: SampleNode) {
     topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 15),
   };
 }
+function observeGc() {
+  const entries: { startTime: number; duration: number; detail?: unknown }[] = [];
+  const observer = new PerformanceObserver((list) => entries.push(...list.getEntries()));
+  observer.observe({ entryTypes: ["gc"] });
+  return async (startedAt: number, endedAt: number) => {
+    // GC notifications arrive after the synchronous owner-check loop yields.
+    await nextTurn();
+    entries.push(...observer.takeRecords());
+    observer.disconnect();
+    const measured = entries.filter(
+      (entry) => entry.startTime >= startedAt && entry.startTime < endedAt,
+    );
+    const summarize = (kind?: number) => {
+      const pauses = measured
+        .filter(
+          (entry) => kind === undefined || (isRecord(entry.detail) && entry.detail.kind === kind),
+        )
+        .map((entry) => entry.duration)
+        .toSorted((a, b) => a - b);
+      return {
+        count: pauses.length,
+        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
+        maxMs: pauses.at(-1) ?? 0,
+        p95Ms: pauses.length ? pauses[Math.ceil(pauses.length * 0.95) - 1] : null,
+        p99Ms: pauses.length ? pauses[Math.ceil(pauses.length * 0.99) - 1] : null,
+      };
+    };
+    return {
+      all: summarize(),
+      minor: summarize(constants.NODE_PERFORMANCE_GC_MINOR),
+      major: summarize(constants.NODE_PERFORMANCE_GC_MAJOR),
+      incremental: summarize(constants.NODE_PERFORMANCE_GC_INCREMENTAL),
+      weakCallback: summarize(constants.NODE_PERFORMANCE_GC_WEAKCB),
+    };
+  };
+}
 const results = [];
 const inspector = new Session();
 inspector.connect();
@@ -351,7 +408,7 @@ try {
     for (let index = 0; index < warmup; index++) {
       scenario.check();
     }
-    globalThis.gc();
+    globalThis.gc?.();
     if (values["start-at"]) {
       const startAt = positiveInteger(values["start-at"], "start-at");
       const remaining = startAt - Date.now();
@@ -361,38 +418,75 @@ try {
       });
     }
     resetCounts();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    if (values["counts-only"]) {
+      assert(authorityCounts);
+      authorityCounts.counts = {};
+      authorityCounts.callers = {};
+      authorityCounts.active = true;
+      try {
+        for (let index = 0; index < iterations; index++) {
+          scenario.check();
+        }
+      } finally {
+        authorityCounts.active = false;
+      }
+      results.push({
+        scenario: scenario.name,
+        iterations,
+        counts: { ...counts },
+        host: {
+          counts: { ...authorityCounts.counts },
+          installed: authorityCounts.installed,
+        },
+      });
+      continue;
+    }
+    if (!values["timing-only"]) {
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
+    const finishGc = values["timing-only"] ? observeGc() : undefined;
     const cpu = process.threadCpuUsage();
     const start = performance.now();
     for (let index = 0; index < iterations; index++) {
       scenario.check();
     }
-    const elapsedMs = performance.now() - start;
+    const endedAt = performance.now();
+    const elapsedMs = endedAt - start;
     const cpuUsed = process.threadCpuUsage(cpu);
     const measuredCounts = { ...counts };
-    const { profile: heapProfile } = await inspector.post("HeapProfiler.stopSampling");
-    const allocation = summarizeProfile(heapProfile.head);
-    if (values.output) {
-      await writeFile(`${values.output}.${scenario.name}.heapprofile`, JSON.stringify(heapProfile));
+    const gc = await finishGc?.(start, endedAt);
+    let allocation: ReturnType<typeof summarizeProfile> | undefined;
+    if (!values["timing-only"]) {
+      const { profile: heapProfile } = await inspector.post("HeapProfiler.stopSampling");
+      allocation = summarizeProfile(heapProfile.head);
+      if (values.output) {
+        await writeFile(
+          `${values.output}.${scenario.name}.heapprofile`,
+          JSON.stringify(heapProfile),
+        );
+      }
     }
     results.push({
       scenario: scenario.name,
       iterations,
       elapsedMs,
+      gc,
+      gcMsPerCheck: gc && gc.all.totalMs / iterations,
       nsPerCheck: (elapsedMs * 1e6) / iterations,
       threadCpuNsPerCheck: ((cpuUsed.user + cpuUsed.system) * 1000) / iterations,
-      estimatedAllocatedBytes: allocation.bytes,
-      estimatedBytesPerCheck: allocation.bytes / iterations,
-      estimatedAuthPolicyStringifyBytesPerCheck: allocation.authPolicyStringifyBytes / iterations,
+      estimatedAllocatedBytes: allocation?.bytes,
+      estimatedBytesPerCheck: allocation && allocation.bytes / iterations,
+      estimatedAuthPolicyStringifyBytesPerCheck:
+        allocation && allocation.authPolicyStringifyBytes / iterations,
       counts: measuredCounts,
       countsPerCheck: Object.fromEntries(
         Object.entries(measuredCounts).map(([name, count]) => [name, count / iterations]),
       ),
-      topSites: allocation.topSites,
+      topSites: allocation?.topSites,
     });
   }
   let nextCheckConfigRevocationDenied: boolean | undefined;
@@ -413,8 +507,10 @@ try {
     workload: "real authority owners; synthetic non-owner profile and registered access policy",
     scope:
       "owner microbenchmark; no model turns, tool execution, transcript writes, or Gateway transport",
-    samplingInterval,
-    includeCollected: true,
+    samplingInterval: values["counts-only"] || values["timing-only"] ? undefined : samplingInterval,
+    includeCollected: !values["counts-only"] && !values["timing-only"],
+    timingOnly: values["timing-only"],
+    countsOnly: values["counts-only"],
     warmup,
     setupCountsExcluded: true,
     nextCheckRevocationDenied: true,

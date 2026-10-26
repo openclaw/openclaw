@@ -4,6 +4,7 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -27,6 +28,7 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import {
   DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
@@ -438,10 +440,17 @@ export async function updateGitInstall(params: {
     await params.progress.onStepStart?.(info);
     assertCurrent?.();
     const { config, env } = await params.getSnapshotSource();
+    const backupProject =
+      installTarget && resolveNativePackageProjectRoot(installTarget, installEnv);
     const snapshot = await assessInitialUpdateSnapshotCapacity({
       config,
       stateDir: resolveStateDir(env),
       env,
+      backupDirectory: params.switchToGit
+        ? backupProject
+          ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
+          : (installTarget?.globalRoot ?? path.dirname(params.root))
+        : path.join(params.root, ".artifacts"),
     });
     await reportUpdateStepCompletion(params.progress, { ...snapshot, index: 0, total: 0 });
     assertCurrent?.();

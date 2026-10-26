@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
+import { resolveModelRuntimeEntry } from "../model-runtime-choice.ts";
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
@@ -39,12 +39,25 @@ export function resolveThinkingProfileForSession(
   | undefined {
   // A partial session identity cannot borrow its missing half from defaults.
   const target = session?.model || session?.modelProvider ? session : defaults;
-  const catalogEntry = resolveThinkingCatalogEntry(
-    catalog,
-    target?.modelProvider ?? null,
-    target?.model ?? null,
-    session?.agentRuntime?.id,
-  );
+  const provider = target?.modelProvider ?? null;
+  const model = target?.model ?? null;
+  const runtime = session?.agentRuntime?.id?.trim();
+  const entry = catalog.find((candidate) => {
+    const entryRuntime = candidate.agentRuntime?.id?.trim();
+    // Agent-scoped catalogs must not supply another runtime's session thinking profile.
+    return (
+      candidate.provider === provider &&
+      candidate.id === model &&
+      (!runtime ||
+        !entryRuntime ||
+        runtime === entryRuntime ||
+        candidate.runtimeChoices?.some((choice) => choice.agentRuntime.id === runtime))
+    );
+  });
+  const catalogEntry =
+    runtime && (entry?.agentRuntime?.id || entry?.runtimeChoices?.length)
+      ? resolveModelRuntimeEntry(entry, runtime)
+      : entry;
   const sessionRuntime = session?.agentRuntime?.id?.trim();
   const defaultRuntime = defaults?.agentRuntime?.id?.trim();
   const candidates: Array<
@@ -160,30 +173,6 @@ export function resolveCurrentThinkingLevel(
     );
   }
   return profile?.thinkingDefault ?? t("common.unknown");
-}
-
-function resolveThinkingCatalogEntry(
-  catalog: readonly ModelCatalogEntry[],
-  provider: string | null,
-  model: string | null,
-  runtimeId?: string,
-): ModelRuntimeEntry | undefined {
-  const runtime = runtimeId?.trim();
-  const entry = catalog.find((candidate) => {
-    const entryRuntime = candidate.agentRuntime?.id?.trim();
-    // Agent-scoped catalogs must not supply another runtime's session thinking profile.
-    return (
-      candidate.provider === provider &&
-      candidate.id === model &&
-      (!runtime ||
-        !entryRuntime ||
-        runtime === entryRuntime ||
-        candidate.runtimeChoices?.some((choice) => choice.agentRuntime.id === runtime))
-    );
-  });
-  return runtime && (entry?.agentRuntime?.id || entry?.runtimeChoices?.length)
-    ? resolveModelRuntimeEntry(entry, runtime)
-    : entry;
 }
 
 export function resolveChatThinkingSelectState(params: {

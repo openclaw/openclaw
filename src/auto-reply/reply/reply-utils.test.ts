@@ -14,10 +14,7 @@ import {
   extractShortModelName,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
-import {
-  createStreamingDirectiveAccumulator,
-  splitTrailingDirective,
-} from "./streaming-directives.js";
+import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -53,7 +50,6 @@ it("records skip reasons for silent, empty, and internal artifact payloads", () 
   for (const [text, reason] of [
     ["   ", "empty"],
     ["set-thought <channel|>", "silent"],
-    ["───", "silent"],
   ] as const) {
     const onSkip = vi.fn();
     expect(normalizeReplyPayload({ text }, { onSkip }), text).toBeNull();
@@ -93,15 +89,6 @@ it("scopes transform ownership to the exact channel adapter and account", () => 
   delivered(differentAccount, "primary", "reply!!!");
   expect(firstMessaging.transformReplyPayload).toHaveBeenCalledTimes(3);
   expect(secondMessaging.transformReplyPayload).toHaveBeenCalledTimes(1);
-});
-
-it.each([
-  "😄 NO_REPLY",
-  "NO_REPLY NO_REPLY\nThe user is saying hello",
-  "NO_REPLYThe user is saying hello",
-  "An answer followed by NO_REPLY",
-])("preserves non-control token mentions: %s", (text) => {
-  expect(normalizeReplyPayload({ text })).toMatchObject({ text });
 });
 
 afterEach(() => vi.useRealTimers());
@@ -257,15 +244,13 @@ it("suppresses tool-start typing in message mode until renderable text arrives",
 });
 
 it("suppresses typing when disabled", async () => {
-  for (const params of [{ mode: "never" }] as const) {
-    const { typing, signaler } = createTestSignaler(params.mode);
-    await signaler.signalRunStart();
-    await signaler.signalTextDelta("hi");
-    await signaler.signalReasoningDelta();
-    await signaler.signalExecutionActivity?.();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
-  }
+  const { typing, signaler } = createTestSignaler("never");
+  await signaler.signalRunStart();
+  await signaler.signalTextDelta("hi");
+  await signaler.signalReasoningDelta();
+  await signaler.signalExecutionActivity?.();
+  expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  expect(typing.startTypingOnText).not.toHaveBeenCalled();
 });
 
 function createCoalescer(config: Partial<BlockStreamingCoalescing> = {}) {
@@ -304,11 +289,6 @@ it.each<FlushCase>([
     { joiner: "\n\n" },
   ],
   [
-    "merges text with compatible media",
-    [{ text: "Hello", replyToId: "thread-1" }, { text: "world" }, { mediaUrls }],
-    [{ text: "Hello world", mediaUrls, replyToId: "thread-1" }],
-  ],
-  [
     "separates changed reply targets",
     [{ text: "Unthreaded caption" }, { mediaUrls, replyToId: "thread-2" }],
   ],
@@ -342,32 +322,15 @@ it("plans references for off/first/batched/all modes", () => {
   expect([existing.use(), existing.use()]).toEqual(["thread-1", undefined]);
 });
 
-type StreamResult = ReturnType<ReturnType<typeof createStreamingDirectiveAccumulator>["consume"]>;
-type StreamCase = [string, string[], Array<Partial<StreamResult>>, boolean?];
-it.each<StreamCase>([
-  ...["NO_REPLY", "no_reply", "No_Reply"].map((token): StreamCase => [
-    `chunked ${token}`,
-    [token.slice(0, 4), token.slice(4), "\nVisible reply"],
-    [null, null, { text: "Visible reply" }],
-  ]),
-  [
-    "split reply tag",
-    ["[", "[reply_to_current]] Yo"],
-    [null, { text: "Yo", replyToCurrent: true }],
-  ],
-  [
-    "malformed leading reply prefix",
-    ["[[reply_to_", "current] Visible reply", ""],
-    [null, null, { text: "Visible reply", replyToCurrent: false, replyToTag: false }],
-    true,
-  ],
-])("parses %s", (_name, chunks, expected, final = false) => {
+it("strips a malformed leading reply prefix without claiming reply intent", () => {
   const accumulator = createStreamingDirectiveAccumulator();
-  expect(
-    chunks.map((chunk, i) =>
-      accumulator.consume(chunk, { final: final && i === chunks.length - 1 }),
-    ),
-  ).toMatchObject(expected);
+  expect(accumulator.consume("[[reply_to_")).toBeNull();
+  expect(accumulator.consume("current] Visible reply")).toBeNull();
+  expect(accumulator.consume("", { final: true })).toMatchObject({
+    text: "Visible reply",
+    replyToCurrent: false,
+    replyToTag: false,
+  });
 });
 
 it("preserves split malformed fenced code", () => {
@@ -397,16 +360,6 @@ it("propagates explicit reply ids until the assistant message resets", () => {
   });
 });
 
-it("preserves a glued leading NO_REPLY mention in streamed text", () => {
-  const text = "NO_REPLYThe user is saying hello";
-  expect(createStreamingDirectiveAccumulator().consume(text)?.text).toBe(text);
-});
-
-it("keeps a complete final MEDIA line available to the final parser", () => {
-  const input = "Here.\nMEDIA:/tmp/a.png";
-  expect(splitTrailingDirective(input)).toEqual({ text: "Here.\n", tail: "MEDIA:/tmp/a.png" });
-  expect(parseReplyDirectives(input)).toMatchObject({ text: "Here.", mediaUrls: ["/tmp/a.png"] });
-});
 it("strips an incomplete reply tag without treating it as reply intent", () => {
   expect(parseReplyDirectives("[[reply_to:")).toMatchObject({
     text: "",

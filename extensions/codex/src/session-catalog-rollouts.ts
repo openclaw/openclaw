@@ -11,11 +11,7 @@ import type {
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
-import {
-  boundedCatalogString,
-  selectCodexCatalogPreviewInput,
-  truncateCodexCatalogPreview,
-} from "./session-catalog-parsing.js";
+import { boundedCatalogString, truncateCodexCatalogPreview } from "./session-catalog-parsing.js";
 
 const WINDOW_BYTES = 128 * 1024;
 const ROLLOUT_SOURCE_DENIAL_CODES = new Set([
@@ -119,7 +115,7 @@ function previewFromEvent(
     message = message.slice(message.indexOf(prefix) + prefix.length);
   }
   return (
-    truncateCodexCatalogPreview(selectCodexCatalogPreviewInput(message ?? ""), sanitize) ||
+    truncateCodexCatalogPreview(message ?? "", sanitize) ||
     (image ? "[Image]" : audio ? "[Audio]" : undefined)
   );
 }

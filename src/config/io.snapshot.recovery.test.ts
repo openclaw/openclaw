@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as deferredMigrations from "../infra/deferred-plugin-migrations.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
@@ -34,8 +35,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 function manifest(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true, encoding: "utf8" })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .toSorted()
     .filter((entry) => fs.statSync(path.join(root, entry)).isFile())
     .map((entry) => [

@@ -94,10 +94,12 @@ import type {
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
-type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
 
-type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<ChannelPlugin, "gateway"> & {
+type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<
+  import("../channels/plugins/types.plugin.js").ChannelPlugin,
+  "gateway"
+> & {
   gateway?: Extract<NonNullable<AnyChannelPlugin["gateway"]>, { apiVersion?: Version }>;
 };
 
@@ -170,34 +172,11 @@ type OpenClawPluginSessionControlsApi = {
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
 };
 
-type OpenClawPluginSessionApi = {
-  state: OpenClawPluginSessionStateApi;
-  workflow: OpenClawPluginSessionWorkflowApi;
-  controls: OpenClawPluginSessionControlsApi;
-};
-
 type OpenClawPluginAgentEventsApi = {
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
   /** Emit a host-routed, plugin-attributed event for workflow/UI subscribers. */
   emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
-};
-
-type OpenClawPluginAgentApi = {
-  /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
-  registerSubagentProfile?: (
-    profile: import("./subagent-profile.types.js").PluginSubagentProfile,
-  ) => void;
-  events: OpenClawPluginAgentEventsApi;
-};
-
-type OpenClawPluginRunContextApi = {
-  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
-  setRunContext: (patch: PluginRunContextPatch) => boolean;
-  /** Read namespaced plugin data for a run. */
-  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
-  /** Clear one namespace or all namespaces this plugin owns for a run. */
-  clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
 type OpenClawPluginLifecycleApi = Partial<
@@ -242,11 +221,28 @@ export type OpenClawPluginApi = {
    * Grouped facade over the existing flat session-related plugin API.
    * Flat methods remain supported for compatibility.
    */
-  session: OpenClawPluginSessionApi;
+  session: {
+    state: OpenClawPluginSessionStateApi;
+    workflow: OpenClawPluginSessionWorkflowApi;
+    controls: OpenClawPluginSessionControlsApi;
+  };
   /** Grouped facade for agent-event workflow seams. */
-  agent: OpenClawPluginAgentApi;
+  agent: {
+    /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
+    registerSubagentProfile?: (
+      profile: import("./subagent-profile.types.js").PluginSubagentProfile,
+    ) => void;
+    events: OpenClawPluginAgentEventsApi;
+  };
   /** Grouped facade for run-scoped plugin scratch state. */
-  runContext: OpenClawPluginRunContextApi;
+  runContext: {
+    /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+    setRunContext: (patch: PluginRunContextPatch) => boolean;
+    /** Read namespaced plugin data for a run. */
+    getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
+    /** Clear one namespace or all namespaces this plugin owns for a run. */
+    clearRunContext: (params: { runId: string; namespace?: string }) => void;
+  };
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
   registerTool: (

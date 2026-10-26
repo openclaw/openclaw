@@ -15,7 +15,6 @@ import * as agentSchema from "../state/openclaw-agent-db-schema.js";
 import { getOpenClawAgentDatabaseValidationForTransfer } from "../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
@@ -23,6 +22,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { assertDoctorMaintenanceReady } from "./doctor-maintenance-inspection.js";
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
+import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
 function openLegacyDatabase(pathname: string, version = 26, agentId = "main") {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
@@ -61,18 +61,6 @@ function migrationParams(
       source: "disk" as const,
     })),
   };
-}
-
-async function withMaintenance<T>(run: () => Promise<T>) {
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => {},
-  });
-  try {
-    return await maintenance.run(run);
-  } finally {
-    await maintenance.close();
-  }
 }
 
 it.each([

@@ -207,23 +207,13 @@ describe("msteams graph helpers", () => {
     expect(fetchCallSearchParam(1, "$top")).toBe("50");
   });
 
-  it("lets the shared SSRF guard select the Graph transport", async () => {
-    mockGraphCollection();
-
-    await fetchGraphJson({
-      token: graphToken,
-      path: "/groups",
-    });
-
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
-  });
-
   it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
     mockGraphCollection(groupOne);
 
     await expect(
       readGraph("/groups?$select=id", { ConsistencyLevel: "eventual" }),
     ).resolves.toEqual(graphCollection(groupOne));
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
 
     expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
     expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
@@ -591,6 +581,11 @@ describe("msteams graph helpers", () => {
     }
 
     it("fetches the newest Teams thread replies across pages", async () => {
+      const deadline = {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: 10_000,
+        deadlineAtMs: Date.now() + 10_000,
+      };
       const replies = Array.from({ length: 60 }, (_, index) => ({
         id: `reply-${index + 1}`,
         createdDateTime: `2026-08-01T00:${String(index).padStart(2, "0")}:00Z`,
@@ -600,7 +595,7 @@ describe("msteams graph helpers", () => {
         pagedResponse(replies.slice(50).toReversed()),
       );
 
-      const result = await fetchThreadReplies("tok", "group", "channel", "root");
+      const result = await fetchThreadReplies("tok", "group", "channel", "root", deadline);
 
       expect(result).toHaveLength(50);
       expect(result[0]?.id).toBe("reply-11");
@@ -609,21 +604,6 @@ describe("msteams graph helpers", () => {
       expect(fetchCallUrl(1)).toContain(
         "/teams/group/channels/channel/messages/root/replies?$skiptoken=page2",
       );
-    });
-
-    it("forwards the shared deadline to every paginated request", async () => {
-      const deadline = {
-        label: "MS Teams inbound preprocessing",
-        timeoutMs: 10_000,
-        deadlineAtMs: Date.now() + 10_000,
-      };
-      mockJsonFetchResponse(
-        pagedResponse([{ id: "reply-1" }], repliesPage2),
-        pagedResponse([{ id: "reply-2" }]),
-      );
-
-      await fetchThreadReplies("tok", "group", "channel", "root", deadline);
-
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
       for (const [params] of fetchWithSsrFGuardMock.mock.calls) {
         expect(params.timeoutMs).toBeGreaterThan(0);

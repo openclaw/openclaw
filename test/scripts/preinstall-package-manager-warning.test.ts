@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -98,6 +98,7 @@ describe("install runtime enforcement", () => {
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",
       "node-version.mjs",
+      "runtime-process-scripts.generated.mjs",
     ]) {
       copyFileSync(new URL(`../../${file}`, import.meta.url), join(root, file));
     }
@@ -253,6 +254,30 @@ describe("install runtime enforcement", () => {
         ),
       ).toBe(true);
       expect(run.mock.calls.map(([command]) => command)).toEqual([executable]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "runs a declared probe file and removes it after completion",
+    () => {
+      let probeFile = "";
+      const result = probe({
+        cwd: "/",
+        pathEnv: ["/node_modules/.bin", dirname(testNodeExecPath)].join(":"),
+        run: (command, args, options) => {
+          expect(command).toBe(testNodeExecPath);
+          expect(args).toHaveLength(1);
+          probeFile = args[0] ?? "";
+          expect(probeFile).toMatch(/package-cli-node-probe\.mjs$/u);
+          return spawnSync(command, args, options);
+        },
+      });
+      expect(result).toEqual({
+        version: expect.stringMatching(/^\d+\.\d+\.\d+/u),
+        bunVersion: null,
+        execPath: testNodeExecPath,
+      });
+      expect(existsSync(probeFile)).toBe(false);
     },
   );
 

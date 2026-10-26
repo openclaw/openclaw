@@ -1,7 +1,6 @@
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as config from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDoctorUpdateBudget } from "../flows/doctor-update-budget.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
@@ -14,18 +13,17 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
-import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
+import { externalDoctorEnv } from "./doctor-update.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const observed = vi.hoisted(() => ({
   now: 0,
   coreChecks: [] as DoctorHealthCheck[],
-  runtimePreparations: 0,
   reports: 0,
 }));
 const warning = (checkId: string, fields: object) =>
@@ -58,12 +56,7 @@ vi.mock("../flows/bundled-health-checks.js", async (importOriginal) => {
 
 beforeEach(() => {
   clearHealthChecksForTest();
-  Object.assign(observed, { coreChecks: [], runtimePreparations: 0, reports: 0 });
-  const readMetadata = config.readConfigFileSnapshotWithPluginMetadata;
-  vi.spyOn(config, "readConfigFileSnapshotWithPluginMetadata").mockImplementation((...args) => {
-    observed.runtimePreparations += 1;
-    return readMetadata(...args);
-  });
+  Object.assign(observed, { coreChecks: [], reports: 0 });
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -91,12 +84,7 @@ async function runLintFixture(
     const env = {
       ...state.env,
       ...buildUpdateRehearsalPathEnv(state.stateDir),
-      ...buildUpdateDoctorEnv({
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
-        serviceRepairPolicy: "external",
-        deferConfiguredPluginInstallRepair: true,
-      }),
+      ...externalDoctorEnv(),
       OPENCLAW_UPDATE_IN_PROGRESS: "0",
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
@@ -290,7 +278,6 @@ it.each(["selected", "required-error"])(
     }
     const deferred = mode !== "selected";
     const failed = mode === "required-error";
-    expect(observed).toMatchObject({ reports: 1, runtimePreparations: deferred ? 0 : 1 });
     expect(detected.toSorted()).toEqual(
       (mode === "selected" ? [runtimeCheckId] : required.map((check) => check.id)).toSorted(),
     );

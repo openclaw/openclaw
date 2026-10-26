@@ -1,6 +1,6 @@
 import { GatewayProtocolClient } from "@openclaw/gateway-client/browser";
 import { afterEach, expect, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import type { ConfigAutoSaveStatus, RuntimeConfigState } from "./config-state-model.ts";
 import { createConfigCapabilityHarness, createConfigServerMock } from "./config-test-harness.ts";

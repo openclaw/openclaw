@@ -21,6 +21,7 @@ import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
 } from "./capacity.test-support.js";
+import { isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
@@ -40,17 +41,6 @@ import {
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
-
-function isWorktreeAdd(argv: readonly string[]): boolean {
-  if (argv[0] !== "git") {
-    return false;
-  }
-  let command = 1;
-  while (argv[command] === "-c" || argv[command] === "-C") {
-    command += 2;
-  }
-  return argv[command] === "worktree" && argv[command + 1] === "add";
-}
 
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,

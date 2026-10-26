@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -207,15 +208,9 @@ it.each<RejectedAttachment>([
     const cancel = vi.fn();
     if (failure === "advertised" || failure === "streamed") {
       fetchMock.mockResolvedValue(
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new Uint8Array(limit + 1));
-            },
-            cancel,
-          }),
-          { headers: failure === "advertised" ? { "Content-Length": String(limit + 1) } : {} },
-        ),
+        new Response(makeStallingStream([new Uint8Array(limit + 1)], cancel), {
+          headers: failure === "advertised" ? { "Content-Length": String(limit + 1) } : {},
+        }),
       );
     } else if (failure === "bytes") {
       fetchMock.mockResolvedValue(new Response(bytes));

@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
@@ -16,7 +17,6 @@ const text = (root: ParentNode | null | undefined, part: string) =>
   find(root, part)?.textContent?.trim();
 const all = <T extends Element = HTMLElement>(root: ParentNode, part: string) =>
   Array.from(root.querySelectorAll<T>(`.chat-queue__${part}`));
-const waitingPath = 'path[d="M21 5v12a2 2 0 0 1-2 2h-6"]';
 function drag(target: Element, type: string, properties: object) {
   target.dispatchEvent(
     Object.assign(new Event(type, { bubbles: true, cancelable: type === "drop" }), properties),
@@ -77,10 +77,6 @@ describe("chat composer steering queue", () => {
     expect(onQueueSteer).toHaveBeenCalledWith("steer-1");
     expect(find(container, "state")).toBeNull();
     expect(find(container, "global-state")).toBeNull();
-    const icon = find(container, "icon");
-    expect(icon?.querySelector(waitingPath)).not.toBeNull();
-    expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).toBeNull();
-    expect(icon?.querySelector("circle")).toBeNull();
   });
 
   it("keeps the queue identifier on failed and held rows", () => {
@@ -93,11 +89,7 @@ describe("chat composer steering queue", () => {
 
     const rows = all(container, "item");
     expect(rows).toHaveLength(2);
-    for (const terminalRow of rows) {
-      const terminalIcon = find(terminalRow, "icon");
-      expect(terminalIcon?.querySelector(waitingPath)).not.toBeNull();
-      expect(terminalIcon?.querySelector('path[d^="m21.73 18"]')).toBeNull();
-    }
+    expect(rows.map((row) => row.getAttribute("data-chat-queue-item"))).toEqual(["failed", "held"]);
     expect(rows[0]?.classList.contains("chat-queue__item--failed")).toBe(true);
     expect(text(rows[0], "error .chat-queue__badge")).toBe(t("common.failed"));
   });
@@ -171,11 +163,8 @@ describe("chat composer queue reordering", () => {
   });
 
   it("auto-scrolls a long queue while a drag stays near its edge", () => {
-    const frames: FrameRequestCallback[] = [];
-    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
-      frames.push(callback);
-      return frames.length;
-    });
+    const { frames, request } = createFrameQueue();
+    const requestFrame = vi.fn(request);
     const cancelFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);

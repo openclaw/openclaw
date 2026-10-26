@@ -304,7 +304,10 @@ function createPluginGenerationArtifact(
         resolveDependency,
         linkDependency,
       );
-      const resolver = resolution.get(source);
+      // Configured tsconfig mappings must be pinned before later source edits.
+      if (process.env.JITI_TSCONFIG_PATHS !== undefined) {
+        resolution.get(source);
+      }
       const captureReference = (
         reference: string,
         kind: "asset" | "import" | "require",
@@ -361,7 +364,7 @@ function createPluginGenerationArtifact(
               : resolve(value);
           const input = resolved?.startsWith("file:") ? fileURLToPath(resolved) : resolved;
           if (
-            resolver.options.tsconfigPaths &&
+            resolution.get(source).options.tsconfigPaths &&
             name !== "openclaw" &&
             name !== "@openclaw/plugin-sdk" &&
             resolved?.startsWith("file:") &&
@@ -504,7 +507,12 @@ function createPluginGenerationArtifact(
           !specifier.startsWith(".") &&
           !path.isAbsolute(specifier) &&
           !specifier.startsWith("file:");
-        if (resolver.options.tsconfigPaths && bare && !self && !specifier.startsWith("#")) {
+        if (
+          bare &&
+          !self &&
+          !specifier.startsWith("#") &&
+          resolution.get(source).options.tsconfigPaths
+        ) {
           // Jiti still owns configured source paths; package maps below use captured metadata.
           const mapped = captureObservedReference(
             specifier,
@@ -573,7 +581,7 @@ function createPluginGenerationArtifact(
         moduleCapture.staticImports = visitPluginSourceReferences(
           source,
           fs.readFileSync(target, "utf8"),
-          resolver,
+          resolution.get(source),
           entry && !executableEntry
             ? captureObservedReference
             : (reference, kind) => observed.set(`${kind}\0${reference}`, null),

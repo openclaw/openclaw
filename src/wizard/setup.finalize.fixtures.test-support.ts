@@ -138,6 +138,17 @@ export function createFinalizeMocks() {
   };
 }
 
+export function createGatewayPasswordRefConfig(): OpenClawConfig {
+  return {
+    gateway: {
+      auth: {
+        mode: "password",
+        password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+      },
+    },
+  };
+}
+
 export function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),

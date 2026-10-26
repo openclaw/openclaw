@@ -25,16 +25,6 @@ export type ChatComposerMenuSkill = {
   blocked?: boolean;
 };
 
-type ChatComposerRootToggle = {
-  value: string;
-  label: string;
-  icon?: IconName;
-  checked: boolean;
-  disabled: boolean;
-  title?: string;
-  onChange: (checked: boolean) => void;
-};
-
 export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
   inputHandle: ChatAttachmentInputHandle;
@@ -43,7 +33,15 @@ export type ChatComposerPlusMenuProps = {
   open: boolean;
   view: ChatComposerPlusMenuView;
   toolOverrides: SessionToolOverrides | null | undefined;
-  rootToggles?: readonly ChatComposerRootToggle[];
+  rootToggles?: readonly {
+    value: string;
+    label: string;
+    icon?: IconName;
+    checked: boolean;
+    disabled: boolean;
+    title?: string;
+    onChange: (checked: boolean) => void;
+  }[];
   onOpenChange: (open: boolean) => void;
   onViewChange: (view: ChatComposerPlusMenuView) => void;
 };

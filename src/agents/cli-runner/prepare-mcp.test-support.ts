@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
@@ -13,6 +16,7 @@ import {
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { resolveCliChildEnv } from "./execution-env.js";
 import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -67,6 +71,50 @@ export function registerCliMcpPreparationTests({
   getFixture: () => ReturnType<typeof createCliRunnerPrepareFixture>;
   createConfig: () => OpenClawConfig;
 }) {
+  it("keeps prepared Gemini runtime settings in native-only child environments", async () => {
+    const fixture = getFixture();
+    const home = path.join(fixture.session.dir, "restricted-home");
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: true,
+      bundleMcpMode: "gemini-system-settings",
+      prepareExecution: async (ctx) => ({
+        env: { ...ctx.env, GEMINI_CLI_HOME: home },
+        clearEnv: ["GEMINI_CLI_SYSTEM_SETTINGS_PATH", "GEMINI_CLI_HOME"],
+        toolAvailabilityEnforced: true,
+      }),
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime: vi.fn(loopbackRuntime) });
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "google-gemini-cli",
+      model: "gemini-2.5-pro",
+      nativeAuthOnly: true,
+      config: {},
+    });
+    try {
+      const { env } = resolveCliChildEnv(context.preparedBackend, context.params);
+      expect(env.GEMINI_CLI_HOME).toBe(home);
+      const settingsPath = expectDefined(
+        env.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
+        "Gemini system settings path",
+      );
+      expect(settingsPath).toBe(context.preparedBackend.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH);
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      expect(settings.mcp.allowed).toEqual(["openclaw"]);
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
+  });
+
   it("preserves already-admitted authority through MCP grant transfer", async () => {
     const messageActionTurnCapability = "test-current-message-authority";
     const activateCapture = vi.fn(() => ({ captureNativeToolAuthority: () => true }));

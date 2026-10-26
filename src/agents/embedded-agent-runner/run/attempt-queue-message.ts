@@ -189,7 +189,7 @@ async function steerWithTranscriptLifecycle(
         ),
       Math.max(1, timeoutMs),
     );
-    timer.unref?.();
+    timer.unref();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (
         event.type === "message_end" &&

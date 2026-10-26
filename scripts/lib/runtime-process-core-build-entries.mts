@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
+import { runtimeProcessScriptEntrypoints } from "../../src/infra/runtime-process-manifest.ts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -36,11 +37,15 @@ export const runtimeProcessCoreEntrypoints = [
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
+  ...Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "runtimeEntrypoint" in entry ? [runtimeProcessEntrypoints[entry.runtimeEntrypoint]] : [],
+  ),
   runtimeProcessEntrypoints.pluginGenerationPreparation,
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.sessionTranscript,
+  runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,

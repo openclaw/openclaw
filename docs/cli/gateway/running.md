@@ -34,7 +34,7 @@ openclaw gateway run   # equivalent, explicit form
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
-    - `SIGUSR2` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR2`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool is read-only; agents request restart through the `openclaw` delegation tool. Effective Full Access, including Default (Full Access), authorizes permitted delegated changes without an approval prompt; restricted runs require human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
+    - `SIGUSR2` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR2`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool exposes owner-requested `restart`, `update.run`, and `update.cleanup`; cleanup keeps the Gateway serving. External-chat restarts and updates also honor `commands.restart`. These runtime-owned actions preserve owner/operator authorization and explicit tool restrictions. Other delegated setup changes follow effective permissions. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
     - `SIGUSR1` is reserved for Node's inspector, so attaching a debugger does not restart the Gateway. Prefer `openclaw gateway restart` for restarts; update manual restart scripts to send `SIGUSR2`.
     - `SIGINT`/`SIGTERM` stop the process but do not restore custom terminal state — if you wrap the CLI in a TUI or raw-mode input, restore the terminal yourself before exit.
     - A foreground Gateway does not follow the lifetime of the process that started it. OpenClaw's own launchers, such as Node runtime recovery, forward stop signals and stop their Gateway when they exit. A shell or wrapper script that does not forward signals leaves the Gateway serving after the wrapper is killed. Signal the Gateway process itself (process title `openclaw-gateway`), or forward signals from the wrapper (for example `exec openclaw gateway run`).
@@ -179,3 +179,12 @@ automatically. The explicit command is needed for crashed owners whose death
 cannot be verified from the new process, including containers with separate PID
 namespaces. `openclaw gateway recover-lock --json` exposes the inspection and
 confirmation command for operator tooling.
+
+Recovery supports SQLite global state and the selected PostgreSQL state family.
+For PostgreSQL, inspection binds the original local anchor, remote store UUID and
+namespace, and complete Gateway-owner lease record. Confirmation clears only that
+unchanged lease under native custody and a bounded PostgreSQL transaction; it
+does not migrate schemas or remove agent data. An unavailable store, incompatible
+lease table, changed anchor or renewed lease remains refused. Inspection may read
+a different application schema version through its verified stable lease contract;
+confirmation requires this binary's current GLOBAL schema version before any cleanup.

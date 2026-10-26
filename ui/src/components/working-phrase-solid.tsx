@@ -1,9 +1,9 @@
 // Decorative long-wait text; the working row owns the accessible status.
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
-import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
@@ -47,16 +47,11 @@ defineSolidBridge<WorkingPhraseProps>(
   "openclaw-working-phrase",
   (props, host) => {
     host.style.display = "contents";
-    const [tick, setTick] = createSignal(0);
-    useVisiblePoll(1_000, () => setTick((value) => value + 1), {
-      enabled: () => props.startMs != null && props.phrases?.length !== 0,
-    });
     const label = createMemo(() => {
-      tick();
       if (props.startMs == null || props.phrases?.length === 0) {
         return undefined;
       }
-      const sinceShown = Date.now() - props.startMs - WORKING_PHRASE_SHOW_AFTER_MS;
+      const sinceShown = readVisibleTime(1_000) - props.startMs - WORKING_PHRASE_SHOW_AFTER_MS;
       if (sinceShown < 0) {
         return undefined;
       }

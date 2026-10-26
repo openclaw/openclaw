@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 // Real CLI scope selection, Gateway handlers, and token storage with in-process transport.
 // Authentication mode is supplied by the fixture; device scope grants use the real verifier.
 import { expectDefined } from "@openclaw/normalization-core";
@@ -22,6 +21,7 @@ import {
   getPendingDevicePairing,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -291,9 +291,9 @@ it("resolves PostgreSQL before a device-list fallback can open local state", asy
     try {
       await expect(run("list", "--json")).rejects.toThrow("SecretRef is unresolved");
       expect(
-        (await fs.readdir(state.stateDir, { recursive: true })).filter((file) =>
-          file.endsWith(".sqlite"),
-        ),
+        (await listDirectoryTreeStrict(state.stateDir))
+          .map((walkEntry) => walkEntry.relativePath)
+          .filter((file) => file.endsWith(".sqlite")),
       ).toEqual([]);
     } finally {
       resetDatabaseEngineSelectionForTest();

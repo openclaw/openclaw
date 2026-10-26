@@ -24,7 +24,7 @@ import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
-import { abortable } from "./abortable.js";
+import { abortable, createAbortableError } from "./abortable.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -256,7 +256,7 @@ export function streamWithIdleTimeout(
       reason = "no response from model",
       name = "LlmIdleTimeoutError",
     ) => {
-      const timer = setTimeout(() => {
+      return setTimeout(() => {
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
@@ -268,9 +268,7 @@ export function streamWithIdleTimeout(
         streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
-      }, delay);
-      timer.unref?.();
-      return timer;
+      }, delay).unref();
     };
     let requestDeadline:
       | { timer: NodeJS.Timeout; reject: (error: Error) => void; accepted: boolean }
@@ -377,9 +375,21 @@ export function streamWithIdleTimeout(
           return returning;
         };
         let idleTimer: NodeJS.Timeout | undefined;
+        let idleTimerDelay = 0;
         let progressTimer: NodeJS.Timeout | undefined;
+        let progressTimerDelay = 0;
+        let progressTimerBudget = 0;
         let lastProgressAt = Date.now();
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
+        const pendingAborts = new Set<(error: Error) => void>();
+        const abortIteration = () => {
+          if (sourceSignal) {
+            for (const reject of pendingAborts) {
+              reject(createAbortableError(sourceSignal));
+            }
+          }
+        };
+        sourceSignal?.addEventListener("abort", abortIteration, { once: true });
         // Consume pre-stream tool activity once; reusing it shortens later chunk budgets.
         let streamFirstArmDone = false;
         // Police parked consumers until the native producer settles. Content-free
@@ -396,35 +406,53 @@ export function streamWithIdleTimeout(
           rejectIdleTimeout?.(error);
         };
         const armTimer = (progress = true) => {
-          clearTimeout(idleTimer);
           if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
             clearTimers();
             return;
           }
-          const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
-          const recentActivity = activeToolMs > 0 && Date.now() - activeToolMs < timeoutMs;
-          const isFirstStreamArm = !streamFirstArmDone;
-          const effectiveTimeout =
-            isFirstStreamArm && recentActivity
-              ? Math.max(1, timeoutMs - Math.max(0, Date.now() - activeToolMs))
-              : timeoutMs;
-          streamFirstArmDone = true;
-          idleTimer = startTimer(effectiveTimeout, rejectTimeout);
+          const now = Date.now();
+          let effectiveTimeout = timeoutMs;
+          if (!streamFirstArmDone) {
+            const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
+            if (activeToolMs > 0 && now - activeToolMs < timeoutMs) {
+              effectiveTimeout = Math.max(1, timeoutMs - Math.max(0, now - activeToolMs));
+            }
+            streamFirstArmDone = true;
+          }
+          if (idleTimer && idleTimerDelay === effectiveTimeout) {
+            idleTimer.refresh();
+          } else {
+            clearTimeout(idleTimer);
+            idleTimer = startTimer(effectiveTimeout, rejectTimeout);
+            idleTimerDelay = effectiveTimeout;
+          }
           iterationWatchdogActive = true;
           if (requestDeadline?.accepted) {
             clearRequestDeadline();
           }
           if (progress) {
-            lastProgressAt = Date.now();
+            lastProgressAt = now;
           }
-          clearTimeout(progressTimer);
-          progressTimer = startTimer(
-            Math.max(1, progressTimeoutMs - (Date.now() - lastProgressAt)),
-            rejectTimeout,
-            progressTimeoutMs,
-            "no model progress",
-            "LlmNoProgressError",
-          );
+          // Heartbeats preserve the progress deadline; only real progress resets it.
+          if (
+            progress &&
+            progressTimer &&
+            progressTimerDelay === progressTimeoutMs &&
+            progressTimerBudget === progressTimeoutMs
+          ) {
+            progressTimer.refresh();
+          } else if (progress || !progressTimer || progressTimerBudget !== progressTimeoutMs) {
+            clearTimeout(progressTimer);
+            progressTimerBudget = progressTimeoutMs;
+            progressTimerDelay = Math.max(1, progressTimeoutMs - (now - lastProgressAt));
+            progressTimer = startTimer(
+              progressTimerDelay,
+              rejectTimeout,
+              progressTimeoutMs,
+              "no model progress",
+              "LlmNoProgressError",
+            );
+          }
         };
         const unsubscribeLlmActivity = onLlmRequestActivity(
           streamAbortController.signal,
@@ -453,26 +481,46 @@ export function streamWithIdleTimeout(
         // Without native completion, preserve structural streams' historical
         // pending-next guard: a parked consumer cannot prove producer silence.
         void producerCompletion?.then(settle, settle);
+        let iteratorFinished = false;
+        const releaseAbortListener = () => {
+          if (iteratorFinished && pendingAborts.size === 0) {
+            sourceSignal?.removeEventListener("abort", abortIteration);
+          }
+        };
+        const finishIterator = () => {
+          settle();
+          iteratorFinished = true;
+          releaseAbortListener();
+        };
 
         return createStreamIteratorWrapper({
           iterator,
           next: async (streamIterator) => {
             let pendingNext: ReturnType<typeof streamIterator.next> | undefined;
+            let rejectAbort: ((error: Error) => void) | undefined;
             try {
-              const timeoutPromise = new Promise<never>((_, reject) => {
-                rejectIdleTimeout = reject;
-                armTimer(false);
-              });
-              // Providers may ignore their mirrored abort signal, so caller
-              // cancellation must also settle this exact iterator wait.
-              pendingNext = streamIterator.next();
-              const result = await withSourceAbort(
-                withRequestTimeout(Promise.race([pendingNext, timeoutPromise])),
+              const waiting = new Promise<IteratorResult<AssistantMessageEvent>>(
+                (resolve, reject) => {
+                  rejectIdleTimeout = reject;
+                  rejectAbort = reject;
+                  if (sourceSignal) {
+                    pendingAborts.add(reject);
+                  }
+                  armTimer(false);
+                  // Cancellation rejects this wait synchronously, before a provider's
+                  // mirrored-signal rejection can replace the caller's abort reason.
+                  pendingNext = streamIterator.next();
+                  void pendingNext.then(resolve, reject);
+                  if (sourceSignal?.aborted) {
+                    reject(createAbortableError(sourceSignal));
+                  }
+                },
               );
+              const result = await withRequestTimeout(waiting);
               finishCreation();
 
               if (result.done) {
-                settle();
+                finishIterator();
                 return result;
               }
 
@@ -484,21 +532,26 @@ export function streamWithIdleTimeout(
               armTimer(!producerReportsActivity);
               return result;
             } catch (error) {
-              settle();
+              finishIterator();
               // The caller's race can finish before the iterator's admitted
               // work. Its owner retains both operations through settlement.
               void trackCleanup(() => Promise.allSettled([pendingNext, returnIterator()])).catch(
                 () => recordAgentCleanupFailure(),
               );
-              throw error;
+              throw sourceSignal ? toErrorObject(error, "Non-Error rejection") : error;
+            } finally {
+              if (rejectAbort) {
+                pendingAborts.delete(rejectAbort);
+              }
+              releaseAbortListener();
             }
           },
           onReturn(_streamIterator, value) {
-            settle();
+            finishIterator();
             return returnIterator(value);
           },
           onThrow(streamIterator, error) {
-            settle();
+            finishIterator();
             return (
               streamIterator.throw?.(error) ??
               Promise.reject(toErrorObject(error, "Non-Error rejection"))

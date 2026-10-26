@@ -1,14 +1,21 @@
 // Source-owner measurement; fixtures use real Linux procfs and worker-spawned descendants.
+// node --import ./scripts/tsx.mjs scripts/perf/child-memory-measure.ts --owner <module> --seconds 120 --output <json>
+// Pair baseline/candidate on interleaved CPUs, then swap placement. Run --allocations
+// and --work-counts separately: their instrumentation is not timing-gate evidence.
+// On Node 26, --work-counts --assert-promise-budget checks promises per native read job.
 import assert from "node:assert/strict";
+import { createHook } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -21,6 +28,8 @@ const { values } = parseArgs({
     "start-file": { type: "string" },
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
+    "work-counts": { type: "boolean", default: false },
+    "assert-promise-budget": { type: "boolean", default: false },
     runaway: { type: "boolean", default: false },
     output: { type: "string" },
   },
@@ -28,6 +37,14 @@ const { values } = parseArgs({
 assert.equal(process.platform, "linux");
 assert.ok(values.output, "--output is required");
 assert.ok(!(values.allocations && values["gc-log"]), "Profile allocation and promotion separately");
+assert.ok(
+  !values["work-counts"] || (!values.allocations && !values["gc-log"]),
+  "Count async resources separately from allocation and promotion profiles",
+);
+assert.ok(
+  !values["assert-promise-budget"] || values["work-counts"],
+  "--assert-promise-budget requires --work-counts",
+);
 const integer = (name: "trees" | "seconds", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const trees = integer("trees", 1);
@@ -85,6 +102,14 @@ let burstAt = 0;
 let killedAt = 0;
 let killDiagnostic = "";
 let diagnosticsStop: ReturnType<typeof startGatewayBenchDiagnostics> | undefined;
+const asyncResources: Record<string, number> = {};
+const resourceHook = values["work-counts"]
+  ? createHook({
+      init(_id, type) {
+        asyncResources[type] = (asyncResources[type] ?? 0) + 1;
+      },
+    })
+  : undefined;
 try {
   // Prepare each identical tree sequentially. Setup allocation is outside capture.
   for (let index = 0; index < trees; index++) {
@@ -164,11 +189,21 @@ try {
     });
   }
   diagnosticsStop = startGatewayBenchDiagnostics();
+  const hostLoadBefore = os.loadavg();
+  const memoryBefore = process.memoryUsage();
+  const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const threadCpuStart = process.threadCpuUsage();
   const cpuStart = process.cpuUsage();
+  resourceHook?.enable();
   marker("heap-start");
   await delay(seconds * 1000);
   marker("heap-stop");
+  resourceHook?.disable();
   const cpu = process.cpuUsage(cpuStart);
+  const threadCpu = process.threadCpuUsage(threadCpuStart);
+  const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
+  const memoryAfter = process.memoryUsage();
+  const hostLoadAfter = os.loadavg();
   const diagnostics = diagnosticsStop();
   diagnosticsStop = undefined;
   let allocation: ReturnType<typeof allocated> | null = null;
@@ -181,12 +216,18 @@ try {
   const result = {
     scope:
       "watchChildMemory with real procfs; 20 independent trees by default, two worker-spawned descendants per tree",
-    timingGateEligible: !values.allocations && !values["gc-log"],
+    timingGateEligible: !values.allocations && !values["gc-log"] && !values["work-counts"],
     trees,
     seconds,
     treeSeconds: trees * seconds,
     allocation,
     cpuMs: (cpu.user + cpu.system) / 1000,
+    mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+    v8AllocationBytes: allocatedBytes,
+    v8AllocationBytesPerSecond: allocatedBytes / seconds,
+    memory: { before: memoryBefore, after: memoryAfter },
+    hostLoad: { before: hostLoadBefore, after: hostLoadAfter },
+    asyncResources: values["work-counts"] ? asyncResources : null,
     diagnostics,
     promotion: values["gc-log"]
       ? readGatewayGcTrace(path.resolve(values["gc-log"]), profilePath)
@@ -211,7 +252,19 @@ try {
   }
   fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
   fs.writeSync(1, `${JSON.stringify(result)}\n`);
+  if (values["assert-promise-budget"]) {
+    const readJobs = asyncResources.FSREQCALLBACK ?? 0;
+    assert.ok(
+      readJobs > 0,
+      "No filesystem polling observed; increase --seconds to capture a sample",
+    );
+    assert.ok(
+      (asyncResources.PROMISE ?? 0) <= 4 * readJobs,
+      "Child-memory polling exceeded four promises per native read job",
+    );
+  }
 } finally {
+  resourceHook?.disable();
   diagnosticsStop?.();
   stops.forEach((stop) => stop());
   inspector.disconnect();

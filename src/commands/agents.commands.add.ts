@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   checkAgentCreationGate,
   createAgent,
@@ -208,16 +209,18 @@ export async function agentsAddCommand(
       writeRuntimeJson(runtime, payload);
     } else {
       runtime.log(`Agent: ${agentId}`);
-      runtime.log(`Workspace: ${shortenHomePath(created.workspace)}`);
-      runtime.log(`Agent dir: ${shortenHomePath(created.agentDir)}`);
+      runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(created.workspace))}`);
+      runtime.log(`Agent dir: ${sanitizeTerminalText(shortenHomePath(created.agentDir))}`);
       if (created.model) {
-        runtime.log(`Model: ${created.model}`);
+        runtime.log(`Model: ${sanitizeTerminalText(created.model)}`);
       }
       if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+            ...payload.bindings.conflicts.map(
+              (description) => `- ${sanitizeTerminalText(description)}`,
+            ),
           ].join("\n"),
         );
       }
@@ -503,7 +506,9 @@ async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: Nod
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+              ...result.conflicts.map(
+                (conflict) => `- ${sanitizeTerminalText(describeBindingConflict(conflict))}`,
+              ),
             ].join("\n"),
             "Routing bindings",
           );

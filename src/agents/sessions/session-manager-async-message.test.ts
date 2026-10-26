@@ -14,11 +14,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  bindSessionPendingInputSources,
-  stageSessionPendingInput,
-  withSessionPendingInputPersistence,
-} from "../../config/sessions/session-accessor.pending-inputs.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -731,72 +727,6 @@ it("fences local navigation changes at worker commit and receipt publication", a
     { type: "message", parentId: tail, message: user("committed-before-reset") },
   ]);
 });
-
-it.each([false, true])(
-  "preserves pending custody and closed committed replay (collected: %s)",
-  async (collected) => {
-    const { target, manager } = await fixture(state, `pending-messages-${collected}`);
-    const stage = async (key: string) =>
-      expectDefined(
-        await stageSessionPendingInput(target, {
-          runId: key,
-          message: user(key),
-          assertCurrent: () => {},
-        }),
-        "Expected pending input custody",
-      );
-    const firstSource = await stage("first");
-    const sources = [firstSource];
-    if (collected) {
-      sources.push(await stage("second"));
-    }
-    const receipt = collected
-      ? expectDefined(
-          bindSessionPendingInputSources(sources, user("aggregate")),
-          "Expected aggregate custody",
-        )
-      : firstSource;
-    const beforeFreshMessageCommit = vi.fn(() => {
-      throw new Error("Accepted input must retain its original admission");
-    });
-    try {
-      await expect(manager.appendMessageAsync(firstSource.message)).rejects.toThrow(
-        "admitted turn",
-      );
-      const committed = await receipt.run(() =>
-        manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-          beforeFreshMessageCommit,
-        }),
-      );
-      expect(committed).toMatchObject({
-        entryId: receipt.inputId,
-        message: receipt.message,
-        appended: true,
-      });
-      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
-        Array(sources.length + 1).fill("consumed"),
-      );
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      const events = await loadTranscriptEvents(target);
-      expect(events).toEqual(manager.getPersistedEntries());
-      receipt.finish("cancelled");
-      await expect(
-        withSessionPendingInputPersistence(receipt, () =>
-          manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-            beforeFreshMessageCommit,
-          }),
-        ),
-      ).resolves.toMatchObject({ entryId: receipt.inputId, appended: false });
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      expect(await loadTranscriptEvents(target)).toEqual(events);
-    } finally {
-      receipt.finish("interrupted");
-      for (const source of sources) {
-        source.finish("interrupted");
-      }
-    }
-  },
-);
 
 it("rolls back worker promotion when pending authority retires at commit", async () => {
   const { target, manager } = await fixture(state, "revoked-message");

@@ -45,6 +45,33 @@ describe("immutable plain data", () => {
     expect(freezeJson({ snapshot }).snapshot).toBe(snapshot);
   });
 
+  it("queues only new descendants when freezing a shared snapshot tail", () => {
+    const retained = freezeTrusted([{ nested: { value: 1 } }, { nested: { value: 2 } }]);
+    const appended = { nested: { value: 3 } };
+    const next = [...retained, appended];
+    const push = Array.prototype.push;
+    let revisited = false;
+    // Spy bookkeeping also uses push; count directly and restore before assertions.
+    /* eslint-disable no-extend-native */
+    Array.prototype.push = function (this: unknown[], ...items: unknown[]) {
+      revisited ||= items.some((item) => item === retained[0] || item === retained[1]);
+      return Reflect.apply(push, this, items);
+    };
+    try {
+      freezeTrusted(next);
+    } finally {
+      Array.prototype.push = push;
+    }
+    /* eslint-enable no-extend-native */
+    expect(revisited).toBe(false);
+    expect(next[0]).toBe(retained[0]);
+    expect(next[1]).toBe(retained[1]);
+    expect([next, appended, appended.nested].map(Object.isFrozen)).toEqual([true, true, true]);
+    expect(() => {
+      appended.nested.value = 4;
+    }).toThrow(TypeError);
+  });
+
   it.each([freezeJson, freezeTrusted])(
     "%s freezes oversized cycles without recursion",
     (freeze) => {

@@ -122,11 +122,14 @@ it("uses the declared default account for configured fallback and keeps absent s
   expect(f.container.querySelector(".settings-count")).toBeNull();
 });
 
-it("retains fact rows across status refreshes, phone insertion, and locale changes", () => {
-  const f = fixture();
+it("retains fact rows and login controls across status refreshes and locale changes", async () => {
+  const qrDataUrl = "data:image/png,qr";
+  const f = fixture({ login: { ...emptyLogin, message: "Scan now", qrDataUrl } });
   const facts = () => [...f.container.querySelectorAll("dt")];
   const original = facts();
   const values = original.map((row) => row.nextElementSibling);
+  const controls = f.buttons();
+  const qr = f.container.querySelector("img");
   f.update({ status: { configured: true, running: true } });
   for (const [index, row] of facts().entries()) {
     expect(row).toBe(original[index]);
@@ -145,11 +148,36 @@ it("retains fact rows across status refreshes, phone insertion, and locale chang
   const phoneValue = phone?.nextElementSibling;
   const labels = withPhone.map((row) => row.textContent);
   f.update({ locale: "de" });
-  expect(facts().map((row) => row.textContent)).not.toEqual(labels);
+  await vi.waitFor(() => {
+    flush();
+    f.expectFacts({ Konfiguriert: "Ja", Läuft: "Ja", Telefonnummer: "+15555550123" });
+  });
   for (const [index, row] of facts().entries()) {
     expect(row).toBe(withPhone[index]);
   }
   expect(phone?.nextElementSibling).toBe(phoneValue);
+  for (const [index, button] of f.buttons().entries()) {
+    expect(button).toBe(controls[index]);
+  }
+  expect(f.container.querySelector("img")).toBe(qr);
+  expect(qr?.getAttribute("src")).toBe(qrDataUrl);
+  expect(qr?.getAttribute("alt")).toBe("WhatsApp-QR");
+  expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Scan now");
+
+  f.update({ locale: "en" });
+  expect(facts().map((row) => row.textContent)).toEqual(labels);
+  for (const [index, button] of f.buttons().entries()) {
+    expect(button).toBe(controls[index]);
+  }
+  expect(qr?.getAttribute("alt")).toBe("WhatsApp QR");
+  f.update({ locale: "sv" });
+  await vi.waitFor(() => {
+    flush();
+    expect(f.button("Uppdatera")).toBe(controls.at(-1));
+  });
+  expect(f.container.querySelector("img")).toBe(qr);
+  expect(f.mountConfig).toHaveBeenCalledOnce();
+  expect([f.start, f.wait, f.logout].map((mock) => mock.mock.calls)).toEqual([[], [], []]);
 
   f.update({ status: { configured: true, running: true } });
   expect(phone?.isConnected).toBe(false);
@@ -216,11 +244,15 @@ it("ignores a superseded refresh failure and keeps command errors retryable", as
   );
 });
 
-it("updates translated labels and disposes the host configuration slot without resetting login", () => {
-  const f = fixture();
+it("loads an initial locale and disposes the host configuration slot without resetting login", async () => {
+  const f = fixture({ locale: "de" });
   expect(f.mountConfig).toHaveBeenCalledOnce();
-  f.update({ locale: "de" });
-  expect(f.container.textContent).not.toContain("Link WhatsApp Web and monitor connection health.");
+  await vi.waitFor(() => {
+    flush();
+    expect(f.container.textContent).toContain(
+      "WhatsApp Web verknüpfen und Verbindungsstatus überwachen.",
+    );
+  });
   f.dispose();
   expect(f.configDispose).toHaveBeenCalledOnce();
   expect([f.start, f.wait, f.logout].map((mock) => mock.mock.calls)).toEqual([[], [], []]);

@@ -20,6 +20,10 @@ GET /api/diagnostics/prometheus
 Content type is `text/plain; version=0.0.4; charset=utf-8`, the standard
 Prometheus exposition format.
 
+Worker queue depths, wait times, and request durations are aggregated directly
+from worker observations. Metrics collection does not enable per-request
+diagnostic events; explicit diagnostic subscribers still receive those events.
+
 <Warning>
 The route uses Gateway authentication (operator scope, trusted-operator surface) and requires the caller's effective scopes to include `operator.read` (implied by `operator.write` or `operator.admin`). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
 </Warning>
@@ -243,6 +247,9 @@ memory, realtime, and other messages. Totals survive worker retirement and are
 published with memory samples. Posts queued on a worker-bound port count when
 accepted by the port, even if cancellation later prevents handing that port to a
 worker. These counters describe transport work, not confirmed delivery.
+Retained-worker `ref()` and `unref()` update host-owned process liveness locally;
+they do not send lifecycle messages to the supervisor. Active work, pending
+samples, and unfinished native cleanup still keep the host alive.
 
 Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
 they exclude transport framing and do not measure structured-clone allocations.
@@ -294,8 +301,11 @@ client receipt. Their only label is `event`: a known protocol event name, such a
 `chat` or `sessions.changed`, or `other` for an unrecognized name. No payload,
 session, user, or connection identifiers are exported. The
 `openclaw_gateway_ws_operator_connections` gauge reports connected authenticated
-operator sockets without labels. These observations use the existing bounded
-diagnostic queue and shared exporter series cap. Event observations are batched
+operator sockets without labels. Event counters reach Prometheus directly at flush,
+without allocating diagnostic event snapshots. Explicit diagnostic subscribers,
+including OpenTelemetry metrics, still receive queued snapshots. Connection counts
+use the bounded diagnostic queue; all metrics share the exporter series cap.
+Event observations are batched
 by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or
@@ -628,10 +638,30 @@ These observations use the existing bounded diagnostic queue when diagnostics
 and an interested trusted consumer are enabled. Compare each stage's count;
 this metric is attribution for waiting callers, not total host work.
 
+### Chat startup stages
+
+`openclaw_gateway_rpc_stage_seconds{method="chat.startup",phase}` attributes
+completed startup work with fixed labels:
+
+| Phase                | Observation                                                            |
+| -------------------- | ---------------------------------------------------------------------- |
+| `session_entry`      | Exact session row preparation and initial access check                 |
+| `pending_inputs`     | Pending-input page and orphaned-input reconciliation                   |
+| `history_page`       | Transcript page read and display projection                            |
+| `startup_projection` | Command preparation and optional settled model projections             |
+| `projection_final`   | Final session row readiness, access revalidation and response assembly |
+| `session_info`       | Synchronous session snapshot presentation                              |
+
+Only entered phases contribute samples, including when they fail. These are
+elapsed durations, including worker queues and scheduling; they do not report
+CPU time. Phases can overlap: `session_info` is included in `projection_final`.
+Startup projection preparation can overlap the history read. Do not sum
+these phases as a request total; use the RPC handler duration for that total.
+Labels contain no agent, session, account or transcript identifiers.
+
 ### Catalog list stages
 
-The stage histograms currently cover only `sessions.catalog.list`. They use
-six fixed phase labels:
+For `sessions.catalog.list`, the stage histograms use six fixed phase labels:
 
 | Phase                | Observation                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------ |

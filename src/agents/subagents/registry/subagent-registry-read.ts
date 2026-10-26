@@ -11,7 +11,6 @@ import {
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
-  getLatestSubagentRunByChildSessionKeyFromRuns,
   getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
   listRunsForControllerFromRuns,
@@ -29,7 +28,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner, latestSubagentRun } from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
@@ -204,7 +203,7 @@ export function isSubagentSessionRunActive(
 ): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunForChild(subagentRuns, { childSessionKey, childAgentId }),
+    getLatestLiveSubagentRunByChildSessionKey(childSessionKey, undefined, childAgentId),
   );
 }
 
@@ -248,13 +247,6 @@ export function getLatestLiveSubagentRunByChildSessionKey(
   childAgentId?: string,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
-  // Mutation ownership is process-local; persisted rows can be stale after a replacement.
-  return (
-    getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsForChildSession(key, childAgentId),
-      key,
-      matches,
-      childAgentId,
-    ) ?? null
-  );
+  // The live index owns child/agent matching; retained snapshots cannot confer custody.
+  return latestSubagentRun(getSubagentRunsForChildSession(key, childAgentId), matches) ?? null;
 }

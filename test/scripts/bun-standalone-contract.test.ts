@@ -51,6 +51,8 @@ describe("standalone build interface", () => {
     [["--plugins", "codex,"], "--plugins"],
     [["--plugins", "codex", "--plugins", "slack"], "--plugins"],
     [["--support-output", "support"], "requires --compile-aot"],
+    [["--aot-source", "--support-output", "support"], "requires --compile-aot"],
+    [["--support-output", "support", "--aot-source"], "requires --compile-aot"],
     [["--compile-aot", "--support-output", "one", "--support-output", "two"], "once"],
     [["--target=bun-linux-x64"], "AOT cannot cross-compile"],
   ])("rejects invalid standalone options %j", (flags, error) => {
@@ -59,6 +61,192 @@ describe("standalone build interface", () => {
 
   it("requires an output directory", () => {
     expect(() => parseStandaloneArguments([])).toThrow("Usage:");
+  });
+  it("defaults to JIT and selects exactly one explicit compilation mode", () => {
+    expect(parseStandaloneArguments(["out"])).toEqual({
+      outputDirectory: "out",
+      mode: "jit",
+      compileFlags: [],
+    });
+    for (const [flag, mode] of Object.entries({
+      "--bytecode": "bytecode",
+      "--compile-aot": "aot",
+    })) {
+      const parsed = parseStandaloneArguments(["out", flag]);
+      if (parsed.help) {
+        throw new Error("A build mode must not request help");
+      }
+      expect(parsed.mode).toBe(mode);
+    }
+    expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
+      "at most one",
+    );
+    expect(() => parseStandaloneArguments(["out", "--unknown"])).toThrow("at most one");
+    expect(() => parseStandaloneArguments([])).toThrow("Usage:");
+  });
+
+  it("limits type-mismatch logging to AOT and accepts either option order", () => {
+    for (const flags of [
+      ["--compile-aot", "--aot-log-type-mismatches"],
+      ["--aot-log-type-mismatches", "--compile-aot"],
+    ]) {
+      expect(parseStandaloneArguments(["out", ...flags])).toEqual({
+        outputDirectory: "out",
+        mode: "aot",
+        compileFlags: ["--aot", "--aot-log-type-mismatches"],
+        aotCompileOptions: { aotLogTypeMismatches: true },
+      });
+    }
+    expect(() => parseStandaloneArguments(["out", "--aot-log-type-mismatches"])).toThrow(
+      "requires --compile-aot",
+    );
+    expect(() =>
+      parseStandaloneArguments(["out", "--bytecode", "--aot-log-type-mismatches"]),
+    ).toThrow("requires --compile-aot");
+    expect(() =>
+      parseStandaloneArguments(["out", "--compile-aot", "--aot-type-errors=log"]),
+    ).toThrow("Unknown option");
+  });
+
+  it("selects original TypeScript without changing the emitted-JavaScript AOT mode", () => {
+    expect(parseStandaloneArguments(["out", "--aot-source", "--aot-log-type-mismatches"])).toEqual({
+      outputDirectory: "out",
+      mode: "aot",
+      source: true,
+      compileFlags: ["--aot", "--aot-log-type-mismatches"],
+      aotCompileOptions: { aotLogTypeMismatches: true },
+    });
+    expect(() => parseStandaloneArguments(["out", "--compile-aot", "--aot-source"])).toThrow(
+      "at most one",
+    );
+  });
+
+  it.each(["--compile-aot", "--aot-source"])(
+    "maps trim, reports, and hardening to both compiler interfaces with %s",
+    (mode) => {
+      const parsed = parseStandaloneArguments([
+        "out",
+        "--trim-locales",
+        "en,de",
+        "--explain",
+        "--explain=statistics",
+        "--explain=trim",
+        "--trim",
+        "--no-compile-function-source",
+        "--disallow-code-generation-from-strings=strict",
+        mode,
+      ]);
+      expect(parsed).toMatchObject({
+        mode: "aot",
+        compileFlags: [
+          "--aot",
+          "--trim-locales=en,de",
+          "--explain",
+          "--explain=statistics",
+          "--explain=trim",
+          "--trim",
+          "--no-compile-function-source",
+          "--disallow-code-generation-from-strings=strict",
+        ],
+        aotCompileOptions: {
+          trim: { locales: ["en", "de"] },
+          aotExplain: ["text", "statistics", "trim"],
+          functionSource: false,
+          disallowCodeGenerationFromStrings: "strict",
+        },
+      });
+      expect("source" in parsed).toBe(mode === "--aot-source");
+    },
+  );
+
+  it("preserves the non-strict string-code policy and plain trimming", () => {
+    expect(
+      parseStandaloneArguments([
+        "out",
+        "--compile-aot",
+        "--trim",
+        "--disallow-code-generation-from-strings",
+      ]),
+    ).toMatchObject({
+      aotCompileOptions: { trim: true, disallowCodeGenerationFromStrings: true },
+    });
+  });
+
+  it.each(["--compile-aot", "--aot-source"])(
+    "normalizes retained trim features with %s",
+    (mode) => {
+      for (const flags of [
+        ["--trim-allow", "run,jit,run", "--trim-locales=en,de"],
+        ["--trim-locales=en,de", "--trim-allow=jit,run"],
+        ["--trim", "--trim-allow=run", "--trim-allow=jit", "--trim-locales=en,de"],
+      ]) {
+        const parsed = parseStandaloneArguments(["out", mode, ...flags]);
+        expect(parsed).toMatchObject({
+          aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en", "de"] } },
+        });
+        if (!parsed.help) {
+          expect(parsed.compileFlags.filter((flag) => flag.startsWith("--trim-allow="))).toEqual([
+            "--trim-allow=run,jit",
+          ]);
+        }
+      }
+      expect(parseStandaloneArguments(["out", mode, "--trim-allow=run"])).toMatchObject({
+        aotCompileOptions: { trim: { allow: ["run"] } },
+      });
+    },
+  );
+
+  it.each([
+    ["--trim"],
+    ["--explain"],
+    ["--no-compile-function-source"],
+    ["--disallow-code-generation-from-strings=strict"],
+    ["--bytecode", "--trim"],
+    ["--trim-allow=run"],
+    ["--bytecode", "--trim-allow=run,jit"],
+  ])("requires AOT for compiler options %j", (...flags) => {
+    expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("requires --compile-aot");
+  });
+
+  it.each([
+    ["--trim", "--trim"],
+    ["--no-compile-function-source", "--no-compile-function-source"],
+    ["--aot-log-type-mismatches", "--aot-log-type-mismatches"],
+    ["--disallow-code-generation-from-strings", "--disallow-code-generation-from-strings=strict"],
+    ["--disallow-code-generation-from-strings=invalid"],
+    ["--trim-locales"],
+    ["--trim-locales=en,"],
+    ["--trim-locales=en"],
+    ["--trim-allow"],
+    ["--trim-allow="],
+    ["--trim-allow=run,"],
+    ["--trim-allow=ffi"],
+    ["--explain="],
+  ])("rejects incomplete or repeated AOT options %j", (...flags) => {
+    expect(() => parseStandaloneArguments(["out", "--compile-aot", ...flags])).toThrow();
+  });
+
+  it("accepts one plugin list independently of the compilation mode", () => {
+    for (const flags of [
+      ["--plugins", "codex, slack,codex", "--bytecode"],
+      ["--bytecode", "--plugins", "codex,slack"],
+    ]) {
+      expect(parseStandaloneArguments(["out", ...flags])).toEqual({
+        outputDirectory: "out",
+        mode: "bytecode",
+        compileFlags: ["--bytecode"],
+        pluginIds: ["codex", "slack"],
+      });
+    }
+    for (const flags of [
+      ["--plugins"],
+      ["--plugins", ""],
+      ["--plugins", "codex,"],
+      ["--plugins", "--bytecode"],
+      ["--plugins", "codex", "--plugins", "slack"],
+    ]) {
+      expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("--plugins");
+    }
   });
 
   it("refuses experimental AOT on a compiler without that capability", () => {
@@ -116,6 +304,13 @@ describe("standalone build interface", () => {
       openclaw: { version: "2026.10.3", commit: "b".repeat(40) },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },
+      pluginContract: {
+        schemaVersion: 1,
+        sdk: {
+          "openclaw/plugin-sdk/core": { source: "dist/plugin-sdk/core.js", entry: "/image/core" },
+        },
+        plugins: {},
+      },
       sqlite: { version: "3.53.4" },
       pruning: { categories: {}, sidecarPlugins: [] },
     });
@@ -127,7 +322,17 @@ describe("standalone build interface", () => {
         fileCount: 1,
         symlinkCount: 1,
       },
-      plugins: { embedded: ["codex", "slack"], omitted: ["matrix", "signal"] },
+      plugins: {
+        embedded: ["codex", "slack"],
+        omitted: ["matrix", "signal"],
+        contract: {
+          schemaVersion: 1,
+          sdk: {
+            "openclaw/plugin-sdk/core": { source: "dist/plugin-sdk/core.js", entry: "/image/core" },
+          },
+          plugins: {},
+        },
+      },
     });
     expect(manifest.runtime.sha256).toBe(
       "c1763658d97365c3501098c7326f9a049ec6107223baaea9f96cdb19e7c6cf9a",

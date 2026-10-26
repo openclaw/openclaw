@@ -454,6 +454,14 @@ Custom package builds using `scripts/package-openclaw-for-docker.mjs --bundle-pl
 retain each selected plugin's declared npm bundles from its own installation,
 including their installed runtime dependencies and local patches. Packaging does
 not change the checkout's dependency links or shared package store.
+
+After the frozen production install, Docker also composes the selected plugins'
+exact production and optional pins into the final distribution manifest and
+links their already-installed package identities at the root resolution scope.
+This lets plugin-owned code emitted into shared root chunks resolve the same
+packages while retaining the plugin-local links needed by plugin-root chunks.
+The composition performs no second install or dependency resolution and fails
+instead of replacing an incompatible root binding.
 This includes WhatsApp: `OPENCLAW_EXTENSIONS=whatsapp` compiles and packages its
 runtime. Ordinary source builds generate its runtime through the separate
 external-plugin build path; root npm artifacts continue to exclude it. Selected
@@ -550,6 +558,9 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
+It uses the live Gateway lock's port first, then `OPENCLAW_GATEWAY_PORT`, then
+the configured port. An explicit environment port still works when the config
+cannot be loaded.
 Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:

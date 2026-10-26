@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
   type ApprovalHistoryResult,
@@ -40,6 +39,7 @@ import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
+import { respondError } from "./response.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CreateApprovalHandlersParams = {
@@ -96,13 +96,9 @@ function resolveLegacyApprovalLabel(client: GatewayClient | null): string | null
 }
 
 function respondApprovalNotFound(respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "approval not found", {
-      details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, "approval not found", {
+    details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
+  });
 }
 
 function readExactApprovalId(params: unknown): string | null {
@@ -190,11 +186,7 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalHistoryParams(rawParams)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history params"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.history params");
         return;
       }
       if (!authority.isCurrent()) {
@@ -216,11 +208,7 @@ export function createApprovalHandlers(
           return;
         }
         if (error instanceof OperatorApprovalHistoryCursorError) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor");
           return;
         }
         respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
@@ -256,11 +244,7 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalGetParams(rawParams)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.get params"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.get params");
         return;
       }
       const id = readExactApprovalId(rawParams);

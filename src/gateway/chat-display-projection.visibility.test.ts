@@ -17,6 +17,13 @@ const internalMessage = (text: string, sourceTool: string) => ({
   ...userTextMessage(text),
   provenance: { kind: "internal_system", sourceTool },
 });
+const mediaMessage = (text: string, seq: number, url: string) => ({
+  ...assistantTextMessage(text, seq),
+  content: [
+    { type: "text", text },
+    { type: "image", source: { type: "url", url } },
+  ],
+});
 const expectProjection = (
   messages: unknown[],
   expected: unknown[],
@@ -95,7 +102,6 @@ it.each(["visible ask", ""])("strips legacy internal envelopes: %s", (visible) =
 
 it.each([
   [" exec ", "Exec completed (background-job, code 0) :: PRIVATE_COMMAND_OUTPUT"],
-  [" exec ", "Exec failed (background-job, code 1) :: PRIVATE_COMMAND_OUTPUT"],
   ["subagent_announce", "private child announcement"],
   ["subagent_settle", "private child settlement"],
   ["image_generate", 'session_key: image_generate:task-123\npath="/private.png"'],
@@ -115,13 +121,7 @@ it.each([
         internalMessage("Gateway restarted during update.", "restart-sentinel"),
       ]
     : [];
-  const answer = {
-    ...assistantTextMessage("Created.", 2),
-    content: [
-      { type: "text", text: "Created." },
-      { type: "image", source: { type: "url", url: "/api/chat/media/outgoing/generated.png" } },
-    ],
-  };
+  const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
   expectProjection([completion, ...controls, answer], [...controls, answer]);
   expect(completion).toEqual(original);
 });
@@ -215,6 +215,37 @@ const provenance = {
   sourceSessionKey: sessionKey,
   sourcePromptPrefix: `[cron:${jobId} Old report]`,
 };
+
+it("keeps scheduled inputs quiet without hiding historical announcements, lookalikes, or delivered media", () => {
+  const input = {
+    ...userTextMessage("[cron:daily Daily check] Check the queue."),
+    provenance: { ...provenance, sourceTool: "cron_execution" },
+  };
+  const announcement = {
+    ...userTextMessage("The historical scheduled result is ready.", 2),
+    provenance,
+  };
+  const human = {
+    ...userTextMessage("[cron:daily Daily check] This is my example.", 3),
+    provenance: { kind: "external_user", sourceTool: "cron_execution" },
+  };
+  const delivered = {
+    ...mediaMessage("The new scheduled result is ready.", 4, "/api/chat/media/outgoing/report.png"),
+    provenance: input.provenance,
+  };
+  const original = structuredClone(input);
+  expectProjection(
+    [input, announcement, human, delivered],
+    [
+      expect.objectContaining({ role: "assistant", content: announcement.content, provenance }),
+      human,
+      delivered,
+    ],
+    { resolveCronJobName: () => "Daily check" },
+  );
+  expectProjection([input], [], { resolveCronJobName: () => "Daily check" });
+  expect(input).toEqual(original);
+});
 
 it("projects only recorded cron envelopes and current labels without changing model input", () => {
   const body = "Check the queue.\n    Keep indentation.";

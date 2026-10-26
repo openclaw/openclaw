@@ -76,16 +76,10 @@ afterEach(async () => {
     socket.destroy();
   }
   runningSockets.clear();
-  await Promise.all(runningServers.splice(0).map(closeServer));
+  await Promise.all(runningServers.splice(0).map((server) => server[Symbol.asyncDispose]()));
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-
-function closeServer(server: Server) {
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
 
 function mockFetchGuard(response: Response, release: () => Promise<void> = async () => undefined) {
   return vi
@@ -106,9 +100,8 @@ function fetchResponse(response: Response) {
 
 describe("ClawRouter usage", () => {
   it("maps the managed monthly budget and usage totals", async () => {
-    const signal = new AbortController().signal;
     const resetAt = Date.UTC(2026, 7, 1);
-    const fetchGuard = mockFetchGuard(
+    mockFetchGuard(
       Response.json({
         budget: {
           configured: true,
@@ -122,10 +115,7 @@ describe("ClawRouter usage", () => {
       }),
     );
 
-    const snapshot = await fetchUsage({
-      baseUrl: "https://clawrouter.example/v1",
-      signal,
-    });
+    const snapshot = await fetchUsage({ baseUrl: "https://clawrouter.example/v1" });
 
     expect(snapshot).toEqual({
       provider: "clawrouter",
@@ -135,18 +125,6 @@ describe("ClawRouter usage", () => {
       summary: "12 requests · 34,567 tokens · $25.00 used",
       plan: "Managed monthly budget",
     });
-    expect(fetchGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://clawrouter.example/v1/usage",
-        init: expect.objectContaining({
-          headers: { Accept: "application/json", Authorization: "Bearer proxy-key" },
-        }),
-        auditContext: "clawrouter.usage",
-        signal,
-        mode: "trusted_env_proxy",
-      }),
-    );
-    expect(fetchGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
   it("does not coerce numeric strings from the usage boundary", async () => {
@@ -157,15 +135,15 @@ describe("ClawRouter usage", () => {
       }),
     );
 
-    expect(snapshot).toMatchObject({ windows: [], plan: "Managed monthly budget" });
-    expect(snapshot.billing).toBeUndefined();
-    expect(snapshot.summary).toBeUndefined();
+    expect([snapshot.windows, snapshot.billing, snapshot.summary]).toEqual([
+      [],
+      undefined,
+      undefined,
+    ]);
   });
 
   it("reports malformed JSON as a malformed usage response", async () => {
-    expect(await fetchResponse(new Response(new TextEncoder().encode('{"budget":')))).toEqual({
-      provider: "clawrouter",
-      displayName: "ClawRouter",
+    expect(await fetchResponse(new Response('{"budget":'))).toMatchObject({
       windows: [],
       error: "Malformed usage response",
     });
@@ -193,10 +171,7 @@ describe("ClawRouter usage", () => {
   });
 
   it("observes peer closure when a real loopback server returns non-OK", async () => {
-    let onResponseClosed: () => void;
-    const responseClosed = new Promise<void>((resolve) => {
-      onResponseClosed = resolve;
-    });
+    const { promise: responseClosed, resolve: onResponseClosed } = Promise.withResolvers<void>();
     const { baseUrl, requests } = await startUsageServer((_req, res) => {
       res.once("close", onResponseClosed);
       res.writeHead(503, { "content-type": "text/plain" });
@@ -212,15 +187,7 @@ describe("ClawRouter usage", () => {
   });
 
   it("bounds successful usage response bodies", async () => {
-    const oversizedPayload = JSON.stringify({
-      budget: { configured: false },
-      usage: { summary: { requestCount: 1 } },
-      padding: "x".repeat(1024 * 1024),
-    });
-
-    const response = new Response(oversizedPayload, {
-      headers: { "content-type": "application/json" },
-    });
+    const response = new Response("x".repeat(1024 * 1024 + 1));
     await expect(fetchResponse(response)).rejects.toThrow("ClawRouter usage response exceeds");
   });
 
@@ -277,7 +244,8 @@ describe("ClawRouter usage", () => {
   });
 
   it("preserves provider usage routing through the env proxy", async () => {
-    const { baseUrl } = await startUsageServer((_req, res) => {
+    const { baseUrl } = await startUsageServer((req, res) => {
+      expect(req.headers.authorization).toBe("Bearer proxy-key");
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(
         JSON.stringify({

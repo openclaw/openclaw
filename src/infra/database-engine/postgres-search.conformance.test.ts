@@ -81,9 +81,6 @@ async function fixture(
       anchor,
       schema,
       input: { connection: connection!, schemaPrefix: "search_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
     });
     if (!(db instanceof PostgresSyncConnection)) {
       throw new Error("Expected PostgreSQL");

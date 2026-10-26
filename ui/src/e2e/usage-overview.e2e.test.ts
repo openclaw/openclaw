@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { buildAggregatesFromSessions, usageTotals } from "../pages/usage/view.test-support.ts";
+import {
+  usageMessages,
+  buildAggregatesFromSessions,
+  usageTotals,
+} from "../pages/usage/view.test-support.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
@@ -126,14 +130,7 @@ suite.define(() => {
           usage: {
             ...usageTotals(100, 0.1),
             durationMs: index === 0 ? 60000 : 0,
-            messageCounts: {
-              total: 2,
-              user: 1,
-              assistant: 1,
-              toolCalls: 0,
-              toolResults: 0,
-              errors: 0,
-            },
+            messageCounts: usageMessages(),
           },
         });
         const sessions = Array.from({ length: 1250 }, (_, index) => session(index));

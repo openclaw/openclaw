@@ -634,6 +634,9 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
+  /* The outer extent owns scroll height. This translated row window must not
+     contribute a second changing box when saved rows become live rows. */
+  contain: size;
   position: absolute;
   top: 0;
   left: 0;
@@ -947,7 +950,7 @@ openclaw-pending-session-create {
 }
 
 .context-ring__track {
-  stroke: color-mix(in srgb, currentColor 22%, transparent);
+  stroke: var(--context-ring-track, color-mix(in srgb, currentColor 22%, transparent));
 }
 
 .context-ring__fill {
@@ -1194,11 +1197,6 @@ openclaw-pending-session-create {
   b {
     width: 36px;
   }
-}
-.context-usage__note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 .task-suggestion__start svg,
 .chat-pr__checks-chevron svg,
@@ -2982,7 +2980,7 @@ openclaw-chat-ci-details {
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
     background: var(--primary);
-    color: var(--primary-foreground);
+    color: var(--chat-send-foreground);
   }
 
   .agent-chat__input--chat .chat-mobile-primary-action .chat-send-btn {
@@ -2995,10 +2993,6 @@ openclaw-chat-ci-details {
     .agent-chat__composer-footer
     :is(.chat-controls__permission-icon svg, .chat-controls__permission-lock svg) {
     stroke-width: var(--chat-mobile-row-permission-stroke);
-  }
-
-  .agent-chat__input--chat :is(.chat-send-btn--send, .chat-send-btn--talk-mode) > svg {
-    color: var(--primary-foreground);
   }
 
   .agent-chat__input--chat
@@ -3020,7 +3014,7 @@ openclaw-chat-ci-details {
   .agent-chat__input--chat .chat-send-btn--stop > svg {
     width: var(--chat-mobile-row-stop-icon-size);
     height: var(--chat-mobile-row-stop-icon-size);
-    color: var(--danger);
+    color: inherit;
     fill: currentColor;
     stroke: none;
   }
@@ -3031,6 +3025,13 @@ openclaw-chat-ci-details {
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+
+  .agent-chat__input--chat
+    .chat-mobile-dictation-action
+    .chat-send-btn--voice:not(:disabled, [aria-disabled="true"])
+    > svg {
+    color: inherit;
   }
 
   .agent-chat__input--chat .chat-mobile-dictation-action .chat-send-btn--voice {

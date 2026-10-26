@@ -68,7 +68,7 @@ import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { createManualCompactRecords } from "./transcript-message.test-support.js";
+import { createManualCompactRecords, messageEvent } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 // mock-isolation: Explicit cold archival owns this suite; automatic age retention is tested separately.
@@ -163,24 +163,9 @@ async function createColdCurrentSession(
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, [
       { type: "session", id: scope.sessionId, version: 3 },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        message: { role: "user", content: "Question" },
-      },
-      {
-        type: "message",
-        id: "answer",
-        parentId: "question",
-        message: { role: "assistant", content: "Original answer" },
-      },
-      {
-        type: "message",
-        id: "alternate",
-        parentId: "question",
-        message: { role: "assistant", content: "Alternate answer" },
-      },
+      messageEvent("question", null, { role: "user", content: "Question" }),
+      messageEvent("answer", "question", { role: "assistant", content: "Original answer" }),
+      messageEvent("alternate", "question", { role: "assistant", content: "Alternate answer" }),
       { type: "leaf", id: "selection", parentId: "alternate", targetId: "answer" },
     ]);
     await waitForSessionTranscriptIndexReconcile(options);

@@ -18,7 +18,7 @@ import {
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import "./chat-camera-capture.tsx";
 import { resolveComposerSkills } from "../composer-capability-catalog.ts";
-import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
+import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -48,11 +48,17 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
   const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
   if (canUpload) {
-    for (const [id, icon, label] of useSingleAttachmentPicker()
-      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
+    const mediaOption = menu.attachments.imagesOnly
+      ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
+      : (["media", "image", t("chat.composer.attachMedia")] as const);
+    for (const [id, icon, label] of useNativeAttachmentSourceMenu()
+      ? ([
+          ...(!menu.attachments.imagesOnly ? [mediaOption] : []),
+          ["file", "paperclip", t("chat.composer.attach")],
+        ] as const)
       : ([
           ["camera", "camera", t("chat.composer.takePhoto")],
-          ["photo", "image", t("chat.composer.attachPhoto")],
+          mediaOption,
           // Image-only composers keep the single picker's file input, filtered to images.
           ...(menu.attachments.imagesOnly
             ? []
@@ -384,7 +390,7 @@ function handleMenuSelection(
   const { surface } = overlay;
   if (
     uploadsEnabled(props.attachments.uploadConfig) &&
-    (value === "camera" || value === "photo" || value === "file")
+    (value === "camera" || value === "photo" || value === "file" || value === "media")
   ) {
     props.inputHandle.open(value);
     return;

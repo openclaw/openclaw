@@ -5,6 +5,10 @@ import { expect, it } from "vitest";
 import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
+import {
+  createStandardCloudProfile,
+  createActiveSessionPlacement,
+} from "../test-helpers/session-placement.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
@@ -47,18 +51,13 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 function activePlacement(id: string, remoteWorkspaceDir: string) {
-  return {
-    state: "active",
-    generation: 1,
-    createdAtMs: 1,
+  return createActiveSessionPlacement({
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: `worker-${id}`,
-    activeOwnerEpoch: 1,
-    workerBundleHash: "a".repeat(64),
     workspaceBaseManifestRef: `manifest-${id}`,
     remoteWorkspaceDir,
-  };
+  });
 }
 
 function readRecovery(page: Page) {
@@ -275,16 +274,7 @@ suite.define(() => {
         },
         "environments.list": {
           environments: [],
-          profiles: [
-            {
-              id: "aws",
-              providerId: "crabbox",
-              machines: [
-                { id: "standard", label: "Standard", default: true },
-                { id: "fast", label: "Fast" },
-              ],
-            },
-          ],
+          profiles: [createStandardCloudProfile()],
         },
         "worktrees.branches": cloudWorkspaceResponses()["worktrees.branches"],
         "chat.send": { runId: "run-create-recovery", status: "started" },

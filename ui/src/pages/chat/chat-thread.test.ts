@@ -116,6 +116,13 @@ function canvasToolOutput(viewId: string, title: string, preferredHeight: number
   });
 }
 
+function canvasBlock<P extends object>(preview: P) {
+  return {
+    type: "canvas",
+    preview: { kind: "canvas", surface: "assistant_message", render: "url", ...preview },
+  };
+}
+
 function messageGroups(props: Partial<CachedChatItemsProps>): MessageGroup[] {
   return buildCachedChatItems(createProps(props)).filter((item) => item.kind === "group");
 }
@@ -337,45 +344,35 @@ describe("collapseCompletedTurnWork", () => {
     timestamp,
   });
 
-  it.each([
-    {
-      name: "durable context event retains surrounding replies",
-      message: {
-        role: "custom",
-        customType: "openclaw.context-compaction",
-        content: "Context compacted",
-        display: true,
-        excludeFromContext: true,
-        details: { runId: "run-1" },
-        idempotencyKey: "codex-context-compaction:thread:turn:item",
-        timestamp: 2_000,
-      },
-      surrounding: true,
-      divider: { compaction: "complete", label: "Context compacted" },
-    },
-    {
-      name: "persisted boundary retains recorded token savings",
-      message: {
-        role: "system",
-        timestamp: 2_000,
-        __openclaw: {
-          kind: "compaction",
-          id: "checkpoint-with-metrics",
-          tokensBefore: 900_000,
-          tokensAfter: 24_700,
-        },
-      },
-      surrounding: false,
-      divider: { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" },
-    },
-  ])("renders a compaction marker when $name", ({ message, surrounding, divider }) => {
+  it.each(["context event", "persisted boundary"])("renders a compaction %s", (source) => {
+    const boundary = source === "persisted boundary";
+    const marker = boundary
+      ? {
+          role: "system",
+          timestamp: 2_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "checkpoint-with-metrics",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        }
+      : chatMessage("custom", "Context compacted", 2_000, {
+          customType: "openclaw.context-compaction",
+          display: true,
+          excludeFromContext: true,
+          details: { runId: "run-1" },
+          idempotencyKey: "codex-context-compaction:thread:turn:item",
+        });
     const items = collapsedItems({
-      messages: surrounding
-        ? [user("do it", 1_000), message, assistant("All done.", 3_000)]
-        : [message],
+      messages: boundary ? [marker] : [user("do it", 1_000), marker, assistant("All done.", 3_000)],
     });
-    expect(items[surrounding ? 1 : 0]).toMatchObject(divider);
-    if (surrounding) {
+    expect(items[boundary ? 0 : 1]).toMatchObject(
+      boundary
+        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" }
+        : { compaction: "complete", label: "Context compacted" },
+    );
+    if (!boundary) {
       expectKinds(items, ["group", "divider", "group"]);
       expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({ content: "All done." });
     }
@@ -1296,15 +1293,7 @@ describe("buildCachedChatItems", () => {
         assistant(
           [
             textBlock(text),
-            {
-              type: "canvas",
-              preview: {
-                kind: "canvas",
-                surface: "assistant_message",
-                render: "url",
-                url: "/__openclaw__/canvas/documents/cv_url_match/index.html",
-              },
-            },
+            canvasBlock({ url: "/__openclaw__/canvas/documents/cv_url_match/index.html" }),
           ],
           1_003,
         ),
@@ -1540,15 +1529,7 @@ describe("buildCachedChatItems", () => {
           },
         ],
       };
-      const canvas = {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          viewId: "cv_final",
-        },
-      };
+      const canvas = canvasBlock({ viewId: "cv_final" });
       const saved = assistant([textBlock("Your counter is ready."), canvas], 1_003, {
         __openclaw: { id: "saved-final", seq: 3, runId },
       });
@@ -1896,19 +1877,13 @@ function mcpAppDescriptor(viewId: string, toolCallId: string) {
 }
 
 function mcpAppCanvasBlock(viewId: string, toolCallId: string) {
-  return {
-    type: "canvas",
-    preview: {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      viewId,
-      title: "Demo App",
-      url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
-      sandbox: "scripts",
-      mcpApp: mcpAppDescriptor(viewId, toolCallId),
-    },
-  };
+  return canvasBlock({
+    viewId,
+    title: "Demo App",
+    url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+    sandbox: "scripts",
+    mcpApp: mcpAppDescriptor(viewId, toolCallId),
+  });
 }
 
 function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {

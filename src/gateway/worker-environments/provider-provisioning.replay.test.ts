@@ -395,7 +395,11 @@ describe("worker environment service provision replay", () => {
       expect.objectContaining({ leaseId, profile: { region: "test" } }),
     );
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId,
+      profile: { region: "test" },
+      signal: expect.any(AbortSignal),
+    });
     expect(support.testState.store.get(pending.environmentId)).toMatchObject({
       state: "failed",
       leaseId: null,

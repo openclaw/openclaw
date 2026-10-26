@@ -73,13 +73,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.embeddedAgent.cyberFailover":
-    "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
+    "Automatic same-model Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime, subject to existing access and policy checks.",
   "agents.defaults.embeddedAgent.cyberFailover.mode":
     'Enable automatic escalation ("auto", default) or keep provider refusals terminal ("off").',
-  "agents.defaults.embeddedAgent.cyberFailover.model":
-    "Provider/model target used for automatic cyber-policy escalation.",
   "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
-    "How long an unavailable escalation target is skipped for the current session.",
+    "How long unavailable Daybreak access for the active model is skipped for the current session.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model, alias, or { primary, fallbacks }) for short internal tasks such as generated titles and progress narration. Utility fallbacks use the same retry, alias resolution, and model-selection policy as configured model fallbacks, independently of model.fallbacks. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.defaults.utilityModel.primary": "Primary utility model (provider/model or alias).",

@@ -16,6 +16,8 @@ import { readEngineAnchor } from "./database-engine/open.js";
 import {
   decodeGatewayOwnerLease,
   gatewayOwnerKey,
+  GATEWAY_OWNER_LEASE_COLUMNS_SQL,
+  assertGatewayOwnerLeaseColumns,
   type GatewayOwnerLeaseRow,
 } from "./gateway-owner-lease.read.js";
 import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
@@ -99,33 +101,9 @@ function inspectPostgresGatewayOwnerLease(
               "PostgreSQL state identity could not be verified for Gateway owner lease inspection",
             );
           }
-          const columns = connection
-            .prepare(
-              `SELECT a.attname AS name, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
-             FROM pg_catalog.pg_class c
-             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-             JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
-             WHERE n.nspname = ? AND c.relname = 'state_leases' AND c.relkind IN ('r', 'p')
-               AND a.attnum > 0 AND NOT a.attisdropped`,
-            )
-            .all(namespace);
-          const required = {
-            scope: "text",
-            lease_key: "text",
-            owner: "text",
-            expires_at: "bigint",
-            heartbeat_at: "bigint",
-            payload_json: "text",
-            created_at: "bigint",
-          };
-          if (
-            Object.entries(required).some(
-              ([name, type]) =>
-                !columns.some((column) => column.name === name && column.type === type),
-            )
-          ) {
-            throw new Error("PostgreSQL Gateway owner lease table is missing or incompatible");
-          }
+          assertGatewayOwnerLeaseColumns(
+            connection.prepare(GATEWAY_OWNER_LEASE_COLUMNS_SQL).all(namespace),
+          );
           onAdmitted();
           return readGatewayOwnerLeaseRows(connection, namespace);
         },

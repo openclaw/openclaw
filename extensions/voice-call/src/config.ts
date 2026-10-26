@@ -220,7 +220,21 @@ const VoiceCallRealtimeConfigSchema = z
       VoiceCallRealtimeAgentContextConfigSchema.parse({}),
     ),
     /** Provider-owned raw config blobs keyed by provider id. */
-    providers: VoiceCallProvidersConfigSchema,
+    providers: z
+      .record(
+        z.string(),
+        z
+          .object({
+            inputTranscriptionModel: z
+              .string()
+              .optional()
+              .describe(
+                "Input transcription model or deployment name. Omit to keep the provider default.",
+              ),
+          })
+          .catchall(z.unknown()),
+      )
+      .default({}),
   })
   .strict();
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
@@ -344,10 +358,6 @@ const VoiceCallConfigSchema = z
   });
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-type VoiceCallEffectiveConfigResult = {
-  config: VoiceCallConfig;
-  numberRouteKey?: string;
-};
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
@@ -438,7 +448,7 @@ export function resolveVoiceCallNumberRouteKeyForCall(call: {
 export function resolveVoiceCallEffectiveConfig(
   config: VoiceCallConfig,
   phoneOrRouteKey: string | undefined,
-): VoiceCallEffectiveConfigResult {
+) {
   const numberRouteKey = resolveVoiceCallNumberRouteKey(config, phoneOrRouteKey);
   if (!numberRouteKey) {
     return { config };
@@ -607,10 +617,7 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
   return resolved;
 }
 
-export function validateProviderConfig(config: VoiceCallConfig): {
-  valid: boolean;
-  errors: string[];
-} {
+export function validateProviderConfig(config: VoiceCallConfig) {
   const errors: string[] = [];
 
   if (!config.enabled) {

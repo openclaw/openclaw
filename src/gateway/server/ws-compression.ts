@@ -112,7 +112,7 @@ function sharedZlib(open: () => NativeZlibStream) {
 }
 
 const inflateShared = sharedZlib(() => createInflateRaw());
-const deflateShared = new Map<number, ReturnType<typeof sharedZlib>>();
+const deflateShared = new Map<string, ReturnType<typeof sharedZlib>>();
 const deflatedSegments = new WeakMap<Uint8Array, Map<number, Buffer>>();
 
 /** Register immutable worker output, including its sync-flush trailer. */
@@ -218,14 +218,24 @@ export function installGatewayDeflateCodec(socket: WebSocket):
     typeof codec.params.server_max_window_bits === "number"
       ? codec.params.server_max_window_bits
       : zlibConstants.Z_DEFAULT_WINDOWBITS;
-  const deflateOptions = { finishFlush: Z_SYNC_FLUSH, level: DEFLATE_LEVEL, windowBits };
-  let deflate = deflateShared.get(windowBits);
-  if (!deflate) {
-    deflate = sharedZlib(() => createDeflateRaw(deflateOptions));
-    deflateShared.set(windowBits, deflate);
-  }
+  const compressorFor = (memLevel: number) => {
+    const options = { finishFlush: Z_SYNC_FLUSH, level: DEFLATE_LEVEL, windowBits, memLevel };
+    const key = `${windowBits}:${memLevel}`;
+    let deflate = deflateShared.get(key);
+    if (!deflate) {
+      deflate = sharedZlib(() => createDeflateRaw(options));
+      deflateShared.set(key, deflate);
+    }
+    return (input: Uint8Array): Buffer =>
+      deflate(input, kMaxLength) ?? deflateRawSync(input, options);
+  };
+  // Small envelopes need less hash-table clearing; large payloads retain zlib's default tables.
+  const compressSmall = compressorFor(5);
+  const compressLarge = compressorFor(8);
   const compressPiece = (input: Uint8Array): Buffer =>
-    deflate(input, kMaxLength) ?? deflateRawSync(input, deflateOptions);
+    (input.byteLength < GATEWAY_PER_MESSAGE_DEFLATE.threshold ? compressSmall : compressLarge)(
+      input,
+    );
   const compress = (
     frame: Buffer | SerializedGatewayFrame,
   ): Buffer | SerializedGatewayFrame | undefined => {

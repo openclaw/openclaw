@@ -53,6 +53,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -78,7 +79,6 @@ import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
-  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type CodexThreadStartParams,
   type CodexThreadResumeParams,
@@ -90,6 +90,7 @@ import {
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
 import {
+  expectResumeRequest,
   expectRetainedSuccessfulThread,
   observeAttemptProjectionReady,
   startClockControlledAttempt,
@@ -163,20 +164,6 @@ import { buildThreadStartParams } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
-
-function expectResumeRequest(
-  requests: Array<{ method: string; params: unknown }>,
-  params: Record<string, unknown>,
-) {
-  const request = requests.find((entry) => entry.method === "thread/resume");
-  if (!request) {
-    throw new Error("Expected thread/resume request");
-  }
-  const requestParams = request.params as Record<string, unknown> | undefined;
-  for (const [key, value] of Object.entries(params)) {
-    expect(requestParams?.[key]).toEqual(value);
-  }
-}
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
@@ -396,16 +383,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
 type RuntimeDynamicToolForTest = Parameters<
   typeof createCodexDynamicToolBridge
 >[0]["tools"][number];
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
-}
 
 function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
   return flattenCodexDynamicToolFunctions(specs).map((tool) => tool.name);
@@ -1910,7 +1887,6 @@ describe("runCodexAppServerAttempt", () => {
       return originalParse(text, reviver);
     });
     const originalClone = structuredClone;
-    let historyClones = 0;
     let privateCloneBytes = 0;
     const cloneSpy = vi
       .spyOn(globalThis, "structuredClone")
@@ -1924,15 +1900,6 @@ describe("runCodexAppServerAttempt", () => {
             return;
           }
           seen.add(node);
-          if (
-            "role" in node &&
-            node.role === "user" &&
-            "content" in node &&
-            Array.isArray(node.content) &&
-            node.content[0]?.text === "previous visible request"
-          ) {
-            historyClones += 1;
-          }
           for (const child of Object.values(node)) {
             visit(child);
           }
@@ -1946,8 +1913,11 @@ describe("runCodexAppServerAttempt", () => {
       await finishRun(run, harness);
       expect(privateParseBytes).toBe(0);
       expect(privateCloneBytes).toBe(0);
-      expect(historyClones).toBeGreaterThan(0);
-      expect(hook).toHaveBeenCalled();
+      // Hook isolation copies only unowned fields, so assert what the authorized hook receives.
+      const [event] = mockCall(hook, "before_prompt_build");
+      const hookInput = JSON.stringify(event);
+      expect(hookInput).toContain("previous visible request");
+      expect(hookInput).not.toContain(marker);
     } finally {
       parseSpy.mockRestore();
       cloneSpy.mockRestore();
@@ -3054,6 +3024,7 @@ describe("runCodexAppServerAttempt", () => {
       error,
     );
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       ...(transient ? ["thread/start"] : ["thread/read", "thread/resume", "thread/inject_items"]),
@@ -3109,6 +3080,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3174,6 +3146,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     await finishRun(run, harness, "thread-existing");
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3968,8 +3941,9 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
       [
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",
@@ -3986,8 +3960,8 @@ describe("runCodexAppServerAttempt", () => {
       runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      ["config/read", "configRequirements/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read"],
     ]);
   });
 

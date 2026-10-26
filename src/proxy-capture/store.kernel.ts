@@ -6,6 +6,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InferResult } from "kysely";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { engineLeast } from "../infra/database-engine/scalar.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
@@ -101,9 +102,9 @@ export class DebugProxyCaptureKernel {
         .values(values)
         .onConflict((conflict) =>
           conflict.column("id").doUpdateSet((eb) => ({
-            started_at: eb.fn<number>("min", [
-              "capture_sessions.started_at",
-              "excluded.started_at",
+            started_at: engineLeast(this.db, [
+              eb.ref("capture_sessions.started_at"),
+              eb.ref("excluded.started_at"),
             ]),
             ended_at: eb.ref("excluded.ended_at"),
             mode: eb
@@ -370,8 +371,8 @@ export class DebugProxyCaptureKernel {
       return this.deletePathBasedSessions(uniqueSessionIds);
     }
     return this.runWrite(() => {
-      const { blobRows, eventCount, sessionCount } = this.readSessionDeletionRows(uniqueSessionIds);
-      this.deleteSessionMetadata(uniqueSessionIds);
+      const blobRows = this.readSessionDeletionBlobRows(uniqueSessionIds);
+      const { events, sessions } = this.deleteSessionMetadata(uniqueSessionIds);
       const candidateBlobIds = blobRows
         .map((row) => row.blobId?.trim())
         .filter((blobId): blobId is string => Boolean(blobId));
@@ -404,7 +405,7 @@ export class DebugProxyCaptureKernel {
           return deleted;
         },
       );
-      return { sessions: sessionCount, events: eventCount, blobs };
+      return { sessions, events, blobs };
     });
   }
 
@@ -417,8 +418,10 @@ export class DebugProxyCaptureKernel {
     if (!pathBased) {
       throw new Error("path-based debug proxy capture store is unavailable");
     }
-    const { blobRows, eventCount, sessionCount } = this.readSessionDeletionRows(sessionIds);
-    runSqliteImmediateTransactionSync(this.db, () => this.deleteSessionMetadata(sessionIds));
+    const blobRows = this.readSessionDeletionBlobRows(sessionIds);
+    const { events, sessions } = runSqliteImmediateTransactionSync(this.db, () =>
+      this.deleteSessionMetadata(sessionIds),
+    );
     // Legacy files are removed only after metadata commits; file failures do not roll it back.
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
@@ -435,7 +438,7 @@ export class DebugProxyCaptureKernel {
         blobs += 1;
       }
     }
-    return { sessions: sessionCount, events: eventCount, blobs };
+    return { sessions, events, blobs };
   }
 
   // The statement executor leaves corruption recovery with the shared write owner or legacy caller.
@@ -449,7 +452,7 @@ export class DebugProxyCaptureKernel {
     return row.count ?? 0;
   }
 
-  private readSessionDeletionRows(sessionIds: string[]) {
+  private readSessionDeletionBlobRows(sessionIds: string[]) {
     const kysely = getNodeSqliteKysely<CaptureDatabase>(this.db);
     const events = kysely.selectFrom("capture_events").where("session_id", "in", sessionIds);
     // DISTINCT precedes trimming: colliding trimmed IDs retain separate cleanup attempts.
@@ -457,54 +460,34 @@ export class DebugProxyCaptureKernel {
       events.select("data_blob_id as blobId").distinct().where("data_blob_id", "is not", null),
     );
     const blobParameters = blobs.bind(undefined);
-    const blobRows = executeWithCachedStatement(
-      this.db,
-      blobs.compiled.sql,
-      blobParameters,
-      (statement) => statement.all(...blobParameters),
+    return executeWithCachedStatement(this.db, blobs.compiled.sql, blobParameters, (statement) =>
+      statement.all(...blobParameters),
     ) as InferResult<typeof blobs.compiled>; // SAFETY: Native rows follow the generated nullable blob-id projection.
-    const eventQuery = compileSqliteQueryBindings(() =>
-      events.select((eb) => eb.fn.countAll<number>().as("count")),
-    );
-    const eventParameters = eventQuery.bind(undefined);
-    const eventRow = executeWithCachedStatement(
-      this.db,
-      eventQuery.compiled.sql,
-      eventParameters,
-      (statement) => statement.get(...eventParameters),
-    ) as InferResult<typeof eventQuery.compiled>[number]; // SAFETY: COUNT(*) always returns the generated numeric count projection.
-    const sessionQuery = compileSqliteQueryBindings(() =>
-      kysely
-        .selectFrom("capture_sessions")
-        .select((eb) => eb.fn.countAll<number>().as("count"))
-        .where("id", "in", sessionIds),
-    );
-    const sessionParameters = sessionQuery.bind(undefined);
-    const sessionRow = executeWithCachedStatement(
-      this.db,
-      sessionQuery.compiled.sql,
-      sessionParameters,
-      (statement) => statement.get(...sessionParameters),
-    ) as InferResult<typeof sessionQuery.compiled>[number]; // SAFETY: COUNT(*) always returns the generated numeric count projection.
-    return { blobRows, eventCount: eventRow.count ?? 0, sessionCount: sessionRow.count ?? 0 };
   }
 
-  private deleteSessionMetadata(sessionIds: string[]): void {
+  private deleteSessionMetadata(sessionIds: string[]) {
     const kysely = getNodeSqliteKysely<CaptureDatabase>(this.db);
     const events = compileSqliteQueryBindings(() =>
       kysely.deleteFrom("capture_events").where("session_id", "in", sessionIds),
     );
     const eventParameters = events.bind(undefined);
-    executeWithCachedStatement(this.db, events.compiled.sql, eventParameters, (statement) =>
-      statement.run(...eventParameters),
+    const eventResult = executeWithCachedStatement(
+      this.db,
+      events.compiled.sql,
+      eventParameters,
+      (statement) => statement.run(...eventParameters),
     );
     const sessions = compileSqliteQueryBindings(() =>
       kysely.deleteFrom("capture_sessions").where("id", "in", sessionIds),
     );
     const sessionParameters = sessions.bind(undefined);
-    executeWithCachedStatement(this.db, sessions.compiled.sql, sessionParameters, (statement) =>
-      statement.run(...sessionParameters),
+    const sessionResult = executeWithCachedStatement(
+      this.db,
+      sessions.compiled.sql,
+      sessionParameters,
+      (statement) => statement.run(...sessionParameters),
     );
+    return { events: Number(eventResult.changes), sessions: Number(sessionResult.changes) };
   }
 
   private findRemainingBlobReferences(candidateBlobIds: string[]): Set<string> {

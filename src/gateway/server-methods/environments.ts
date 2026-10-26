@@ -14,10 +14,16 @@ import {
   validateEnvironmentsStatusParams,
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
+  type DesktopObserveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { resolveDesktopObserveRequester } from "../desktop/observe-requester.js";
+import { DesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { getNodeDesktopService } from "../desktop/node-source-context.js";
+import {
+  resolveDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "../desktop/observe-requester.js";
 import {
   ADMIN_SCOPE,
   WRITE_SCOPE,
@@ -34,7 +40,6 @@ import { summarizeWorkerEnvironment } from "../worker-environments/environment-s
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
-import { respondDesktopLaunch, respondDesktopObserve } from "./environments.desktop.js";
 import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
@@ -48,8 +53,131 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
+  RespondFn,
 } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
+
+function respondDesktopObserveFailure(respond: RespondFn, error: unknown, fallback: string) {
+  if (error instanceof DesktopCredentialsRequiredError) {
+    respondError(respond, ErrorCodes.INVALID_REQUEST, error.message, {
+      details: { code: error.detailCode, auth: error.auth },
+    });
+    return;
+  }
+  respondError(respond, ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : fallback);
+}
+
+async function respondDesktopObserve(params: {
+  request: DesktopObserveParams;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+  requester?: DesktopObserveRequester;
+}) {
+  const { request, context, respond } = params;
+  if (request.source.kind !== "environment") {
+    const host = request.source.kind === "host";
+    if (host && context.getRuntimeConfig().desktop?.host?.enabled !== true) {
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
+      );
+      return;
+    }
+    const options = {
+      control: request.control ?? false,
+      requester: params.requester,
+      ...("credentials" in request && request.credentials
+        ? { credentials: request.credentials }
+        : {}),
+    };
+    const hostService = host ? context.hostDesktopService : undefined;
+    const nodeService = host ? undefined : getNodeDesktopService(context);
+    const observe =
+      request.source.kind === "host"
+        ? hostService?.observe.bind(hostService, options)
+        : nodeService?.observe.bind(nodeService, { ...options, nodeId: request.source.nodeId });
+    if (!observe) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        host
+          ? "gateway host desktop is unavailable in this Gateway runtime"
+          : "node desktop service is unavailable; reconnect to the Gateway and retry",
+      );
+      return;
+    }
+    try {
+      respond(true, await observe(), undefined);
+    } catch (error) {
+      respondDesktopObserveFailure(
+        respond,
+        error,
+        host
+          ? "gateway host desktop observe unavailable; verify the VNC server and retry"
+          : "node desktop observe unavailable",
+      );
+    }
+    return;
+  }
+
+  const { environmentId } = request.source;
+  await respondWorkerDesktop(params, "observe", (service) =>
+    service.observeDesktop({
+      environmentId,
+      control: params.request.control ?? false,
+      requester: params.requester,
+    }),
+  );
+}
+
+async function respondDesktopLaunch(params: {
+  environmentId: string;
+  app: "browser" | "terminal";
+  respond: RespondFn;
+  context: GatewayRequestContext;
+}) {
+  await respondWorkerDesktop(params, "launch", (service) =>
+    service.launchDesktopApp({ environmentId: params.environmentId, app: params.app }),
+  );
+}
+
+async function respondWorkerDesktop(
+  params: { respond: RespondFn; context: GatewayRequestContext },
+  operation: "observe" | "launch",
+  run: (
+    service: NonNullable<GatewayRequestContext["workerEnvironmentService"]>,
+  ) => Promise<unknown>,
+) {
+  const service = params.context.workerEnvironmentService;
+  if (!service) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, "unknown environmentId");
+    return;
+  }
+  try {
+    params.respond(true, await run(service), undefined);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const invalid =
+      code === "environment_not_found" ||
+      code === "invalid_state" ||
+      (operation === "launch" &&
+        (code === "desktop_app_not_found" || code === "unsupported_platform"));
+    const actionable = invalid || (operation === "launch" && code === "launcher_failure");
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+        actionable && error instanceof Error
+          ? error.message
+          : operation === "launch"
+            ? "worker desktop app launch unavailable; try again"
+            : "worker desktop observe unavailable",
+      ),
+    );
+  }
+}
 
 const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   id: "gateway",
@@ -254,7 +382,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
-    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const scopes = client?.connect.scopes ?? [];
     const includePreparedDetails =
       params.includePreparedDetails === true &&
       authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
@@ -286,10 +414,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       authority.assertCurrent();
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
-        authorizeOperatorScopesForRequiredScope(
-          ADMIN_SCOPE,
-          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-        ).allowed;
+        authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? []).allowed;
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) =>
@@ -354,10 +479,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           ? summarizeWorkerEnvironment(worker, Date.now(), {
               includePreparedDetails:
                 params.includePreparedDetails === true &&
-                authorizeOperatorScopesForRequiredScope(
-                  ADMIN_SCOPE,
-                  Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
-                ).allowed,
+                authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? [])
+                  .allowed,
             })
           : undefined,
         worker ? undefined : errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),

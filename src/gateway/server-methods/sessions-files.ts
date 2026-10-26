@@ -144,6 +144,7 @@ export async function withSessionFileRoot<T>(
     projection?: SessionEntryReadScope["projection"];
     getRuntimeConfig?: () => OpenClawConfig;
     messageEntryId?: string;
+    retained?: Awaited<ReturnType<typeof retainGatewaySessionEntryReadOnly>>;
   },
   cfg: OpenClawConfig,
   consume: (
@@ -152,18 +153,20 @@ export async function withSessionFileRoot<T>(
     readEntry: () => InternalSessionEntry | undefined,
   ) => Promise<T>,
 ): Promise<T> {
-  const session = await retainGatewaySessionEntryReadOnly(
-    params.sessionKey,
-    params.agentId,
-    sessionFileWorkspaceMatches,
-    cfg,
-    {
-      projection:
-        params.projection && params.projection !== "full"
-          ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
-          : "full",
-    },
-  );
+  const session =
+    params.retained ??
+    (await retainGatewaySessionEntryReadOnly(
+      params.sessionKey,
+      params.agentId,
+      sessionFileWorkspaceMatches,
+      cfg,
+      {
+        projection:
+          params.projection && params.projection !== "full"
+            ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
+            : "full",
+      },
+    ));
   try {
     const loaded = await loadSessionFileRoot(session, params.messageEntryId);
     const assertCurrent = () => {
@@ -182,7 +185,9 @@ export async function withSessionFileRoot<T>(
     assertCurrent();
     return result;
   } finally {
-    session.release();
+    if (!params.retained) {
+      session.release();
+    }
   }
 }
 
@@ -233,7 +238,8 @@ async function loadSessionFiles(
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
-    files: [...files.values()].toSorted((a, b) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a fresh, private array.
+    files: [...files.values()].sort((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
       }

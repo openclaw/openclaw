@@ -21,15 +21,19 @@ const offlineTail = "The second section arrived while the browser was offline.";
 const followUpPrompt = "Confirm the next turn is clean.";
 const followUpReply = "The follow-up completed exactly once.";
 
+type HistoryPayload = {
+  inFlightRun?: { runId?: string; text?: string } | null;
+  messages?: Array<{ role?: string }>;
+};
 type Frame = {
   connection: number;
   type?: string;
   id?: string;
   method?: string;
+  ok?: boolean;
   params?: Record<string, unknown>;
-  payload?: {
-    inFlightRun?: { runId?: string; text?: string } | null;
-    messages?: Array<{ role?: string }>;
+  payload?: HistoryPayload & {
+    initialHistory?: { ok?: boolean; payload?: HistoryPayload };
   };
 };
 
@@ -165,12 +169,21 @@ suite.define(() => {
         (frame) =>
           frame.connection === 2 &&
           frame.type === "req" &&
-          ["chat.startup", "chat.history"].includes(frame.method ?? "") &&
-          frame.params?.sessionKey === sessionKey,
+          ((["chat.startup", "chat.history"].includes(frame.method ?? "") &&
+            frame.params?.sessionKey === sessionKey) ||
+            (frame.method === "sessions.messages.subscribe" &&
+              frame.params?.key === sessionKey &&
+              frame.params.initialHistory !== undefined)),
       );
       expect(historyRequest?.id).toEqual(expect.any(String));
-      expect(response(historyRequest?.id, 2)).toMatchObject({
-        type: "res",
+      const historyResponse = response(historyRequest?.id, 2);
+      expect(historyResponse).toMatchObject({ type: "res", ok: true });
+      const history =
+        historyRequest?.method === "sessions.messages.subscribe"
+          ? historyResponse?.payload?.initialHistory
+          : { ok: historyResponse?.ok, payload: historyResponse?.payload };
+      expect(history).toMatchObject({
+        ok: true,
         payload: { inFlightRun: { runId, text: opening + offlineTail } },
       });
 

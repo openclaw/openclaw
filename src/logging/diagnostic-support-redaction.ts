@@ -11,6 +11,7 @@ import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "../infra/update-preflight-details.js";
 import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
+import { createSupportKeyChecker } from "./diagnostic-support-key-check.js";
 import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
 import { redactSensitiveText, redactText, resolveRedactOptions } from "./redact.js";
@@ -77,6 +78,8 @@ type SupportObjectEntry = {
   value: unknown;
 };
 
+const isUnchangedSupportKey = createSupportKeyChecker(redactTextForSupport);
+
 function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
@@ -103,7 +106,7 @@ function sanitizeSupportKey(
   privateMap: boolean,
 ): string {
   // Reserve the placeholder namespace so literal keys cannot overwrite redacted entries.
-  if (!privateMap && !key.startsWith("<identifier#") && redactTextForSupport(key) === key) {
+  if (!privateMap && !key.startsWith("<identifier#") && isUnchangedSupportKey(key, redaction)) {
     return key;
   }
   const identifiers = (redaction.identifierKeys ??= new Map<string, string>());

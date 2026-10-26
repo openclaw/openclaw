@@ -15,7 +15,11 @@ import type { DiffValue } from "./session-diff-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
-function createSessionDiffResultViews(bindings: SessionDiffViewBindings) {
+export function createSessionDiffPanelFrame(
+  bindings: SessionDiffViewBindings,
+  setMotionInstant: (instant: boolean) => void,
+  awaitingDestination: () => boolean,
+) {
   const { MobileRail, MobileSummary, DesktopSummary, Summary } = createSessionDiffChrome(bindings);
   const File = createSessionDiffFileView(bindings);
   const {
@@ -296,15 +300,6 @@ function createSessionDiffResultViews(bindings: SessionDiffViewBindings) {
       </>
     );
   }
-  return { MobileRail, MobileResultBody, ResultBody };
-}
-
-export function createSessionDiffPanelFrame(
-  bindings: SessionDiffViewBindings,
-  setMotionInstant: (instant: boolean) => void,
-  awaitingDestination: () => boolean,
-) {
-  const { MobileRail, MobileResultBody, ResultBody } = createSessionDiffResultViews(bindings);
   function Panel(panel: { children?: JSX.Element }) {
     return (
       <div

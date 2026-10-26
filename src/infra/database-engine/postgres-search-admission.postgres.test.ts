@@ -9,7 +9,7 @@ import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { StoreSchema } from "./contract.js";
-import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
+import { createNotesSearch, openPostgresEngineTestStore } from "./engine-store.test-support.js";
 import { readEngineAnchor } from "./open.js";
 import {
   admitPostgresSearch,
@@ -22,19 +22,7 @@ const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const search: SearchSchema = {
-  text: {
-    notes: { table: "notes", fields: ["text"], postgres: { identity: "id", mode: "trigram" } },
-  },
-  vector: {
-    notes: {
-      table: "vectors",
-      alias: "v",
-      rowShape: { id: "string" },
-      postgres: { source: "notes", key: "id", embedding: "embedding", dimensions: 3 },
-    },
-  },
-};
+const search: SearchSchema = createNotesSearch();
 function fixture(
   dsn: string,
   selected: SearchSchema | undefined,
@@ -58,9 +46,6 @@ function fixture(
         anchor,
         schema,
         input: { connection: dsn, schemaPrefix: "r6" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
       });
       if (!isPostgresSqlConnection(opened)) {
         throw new Error("Expected PostgreSQL");

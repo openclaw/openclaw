@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectStaleRuntimeBuildFindings } from "./doctor-stale-runtime-build.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
 const BUILT = "1623683f478b1e4a2e3d5632585f006ea142e08c";
 const HEAD = "5034f2ab174b5c76b0f2a7703ddb332572916e02";
@@ -30,12 +31,7 @@ it("does not recommend rebuilding a host-owned payload with checkout metadata", 
   const root = await makeCheckout({ built: BUILT, head: HEAD });
   await fs.writeFile(
     path.join(root, "openclaw-install-owner.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      owner: "macos-app",
-      displayName: "OpenClaw.app",
-      updateHint: "Update OpenClaw.app to update this Gateway.",
-    }),
+    MACOS_APP_INSTALL_OWNER_MARKER,
   );
 
   await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);

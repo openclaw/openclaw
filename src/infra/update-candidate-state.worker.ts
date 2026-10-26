@@ -47,6 +47,11 @@ async function snapshotCandidateState(): Promise<unknown> {
     const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
     return prepareRetainedRuntimeFiles(input);
   }
+  if ("stateDir" in input) {
+    // Older installed drivers omit this from their restricted environment payload.
+    // Metadata discovery must use the same installation as the inspected databases.
+    input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+  }
   // Runtime retention needs no database/config inspection graph.
   const { createUpdateStateInspectionReporter } =
     await import("./update-candidate-state.diagnostics.js");
@@ -158,6 +163,9 @@ if (parentPort) {
       ),
   );
 } else {
+  // Stdout carries only the JSON result; raised console levels must not prefix it.
+  const { routeLogsToStderr } = await import("../logging/console.js");
+  routeLogsToStderr();
   const { formatUpdateStateInspectionError } =
     await import("./update-candidate-state.diagnostics.js");
   void snapshotCandidateState()

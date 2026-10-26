@@ -1,4 +1,4 @@
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -19,7 +19,7 @@ type CompleteRun = ReturnType<
 >["completeSubagentRunWithRecovery"];
 type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
 
-/** Settles an active-looking run whose execution context is gone, from its session or as lost. */
+/** Settles a run with no live execution owner, from its session or as lost. */
 export async function settleStaleActiveSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
@@ -35,7 +35,7 @@ export async function settleStaleActiveSubagentRun(params: {
       entry.execution.status === "queued" ||
       entry.killIntent ||
       entry.killReconciliation ||
-      getAgentRunContext(runId)
+      hasLiveAgentRunContext(runId)
     ) {
       throw readScope.retiredRead;
     }

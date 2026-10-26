@@ -8,6 +8,7 @@ import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -88,7 +89,7 @@ export function buildSessionEventContext(params: {
     CommandAuthorized: false,
     InputProvenance: {
       kind: "internal_system",
-      sourceTool: options.source,
+      sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,
