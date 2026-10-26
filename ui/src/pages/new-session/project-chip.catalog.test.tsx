@@ -1,13 +1,12 @@
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it } from "vitest";
 import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
-import { mountProjectChip } from "./project-chip.test-support.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { projectChipFixture, projectChipQueries } from "./project-chip-view.test-support.ts";
 
 it("keeps project search live through catalog reads and retires invalidated rows", async () => {
-  const fixture = createRepositoryFixture();
-  const { browser, state: place, context, gateway, changed, request } = fixture;
+  const fixture = projectChipFixture("/home/openclaw/.openclaw/workspace", "projects.list");
+  const { browser, changed, request, popoverOpen } = fixture;
   const first = createDeferred<ProjectsListResult>();
   const refreshed = createDeferred<ProjectsListResult>();
   const replacement = createDeferred<ProjectsListResult>();
@@ -15,50 +14,19 @@ it("keeps project search live through catalog reads and retires invalidated rows
     .mockImplementationOnce(() => first.promise)
     .mockImplementationOnce(() => refreshed.promise)
     .mockImplementationOnce(() => replacement.promise);
-  Object.assign(gateway, {
-    connected: true,
-    client: context.gateway.snapshot.client,
-    connectionEpoch: 1,
-  });
-  Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
-  const popoverOpen = vi.spyOn(browser, "popoverOpen").mockReturnValue(false);
-  vi.spyOn(place, "folder", "get").mockReturnValue("");
-  vi.spyOn(place, "workspacePath").mockReturnValue("/home/openclaw/.openclaw/workspace");
-  vi.spyOn(place, "browseAvailable").mockReturnValue(true);
-  vi.spyOn(place, "isAdmin").mockReturnValue(true);
-  vi.spyOn(place, "canWrite").mockReturnValue(true);
-  vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
-  onTestFinished(() => browser.disconnect());
+  popoverOpen.mockReturnValue(false);
   browser.synchronize();
   let nativeTerminal = false;
-  const mountPicker = () =>
-    mountProjectChip(
-      fixture,
-      () => ({
-        folder: "",
-        workspace: "/home/openclaw/.openclaw/workspace",
-        projectId: browser.projectId,
-        selectedRemoteProject: browser.remoteProject,
-        projects: browser.projects,
-        recents: [],
-        projectQuery: browser.projectQuery,
-      }),
-      () => nativeTerminal,
-    );
+  const mountPicker = () => fixture.mount(() => nativeTerminal);
   let view = mountPicker();
-  expect(view.container.querySelector('input[type="search"]')).toBeNull();
+  let query = projectChipQueries(view);
+  expect(query.input()).toBeNull();
   popoverOpen.mockReturnValue(true);
   changed();
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
-  let input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  await waitForSolid(() => expect(query.input()).not.toBeNull());
+  let input = query.input()!;
   const rows = () => Array.from(view.container.querySelectorAll('[data-value^="project:"]'));
-  const type = (value: string) => {
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-  };
+  const type = (value: string) => query.type(value);
   input.focus();
   type("alpha");
   popoverOpen.mockReturnValue(false);
@@ -70,7 +38,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
         ?.getAttribute("data-phase"),
     ).toBe("hidden"),
   );
-  expect(view.container.querySelector('input[type="search"]')).toBe(input);
+  expect(query.input()).toBe(input);
   popoverOpen.mockReturnValue(true);
   changed();
   await waitForSolid(() =>
@@ -102,7 +70,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   await waitForSolid(() => expect(rows()).toHaveLength(1));
   const alphaRow = rows()[0];
   expect(alphaRow?.textContent).toContain("Alpha project");
-  expect(view.container.querySelector('input[type="search"]')).toBe(input);
+  expect(query.input()).toBe(input);
   expect(document.activeElement).toBe(input);
   type("");
   expect(rows()).toHaveLength(2);
@@ -122,7 +90,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   nativeTerminal = false;
   changed();
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Alpha project"));
-  expect(view.container.querySelector('input[type="search"]')).toBe(input);
+  expect(query.input()).toBe(input);
   expect(document.activeElement).toBe(input);
   type("beta");
   expect(rows()[0]?.textContent).toContain("Beta project");
@@ -131,10 +99,9 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   view.unmount();
   view = mountPicker();
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
-  input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  query = projectChipQueries(view);
+  await waitForSolid(() => expect(query.input()).not.toBeNull());
+  input = query.input()!;
   input.focus();
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Alpha project"));
   type("beta");
