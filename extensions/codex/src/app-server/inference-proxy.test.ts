@@ -538,8 +538,15 @@ describe("private inference WebSocket relay", () => {
           null,
           2,
         );
-        socket.send(wire);
-        expect((await response)[0].toString()).toBe(final);
+        const compose = vi.spyOn(AbortSignal, "any");
+        try {
+          socket.send(wire);
+          expect((await response)[0].toString()).toBe(final);
+          // Dispatch composes cancellation once; forwarding reuses the admitted signal.
+          expect(compose).toHaveBeenCalledTimes(1);
+        } finally {
+          compose.mockRestore();
+        }
       }
       const expected = {
         ...body,
