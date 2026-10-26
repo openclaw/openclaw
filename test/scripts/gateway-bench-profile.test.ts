@@ -855,19 +855,25 @@ it("separates discarded allocation churn from retained objects and cleans up fai
     function retainedAllocation() {
       return Array.from({ length: 100000 }, (_, i) => ({ i, values: [i, i + 1] }));
     }
-    // Reuse the warmed callback so retained captures do not sample new callback bookkeeping.
-    const discardedRow = (_, i) => ({ i, values: [i, i + 1] });
-    function discardedAllocation() {
+    // Keep GC/promotion churn separate from the exact-zero discarded allocation fixture.
+    function allocationChurn() {
       let checksum = 0;
       for (let batch = 0; batch < 10; batch++) {
-        const rows = Array.from({ length: 20000 }, discardedRow);
+        const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
         checksum += rows[rows.length - 1].values[1];
       }
       return checksum;
     }
+    function discardedAllocation() {
+      const rows = new Array(1_000_000).fill(1);
+      return rows[rows.length - 1];
+    }
     process.on('message', async message => {
       if (!message.run) return;
-      for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      for (let operation = 0; operation < 4; operation++) {
+        allocationChurn();
+        discardedAllocation();
+      }
       if (message.retain) retainedRows = retainedAllocation();
       globalThis.gc();
       await new Promise(setImmediate);
