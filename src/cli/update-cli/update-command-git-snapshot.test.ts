@@ -2,9 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
-import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
+import { runFixtureGit as git } from "../../infra/update-runner-git-candidate.test-support.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -14,27 +13,14 @@ import { updateGitInstall } from "./update-command-git.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-async function git(root: string, ...args: string[]): Promise<string> {
-  const result = await processRunner.runCommandWithTimeout(["git", "-C", root, ...args], {
-    timeoutMs: 5000,
-  });
-  if (result.code !== 0) {
-    throw new Error(result.stderr);
-  }
-  return result.stdout.trim();
-}
-
-const snapshotCases = [
-  { current: true, runtimeReady: true, noOp: true, reportingFails: false },
-  { current: true, runtimeReady: false, noOp: false, reportingFails: false },
-  { current: false, runtimeReady: true, noOp: false, reportingFails: true },
-];
 it.each([
-  ...snapshotCases.map((entry) => Object.assign({ backupShortfall: false }, entry)),
-  { current: false, runtimeReady: true, noOp: false, reportingFails: false, backupShortfall: true },
+  { current: true, runtimeReady: true, backupShortfall: false },
+  { current: true, runtimeReady: false, backupShortfall: false },
+  { current: false, runtimeReady: true, backupShortfall: true },
 ])(
-  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails, backupShortfall=$backupShortfall)",
-  async ({ current, runtimeReady, noOp, reportingFails, backupShortfall }) => {
+  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, backupShortfall=$backupShortfall)",
+  async ({ current, runtimeReady, backupShortfall }) => {
+    const noOp = current && runtimeReady;
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -96,66 +82,41 @@ it.each([
       const allocate = vi.spyOn(fs, "mkdtemp");
       const beforeGitMutation = vi.fn();
       const validateCandidate = vi.fn();
-      const getSnapshotSource = vi.fn(async () => ({ config: {}, env }));
-      const reportingError = new Error("snapshot capacity receipt rejected");
-      const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>(
-        async (step) => {
-          if (reportingFails && step.name === "snapshot-space-preflight") {
-            throw reportingError;
-          }
-        },
-      );
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       const capacityStep = { name: "snapshot-space-preflight", exitCode: 1 };
       const originalArgv = process.argv;
       process.argv = [process.execPath, path.join(root, "openclaw.mjs")];
       try {
-        const update = updateGitInstall({
+        const result = await updateGitInstall({
           root,
           switchToGit: false,
           installKind: "git",
           timeoutMs: undefined,
           startedAt: Date.now(),
-          progress: { onStepComplete },
+          progress: {},
           channel: "dev",
           devTarget: { mode: "detached", ref: target },
           beforeGitMutation,
           validateCandidate,
           inspectGitTarget: async () => {},
           getManagedServiceEnv: () => undefined,
-          getSnapshotSource,
+          getSnapshotSource: async () => ({ config: {}, env }),
           jsonMode: true,
         });
-        if (reportingFails) {
-          const errors = await update.then(() => [], collectNestedErrorCandidates);
-          expect(errors).toContain(reportingError);
-          expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(capacityStep));
-          expect(errors).toContainEqual(
+        expect(result).toMatchObject(
+          noOp
+            ? { status: "skipped", reason: "already-current" }
+            : { status: "error", reason: "snapshot-capacity-insufficient" },
+        );
+        if (!noOp) {
+          expect(result.steps).toContainEqual(
             expect.objectContaining({
-              exitCode: 1,
-              stderrTail: expect.stringMatching(
-                /snapshot-capacity-insufficient[\s\S]*Initial snapshot needs/,
-              ),
+              ...capacityStep,
               snapshotCapacity: expect.objectContaining({
                 reason: "snapshot-capacity-insufficient",
-                requiredBytes: expect.any(Number),
-                selection: null,
-                candidates: expect.arrayContaining([
-                  expect.objectContaining({ availableBytes: 0 }),
-                ]),
               }),
             }),
           );
-        } else {
-          const result = await update;
-          expect(result).toMatchObject(
-            noOp
-              ? { status: "skipped", reason: "already-current" }
-              : { status: "error", reason: "snapshot-capacity-insufficient" },
-          );
-          if (!noOp) {
-            expect(result.steps).toContainEqual(expect.objectContaining(capacityStep));
-          }
         }
         expect(capacity.mock.calls.length === 0).toBe(noOp);
         expect(

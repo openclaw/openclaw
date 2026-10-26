@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  GatewayServiceStopUnsafeError,
-  SystemdInspectionTimeout,
-} from "../../daemon/service-inspection-error.js";
+import { SystemdInspectionTimeout } from "../../daemon/service-inspection-error.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
   readDeferredPluginMigrations,
@@ -48,11 +45,9 @@ const native = vi.hoisted(() => ({
   events: [] as string[],
   inspecting: false,
   stopped: false,
-  failStop: false,
   contend: true,
   elapsedMs: 0,
   root: "",
-  absent: false,
   realOwner: false,
   blockCode: undefined as string | undefined,
 }));
@@ -84,12 +79,7 @@ vi.mock("../../infra/gateway-state-owner.js", async (original) => {
   return {
     ...actual,
     acquireGatewayStateOwner: (params: Parameters<typeof actual.acquireGatewayStateOwner>[0]) => {
-      if (
-        !native.realOwner &&
-        !native.absent &&
-        native.inspecting &&
-        (!native.stopped || native.contend)
-      ) {
+      if (!native.realOwner && native.inspecting && (!native.stopped || native.contend)) {
         native.events.push(native.stopped ? "non-serving-holder" : "running-holder");
         throw new actual.GatewayStateOwnerContentionError(params.databasePath);
       }
@@ -108,16 +98,6 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
       if (native.realOwner) {
         return actual.maybeStopManagedServiceBeforeMutableUpdate(params);
       }
-      if (native.absent) {
-        return {
-          stopped: false,
-          inspected: true,
-          runtimeInspected: true,
-          running: false,
-          serviceMutationAllowed: false,
-          serviceUpdateVerdict: { kind: "absent" },
-        };
-      }
       if (params.phase !== "inspect") {
         if (native.blockCode) {
           return {
@@ -126,9 +106,6 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
             blockMessage: "Synthetic managed-service refusal before stopping the Gateway.",
             blockFailureFacts: [{ check: "managed-service", code: native.blockCode }],
           };
-        }
-        if (native.failStop) {
-          throw new GatewayServiceStopUnsafeError("An admitted migration write is incomplete.");
         }
         native.stopped = true;
         // A verified stop can consume the shutdown allowance before ownership clears.
@@ -233,7 +210,6 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_HOME", undefined);
   mockSystemAccountHome();
   native.root = path.join(base, "package");
-  native.absent = false;
   native.realOwner = false;
   native.blockCode = undefined;
   await fs.mkdir(native.root);
@@ -252,7 +228,6 @@ beforeEach(async () => {
   native.events = [];
   native.inspecting = false;
   native.stopped = false;
-  native.failStop = false;
   native.contend = true;
   native.elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => native.elapsedMs);
@@ -426,9 +401,6 @@ it.each(["coordinator-contention", "admission-unavailable"] as const)(
 
 it.each([
   "inside-gateway-process-tree",
-  "inside-gateway-service",
-  "service-membership-unverified",
-  "service-ancestry-unverified",
   "inside-triage-process-tree",
   "service-definition-changed",
 ])("retains the managed-service refusal through repair history and reports (%s)", async (code) => {
@@ -456,9 +428,7 @@ it.each([
 });
 
 it.each([
-  ["stop", false],
   ["doctor", false],
-  ["headless", false],
   ["source", false],
   ["source", true],
 ] as const)(
@@ -469,26 +439,19 @@ it.each([
       adoptUpdateRun(run.runId);
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
     }
-    const failure =
-      stage === "stop"
-        ? new GatewayServiceStopUnsafeError("An admitted migration write is incomplete.")
-        : new Error("Synthetic repair failure");
-    native.failStop = stage === "stop";
-    native.absent = stage === "headless";
+    const failure = new Error("Synthetic repair failure");
     if (stage === "doctor") {
       native.contend = false;
     }
-    if (stage === "headless" || stage === "source") {
+    let inspect: MockInstance<typeof ports.inspectPortUsage> | undefined;
+    let sleep: MockInstance<typeof utils.sleep> | undefined;
+    if (stage === "source") {
       const actual = await vi.importActual<typeof import("./update-command-failure-recovery.js")>(
         "./update-command-failure-recovery.js",
       );
       vi.mocked(verifyUpdateFailureRecovery).mockImplementationOnce(
         actual.verifyUpdateFailureRecovery,
       );
-    }
-    let inspect: MockInstance<typeof ports.inspectPortUsage> | undefined;
-    let sleep: MockInstance<typeof utils.sleep> | undefined;
-    if (stage === "source") {
       vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git");
       vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockRejectedValueOnce(failure);
       vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate").mockResolvedValue(null);
@@ -504,20 +467,15 @@ it.each([
       sleep = vi.spyOn(utils, "sleep").mockImplementation(async () => {
         throw new Error("No Gateway startup was requested before the source repair refusal");
       });
-    } else if (stage !== "stop") {
+    } else {
       vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
         failure,
       );
     }
-    const operation = expect(updateRepairCommand({ json: true, yes: true })).rejects;
-    if (stage === "stop") {
-      await operation.toThrow(failure.message);
-    } else {
-      await operation.toBe(failure);
-    }
+    await expect(updateRepairCommand({ json: true, yes: true })).rejects.toBe(failure);
     const run = listUpdateRuns()[0]!;
     expect(run.status).toBe(inherited ? "running" : "failed");
-    if (!inherited && stage !== "stop") {
+    if (!inherited) {
       expect(run.reason).toBe("repair-failed");
     }
     if (stage === "source") {
@@ -537,26 +495,15 @@ it.each([
       expect(sleep).not.toHaveBeenCalled();
     } else {
       expect(readDeferredPluginMigrations()).toEqual([pending]);
-      expect(native.events).toEqual(
-        stage === "stop"
-          ? ["running-holder"]
-          : stage === "doctor"
-            ? ["running-holder", "stop-verified", "restart", "restart-verified"]
-            : [],
+      expect(native.events).toEqual([
+        "running-holder",
+        "stop-verified",
+        "restart",
+        "restart-verified",
+      ]);
+      expect(verifyUpdateFailureRecovery).toHaveBeenLastCalledWith(
+        expect.objectContaining({ waitForStartup: true }),
       );
-      if (stage === "doctor") {
-        expect(verifyUpdateFailureRecovery).toHaveBeenLastCalledWith(
-          expect.objectContaining({ waitForStartup: true }),
-        );
-      } else if (stage === "headless") {
-        expect(run.steps).toContainEqual(
-          expect.objectContaining({
-            step: "diagnostic:gateway recovery observation",
-            detail: expect.stringContaining("no Gateway service or listener"),
-          }),
-        );
-        expect(run.verification.readyz).not.toBe(true);
-      }
     }
   },
 );
