@@ -70,6 +70,7 @@ it.each([false, true])(
       models: { [model]: { agentRuntime: { id: "acp-opencode" } } },
     };
     expect(fixture.config).toEqual({
+      ...(implicit ? { meta: { migrations: { modelPolicyAllowlist: true } } } : {}),
       agents: implicit ? { defaults: selection } : { defaults: {}, entries: { main: selection } },
     });
   },
