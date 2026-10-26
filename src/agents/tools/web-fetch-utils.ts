@@ -371,6 +371,55 @@ function readBacktickRunEnd(value: string, start: number): number {
   return end;
 }
 
+/**
+ * Inline code spans are literal text: replace each one with a placeholder so that
+ * the prose formatting that follows (inline links, heading and list markers) cannot
+ * reinterpret Markdown-looking content written between backticks. A run of N
+ * backticks closes only on a matching run of exactly N backticks; unmatched runs
+ * are left untouched, matching the previous behavior for stray backticks.
+ */
+function hideInlineCodeSpans(text: string, codeBlocks: string[]): string {
+  let result = "";
+  let pos = 0;
+  while (pos < text.length) {
+    const open = text.indexOf("`", pos);
+    if (open === -1) {
+      result += text.slice(pos);
+      break;
+    }
+    result += text.slice(pos, open);
+    const openEnd = readBacktickRunEnd(text, open);
+    const runLength = openEnd - open;
+    let close = -1;
+    let cursor = openEnd;
+    while (cursor < text.length) {
+      const candidate = text.indexOf("`", cursor);
+      if (candidate === -1) {
+        break;
+      }
+      const candidateEnd = readBacktickRunEnd(text, candidate);
+      if (candidateEnd - candidate === runLength) {
+        close = candidate;
+        break;
+      }
+      cursor = candidateEnd;
+    }
+    if (close === -1) {
+      result += text.slice(open, openEnd);
+      pos = openEnd;
+      continue;
+    }
+    // Prose NULs were escaped into doubled pairs; restore the literal content.
+    const content = text.slice(openEnd, close).replaceAll("\0\0", "\0");
+    if (content) {
+      result += `\0${codeBlocks.length}\0`;
+      codeBlocks.push(content);
+    }
+    pos = close + runLength;
+  }
+  return result;
+}
+
 export function markdownToText(markdown: string): string {
   const codeBlocks: string[] = [];
   let text = "";
@@ -445,8 +494,10 @@ export function markdownToText(markdown: string): string {
     text += lineEnd;
     pos = close?.end ?? markdown.length;
   }
+  // Inline code spans are literal text too: hide them before link/heading/list
+  // formatting so Markdown-looking content between backticks survives verbatim.
+  text = hideInlineCodeSpans(text, codeBlocks);
   text = stripInlineLinks(text, { images: "omit" });
-  text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
