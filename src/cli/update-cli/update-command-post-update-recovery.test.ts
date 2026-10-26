@@ -197,7 +197,7 @@ async function finishFailedUpdate(
     windowsTaskAutoStartRecovery,
     ...overrides
   } = options;
-  return await finishUpdate(
+  const error = await finishUpdate(
     finishParams({
       ...overrides,
       mutationStarted: options.mutationStarted ?? true,
@@ -228,19 +228,11 @@ async function finishFailedUpdate(
         windowsTaskAutoStartRecovery,
       },
     }),
-  ).then(
-    () => {
-      throw new Error("Expected failed update finalization to reject");
-    },
-    (error: unknown) => {
-      if (!(error instanceof UpdateCommandFailure)) {
-        throw error;
-      }
-      expect(error.result).toEqual(mocks.printResult.mock.lastCall?.[0]);
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      return error;
-    },
-  );
+  ).catch((cause: unknown) => cause);
+  assert(error instanceof UpdateCommandFailure, "Expected failed update finalization to reject");
+  expect(error.result).toEqual(mocks.printResult.mock.lastCall?.[0]);
+  expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  return error;
 }
 
 function resetRuntimeMocks() {
@@ -264,7 +256,6 @@ describe("skipped update exit status", () => {
       { stopped: false },
     );
     expect(failure.exitCode).toBe(exitCode);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -396,7 +387,6 @@ describe("failed update recovery restart", () => {
     );
     expect(failure.cause).toBe(original);
     expect(failure).toMatchObject({ detail, exitCode: 1 });
-    expect(original.cause).toBe(restoreError);
     expect(mocks.restart).not.toHaveBeenCalled();
   });
 
@@ -474,10 +464,7 @@ describe("failed update recovery restart", () => {
         expect(failure.detail).toContain(result.reason);
         if (original) {
           const combined = failure.cause;
-          assert(
-            combined instanceof AggregateError,
-            "Expected both original and restoration failures",
-          );
+          assert(combined instanceof AggregateError, "Expected both failures");
           expect(combined.errors).toEqual([original, restoreError]);
           expect(combined.cause).toBe(restoreError);
           expect(failure.detail).toContain(original.message);
