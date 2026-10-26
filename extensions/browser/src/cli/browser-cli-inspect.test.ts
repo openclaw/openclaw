@@ -107,7 +107,14 @@ describe("browser cli snapshot defaults", () => {
     "passes the explicit timeout to gateway and %s",
     async (command) => {
       const params = await runBrowserInspect(
-        ["--timeout", "60000", command, "--timeout", "90000"],
+        [
+          "--timeout",
+          "60000",
+          command,
+          "--timeout",
+          "90000",
+          ...(command === "screenshot" ? [" tab-1 ", "--type", "jpeg"] : []),
+        ],
         true,
       );
 
@@ -117,6 +124,7 @@ describe("browser cli snapshot defaults", () => {
       );
       expect(command === "snapshot" ? params?.query : params?.body).toMatchObject({
         timeoutMs: 90000,
+        ...(command === "screenshot" ? { targetId: "tab-1", type: "jpeg", fullPage: false } : {}),
       });
     },
   );
@@ -144,14 +152,6 @@ describe("browser cli snapshot defaults", () => {
     expect(request).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("sends screenshot request with trimmed target id and jpeg type", async () => {
-    const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
-    expect(params).toMatchObject({
-      path: "/screenshot",
-      body: { targetId: "tab-1", type: "jpeg", fullPage: false },
-    });
   });
 
   it("keeps an existing AI snapshot when publication fails", async () => {

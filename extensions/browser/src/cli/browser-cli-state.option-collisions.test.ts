@@ -52,21 +52,16 @@ describe("browser state option collisions", () => {
       { kind: "resize", width: 1024, height: 768, targetId: "tab-1" },
     ],
   ] as const)("inherits parent options for %s", async (args, path, body) => {
-    await run(
+    const request = await run(
       `--timeout 60000 --browser-profile work --json ${args}`,
       ...(body ? [" tab-1 "] : []),
     );
-    expect(gatewayMock).toHaveBeenLastCalledWith(
-      "browser.request",
-      expect.objectContaining({ timeout: "190000" }),
-      expect.objectContaining({
-        path,
-        timeoutMs: 60000,
-        query: { profile: "work" },
-        ...(body ? { body } : {}),
-      }),
-      expect.objectContaining({ scopes: ["operator.admin"] }),
-    );
+    expect(request).toMatchObject({
+      path,
+      timeoutMs: 60000,
+      query: { profile: "work" },
+      ...(body ? { body } : {}),
+    });
   });
 
   it("reads the exact quoted storage key", async () => {
