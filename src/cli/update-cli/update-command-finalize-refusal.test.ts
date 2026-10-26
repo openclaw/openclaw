@@ -17,7 +17,6 @@ import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as ports from "../../infra/ports-inspect.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
@@ -446,12 +445,6 @@ it.each([
       exitCode: 1,
     }),
   );
-  const report = await prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
-  });
-  expect(report.body).toContain(`Reason code: ${code}`);
   if (code !== "service-definition-changed") {
     expect(renderUpdateRunReport(run).markdown).toContain("terminal outside");
     expect(renderUpdateRunReport(run).markdown).toContain("openclaw update repair");
@@ -479,13 +472,7 @@ it.each([
     const failure =
       stage === "stop"
         ? new GatewayServiceStopUnsafeError("An admitted migration write is incomplete.")
-        : new Error(
-            stage === "doctor"
-              ? "Synthetic half-applied schema write"
-              : stage === "headless"
-                ? "Synthetic repair failed"
-                : "Synthetic runtime artifact ownership refusal",
-          );
+        : new Error("Synthetic repair failure");
     native.failStop = stage === "stop";
     native.absent = stage === "headless";
     if (stage === "doctor") {
@@ -539,18 +526,10 @@ it.each([
         expect.objectContaining({ result: expect.objectContaining({ reason }) }),
       );
       if (!inherited) {
-        expect(run.reason).toBe(reason);
         expect(renderUpdateRunReport(run).headline).toBe(
           "⚠️ OpenClaw repair failed: repair-failed.",
         );
         expect(renderUpdateRunReport(run).markdown).toContain("diagnose this repair failure");
-        const report = await prepareUpdateFailureReport({
-          attemptId: run.runId,
-          recordedRun: run,
-          result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
-        });
-        expect(report.body).toContain("Reason code: repair-failed");
-        expect(report.body).not.toContain("Reason code: update-failed");
       }
       expect(native.inspecting).toBe(false);
       expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();

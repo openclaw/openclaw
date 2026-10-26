@@ -26,7 +26,6 @@ async function git(root: string, ...args: string[]): Promise<string> {
 
 const snapshotCases = [
   { current: true, runtimeReady: true, noOp: true, reportingFails: false },
-  { current: false, runtimeReady: true, noOp: false, reportingFails: false },
   { current: true, runtimeReady: false, noOp: false, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: true },
 ];

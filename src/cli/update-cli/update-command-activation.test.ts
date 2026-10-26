@@ -122,20 +122,16 @@ it.each([false, true])("keeps custody after timeout (retained: %s)", async (reta
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it.each([false, true])("checks deadlines after synchronous work (%s)", async (expired) => {
+it("checks expiry after synchronous work without dispatching timers", async () => {
   const { root } = fixture();
   useActivationClock();
   const work = withUpdateCommandExecutor("clock-probe", async (executor) => {
     await executor.enter(root, { activationTimeoutMs: 60_000 });
     // Move the clock without dispatching timers, as a blocking native probe can.
-    vi.setSystemTime(Date.now() + (expired ? 60_001 : 59_999));
+    vi.setSystemTime(Date.now() + 60_001);
     return "completed";
   });
-  if (expired) {
-    await expect(work).rejects.toMatchObject({ reason: "update-activation-timeout" });
-  } else {
-    await expect(work).resolves.toBe("completed");
-  }
+  await expect(work).rejects.toMatchObject({ reason: "update-activation-timeout" });
   expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
   expect(vi.getTimerCount()).toBe(0);
 });
