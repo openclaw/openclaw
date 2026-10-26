@@ -91,6 +91,7 @@ it("settles a tool batch without additional materialization passes over its cell
       visits += 1;
       yield value;
     }
+    return undefined;
   });
   let completed: boolean;
   try {
