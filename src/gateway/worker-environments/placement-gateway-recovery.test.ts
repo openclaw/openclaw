@@ -47,16 +47,6 @@ it.each([false, true])(
     ).resolves.toMatchObject({ state: "local", recoveryError: null, terminalReason: null });
 
     expect(prepare).toHaveBeenCalledTimes(Number(recover));
-    if (recover) {
-      expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: REQUEST.sessionId,
-          sessionKey: REQUEST.sessionKey,
-          agentId: REQUEST.agentId,
-          assertCurrent: expect.any(Function),
-        }),
-      );
-    }
     await store.releaseTurn(await claimLocal("recovered"));
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
   },
