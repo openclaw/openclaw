@@ -1,10 +1,12 @@
 import { createSignal } from "solid-js";
+import type { ApprovalPresentation } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import type {
   ApprovalAllowDecision,
   ApprovalKind,
   ApprovalTerminalReason,
   TerminalApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
+import { execWarningText } from "../../app/approval-presentation.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -79,6 +81,15 @@ function DetailRow(props: { label: string; value: string | undefined; mono?: boo
   ) : null;
 }
 
+function ExecWarning(props: { presentation: ApprovalPresentation }) {
+  const warning = () => execWarningText(props.presentation);
+  return warning() ? (
+    <span class="approval-history-warning" role="note">
+      {t("approvalHistory.warningLabel")}: {warning()}
+    </span>
+  ) : null;
+}
+
 export function HistoryRow(props: {
   item: TerminalApprovalSnapshot;
   time: string;
@@ -105,7 +116,10 @@ export function HistoryRow(props: {
           setOpen((value) => !value);
         }}
       >
-        <span class="mono approval-log__request">{requestLabel(props.item)}</span>
+        <span class="approval-log__request-wrap">
+          <span class="mono approval-log__request">{requestLabel(props.item)}</span>
+          <ExecWarning presentation={props.item.presentation} />
+        </span>
         <span class="approval-log__meta">
           <SettingsStatus
             kind={APPROVAL_STATUS_KINDS[props.item.status]}
