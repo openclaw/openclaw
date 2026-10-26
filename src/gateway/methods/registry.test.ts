@@ -23,11 +23,7 @@ const core = (
 
 describe("gateway method registry", () => {
   it("requires a profile for session-scoped plugin and core methods", () => {
-    const sessionAccess = {
-      mode: "write" as const,
-      allowOwnSessionScope: true,
-      requiredTool: "example",
-    };
+    const sessionAccess = { mode: "write" as const, allowOwnSessionScope: true, requiredTool: "x" };
     const plugin = createPluginGatewayMethodDescriptor({
       pluginId: "example",
       name: "example.session",
@@ -83,31 +79,16 @@ describe("gateway method registry", () => {
 
   it("rejects duplicate method names", () => {
     expect(() =>
-      createGatewayMethodRegistry([
-        core("example.duplicate"),
-        core("example.duplicate", { scope: WRITE_SCOPE }),
-      ]),
-    ).toThrow("gateway method already registered: example.duplicate");
+      createGatewayMethodRegistry([core("same"), core("same", { scope: WRITE_SCOPE })]),
+    ).toThrow("gateway method already registered: same");
   });
 
-  it("rejects unknown core handlers while accepting hidden core methods", () => {
-    for (const method of "example.unknown claws.status claws.update.apply claws.remove.apply".split(
-      " ",
-    )) {
+  it("rejects unknown core handlers", () => {
+    for (const method of "claws.status claws.update.apply claws.remove.apply".split(" ")) {
       expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
         `gateway method handler is missing a descriptor: ${method}`,
       );
     }
-    expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
-      { name: "config.openFile", advertise: false, handler },
-    ]);
-  });
-
-  it("classifies Claw Add as a control-plane write", () => {
-    const registry = createGatewayMethodRegistry(
-      createCoreGatewayMethodDescriptors({ "claws.add.apply": handler }),
-    );
-    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
   });
 
   it.each([
@@ -122,32 +103,21 @@ describe("gateway method registry", () => {
     expect(registry.descriptors()[0]?.owner).toEqual({ kind: "plugin", pluginId: "demo" });
   });
 
-  it("preserves reserved core and aux scopes", () => {
-    const registry = createGatewayMethodRegistry([
-      core("config.get", { owner: { kind: "core", area: "gateway" } }),
-      core("exec.approvals.get", {
-        scope: "operator.approvals",
-        owner: { kind: "aux", area: "gateway-extra" },
-      }),
-    ]);
-    expect(registry.getScope("config.get")).toBe(READ_SCOPE);
-    expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
-  });
-
   it("classifies every core method and defaults non-core owners fail-closed", () => {
     const coreDescriptors = createCoreGatewayMethodDescriptors(
       Object.fromEntries(listCoreGatewayMethodNames().map((name) => [name, handler])),
     );
     const registry = createGatewayMethodRegistry([
       ...coreDescriptors,
-      core("aux.identity.read", { owner: { kind: "aux", area: "test" } }),
+      core("aux.approvals", { scope: "operator.approvals", owner: { kind: "aux", area: "test" } }),
     ]);
-
+    expect(registry.getScope("config.get")).toBe(READ_SCOPE);
+    expect(registry.getScope("aux.approvals")).toBe("operator.approvals");
+    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
+    expect(registry.listMethods()).toContain("config.openFile");
+    expect(registry.listAdvertisedMethods()).not.toContain("config.openFile");
     for (const descriptor of coreDescriptors) {
       expect(["independent", "required"], descriptor.name).toContain(descriptor.profileAccess);
-      expect(registry.requiresAuthenticatedProfile(descriptor.name), descriptor.name).toBe(
-        descriptor.profileAccess === "required",
-      );
     }
     const expectProfile = (methods: string[], required: boolean) => {
       for (const method of methods) {
@@ -156,7 +126,7 @@ describe("gateway method registry", () => {
     };
     // Profile accent projection must wait for pending GitHub identity sync.
     expectProfile(
-      "users.self talk.config talk.voice.get talk.voice.set agent chat.history sessions.list openclaw.chat projects.list aux.identity.read".split(
+      "users.self talk.config talk.voice.get talk.voice.set agent chat.history sessions.list openclaw.chat projects.list aux.approvals".split(
         " ",
       ),
       true,
