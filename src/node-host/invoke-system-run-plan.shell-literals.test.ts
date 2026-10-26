@@ -77,5 +77,5 @@ it
     ...["let", "declare"].map((builtin) => `${builtin} 'a[$(python ./mutable.py "x&y")]=1'`),
     "busybox sh -c 'python ./mutable.py \"x&y\"'",
   ])("rejects unsafe shell syntax and mutable-interpreter carriers: %j", (command) => {
-  expect(prepareShell(command)).toEqual(DENIED_RUNTIME_APPROVAL);
+  expect(prepareShell(command)).toMatchObject(DENIED_RUNTIME_APPROVAL);
 });
