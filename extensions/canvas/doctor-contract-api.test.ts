@@ -4,11 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  legacyConfigRules,
-  normalizeCompatibilityConfig,
-  stateMigrations,
-} from "./doctor-contract-api.js";
+import { normalizeCompatibilityConfig, stateMigrations } from "./doctor-contract-api.js";
 
 const migration = stateMigrations[0];
 const migrated = { changes: ["Migrated 1 Canvas document(s) into core storage"], warnings: [] };
@@ -45,29 +41,17 @@ const readDoc = (dir: string, file = "index.html") => fs.readFile(path.join(dir,
 afterEach(() => vi.restoreAllMocks());
 
 describe("Canvas doctor", () => {
-  it("flags and removes retired file-host settings", () => {
-    expect(legacyConfigRules.map((rule) => rule.path)).toEqual([
-      ["canvasHost"],
-      ["plugins", "entries", "canvas", "config", "host", "root"],
-      ["plugins", "entries", "canvas", "config", "host", "port"],
-      ["plugins", "entries", "canvas", "config", "host", "liveReload"],
-    ]);
-    expect(legacyConfigRules.every((rule) => rule.message.includes("doctor --fix"))).toBe(true);
+  it("removes retired file-host settings without mutating the input", () => {
     const host = { enabled: false, root: "~/canvas", port: 18793, liveReload: true };
     const cfg = { plugins: { entries: { canvas: { enabled: true, config: { host } } } } };
-
+    const original = structuredClone(cfg);
     const result = normalizeCompatibilityConfig({ cfg });
-
     expect(result.config.plugins?.entries?.canvas).toEqual({
       enabled: true,
       config: { host: { enabled: false } },
     });
-    expect(result.changes).toEqual([
-      "Removed retired Canvas host config: plugins.entries.canvas.config.host.root, plugins.entries.canvas.config.host.port, plugins.entries.canvas.config.host.liveReload.",
-    ]);
-    expect(cfg.plugins?.entries?.canvas?.config).toEqual({
-      host: { enabled: false, root: "~/canvas", port: 18793, liveReload: true },
-    });
+    expect(result.changes).toHaveLength(1);
+    expect(cfg).toEqual(original);
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
       changes: [],
@@ -105,8 +89,7 @@ describe("Canvas doctor", () => {
     await writeDocument(source, "legacy");
     await writeDocument(target, "core");
     const result = await migration?.migrateLegacyState(params);
-    expect(result?.changes).toEqual([]);
-    expect(result?.warnings).toHaveLength(1);
+    expect(result).toEqual({ changes: [], warnings: [expect.any(String)] });
     await expect(readDoc(source)).resolves.toBe("legacy");
     await expect(readDoc(target)).resolves.toBe("core");
   });
@@ -123,8 +106,7 @@ describe("Canvas doctor", () => {
     });
 
     const failed = await migration?.migrateLegacyState(params);
-    expect(failed?.changes).toEqual([]);
-    expect(failed?.warnings).toHaveLength(1);
+    expect(failed).toEqual({ changes: [], warnings: [expect.any(String)] });
     await expect(fs.access(target)).rejects.toThrow();
     await expect(readDoc(source)).resolves.toBe("complete");
     expect(

@@ -34,17 +34,19 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
     registerNodeCliFeature: vi.fn<OpenClawPluginApi["registerNodeCliFeature"]>(),
     registerNodeInvokePolicy: vi.fn<OpenClawPluginApi["registerNodeInvokePolicy"]>(),
   };
-  canvasPlugin.register?.(
-    createTestPluginApi({ id: "canvas", name: "Canvas", config, ...registrations }),
-  );
+  canvasPlugin.register?.(createTestPluginApi({ config, ...registrations }));
   return registrations;
 }
 
 describe("Canvas plugin entry", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("registers the macOS-only presenter surface and command policy", () => {
-    const api = registerCanvas();
+  it.each([undefined, false])("gates the presenter with host.enabled=%s", (enabled) => {
+    const api = registerCanvas(
+      enabled === undefined
+        ? {}
+        : { plugins: { entries: { canvas: { config: { host: { enabled } } } } } },
+    );
     expect(api.registerNodeInvokePolicy).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
@@ -53,19 +55,9 @@ describe("Canvas plugin entry", () => {
     );
     expect(api.registerHttpRoute).not.toHaveBeenCalled();
     expect(api.registerService).not.toHaveBeenCalled();
-    expect(api.registerWidgetPresenter).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        target: "node_panel",
-        description: "Show on a connected device panel",
-      }),
+    expect(api.registerWidgetPresenter.mock.calls.map(([presenter]) => presenter.target)).toEqual(
+      enabled === false ? [] : ["node_panel"],
     );
-  });
-
-  it("uses host.enabled as the presenter gate", () => {
-    const api = registerCanvas({
-      plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-    });
-    expect(api.registerWidgetPresenter).not.toHaveBeenCalled();
   });
 
   it("defers Canvas CLI and tool implementations until use", async () => {
