@@ -111,6 +111,7 @@ The bundled `crabbox` provider provisions a disposable machine through the local
 - `settings.provider` (required): backend from the [Crabbox provider reference](https://crabbox.sh/providers/index.html), passed through `--provider`. Direct or coordinator-backed operation follows Crabbox's configuration.
 - `settings.class`: optional Crabbox machine class passed to `--class`. Omission leaves selection to Crabbox unless the placement supplies `machineClass`; OpenClaw does not invent a default or hardware size. Explicit `null`, empty or whitespace strings, and nonstring values are invalid. Edit classless profiles through **Settings → Advanced**.
 - `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout`. TTL is total lifetime from creation, including provisioning; idle timeout is the inactivity window. The earlier deadline wins. Crabbox may clamp either request to effective policy; idle never exceeds TTL. The default maximum is `4h`, while explicit owner or organization overrides can permit longer requests, up to `24h`. OpenClaw accepts those longer configured values and uses the effective policy returned by Crabbox.
+- `settings.network`: `"public"` (default) or the explicit `"tailscale"` opt-in described below.
 - `settings.warmImage`: Linux snapshot capture and reuse. Enabled by default when the profile or session selects a machine class, including profiles with setup secrets. Without a class, omission stays cold; explicit `true` requires a class. `false` disables capture and reuse. Repository snapshots fix their capture point before enrollment; supported nonblocking AWS uploads can finish while the session runs. Empty workspaces share runtime images captured at eligible teardown. See [Warm images](/gateway/cloud-workers/warm-images) for compatibility, refresh, storage charges, and recovery.
 - `settings.setup`: optional, repeatable machine setup command for the profile's `settings.target` (Linux when omitted). Profiles with setup cannot override the OS between native Windows (PowerShell) and POSIX targets; incompatible OS and machine choices are omitted. Configure a separate profile with compatible setup for the other interpreter. Snapshot forks reuse its filesystem results. Repository lifecycle commands belong in the [environment file](/gateway/cloud-workers/environment-file).
 - `settings.setupSecrets`: operator-approved environment-name to protected store SecretRef map; see [Setup secrets](/gateway/config-cloud-workers#setup-secrets).
@@ -126,7 +127,7 @@ Managed release archives stream into private staging files, bounded to 128 MiB, 
 
 The supported CLI is also required to inspect and stop existing leases. On hosts with restricted release-download access or managed-tool write permissions, provision the supported executable at the exact path used by existing profiles, or stage the managed distribution before rolling out an OpenClaw update. Supported executables and installed managed copies do not need release-download access. If neither is available, acquisition must succeed before lease inspection or teardown can continue; actual release stops heartbeats before attempting acquisition. An admitted source-dependent capture retains its heartbeat while the provider still requires the source.
 
-Unknown settings are rejected. Backend credentials, coordinator access, networking, and provider-specific snapshot support remain configured in [Crabbox](https://crabbox.sh/providers/index.html), rather than OpenClaw settings. Keep Crabbox's state across Gateway restarts. Provisioning retries use one fixed lease ID; never bypass a fixed-ID capability error by allocating a replacement manually. See [provider requirements](/gateway/cloud-workers#crabbox-provider-support).
+Unknown settings are rejected. Backend credentials, coordinator access, enrollment policy, and provider-specific snapshot support remain configured in [Crabbox](https://crabbox.sh/providers/index.html), rather than OpenClaw settings. Keep Crabbox's state across Gateway restarts. Provisioning retries use one fixed lease ID; never bypass a fixed-ID capability error by allocating a replacement manually. See [provider requirements](/gateway/cloud-workers#crabbox-provider-support).
 
 Cloud-worker discovery and lifecycle commands run from the Gateway user's home directory, so a `crabbox.yaml` in the Gateway's repository working directory does not override Crabbox's global configuration. Project-scoped sandbox commands retain their explicit workspace directory.
 
@@ -137,6 +138,56 @@ The coordinator defaults to a 30-minute TTL and idle timeout when no values are 
 Crabbox also owns whether direct leases are permitted. Its trusted `directLeases: deny` configuration blocks remote direct allocation unless the selected provider is explicitly permitted by `directLeaseAllow`. Repository configuration cannot relax that policy. Use the configured coordinator path when direct allocation is denied; do not switch credentials to bypass it.
 
 Codex remote-exec requires `codex.exec-server.stdio.v1` in the node-command allowlist and critical invocation approval. AWS admission requires authoritative `providerMetadata.instanceProfileAttached: false`; workers with an instance role are rejected.
+
+#### Private Proxmox workers
+
+`settings.network: "tailscale"` opts into native per-lease Tailscale enrollment
+for **Proxmox Linux only**. Other backends and targets remain unsupported. This
+mode always allocates cold, even with a machine class: omit `warmImage` or set it
+to `false`. Warm images, prepared workers, reserves, desktops, and protected
+`setupSecrets` are unavailable in this mode. Set the outer profile's
+`readyWorkers: 0`; no preparation target is advertised to the reserve pool.
+
+```json5 validate=false
+{
+  provider: "crabbox",
+  install: "bundle",
+  readyWorkers: 0,
+  settings: {
+    provider: "proxmox",
+    target: "linux",
+    network: "tailscale",
+    warmImage: false,
+    ttl: "60m",
+    idleTimeout: "15m",
+  },
+}
+```
+
+Use a Crabbox build with native Proxmox Tailnet enrollment and durable device
+receipts ([counterpart change](https://github.com/openclaw/crabbox/pull/2910));
+Crabbox 0.78.1 does not implement this contract. The general minimum-version
+check alone does not establish support. An unsupported CLI fails visibly; there
+is no public-network retry. Configure the trusted broker, clean template helper,
+strict TLS, isolated guest-agent execution rights, worker tag/ACL, and device
+cleanup in Crabbox's operator configuration. Do not put join keys or provider
+credentials in OpenClaw settings or setup scripts.
+
+Allocation, inspection, and setup keep the same explicit private network policy
+and canonical lease ID. Admission requires matching lease identity, effective
+`network: "tailscale"`, and enabled, error-free, ready Tailscale metadata with a
+valid `100.64.0.0/10` IPv4 and nonempty actual `deviceID`. SSH must also be ready
+before setup or node enrollment. Fresh inspection and post-setup refresh repeat
+these checks. Crabbox binds the receipt to its cluster, VMID, and VM generation,
+pins SSH to the current QGA `tailscale0` address on port 22, and rejects fixed-ID
+network-policy changes. No LAN or public fallback is permitted. Preserve its
+state across restarts; normal stop owns both VM and device cleanup.
+
+The worker still connects through ordinary authenticated OpenClaw node enrollment.
+Provide a reachable private HTTPS/WSS Gateway endpoint, such as
+[Tailscale Serve](/gateway/tailscale), for both artifact downloads and the node
+connection. Enabling the profile does not configure Serve, change Gateway binding,
+grant Proxmox permissions, install the counterpart CLI, or prove live connectivity.
 
 #### Crabbox machine catalog
 

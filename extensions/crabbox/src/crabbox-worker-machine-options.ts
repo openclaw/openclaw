@@ -126,7 +126,16 @@ export function createCrabboxMachineOptionsResolver(
   const resolveCatalog = async (profile: WorkerProfile) => {
     const parsed = parseCrabboxProfile(profile);
     const catalog = await resolveMachineCatalog(parsed.provider, parsed.binary);
-    return { parsed, catalog };
+    return {
+      parsed,
+      catalog:
+        parsed.network === "tailscale" && catalog
+          ? {
+              operatingSystems: catalog.operatingSystems.filter((os) => os === "linux"),
+              machines: catalog.machines.filter((machine) => machine.os === "linux"),
+            }
+          : catalog,
+    };
   };
   return {
     async listMachineOptions(profile) {

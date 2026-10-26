@@ -39,6 +39,7 @@ import {
 } from "./crabbox-worker-project.js";
 import { createCrabboxWorkerBinaryResolver } from "./crabbox-worker-provider-binary.js";
 import {
+  CrabboxWorkerNetworkPolicyError,
   createCrabboxProvisionAuthority,
   failProvisionAfterCleanup,
   inspectWithContext,
@@ -170,6 +171,7 @@ export function createCrabboxWorkerProvider(
         id: lease.leaseId,
         idleTimeout: profile.idleTimeout,
         provider: profile.provider,
+        network: profile.network,
       },
       profile,
     };
@@ -241,7 +243,10 @@ export function createCrabboxWorkerProvider(
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
-    const context = warmImages.startContext(binary, parsed.provider, options, Boolean(project));
+    const context = {
+      ...warmImages.startContext(binary, parsed.provider, options, Boolean(project)),
+      network: parsed.network,
+    };
     const leaseId = allocation.leaseId;
     if (parsed.desktop && parsed.provider === "hetzner") {
       await assertHetznerDesktopHasManagedCoordinator({ binary, signal });
@@ -303,6 +308,7 @@ export function createCrabboxWorkerProvider(
           binary,
           id: leaseId,
           provider: parsed.provider,
+          network: parsed.network,
           heartbeatIntervalMs: parsed.heartbeatIntervalMs,
           heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
           idleTimeout: parsed.idleTimeout,
@@ -633,12 +639,18 @@ export function createCrabboxWorkerProvider(
       const inspected = await inspectWithContext({
         ...context,
         signal: lease.signal,
+      }).catch((error: unknown) => {
+        if (error instanceof CrabboxWorkerNetworkPolicyError) {
+          return undefined;
+        }
+        throw error;
       });
-      lease.signal?.throwIfAborted();
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
+        lease.signal?.throwIfAborted();
         return { status: "unknown" };
       }
+      lease.signal?.throwIfAborted();
       // `ready` is an SSH probe; every recognized nonterminal lease remains active.
       heartbeats.start({ ...context, lifetime: inspected.lifetime });
       return { status: "active", sharedHost: false };

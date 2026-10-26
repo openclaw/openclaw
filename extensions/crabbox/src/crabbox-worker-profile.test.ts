@@ -4,6 +4,8 @@ import {
   parseCrabboxProfile,
   resolveCrabboxWarmImageProfileKey,
   resolveCrabboxPreparationTarget,
+  supportsCrabboxProjectPreparation,
+  resolveCrabboxPreparedIdleTimeoutMs,
   resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 
@@ -119,3 +121,38 @@ it.each([{ setupEnv: [] }, { setupEnv: ["TOKEN"] }, { setupEnv: "TOKEN" }])(
     );
   },
 );
+
+const TAILNET_PROFILE = { ...PROFILE, provider: "proxmox", network: "tailscale" };
+
+it("keeps private Proxmox workers cold and unavailable to preparation and reserves", () => {
+  expect(resolveCrabboxProvisionProfile(TAILNET_PROFILE, "standard").profile).toMatchObject({
+    network: "tailscale",
+    warmImage: false,
+    target: "linux",
+  });
+  expect(resolveCrabboxPreparationTarget(TAILNET_PROFILE)).toBeUndefined();
+  expect(supportsCrabboxProjectPreparation(TAILNET_PROFILE)).toBe(false);
+  expect(resolveCrabboxPreparedIdleTimeoutMs(TAILNET_PROFILE)).toBeUndefined();
+});
+
+it.each([
+  [{ network: null }, "network"],
+  [{ network: "auto" }, "network"],
+  [{ provider: "aws" }, "Proxmox Linux"],
+  [{ target: "macos" }, "Proxmox Linux"],
+  [{ warmImage: true }, "cold"],
+  [
+    { setupSecrets: { TOKEN: { source: "store", provider: "default", id: "TOKEN" } } },
+    "setup secrets",
+  ],
+])("rejects unsupported private policy %j", (patch, message) => {
+  expect(() => resolveCrabboxProvisionProfile({ ...TAILNET_PROFILE, ...patch }, undefined)).toThrow(
+    message,
+  );
+});
+
+it("rechecks private target policy after session placement overrides", () => {
+  expect(() =>
+    resolveCrabboxProvisionProfile(TAILNET_PROFILE, undefined, "windows/normal"),
+  ).toThrow("Proxmox Linux");
+});

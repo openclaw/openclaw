@@ -3,18 +3,16 @@ import {
   crabboxCommandError,
   runCrabboxCommandWithCoordinatorRetry,
   sanitizeCrabboxNotice,
+  type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
 import { parseInspectJson, type CrabboxLeaseLifetime } from "./crabbox-worker-inspect.js";
 import { heartbeatIntervalMs } from "./crabbox-worker-profile.js";
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
-type HeartbeatContext = {
-  binary: string;
+type HeartbeatContext = LeaseCommandContext & {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
-  id: string;
   idleTimeout: string;
-  provider: string;
   lifetime?: CrabboxLeaseLifetime;
 };
 

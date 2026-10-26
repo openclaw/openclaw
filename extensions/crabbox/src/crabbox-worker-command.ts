@@ -3,6 +3,7 @@ import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
+import { buildCrabboxNetworkArgs, type CrabboxNetwork } from "./crabbox-worker-profile.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -12,7 +13,12 @@ export function sanitizeCrabboxNotice(text: string): string {
   return sliceUtf16Safe(redactToolPayloadText(text).replace(/\s+/gu, " ").trim(), 0, 512);
 }
 
-export type LeaseCommandContext = { binary: string; id: string; provider: string };
+export type LeaseCommandContext = {
+  binary: string;
+  id: string;
+  provider: string;
+  network?: CrabboxNetwork;
+};
 
 export function leaseRunArgs(
   context: LeaseCommandContext,
@@ -23,9 +29,7 @@ export function leaseRunArgs(
     "run",
     "--provider",
     context.provider,
-    "--network",
-    "public",
-    "--tailscale=false",
+    ...buildCrabboxNetworkArgs(context.network),
     "--id",
     context.id,
     "--keep=true",
