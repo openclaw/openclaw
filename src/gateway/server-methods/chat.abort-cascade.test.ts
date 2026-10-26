@@ -16,6 +16,7 @@ import {
   waitForExecSession,
   type ProcessSession,
 } from "../../agents/bash-process-registry.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -111,11 +112,7 @@ function registerDescendant(
 afterEach(() => resetPluginRuntimeStateForTest());
 
 function installNativeCancellation(
-  withDescendantCancellation: NonNullable<
-    ReturnType<
-      typeof createEmptyPluginRegistry
-    >["agentHarnesses"][number]["harness"]["withDescendantCancellation"]
-  >,
+  withDescendantCancellation: NonNullable<AgentHarness["withDescendantCancellation"]>,
 ) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
@@ -576,53 +573,39 @@ describe("descendant cascade ownership", () => {
       };
     });
     let command: ProcessSession | undefined;
+    const identity = { ...mainIdentity, runId: "parent", ownerConnId: "owner" };
     const execution = withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-      withExecRequestTurn(
-        {
-          identity: {
-            runId: "parent",
-            sessionKey,
-            sessionId: "main-session",
-            agentId: "main",
-            ownerConnId: "owner",
+      withExecRequestTurn({ identity, abortSignal: parent.input.abortSignal }, async () => {
+        const tool = createLazyExecTool({
+          ...identity,
+          config: getRuntimeConfig(),
+          cwd: fixture.stateDir,
+          scopeKey: sessionKey,
+          host: "gateway",
+          mode: "full",
+          ask: "off",
+          allowBackground: true,
+          notifyOnExit: false,
+          preparedStoreEnvironment: {},
+        });
+        const result = await tool.execute(
+          "ordinary-command",
+          {
+            command: `node -e "require('fs').watch('.', () => {})"`,
+            yieldMs: 10,
+            timeoutSeconds: 60,
           },
-          abortSignal: parent.input.abortSignal,
-        },
-        async () => {
-          const tool = createLazyExecTool({
-            runId: "parent",
-            sessionKey,
-            sessionId: "main-session",
-            agentId: "main",
-            config: getRuntimeConfig(),
-            cwd: fixture.stateDir,
-            scopeKey: sessionKey,
-            host: "gateway",
-            mode: "full",
-            ask: "off",
-            allowBackground: true,
-            notifyOnExit: false,
-            preparedStoreEnvironment: {},
-          });
-          const result = await tool.execute(
-            "ordinary-command",
-            {
-              command: `node -e "require('fs').watch('.', () => {})"`,
-              yieldMs: 10,
-              timeoutSeconds: 60,
-            },
-            parent.input.abortSignal,
-          );
-          const details = asOptionalRecord(result.details);
-          expect(details?.status).toBe("running");
-          if (typeof details?.sessionId !== "string") {
-            throw new Error("Expected an ordinary command to yield its process handle");
-          }
-          command = expectDefined(getSession(details.sessionId), "ordinary command");
-          commandReady.resolve();
-          await turnAborted.promise;
-        },
-      ),
+          parent.input.abortSignal,
+        );
+        const details = asOptionalRecord(result.details);
+        expect(details?.status).toBe("running");
+        if (typeof details?.sessionId !== "string") {
+          throw new Error("Expected an ordinary command to yield its process handle");
+        }
+        command = expectDefined(getSession(details.sessionId), "ordinary command");
+        commandReady.resolve();
+        await turnAborted.promise;
+      }),
     );
     void execution.catch((error: unknown) => commandReady.reject(error));
     let stopping: ReturnType<typeof invokeChatAbortHandler> | undefined;
