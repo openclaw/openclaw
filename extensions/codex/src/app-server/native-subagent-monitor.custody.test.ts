@@ -11,6 +11,7 @@ import {
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { createNativeSubagentSubmissionStore } from "./native-subagent-assignment-store.js";
 import { createNativeSubagentCompletionCustodyFixture as createCustody } from "./native-subagent-custody.test-support.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
@@ -178,7 +179,7 @@ describe("native assignment completion custody", () => {
     },
   );
 
-  it.each(["closed", "exhausted"] as const)(
+  it.each(["closed", "exhausted", "blocked"] as const)(
     "retains the exact overlapping owner through parent yield and releases on %s",
     async (ending) => {
       vi.useFakeTimers();
@@ -188,7 +189,11 @@ describe("native assignment completion custody", () => {
       runtime.captureAgentHarnessCompletionCustody
         .mockResolvedValueOnce(first.root)
         .mockResolvedValueOnce(second.root);
-      runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: false, path: "none" });
+      runtime.deliverAgentHarnessCompletion.mockResolvedValue({
+        delivered: false,
+        path: "none",
+        ...(ending === "blocked" ? { recoveryBlocked: true } : {}),
+      });
       try {
         const owner = await registerParent(monitor);
         const other = await registerParent(monitor);
@@ -206,7 +211,15 @@ describe("native assignment completion custody", () => {
           runtime.deliverAgentHarnessCompletion.mock.calls[0]![0].completionCustody,
         );
         expect(first.executions.size).toBe(0);
-        if (ending === "closed") {
+        if (ending === "blocked") {
+          expect(first.live()).toHaveLength(0);
+          await vi.advanceTimersByTimeAsync(530_000);
+          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+          await using successor = disposableMonitor();
+          await registerDetachedChild(successor.client, successor.monitor);
+          await successor.client.notify(nativeCompletionNotification());
+          expect(successor.runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+        } else if (ending === "closed") {
           await monitor.dispose();
           expect(first.live()).toHaveLength(1);
           runtime.deliverAgentHarnessCompletion.mockResolvedValue({
@@ -280,25 +293,6 @@ describe("native assignment completion custody", () => {
 });
 
 describe("native completion custody and host recovery", () => {
-  it("releases blocked completion ownership without polling", async () => {
-    vi.useFakeTimers();
-    await using fixture = disposableMonitor();
-    const { client, runtime, monitor } = fixture;
-    runtime.deliverAgentHarnessCompletion.mockResolvedValue({
-      delivered: false,
-      path: "none",
-      recoveryBlocked: true,
-    });
-    await registerDetachedChild(client, monitor);
-    await client.notify(nativeCompletionNotification());
-    await vi.advanceTimersByTimeAsync(530_000);
-    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
-    await using successor = disposableMonitor();
-    await registerDetachedChild(successor.client, successor.monitor);
-    await successor.client.notify(nativeCompletionNotification());
-    expect(successor.runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
-  });
-
   it("does not exhaust delivery retries while the host recovery owns completion", async () => {
     vi.useFakeTimers();
     await using fixture = disposableMonitor();
@@ -406,30 +400,19 @@ async function createSubmissionFixture(acknowledgePredecessor = true) {
   }
   const runtime = createRuntime();
   const holds = { client: 0, parent: 0, child: 0 };
-  const consume = vi.fn<CodexNativeSubagentSubmissionStore["consume"]>((receipt, guard) =>
-    bindingStore.mutate(
-      identity,
-      { kind: "consume-native-subagent-submission", owner, receipt },
-      guard,
-    ),
-  );
-  const submissionStore: CodexNativeSubagentSubmissionStore = {
-    assertCurrent: () => {
+  const submissionStore = createNativeSubagentSubmissionStore({
+    bindingStore,
+    identity,
+    owner,
+    assertBindingCurrent: () => {
       const current = bindingStore.read(identity);
       if (!current || !matchesCodexNativeSubagentSubmissionBinding(current, owner)) {
         throw new Error("Submission binding changed.");
       }
     },
-    assertCurrentAsync: async () => submissionStore.assertCurrent(),
-    read: () => bindingStore.readNativeSubagentSubmissions(identity, owner),
-    record: (receipt, guard) =>
-      bindingStore.mutate(
-        identity,
-        { kind: "record-native-subagent-submission", owner, receipt },
-        guard,
-      ),
-    consume,
-  };
+    assertLifecycleCurrentAsync: async () => {},
+  });
+  const consume = vi.spyOn(submissionStore, "consume");
   const parent = await registerCodexNativeSubagentMonitor({
     client: client.client,
     parentThreadId: binding.threadId,

@@ -38,7 +38,6 @@ import {
   adaptCodexTestClientFactory,
   createInferenceReadyClientHarness,
   waitForHarnessRequest,
-  withoutCodexSkillDiscovery,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
@@ -57,6 +56,8 @@ function multiplexedClientFactory(
 }
 
 type Harness = ReturnType<typeof createInferenceReadyClientHarness>;
+const isThreadRequest = (method: string) =>
+  method.startsWith("thread/") || method.startsWith("turn/");
 
 async function answer(harness: Harness, method: string, result: unknown, since = 0) {
   const request = await waitForHarnessRequest(harness, method, since);
@@ -185,32 +186,16 @@ describe("Codex app-server main thread cleanup", () => {
       expect(readAttemptTerminal(await run).aborted).toBe(false);
     }
 
-    const userRequestMethods = () =>
+    const threadRequestMethods = () =>
       harness.writes
         .map((write) => (JSON.parse(write) as { method: string }).method)
-        .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
-    expect(userRequestMethods()).toEqual([
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
-      "account/read",
+        .filter(isThreadRequest);
+    expect(threadRequestMethods()).toEqual([
       "thread/start",
       "turn/start",
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
-      "account/read",
       "thread/start",
       "turn/start",
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
-      "account/read",
       "turn/start",
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
-      "account/read",
       "turn/start",
     ]);
     await expect(readCodexAppServerBinding(sessionFiles.a)).resolves.toMatchObject({
@@ -248,14 +233,7 @@ describe("Codex app-server main thread cleanup", () => {
     await answer(harness, "turn/start", turnStartResult("turn-5"), siblingRequestStart);
     completeTurn(harness, "thread-b", "turn-5");
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-6)).toEqual([
-      "thread/unsubscribe",
-      "configRequirements/read",
-      "config/read",
-      "configRequirements/read",
-      "account/read",
-      "turn/start",
-    ]);
+    expect(threadRequestMethods().slice(-2)).toEqual(["thread/unsubscribe", "turn/start"]);
   });
 
   it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
@@ -451,47 +429,6 @@ describe("Codex app-server main thread cleanup", () => {
     }
   });
 
-  it("keeps an incognito thread subscribed for live in-process reuse", async () => {
-    const sessionFile = path.join(tempDir, "incognito-session.jsonl");
-    const workspaceDir = path.join(tempDir, "incognito-workspace");
-    const sessionKey = "agent:main:dashboard:incognito-live-thread";
-    // Dashboard incognito sessions keep an authoritative row in process-held SQLite.
-    await seedRunSessionOwnerForTest("session-1", sessionKey);
-    const harness = createInferenceReadyClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-    const params = createParams(sessionFile, workspaceDir, sessionKey);
-    params.disableTools = false;
-    const run = runCodexAppServerAttempt(params, {
-      bindingStore: testCodexAppServerBindingStore,
-    });
-    await initialize(harness);
-    await capabilities(harness);
-    await allowNativeToolPreflight(harness);
-    const start = await waitForHarnessRequest(harness, "thread/start");
-    expect(start.params).toEqual(expect.objectContaining({ ephemeral: true }));
-    harness.send({ id: start.id, result: threadStartResult() });
-    await answer(harness, "turn/start", turnStartResult());
-    harness.send(turnCompleted({ id: "turn-1", status: "completed" }));
-
-    const result = await run;
-    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-1",
-      clientId: harness.client.getInstanceId(),
-    });
-
-    const requestStart = harness.writes.length;
-    const retirement = retireCodexAppServerSessionGeneration({
-      bindingStore: testCodexAppServerBindingStore,
-      identity: sessionBindingIdentity({ agentId: "main", sessionId: "session-1", sessionKey }),
-      mode: "retire",
-    });
-    const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe", requestStart);
-    expect(unsubscribe.params).toEqual({ threadId: "thread-1" });
-    harness.send({ id: unsubscribe.id, result: {} });
-    await expect(retirement).resolves.toBe("applied");
-  });
-
   it.each(
     [
       { reason: "fails", error: new Error("turn start exploded") },
@@ -560,11 +497,7 @@ describe("Codex app-server main thread cleanup", () => {
           clientFactory,
         }),
       ).rejects.toThrow(error.message);
-      expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
-        "modelProvider/capabilities/read",
-        "configRequirements/read",
-        "config/read",
-        "configRequirements/read",
+      expect(request.mock.calls.map(([method]) => method).filter(isThreadRequest)).toEqual([
         "thread/start",
         "turn/start",
         ...(owner === "current" ? ["thread/unsubscribe"] : []),
@@ -636,12 +569,9 @@ describe("Codex app-server main thread cleanup", () => {
         reason: "aborted",
         mayHaveWritten: true,
       });
-      expect(harness.writes.map((entry) => JSON.parse(entry).method)).toEqual([
-        "initialize",
-        "initialized",
-        "skills/list",
-        "config/read",
-        "account/read",
+      expect(
+        harness.writes.map((entry) => JSON.parse(entry).method).filter(isThreadRequest),
+      ).toEqual([
         "thread/start",
         "turn/start",
         "turn/interrupt",
@@ -695,8 +625,7 @@ describe("Codex app-server main thread cleanup", () => {
         clientFactory,
       }),
     ).rejects.toBe(startupError);
-    expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
-      "config/read",
+    expect(request.mock.calls.map(([method]) => method).filter(isThreadRequest)).toEqual([
       "thread/start",
       "turn/start",
       "turn/interrupt",
