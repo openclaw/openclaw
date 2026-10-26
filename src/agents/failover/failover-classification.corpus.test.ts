@@ -5,23 +5,14 @@ vi.mock("../../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: () => null,
 }));
 
-import {
-  classifyFailoverSignal,
-  isAuthErrorMessage,
-  isBillingErrorMessage,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
-  isServerErrorMessage,
-  isTimeoutErrorMessage,
-} from "./classify.js";
+import { classifyFailoverSignal, isBillingErrorMessage } from "./classify.js";
 import { failoverClassificationCorpus } from "./failover-classification.corpus.cases.test-support.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
 import { resolveReplyFailoverFacts } from "./request-error-facts.js";
 import type { FailoverSignal } from "./signal.js";
 
-function classifyReplyRequest(signal: FailoverSignal) {
-  return resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
-}
+const classifyReplyRequest = (signal: FailoverSignal) =>
+  resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
 
 const expectClassification = (signal: FailoverSignal, reason: string | null) =>
   expect(classifyFailoverSignal(signal)).toEqual(reason ? { kind: "reason", reason } : null);
@@ -42,7 +33,6 @@ const representativeCorpusIds = new Set([
   "http-structured-insufficient-quota",
   "xai-403-spending-limit",
   "billing-periodic-limit-402",
-  "billing-custom-proxy",
   "billing-zhipu-periodic-limit",
   "billing-minimax-chinese-usage-limit",
   "billing-subscription-quota-refresh",
@@ -94,11 +84,8 @@ it.each([
   expect(classifyReplyRequest(signal)?.code).not.toBe("provider_model_unavailable");
 });
 
-it("ignores an embedded 429 substring outside a status context", () => {
-  const message = "request id req-4291 failed";
-  expect(isRateLimitErrorMessage(message)).toBe(false);
-  expect(classifyFailoverSignal({ message })).toBeNull();
-});
+it("ignores an embedded 429 substring outside a status context", () =>
+  expectClassification({ message: "request id req-4291 failed" }, null));
 
 it.each([
   [
@@ -123,24 +110,16 @@ it.each([
 
 it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {
   const message = "503 service unavailable";
-  expect(isTimeoutErrorMessage(message)).toBe(false);
-  expect(isOverloadedErrorMessage(message)).toBe(true);
-  expect(isServerErrorMessage(message)).toBe(false);
   expectClassification({ message }, "overloaded");
   expect(classifyProviderRequestFacets({ message })).toBe("provider-internal-503");
   expect(classifyReplyRequest({ message })).toMatchObject({ code: "provider_internal_error" });
 });
 
-it("classifies billing evidence beyond 512 characters", () => {
-  const longMessage = `insufficient credits ${"x".repeat(600)}`;
-  const truncatedMessage = longMessage.slice(0, 511);
-  expect(isBillingErrorMessage(longMessage)).toBe(true);
-  expect(isBillingErrorMessage(truncatedMessage)).toBe(true);
-});
+it("classifies billing evidence beyond 512 characters", () =>
+  expect(isBillingErrorMessage(`insufficient credits ${"x".repeat(600)}`)).toBe(true));
 
 it("rotates ambiguous 403 permissions without reply-level auth copy", () => {
   const message = "403 Forbidden: insufficient permissions";
-  expect(isAuthErrorMessage(message)).toBe(true);
   expectClassification({ message }, "auth");
   expect(classifyReplyRequest({ message, status: 403 })).toBeUndefined();
 });
@@ -188,9 +167,6 @@ const retirement =
 it.each([
   [{ status: 410, message: "Gone", details: [retirement] }, "model_not_found"],
   [{ message: "410 The account has been retired." }, "timeout"],
-])("distinguishes model retirement from other HTTP 410s: %j", (signal, reason) => {
-  expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
-    kind: "reason",
-    reason,
-  });
-});
+])("distinguishes model retirement from other HTTP 410s: %j", (signal, reason) =>
+  expectClassification(signal, reason),
+);

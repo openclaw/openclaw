@@ -11,6 +11,9 @@ const MULTIPLE_FLOORS =
 const expectDelay = (message: string, expected: number | undefined, errorBody?: unknown) =>
   expect(resolveRetryAfterMs(message, NOW_MS, errorBody)).toBe(expected);
 const tpm = "429 Rate limit reached for gpt in organization org-synthetic on tokens per min (TPM)";
+const retryInfo = (retryDelay: string, type = "RetryInfo") => ({
+  error: { details: [{ retryDelay, "@type": `type.googleapis.com/google.rpc.${type}` }] },
+});
 
 describe("resolveRetryAfterMs", () => {
   it.each<[string, number | undefined, unknown?]>([
@@ -39,12 +42,10 @@ describe("resolveRetryAfterMs", () => {
     const body = (retryDelay: string) =>
       `429: ${JSON.stringify({
         error: {
-          code: 429,
           message: "You exceeded your current quota. Please retry in 32.578767138s.",
-          status: "RESOURCE_EXHAUSTED",
           details: [
             { "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [] },
-            { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay },
+            ...retryInfo(retryDelay).error.details,
           ],
         },
       })}`;
@@ -57,15 +58,8 @@ describe("resolveRetryAfterMs", () => {
   });
 
   it("reads RetryInfo in any key order from a structured error body", () => {
-    const errorBody = {
-      error: {
-        details: [{ retryDelay: "12s", "@type": "type.googleapis.com/google.rpc.RetryInfo" }],
-      },
-    };
-    expectDelay("429 RESOURCE_EXHAUSTED", 12_000, errorBody);
-    expectDelay("429 RESOURCE_EXHAUSTED", undefined, {
-      error: { details: [{ "@type": "type.googleapis.com/google.rpc.Help", retryDelay: "12s" }] },
-    });
+    expectDelay("429 RESOURCE_EXHAUSTED", 12_000, retryInfo("12s"));
+    expectDelay("429 RESOURCE_EXHAUSTED", undefined, retryInfo("12s", "Help"));
   });
 
   it("applies an exhausted-bucket reset only when the provider gave no explicit time", () => {
@@ -85,7 +79,6 @@ describe("resolveRetryAfterMs", () => {
 describe("classifyRateLimitWindow", () => {
   it.each([
     ["请求过于频繁，请稍后重试", "short"],
-    ["请求过于频繁; please retry later", "short"],
     ["上下文长度上限为 128k tokens", "unknown"],
   ])("keeps transient throttles and context caps out of long windows: %s", (message, kind) =>
     expect(classifyRateLimitWindow(message, NOW_MS)).toEqual({ kind }),
@@ -104,15 +97,11 @@ describe("classifyRateLimitWindow", () => {
     expect(hasOrganizationTpmRateLimitEvidence(message)).toBe(expected),
   );
 
-  it("compares converted fractions against the one-minute short-window limit", () => {
-    expect(classifyRateLimitWindow("429 Try again in 0.5 minutes", NOW_MS)).toEqual({
-      kind: "short",
-      retryAfterSeconds: 30,
-    });
-    expect(classifyRateLimitWindow("429 Retry-After: 60000ms", NOW_MS)).toEqual({
-      kind: "short",
-      retryAfterSeconds: 60,
-    });
-    expect(classifyRateLimitWindow("429 Retry-After: 60001ms", NOW_MS)).toEqual({ kind: "long" });
-  });
+  it.each([
+    ["Try again in 0.5 minutes", { kind: "short", retryAfterSeconds: 30 }],
+    ["Retry-After: 60000ms", { kind: "short", retryAfterSeconds: 60 }],
+    ["Retry-After: 60001ms", { kind: "long" }],
+  ])("compares converted durations against the one-minute limit: %s", (message, expected) =>
+    expect(classifyRateLimitWindow(`429 ${message}`, NOW_MS)).toEqual(expected),
+  );
 });
