@@ -34,7 +34,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["synthesize", "stream", "voices"] as const)(
+it.each(["synthesize", "streamSynthesize", "listVoices"] as const)(
   "redacts the active credential from %s provider diagnostics",
   async (operation) => {
     const credential = "opaque-fish-secret42";
@@ -44,12 +44,7 @@ it.each(["synthesize", "stream", "voices"] as const)(
       providerConfig: { apiKey: credential },
       target: "audio-file" as const,
     };
-    const pending =
-      operation === "synthesize"
-        ? provider.synthesize(params)
-        : operation === "stream"
-          ? provider.streamSynthesize?.(params)
-          : provider.listVoices?.(params);
+    const pending = provider[operation]?.(params);
     assert(pending);
     const error: unknown = await pending.catch((cause: unknown) => cause);
     assert(error instanceof Error);
@@ -88,14 +83,23 @@ it("preserves Talk setting precedence and explicit blank-key clearing", () => {
 
 it.each([
   [undefined, "audio-file", "mp3", 44100],
-  ["s2.1-pro", "audio-file", "mp3", 44100],
   ["drama-3", "audio-file", "mp3", 44100],
-  ["drama-3-preview", "audio-file", "mp3", 44100],
   ["drama-3-preview", "voice-note", "opus", 48000],
   ["drama-3-preview", "telephony", "pcm", 8000],
 ] as const)("synthesizes %s for %s", async (model, target, format, sampleRate) => {
-  const bytes = [1, 2, 3];
+  const audioBuffer = Buffer.from([1, 2, 3]);
   const hosted = target === "audio-file";
+  const text = "[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>";
+  const providerConfig = {
+    ...request.providerConfig,
+    model: hosted ? model : undefined,
+    speakerVoiceId: "voice-123",
+    latency: "normal",
+    speed: 1.1,
+    temperature: 0.6,
+    topP: 0.8,
+    normalize: false,
+  };
   const metadata = {
     outputFormat: format,
     fileExtension: `.${format}`,
@@ -107,69 +111,51 @@ it.each([
       model: model ?? "s2.1-pro",
       authorization: "Bearer fish-test",
     });
-    if (hosted) {
-      expect(init?.body).toBe(
-        '{"text":"[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>","format":"mp3","reference_id":"voice-123","sample_rate":44100,"latency":"normal","prosody":{"speed":1.1},"temperature":0.6,"top_p":0.8,"normalize":false}',
-      );
-    } else {
-      if (typeof init?.body !== "string") {
-        throw new Error("expected Fish Audio JSON request body");
-      }
-      expect(JSON.parse(init.body)).toMatchObject({ format, sample_rate: sampleRate });
-    }
-    return new Response(
-      new Uint8Array(bytes),
+    expect(init?.body).toBe(
+      JSON.stringify({
+        text,
+        format,
+        reference_id: "voice-123",
+        sample_rate: sampleRate,
+        latency: "normal",
+        prosody: { speed: 1.1 },
+        temperature: 0.6,
+        top_p: 0.8,
+        normalize: false,
+      }),
+    );
+    const headers =
       format === "pcm"
         ? undefined
-        : { headers: { "content-type": format === "mp3" ? "audio/mpeg" : "audio/opus" } },
-    );
+        : { "content-type": format === "mp3" ? "audio/mpeg" : "audio/opus" };
+    return new Response(audioBuffer, { headers });
   });
-  let result;
-  if (hosted) {
-    result = await provider.synthesize({
-      ...request,
-      text: "[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>",
-      providerConfig: {
-        apiKey: "fish-test",
-        model,
-        speakerVoiceId: "voice-123",
-        latency: "normal",
-        speed: 1.1,
-        temperature: 0.6,
-        topP: 0.8,
-        normalize: false,
-      },
-      target,
-      timeoutMs: 12_345,
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 12_345, auditContext: "fish-audio.tts" }),
-    );
-  } else if (target === "voice-note") {
-    result = await provider.streamSynthesize?.({
-      ...request,
-      target,
-      providerOverrides: { model },
-    });
-  } else {
-    const providerConfig = provider.resolveTalkConfig?.({
-      ...request,
-      baseTtsConfig: { providers: { "fish-audio": request.providerConfig } },
-      talkProviderConfig: { modelId: model },
-    });
-    if (!providerConfig) {
-      throw new Error("expected Fish Audio Talk configuration");
-    }
-    result = await provider.synthesizeTelephony?.({ ...request, providerConfig });
-  }
+  const talkConfig =
+    target === "telephony"
+      ? provider.resolveTalkConfig?.({
+          ...request,
+          baseTtsConfig: { providers: { "fish-audio": providerConfig } },
+          talkProviderConfig: { modelId: model },
+        })
+      : providerConfig;
+  assert(talkConfig);
+  const params = { ...request, text, target, providerConfig: talkConfig, timeoutMs: 12_345 };
+  const result = hosted
+    ? await provider.synthesize(params)
+    : target === "voice-note"
+      ? await provider.streamSynthesize?.({ ...params, providerOverrides: { model } })
+      : await provider.synthesizeTelephony?.(params);
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.objectContaining({ timeoutMs: 12_345, auditContext: "fish-audio.tts" }),
+  );
   if (result && "audioStream" in result) {
     const { audioStream, release, ...actualMetadata } = result;
     expect(actualMetadata).toEqual(metadata);
-    expect([...new Uint8Array(await new Response(audioStream).arrayBuffer())]).toEqual(bytes);
+    expect(Buffer.from(await new Response(audioStream).arrayBuffer())).toEqual(audioBuffer);
     await release?.();
   } else {
     expect(result).toEqual({
-      audioBuffer: Buffer.from(bytes),
+      audioBuffer,
       ...(target === "telephony" ? { outputFormat: "pcm", sampleRate: 8000 } : metadata),
     });
   }
