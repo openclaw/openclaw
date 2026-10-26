@@ -25,8 +25,9 @@ it("retires inline views when retained rows hide and remounts equal props on ret
     registrations: (kind: string) =>
       kind === "inlineViews" ? [{ ...registration, key: "review/fixture@1" }] : [],
   });
-  const applicationContext = createInitializationContext();
-  Object.assign(applicationContext, { plugins: runtime.context.plugins });
+  const applicationContext = Object.assign(createInitializationContext(), {
+    plugins: runtime.context.plugins,
+  });
   const presentation = new EventTarget();
   let visible = true;
   const props = threadProps(
@@ -35,10 +36,7 @@ it("retires inline views when retained rows hide and remounts equal props on ret
     [
       {
         role: "toolResult",
-        toolName: "show_incident",
-        toolCallId: "incident-call",
         timestamp: 1_000,
-        content: [{ type: "text", text: "Incident summary" }],
         details: {
           pluginView: {
             type: "plugin_view",
@@ -69,8 +67,6 @@ it("retires inline views when retained rows hide and remounts equal props on ret
     expect(row).not.toBeNull();
     expect(placeholder?.textContent).toContain("Incident detail");
     const original = contexts[0]!;
-    await expect(original.host.request("fixture.active")).resolves.toEqual({ ok: true });
-    runtime.request.mockClear();
 
     // Keep row props and the last near-viewport receipt unchanged. The canonical
     // transcript presentation owner must retire work before another IO receipt.

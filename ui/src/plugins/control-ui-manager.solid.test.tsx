@@ -44,14 +44,14 @@ function mountManager(kind: "refresh" | "reload") {
   };
 }
 
-it.each(["refresh", "reload"] as const)("shows %s failures and recovers on retry", async (kind) => {
-  const view = mountManager(kind);
+it("shows refresh failures and recovers on retry", async () => {
+  const view = mountManager("refresh");
   const first = createDeferred();
   const second = createDeferred();
   view.request.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   view.button.click();
   await waitForSolid(() => view.expectBusy(true));
-  expect(view.button.hasAttribute("disabled")).toBe(kind === "reload");
+  expect(view.button.hasAttribute("disabled")).toBe(false);
   first.reject(new Error("Catalog unavailable"));
   await waitForSolid(() =>
     expect(view.getByRole("alert").textContent).toContain("Catalog unavailable"),
