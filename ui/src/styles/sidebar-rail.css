@@ -216,7 +216,7 @@
     .nav-item__icon > svg,
     .session-glyph__content,
     .session-glyph__icon,
-    .session-glyph__icon > :is(svg, i, img)
+    .session-glyph__icon > *
   ) {
   width: var(--sidebar-rail-glyph-size);
   height: var(--sidebar-rail-glyph-size);
