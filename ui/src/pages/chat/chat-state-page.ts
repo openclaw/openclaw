@@ -21,6 +21,7 @@ import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
+import { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
@@ -134,6 +135,7 @@ export function createPageState(
   const errors = createChatErrorState();
   const presentedFields = {
     settings,
+    accessPreferenceRevision: 0,
     // Unscoped names retain the gateway-wide fallback.
     assistantName:
       bootstrapIdentity?.name ??
@@ -328,6 +330,9 @@ export function createPageState(
       return resolveSpeechTextLimit(config);
     },
   );
+  state.accessPreferences = DraftPreferenceState.forChat(context, () => {
+    state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
+  });
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;

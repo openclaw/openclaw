@@ -3922,3 +3922,105 @@ html[dir="rtl"] .chat-attachment-loading > span {
       background var(--duration-normal) var(--ease-out);
   }
 }
+
+.chat-controls__access-head .settings-toggle__input:not(:checked) + .settings-toggle__control {
+  border-color: color-mix(in srgb, var(--border) 92%, var(--text));
+  background: color-mix(in srgb, var(--text) 12%, var(--card));
+}
+
+.chat-controls__access-head
+  .settings-toggle__input:not(:checked)
+  + .settings-toggle__control::before {
+  background: var(--button-icon-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-controls__access-panel {
+  flex: 0 0 auto;
+  padding: 12px;
+}
+
+.chat-controls__access-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  gap: 12px;
+  padding-inline: 2px;
+}
+
+.chat-controls__access-choices {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--access-motion-duration) var(--access-motion-easing),
+    opacity var(--access-motion-duration) var(--access-motion-easing);
+}
+
+.chat-controls__access-choices[data-expanded="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.chat-controls__access-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-controls__access-options {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.chat-controls__access-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  text-align: start;
+}
+
+.chat-controls__access-option:hover {
+  background: var(--chat-composer-hover);
+}
+
+.chat-controls__access-option[aria-pressed="true"] {
+  background: var(--chat-composer-menu-selected);
+  color: var(--text-strong);
+}
+
+.chat-controls__access-check {
+  display: flex;
+  color: var(--accent);
+  visibility: hidden;
+}
+
+.chat-controls__access-option[aria-pressed="true"] .chat-controls__access-check {
+  visibility: visible;
+}
+
+.chat-controls__access-check svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-controls__access-choices {
+    transition: none;
+  }
+}
+
+.chat-controls__effort-menu--access {
+  max-height: min(400px, var(--auto-size-available-height, calc(100vh - 120px)));
+}
