@@ -79,19 +79,6 @@ async function refreshHistory(host: ReviewHost) {
   await loadChatHistory(host, { deferBranches: true });
   await flushChatQueueForEvent(host);
 }
-function publisher(emit: ReturnType<typeof createGatewayHarness>["emitEvent"]) {
-  return (
-    session: Omit<Partial<GatewaySessionRow>, "providerReview"> & {
-      providerReview?: GatewaySessionRow["providerReview"] | null;
-    },
-  ) =>
-    emit({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: paused.key, agentId: "main", session },
-    });
-}
-
 async function createReviewHost(
   request: ReturnType<typeof makeRequestMock>,
   initialRow: GatewaySessionRow,
@@ -102,8 +89,16 @@ async function createReviewHost(
   const sessions = createTestSessionCapability(gateway);
   await sessions.refresh({ agentId: "main", force: true });
   const host = reviewHost(request, initialRow, { client, sessions, chatMessage });
-  const publish = (row: Parameters<ReturnType<typeof publisher>>[0], clearReview = false) =>
-    publisher(emitEvent)(clearReview ? { ...row, providerReview: null } : row);
+  const publish = (row: Partial<GatewaySessionRow>, clearReview = false) =>
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: paused.key,
+        agentId: "main",
+        session: clearReview ? { ...row, providerReview: null } : row,
+      },
+    });
   return { host, publish };
 }
 
@@ -356,11 +351,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     host.sessions.reconcile(paused);
     expect(holdProviderReviewQueuedInputs(host)).toBe(true);
     expect(host.chatQueue[0]).toMatchObject({
-      id: inFlight?.id,
-      text: inFlight?.text,
-      createdAt: inFlight?.createdAt,
-      sessionKey: inFlight?.sessionKey,
-      sendRunId: inFlight?.sendRunId,
+      ...inFlight,
       sendAttempts: 1,
       sendState: "held",
       sendError: expect.any(String),

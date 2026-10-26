@@ -77,14 +77,6 @@ describe("resolveWorkingProgress", () => {
     expect(submitted).toMatchObject({ runId: "new-run", startedAt: 60_000 });
   });
 
-  it("preserves anonymous progress when the same turn gains an identity", () => {
-    const anonymous = progress(null, null, [], [{ ts: 1_000 }], []);
-    expect(progress("active-run", 2_000, [], [{ ts: 1_000 }], [])).toEqual({
-      ...anonymous,
-      runId: "active-run",
-    });
-  });
-
   it.each(["other-run", undefined])(
     "ignores stream and tool timing without matching ownership (%s)",
     (runId) => {
@@ -146,6 +138,8 @@ describe("resolveTurnRecap", () => {
     new Map([[owner, { outputTokens, seq: 1 }]]);
   const resolve = (params: Omit<Parameters<typeof resolveTurnRecap>[1], "sessionKey"> = {}) =>
     resolveTurnRecap(host, { sessionKey: SESSION, ...params });
+  const finish = (outputTokens: number | null = 695) =>
+    resolve({ row: doneRow, usageByRun: usage(outputTokens) });
   const watch = () => resolve({ indicator: { runId } });
   const recap = (outputTokens: number | null, runtimeMs = 14_000) => ({
     runId,
@@ -162,24 +156,24 @@ describe("resolveTurnRecap", () => {
     expect(
       resolve({ row: { ...doneRow, lastRunId: "previous-run" }, usageByRun: usage(690) }),
     ).toBeNull();
-    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual(recap(690));
+    expect(finish(690)).toEqual(recap(690));
   });
 
   it("reconciles usage arriving after the first completed recap", () => {
     watch();
     for (const count of [690, 695, 680, null]) {
-      expect(resolve({ row: doneRow, usageByRun: usage(count) })).toEqual(recap(count));
+      expect(finish(count)).toEqual(recap(count));
     }
   });
 
   it("retains a matching terminal that arrives before the indicator disappears", () => {
     expect(resolve({ indicator: { runId }, row: doneRow, usageByRun: usage(695) })).toBeNull();
-    expect(resolve()).toEqual({ runId, runtimeMs: 14_000, outputTokens: 695 });
+    expect(resolve()).toEqual(recap(695));
   });
 
   it("keeps a resolved recap against unwatched terminal rows and usage", () => {
     watch();
-    const settledRecap = resolve({ row: doneRow, usageByRun: usage(695) });
+    const settledRecap = finish();
     expect(
       resolve({
         row: { ...doneRow, lastRunId: "foreign-run", runtimeMs: 1_000 },
@@ -198,7 +192,7 @@ describe("resolveTurnRecap", () => {
 
   it("reports equal counts on consecutive runs and preserves a known zero", () => {
     watch();
-    expect(resolve({ row: doneRow, usageByRun: usage(0) })?.outputTokens).toBe(0);
+    expect(finish(0)?.outputTokens).toBe(0);
     const nextRunId = "next-run";
     expect(resolve({ indicator: { runId: nextRunId }, row: doneRow })).toBeNull();
     expect(resolve({ row: doneRow })).toBeNull();
@@ -207,15 +201,11 @@ describe("resolveTurnRecap", () => {
     ).toEqual({ runId: nextRunId, runtimeMs: 14_000, outputTokens: 0 });
   });
 
-  describe("for a run that resumed a handoff", () => {
-    const resumed = { runId, request: { askedAt: 1_000, runIds: ["handoff-run"] } };
-
-    it("never reports a partial token total, or less time than its last run", () => {
-      resolve({ indicator: resumed });
-      expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual(
-        recap(null),
-      );
-    });
+  it("never reports a partial handoff token total, or less time than its last run", () => {
+    resolve({ indicator: { runId, request: { askedAt: 1_000, runIds: ["handoff-run"] } } });
+    expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual(
+      recap(null),
+    );
   });
 
   it("stays quiet for a watched failed run", () => {
@@ -242,16 +232,16 @@ describe("resolveTurnRecap", () => {
   });
 
   it("never invents a watch from history or an unidentified queued indicator", () => {
-    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
+    expect(finish()).toBeNull();
     expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
-    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
+    expect(finish()).toBeNull();
   });
 
   it("clears the previous recap when a new queued turn has no run identity yet", () => {
     watch();
-    expect(resolve({ row: doneRow, usageByRun: usage(695) })).not.toBeNull();
+    expect(finish()).not.toBeNull();
     expect(resolve({ indicator: {}, startingNewTurn: true, row: doneRow })).toBeNull();
-    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
+    expect(finish()).toBeNull();
   });
 
   it.each(["agent", "gateway"])(

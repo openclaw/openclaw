@@ -22,6 +22,20 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 type Subscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 type Subscribe = SessionCapability["subscribeMessages"];
 type Unsubscribe = SessionCapability["unsubscribeMessages"];
+const previousSubscription = { key: "agent:main:previous", agentId: null };
+function observe<T>(read: () => T) {
+  const values: T[] = [];
+  onTestFinished(
+    createRoot((stop) => {
+      createEffect(read, (value) => {
+        values.push(value);
+      });
+      return stop;
+    }),
+  );
+  flush();
+  return values;
+}
 function silenceReleaseWarning() {
   const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
   onTestFinished(() => warning.mockRestore());
@@ -66,27 +80,20 @@ function createSubscriptionState(options?: {
     chatSessionMessageSubscription: options?.previous ?? null,
     sessions: { ...host.sessions, subscribeMessages, unsubscribeMessages },
   } satisfies Parameters<typeof syncSubscription>[0];
-  const publishedLoads: Array<ReturnType<typeof historyLoad>> = [];
-  const dispose = createRoot((stop) => {
-    projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
-    createEffect(
-      () => historyLoad(state),
-      (load) => {
-        publishedLoads.push(load);
-      },
-    );
-    return stop;
-  });
-  onTestFinished(dispose);
-  flush();
+  onTestFinished(
+    createRoot((stop) => {
+      projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+      return stop;
+    }),
+  );
+  const publishedLoads = observe(() => historyLoad(state).phase);
   return { selected, state, subscribeMessages, unsubscribeMessages, publishedLoads };
 }
 
 it("makes the new subscription ready before the old unsubscribe settles", async () => {
-  const previous = { key: "agent:main:previous", agentId: null };
   const release = createDeferred();
   const { state, selected, unsubscribeMessages } = createSubscriptionState({
-    previous,
+    previous: previousSubscription,
     unsubscribeMessages: vi.fn(() => release.promise),
   });
   const sync = syncSubscription(state);
@@ -206,25 +213,23 @@ it.each([
 
 it("keeps a successful replacement and warns when the previous release fails", async () => {
   const warning = silenceReleaseWarning();
-  const previous = { key: "agent:main:previous", agentId: null } satisfies Subscription;
   const unsubscribeMessages = vi
     .fn<Unsubscribe>()
     .mockRejectedValueOnce(new Error("Previous observer release failed"))
     .mockResolvedValueOnce(undefined);
   const { selected, state, publishedLoads } = createSubscriptionState({
-    previous,
+    previous: previousSubscription,
     unsubscribeMessages,
   });
 
   await expect(syncSubscription(state)).resolves.toBe(true);
 
   expect(state.chatSessionMessageSubscription).toBe(selected);
-  expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(previous);
+  expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(previousSubscription);
   expect(warning).toHaveBeenCalledOnce();
-  expect(historyLoad(state).phase).toBe("idle");
   expect(state).toMatchObject({ lastError: null, chatError: null });
   flush();
-  expect(publishedLoads.map((load) => load.phase)).toEqual(["idle"]);
+  expect(publishedLoads).toEqual(["idle"]);
   expect(state.chatLoading).toBe(false);
   state.lastError = "Sending the message failed";
   state.chatError = "Sending the message failed";
@@ -234,14 +239,13 @@ it("keeps a successful replacement and warns when the previous release fails", a
   flush();
 
   expect(state.chatSessionMessageSubscription).toEqual(selected);
-  expect(historyLoad(state).phase).toBe("idle");
   expect(state).toMatchObject({
     lastError: "Sending the message failed",
     chatError: "Sending the message failed",
     sessionsError: "Session list refresh failed",
   });
   expect(unsubscribeMessages).toHaveBeenCalledOnce();
-  expect(publishedLoads.map((load) => load.phase)).toEqual(["idle"]);
+  expect(publishedLoads).toEqual(["idle"]);
   expect(state.chatLoading).toBe(false);
 });
 
@@ -265,24 +269,13 @@ it.each(["dispose", "reconnect"])(
 
     expect(state).toMatchObject({ lastError: null, chatError: null });
     flush();
-    expect(publishedLoads.map((load) => load.phase)).toEqual(["idle"]);
+    expect(publishedLoads).toEqual(["idle"]);
   },
 );
 it("publishes accepted-history removal while loading stays idle", () => {
   const { state } = createSubscriptionState();
   state.currentSessionId = "accepted-session";
-  const accepted: Array<string | undefined> = [];
-  const dispose = createRoot((stop) => {
-    createEffect(
-      () => acceptedHistory(state)?.sessionId,
-      (sessionId) => {
-        accepted.push(sessionId);
-      },
-    );
-    return stop;
-  });
-  onTestFinished(dispose);
-  flush();
+  const accepted = observe(() => acceptedHistory(state)?.sessionId);
   setChatHistoryLoad(state, {
     phase: "committed",
     sessions: state.sessions,
@@ -321,17 +314,7 @@ it("clears stale approvals while switching the selected global agent", async () 
   const sync = syncSubscription(state);
   await Promise.resolve();
   const queueWhileReplacementIsPending = [...state.chatSessionApprovalQueue];
-  pending.resolve({
-    key: "global",
-    agentId: "research",
-    includeApprovals: true,
-    approvalReplay: {
-      sessionKey: "agent:research:global",
-      updatedAtMs: 2,
-      approvals: [],
-      truncated: false,
-    },
-  });
+  pending.resolve({ key: "global", agentId: "research" });
   await sync;
 
   expect(queueWhileReplacementIsPending).toEqual([]);

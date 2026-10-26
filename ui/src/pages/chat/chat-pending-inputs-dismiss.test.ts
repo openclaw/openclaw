@@ -72,7 +72,9 @@ afterEach(() => {
 });
 
 async function setup(
-  dismiss: (params: unknown) => unknown,
+  dismiss: (
+    params: unknown,
+  ) => ChatPendingInputsDismissResult | Promise<ChatPendingInputsDismissResult>,
   options: {
     canSend?: boolean;
     canDismissPendingInputs?: boolean;
@@ -86,7 +88,7 @@ async function setup(
     currentSessionId: sessionId,
     requestHandlers: {
       "chat.pendingInputs.dismiss": async (params: unknown) => {
-        const result = (await dismiss(params)) as ChatPendingInputsDismissResult;
+        const result = await dismiss(params);
         result.dismissedIds.forEach((id) => serverDismissed.add(id));
         return result;
       },
@@ -173,14 +175,6 @@ const interruptedLabel = "Dismiss interrupted message: Draft the release notes";
 const cancelledLabel = "Dismiss cancelled message: Rename the staging bucket";
 
 describe("retired pending input dismissal", () => {
-  it("offers named dismissal only on interrupted and cancelled rows", async () => {
-    const view = await setup(() => dismissed([]));
-    expect(view.dismissButtons()).toHaveLength(2);
-    expect(view.named(interruptedLabel)).not.toBeNull();
-    expect(view.named(cancelledLabel)).not.toBeNull();
-    expect(view.named(dismissAllLabel)?.textContent?.trim()).toBe("Dismiss all");
-  });
-
   it("hides every dismissal control from a viewer who cannot mutate the session", async () => {
     const view = await setup(() => dismissed([]), { canDismissPendingInputs: false });
     expect(view.hasRow("interrupted-input")).toBe(true);
@@ -191,7 +185,9 @@ describe("retired pending input dismissal", () => {
   it("lets a writer dismiss while sending is unavailable", async () => {
     const view = await setup(() => dismissed([]), { canSend: false });
     expect(view.dismissButtons()).toHaveLength(2);
-    expect(view.named(dismissAllLabel)).not.toBeNull();
+    expect(view.named(interruptedLabel)).not.toBeNull();
+    expect(view.named(cancelledLabel)).not.toBeNull();
+    expect(view.named(dismissAllLabel)?.textContent?.trim()).toBe("Dismiss all");
   });
 
   it("names text-less inputs by their attachments or image count", async () => {

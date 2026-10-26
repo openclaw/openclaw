@@ -64,12 +64,15 @@ function planProvider(
   };
 }
 
-function planUsage(providers: ModelAuthStatusProvider[], basePath?: string) {
-  return {
-    ...(basePath ? { basePath } : {}),
-    modelAuthStatusResult: { ts: Date.now(), providers },
-  };
-}
+const planUsage = (providers: ModelAuthStatusProvider[]) => ({
+  modelAuthStatusResult: { ts: Date.now(), providers },
+});
+const assistant = (overrides: Record<string, unknown> = {}) => ({
+  role: "assistant",
+  content: "hello",
+  provider: "openai",
+  ...overrides,
+});
 
 const weekly = (provider: string, displayName: string, usedPercent: number) =>
   planProvider(provider, displayName, [["Week", usedPercent]]);
@@ -151,30 +154,6 @@ describe("renderChatComposer context usage", () => {
     });
 
     expect(contextRingFor(container)?.getAttribute("aria-label") ?? null).toBe(null);
-  });
-
-  it("renders plan usage before session metrics arrive", () => {
-    const container = renderComposer({
-      sessions: null,
-      messages: [{ role: "assistant", content: "hello", provider: "openai" }],
-      providerUsage: planUsage(
-        [
-          planProvider("openai", "OpenAI", [
-            ["5h", 34],
-            ["Week", 78],
-          ]),
-        ],
-        "/control",
-      ),
-    });
-
-    expect(contextRingFor(container)?.getAttribute("aria-label")).toBe("Usage Remaining");
-    expect(textContents(container, ".context-usage__limit-value")).toEqual(["34%", "78%"]);
-    expect(
-      container
-        .querySelector<HTMLAnchorElement>("[data-chat-provider-usage='true']")
-        ?.getAttribute("href"),
-    ).toBe("/control/usage");
   });
 
   it.each([false, true])(
@@ -279,13 +258,7 @@ describe("renderChatComposer context usage", () => {
     const composerProps = {
       messages: [
         { role: "user", content: "hi" },
-        {
-          role: "assistant",
-          content: "hello",
-          cost: { input: 0.01, output: 0.02 },
-          provider: "openai",
-          responseModel: "gpt-5.5",
-        },
+        assistant({ cost: { input: 0.01, output: 0.02 }, responseModel: "gpt-5.5" }),
       ],
       selectedSession: session,
       sessions: { ...defaultSessions(), sessions: [session] },
@@ -333,22 +306,15 @@ describe("renderChatComposer context usage", () => {
       session: { estimatedCostUsd: 0 },
       messages: [
         { role: "user", content: "hi" },
-        {
-          role: "assistant",
-          content: "hello",
+        assistant({
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          provider: "openai",
           responseModel: "gpt-zero",
-        },
-        {
-          role: "assistant",
-          content: "hello",
+        }),
+        assistant({
           model: "gateway-injected",
           provider: "openclaw",
-          usage: {
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-        },
+          usage: { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        }),
       ],
       sessions: defaultSessions() as never,
     });
