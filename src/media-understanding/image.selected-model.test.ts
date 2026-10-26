@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
+import { createModelAliasMetadata } from "../agents/embedded-agent-runner/model-alias-metadata.test-support.js";
 import { createEmptyPreparedModelRuntimeFixture } from "../agents/embedded-agent-runner/model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../agents/embedded-agent-runner/model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "../agents/embedded-agent-runner/model.static-id.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,16 +14,7 @@ import { resolveImageRuntime } from "./image-model-runtime.js";
 const provider = "image-selected-model";
 const baseUrl = "https://image-selected-model.example/v1";
 const modelRoute = { provider, baseUrl, api: "openai-completions" as const };
-const metadata = (aliases: Record<string, string>) =>
-  createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: provider,
-        providers: [provider],
-        modelIdNormalization: { providers: { [provider]: { aliases } } },
-      },
-    ],
-  });
+const metadata = createModelAliasMetadata.bind(undefined, provider);
 
 it("uses supplied alias metadata exactly once despite conflicting ambient hooks", async () => {
   await withOpenClawTestState({ label: "image-selected-model" }, async (state) => {
@@ -59,7 +50,6 @@ it("uses supplied alias metadata exactly once despite conflicting ambient hooks"
         metadataSnapshot,
         createStores: () => stores,
       }),
-      agentId: "main",
       workspaceDir: state.workspaceDir,
       pluginRegistry,
       configuredRuntimeModels,
