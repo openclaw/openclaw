@@ -10,7 +10,6 @@ import type {
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
 } from "../../../context-engine/types.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 // Preserve snapshot-reader and lifecycle registration before the attempt graph loads.
@@ -377,11 +376,6 @@ vi.mock("../tool-schema-runtime.js", () => ({
 
 vi.mock("../tool-result-context-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../tool-result-context-guard.js")>()),
-  formatContextLimitTruncationNotice: (truncatedChars: number) =>
-    `[... ${Math.max(
-      1,
-      Math.floor(truncatedChars),
-    )} more characters truncated; rerun with narrower args if needed]`,
   installToolResultContextGuard: hoisted.installToolResultContextGuardMock,
   installContextEngineLoopHook: hoisted.installContextEngineLoopHookMock,
 }));
@@ -583,11 +577,6 @@ vi.mock("../thinking.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../thinking.js")>()),
   dropReasoningFromHistory: <T>(messages: T) => messages,
   dropThinkingBlocks: <T>(messages: T) => messages,
-}));
-
-vi.mock("../utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils.js")>()),
-  describeUnknownError: (error: unknown) => formatErrorMessage(error),
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
