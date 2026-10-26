@@ -852,9 +852,11 @@ src/cron/run-history-detail.ts
 src/cron/scratch-contract.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
+src/daemon/paths.ts
 src/daemon/runtime-binary.ts
 src/daemon/service-inspection-error.ts
 src/daemon/service-process-env.ts
+src/daemon/service-tmp-dir.ts
 src/gateway/chat-display-projection.helpers.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-diff-revision.ts
@@ -1329,6 +1331,7 @@ src/infra/update-managed-service-handoff-schema.ts
 src/infra/update-managed-service-handoff-scope.ts
 src/infra/update-managed-service-handoff-source-inspection.ts
 src/infra/update-managed-service-handoff-store-repair.ts
+src/infra/update-managed-service-handoff-temp-root.ts
 src/infra/update-preflight-details.ts
 src/infra/update-recovery-receipt-schema.ts
 src/infra/update-recovery.ts
