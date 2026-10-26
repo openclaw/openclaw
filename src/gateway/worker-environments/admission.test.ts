@@ -1,14 +1,18 @@
+import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import type { WorkerConnectParams } from "../../../packages/gateway-protocol/src/index.js";
-import { admitWorkerConnection } from "./admission.js";
+import { admitWorkerConnection, validateWorkerConnectionIdentity } from "./admission.js";
 import { hashWorkerCredential } from "./credential.js";
-import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import { workerCredential } from "./store.test-support.js";
 
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
-const { ready } = createDispatchEnvironmentFixtures();
-const RECEIPT = ready.bootstrapReceipt;
+const OTHER_CREDENTIAL = ["other", "credential", "fixture"].join("-");
+const RECEIPT = {
+  bundleHash: "a".repeat(64),
+  openclawVersion: "2026.7.11",
+  protocolFeatures: ["worker-heartbeat-v1"],
+};
 const STALE_RECEIPT = { ...RECEIPT, bundleHash: "b".repeat(64) };
 type Admission = WorkerConnectParams["admission"];
 type AdmissionOverrides = Partial<Omit<Admission, "sessionId" | "runId">> &
@@ -16,11 +20,17 @@ type AdmissionOverrides = Partial<Omit<Admission, "sessionId" | "runId">> &
 
 function fixture() {
   const owner = { environmentId: "worker-1", ownerEpoch: 1 };
-  const environment: WorkerEnvironmentRecord = { ...ready, ...owner };
+  const environment = {
+    ...owner,
+    state: "ready",
+    destroyRequestedAtMs: null,
+    bootstrapReceipt: RECEIPT,
+  } as WorkerEnvironmentRecord;
   const credential = {
     ...owner,
     ...workerCredential(hashWorkerCredential(CREDENTIAL)),
     bundleHash: RECEIPT.bundleHash,
+    deliveredAtMs: null,
   };
   const store = {
     get: (id: string) => (id.trim() === environment.environmentId ? environment : undefined),
@@ -49,7 +59,30 @@ function fixture() {
   return { environment, credential, params, admit, reject };
 }
 
+it("admits the complete current identity and fences it after credential rotation", () => {
+  const { admit, credential, params } = fixture();
+  const result = admit();
+  expect(result).toMatchObject({
+    ok: true,
+    identity: {
+      environmentId: "worker-1",
+      sessionId: null,
+      runId: null,
+      ownerEpoch: 1,
+      rpcSetVersion: 1,
+      protocolFeatures: ["worker-heartbeat-v1"],
+      credentialExpiresAtMs: 2_000,
+    },
+  });
+  assert(result.ok, "fixture admission failed");
+  credential.credentialHash = hashWorkerCredential(OTHER_CREDENTIAL);
+  expect(validateWorkerConnectionIdentity({ ...params, identity: result.identity })).toBe(
+    "credential-replaced",
+  );
+});
+
 it.each([
+  ["invalid-credential", { credential: OTHER_CREDENTIAL }],
   ["environment-mismatch", { environmentId: "worker-other" }],
   ["environment-mismatch", { environmentId: " worker-1 " }],
   ["bundle-mismatch", { handshake: STALE_RECEIPT }],

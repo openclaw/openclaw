@@ -24,7 +24,23 @@ it.each<[string, string[]]>([
   [" 198.51.100.42 ", ["198.51.100.42/32"]],
 ])("preserves default and trimmed override IP ranges: %j", (hostIp, allowedIps) => {
   const yaml = buildOpenShellPolicyYaml({ port: 17680, binaryPath: "/usr/bin/curl", hostIp });
-  expect(parse(yaml).network_policies.host_echo.endpoints[0].allowed_ips).toEqual(allowedIps);
+  expect(parse(yaml)).toMatchObject({
+    network_policies: {
+      host_echo: {
+        endpoints: [
+          {
+            host: "host.openshell.internal",
+            port: 17680,
+            protocol: "rest",
+            enforcement: "enforce",
+            access: "full",
+            allowed_ips: allowedIps,
+          },
+        ],
+        binaries: [{ path: "/usr/bin/curl" }],
+      },
+    },
+  });
 });
 
 it.runIf(process.platform !== "win32")("reports a signal-killed probe as failure", async () => {

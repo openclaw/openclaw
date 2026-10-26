@@ -1,55 +1,103 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 
-const [appendMessage, publishUpdate] = vi.hoisted(() => [vi.fn(), vi.fn()] as const);
+const appendMessage = vi.hoisted(() => vi.fn());
+const publishUpdate = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
   appendSessionTranscriptMessageByIdentity: appendMessage,
   publishSessionTranscriptUpdateByIdentity: publishUpdate,
 }));
 
-it("publishes a model-excluded activity once per transcript identity", async () => {
-  appendMessage
-    .mockImplementationOnce(async ({ message }: { message: unknown }) => ({
-      appended: true,
-      message,
-      messageId: "activity-message",
-    }))
-    .mockResolvedValueOnce({ appended: false, message: {}, messageId: "activity-message" });
-  const activity = {
-    sessionTarget: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      storePath: "/state/openclaw-agent.sqlite",
-    },
-    threadId: "thread-1",
-    turnId: "turn-1",
-    itemId: "compact-1",
-    timestamp: 123,
-    runId: "run-1",
-  };
+beforeEach(() => {
+  appendMessage.mockReset();
+  publishUpdate.mockReset();
+});
 
-  await persistCodexContextCompactionActivity(activity);
-  await persistCodexContextCompactionActivity(activity);
+describe("persistCodexContextCompactionActivity", () => {
+  it("publishes one model-excluded activity and leaves replay deduplication to transcript identity", async () => {
+    appendMessage
+      .mockImplementationOnce(async (params: { message: unknown }) => ({
+        appended: true,
+        message: params.message,
+        messageId: "activity-message",
+      }))
+      .mockResolvedValueOnce({
+        appended: false,
+        message: {},
+        messageId: "activity-message",
+      });
+    const params = {
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      cwd: "/workspace",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:dashboard:session-1",
+        storePath: "/state/openclaw-agent.sqlite",
+      },
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "compact-1",
+      timestamp: 123,
+    } as Parameters<typeof persistCodexContextCompactionActivity>[0];
 
-  expect(appendMessage).toHaveBeenCalledTimes(2);
-  expect(appendMessage.mock.calls[0]?.[0].message.usage).toEqual({
-    contextUsage: { state: "unavailable" },
+    await persistCodexContextCompactionActivity(params);
+    await persistCodexContextCompactionActivity(params);
+
+    expect(appendMessage).toHaveBeenCalledTimes(2);
+    expect(appendMessage.mock.calls[0]?.[0]).toMatchObject({
+      eventId: "codex-context-compaction:thread-1:turn-1:compact-1",
+      message: {
+        role: "custom",
+        customType: "openclaw.context-compaction",
+        content: "Context compacted",
+        display: true,
+        excludeFromContext: true,
+        idempotencyKey: "codex-context-compaction:thread-1:turn-1:compact-1",
+        __openclaw: { runId: "run-1", itemId: "compact-1" },
+      },
+    });
+    expect(publishUpdate).toHaveBeenCalledOnce();
+    expect(publishUpdate.mock.calls[0]?.[0]).toMatchObject({
+      update: {
+        messageId: "activity-message",
+        runId: "run-1",
+      },
+    });
   });
-  expect(appendMessage.mock.calls[0]?.[0]).toMatchObject({
-    eventId: "codex-context-compaction:thread-1:turn-1:compact-1",
-    message: {
-      role: "custom",
-      customType: "openclaw.context-compaction",
-      display: true,
-      excludeFromContext: true,
-      idempotencyKey: "codex-context-compaction:thread-1:turn-1:compact-1",
-      __openclaw: { runId: "run-1", itemId: "compact-1" },
+
+  it.each([321, 0, undefined])(
+    "records post-compaction context %s without billing it again",
+    async (tokensAfter) => {
+      await persistCodexContextCompactionActivity({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        tokensAfter,
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          storePath: "/state/openclaw-agent.sqlite",
+        },
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "compact-1",
+        timestamp: 123,
+      });
+
+      expect(appendMessage.mock.calls[0]?.[0].message).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      });
+      expect(appendMessage.mock.calls[0]?.[0].message.usage).toEqual({
+        contextUsage:
+          tokensAfter === undefined
+            ? { state: "unavailable" }
+            : { state: "available", promptTokens: tokensAfter, totalTokens: tokensAfter },
+      });
     },
-  });
-  expect(publishUpdate).toHaveBeenCalledOnce();
-  expect(publishUpdate.mock.calls[0]?.[0]).toMatchObject({
-    update: { messageId: "activity-message", runId: "run-1" },
-  });
+  );
 });

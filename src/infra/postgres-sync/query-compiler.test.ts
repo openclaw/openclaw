@@ -46,6 +46,22 @@ describe("PostgreSQL string-set compilation", () => {
     );
   });
 
+  it.each([
+    [[], "{}"],
+    [['"', "\\", ",", "{", "}"], '{"\\\"","\\\\",",","{","}"}'],
+    [[" leading", "trailing ", "", "NULL"], '{" leading","trailing ","","NULL"}'],
+    [["λ🦞", "\ud800", "\udfff"], '{"λ🦞","�","�"}'],
+    [["a", "a", "line\nnext"], '{"a","a","line\nnext"}'],
+  ])("encodes PostgreSQL array elements exactly: %j", (values, encoded) => {
+    const compiled = postgres
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "in", sqliteStringSet(values))
+      .compile();
+    expect(compiled.sql).toBe('select * from "items" where "id" = ANY($1::text[])');
+    expect(compiled.parameters).toEqual([encoded]);
+  });
+
   it.each(["null", '["a",null]', "[1]", "{}", "[invalid", '["a\\x00b"]'])(
     "keeps the existing lowering for unsupported input %s",
     (encoded) => {
