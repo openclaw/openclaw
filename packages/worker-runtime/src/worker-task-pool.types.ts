@@ -78,6 +78,8 @@ export type WorkerTaskOptions<Input> = {
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
 export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Retained owners may exclude queueing behind owner-controlled work from their budget. */
+  timeoutFrom?: "dispatch";
   /** Host diagnostics classify this operation before publishing bounded labels. */
   diagnosticOperation?: string;
   /** Optional shared sequence word; wakeups are hints, never task receipts. */

@@ -497,7 +497,14 @@ it("shares one worker while a sibling capture waits on host publication", async 
       try {
         // Resolve synchronously before the sibling's result continuation can run.
         // The shared transport must service and release its preceding capture.
-        first.artifact.prepareModule(first.artifact.resolve(fixture.entry));
+        const now = performance.now();
+        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 30_001);
+        clock.mockReturnValueOnce(now);
+        try {
+          first.artifact.prepareModule(first.artifact.resolve(fixture.entry));
+        } finally {
+          clock.mockRestore();
+        }
         await Promise.race([
           started,
           preparing.then(() => {

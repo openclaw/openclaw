@@ -93,7 +93,8 @@ function createPreparationPool(nativeSource: RetainedNativeWorkerSource) {
       return retired;
     },
     startTask(...args: Parameters<typeof pool.startTask>) {
-      const task = pool.startTask(...args);
+      // A sibling's owner-controlled capture must not consume this call's deadline.
+      const task = pool.startTask(args[0], { ...args[1], timeoutFrom: "dispatch" });
       tasks.add(task);
       // Physical task custody ends with its reply. Artifact custody continues until
       // its own disposal, independently of host-side admission publication.
