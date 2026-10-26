@@ -21,16 +21,8 @@ function greeting(options: Partial<Parameters<typeof createOutboundGreetingContr
     instructions: "Exact opening",
     ...options,
   });
-  const ready = () =>
-    controller.onReady({ triggerGreeting } as unknown as RealtimeVoiceBridgeSession);
-  return { controller, triggerGreeting, ready };
-}
-
-function amdCall(): Pick<CallRecord, "direction" | "metadata"> {
-  return {
-    direction: "outbound",
-    metadata: { voicemailManagedByHost: true, mode: "conversation" },
-  };
+  controller.onReady({ triggerGreeting } as unknown as RealtimeVoiceBridgeSession);
+  return { controller, triggerGreeting };
 }
 
 function activity(isPaused?: () => boolean) {
@@ -42,20 +34,22 @@ function activity(isPaused?: () => boolean) {
     onMediaWarning: vi.fn(),
     onMediaTimeout: vi.fn(),
   });
-  return { controller, onIdle };
+  const elapse = async (ms: number, calls = 0) => {
+    await vi.advanceTimersByTimeAsync(ms);
+    expect(onIdle).toHaveBeenCalledTimes(calls);
+  };
+  return { controller, elapse };
 }
 
 describe("realtime call activity pause", () => {
-  it("does not time speech idle while the opening hold is active", () => {
+  it("does not time speech idle while the opening hold is active", async () => {
     let paused = true;
-    const { controller, onIdle } = activity(() => paused);
+    const { controller, elapse } = activity(() => paused);
     controller.start();
-    vi.advanceTimersByTime(5_000);
-    expect(onIdle).not.toHaveBeenCalled();
+    await elapse(5_000);
     paused = false;
     controller.noteSpeech();
-    vi.advanceTimersByTime(1_000);
-    expect(onIdle).toHaveBeenCalledTimes(1);
+    await elapse(1_000, 1);
   });
 });
 
@@ -103,9 +97,7 @@ describe("realtime call session control", () => {
   );
 
   it("uses the outbound greeting fallback once after three seconds", async () => {
-    const { triggerGreeting, ready } = greeting({ instructions: "Exact greeting" });
-
-    ready();
+    const { triggerGreeting } = greeting({ instructions: "Exact greeting" });
     await vi.advanceTimersByTimeAsync(2_999);
     expect(triggerGreeting).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -124,12 +116,14 @@ describe("realtime call session control", () => {
   ] as const)(
     "holds the realtime opening until AMD resolves (%s, cap=%d)",
     async (classification, holdOpeningMaxMs) => {
-      const call = amdCall();
-      const { controller, triggerGreeting, ready } = greeting({
+      const call: Pick<CallRecord, "direction" | "metadata"> = {
+        direction: "outbound",
+        metadata: { voicemailManagedByHost: true, mode: "conversation" },
+      };
+      const { controller, triggerGreeting } = greeting({
         call,
         ...(holdOpeningMaxMs === 45_000 ? { holdOpeningMaxMs } : {}),
       });
-      ready();
       if (classification === "closed") {
         controller.close();
         await vi.advanceTimersByTimeAsync(holdOpeningMaxMs);
@@ -166,26 +160,20 @@ describe("realtime call session control", () => {
   );
 
   it("starts idle monitoring on media activation and pauses it during consults", async () => {
-    const { controller, onIdle } = activity();
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onIdle).not.toHaveBeenCalled();
+    const { controller, elapse } = activity();
+    await elapse(2_000);
     controller.start();
     controller.noteSpeech();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(onIdle).not.toHaveBeenCalled();
+    await elapse(999);
     controller.beginConsult();
     controller.beginConsult();
     expect(controller.isPaused()).toBe(true);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onIdle).not.toHaveBeenCalled();
+    await elapse(2_000);
     controller.endConsult();
     expect(controller.isPaused()).toBe(true);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onIdle).not.toHaveBeenCalled();
+    await elapse(2_000);
     controller.endConsult();
     expect(controller.isPaused()).toBe(false);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(onIdle).toHaveBeenCalledOnce();
+    await elapse(1_000, 1);
   });
 });

@@ -6,7 +6,7 @@ import { onTestFinished, vi } from "vitest";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord } from "../types.js";
-import { RealtimeCallHandler } from "./realtime-handler.js";
+import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 export function makeCall(providerCallId: string, overrides: Partial<CallRecord> = {}): CallRecord {
@@ -38,6 +38,23 @@ export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): Realti
     triggerGreeting: () => {},
     ...overrides,
   };
+}
+
+export function managedHandler(
+  config: ConstructorParameters<typeof RealtimeCallHandler>[0],
+  manager: CallManager,
+  resolve: ResolveRealtimeCallRegistration,
+  lifecycle = new StreamDisconnectGrace(() => {}),
+) {
+  const handler = new RealtimeCallHandler(config, manager, resolve, "/voice/webhook", lifecycle);
+  onTestFinished(async () => {
+    try {
+      await handler.close();
+    } finally {
+      lifecycle.close();
+    }
+  });
+  return handler;
 }
 
 export function makeHandler(params: {
@@ -77,27 +94,13 @@ export function makeHandler(params: {
     getCallForStream: vi.fn(async () => params.call),
     getCallByProviderCallId: vi.fn(() => params.call),
   } as unknown as CallManager;
-  const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
-  const handler = new RealtimeCallHandler(
-    config,
-    manager,
-    () => ({
-      agentId: "main",
-      instructions: config.instructions,
-      provider,
-      providerConfig: { apiKey: "test-key" },
-      capabilities: provider.capabilities,
-    }),
-    "/voice/webhook",
-    streamDisconnectLifecycle,
-  );
-  onTestFinished(async () => {
-    try {
-      await handler.close();
-    } finally {
-      streamDisconnectLifecycle.close();
-    }
-  });
+  const handler = managedHandler(config, manager, () => ({
+    agentId: "main",
+    instructions: config.instructions,
+    provider,
+    providerConfig: { apiKey: "test-key" },
+    capabilities: provider.capabilities,
+  }));
   handler.setPublicUrl("https://public.example/voice/webhook");
   return { handler, manager, processEvent, endCall };
 }

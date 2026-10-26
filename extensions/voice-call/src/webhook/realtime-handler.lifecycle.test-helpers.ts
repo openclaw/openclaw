@@ -8,9 +8,9 @@ import { onTestFinished, vi } from "vitest";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import { connectWs, startUpgradeWsServer } from "../websocket-test-support.js";
-import { makeBridge, makeCall } from "./realtime-call-control.test-helpers.js";
-import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
-import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
+import { makeBridge, makeCall, managedHandler } from "./realtime-call-control.test-helpers.js";
+import type { RealtimeCallHandler, ResolveRealtimeCallRegistration } from "./realtime-handler.js";
+import type { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 export const updateCallMetadata: CallManager["updateCallMetadata"] = async (call, update) => {
   call.metadata = update(call.metadata);
@@ -87,9 +87,7 @@ export function createCarrierLifecycleHarness(
         }
       }),
   );
-  const streamDisconnectLifecycle =
-    options.streamDisconnectLifecycle ?? new StreamDisconnectGrace(() => {});
-  const handler = new RealtimeCallHandler(
+  const handler = managedHandler(
     {
       ...createRealtimeConfig(),
       ...(options.toolPolicy ? { toolPolicy: options.toolPolicy } : {}),
@@ -107,16 +105,8 @@ export function createCarrierLifecycleHarness(
         provider: realtimeProvider,
         providerConfig: { apiKey: "test-key" },
       })),
-    "/voice/webhook",
-    streamDisconnectLifecycle,
+    options.streamDisconnectLifecycle,
   );
-  onTestFinished(async () => {
-    try {
-      await handler.close();
-    } finally {
-      streamDisconnectLifecycle.close();
-    }
-  });
   return { call, endCall, handler, processEvent };
 }
 

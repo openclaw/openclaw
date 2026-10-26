@@ -21,8 +21,6 @@ const dnsResult = () =>
     stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
   });
 const route = { path: "/voice", localUrl: "http://127.0.0.1:8787/webhook" };
-const funnel = ["tailscale", "funnel", "--bg", "--yes", "--set-path"];
-const funnel8443 = ["tailscale", "funnel", "--bg", "--yes", "--https", "8443", "--set-path"];
 function config(mode: VoiceCallConfig["tailscale"]["mode"], port = 443, realtime = false) {
   const base = createVoiceCallBaseConfig();
   base.tailscale = { mode, port, path: realtime ? "/voice/webhook" : "/voice" };
@@ -67,17 +65,49 @@ describe("voice-call tailscale helpers", () => {
     );
   });
 
-  it.each(["serve", "funnel"] as const)("sets up and cleans up %s exposure", async (mode) => {
-    runCommandMock.mockResolvedValueOnce(dnsResult());
-    await expect(setupTailscaleExposure(config(mode))).resolves.toBe(
-      "https://bot.example.ts.net/voice",
-    );
-    await cleanupTailscaleExposure(config(mode));
-    expect(commands().slice(1)).toEqual([
-      ["tailscale", mode, "--bg", "--yes", "--set-path", route.path, route.localUrl],
-      ["tailscale", mode, "off", route.path],
-    ]);
-  });
+  it.each([
+    ["serve", 443, false, false],
+    ["funnel", 443, false, false],
+    ["funnel", 443, false, true],
+    ["funnel", 443, true, true],
+    ["funnel", 8443, true, false],
+  ] as const)(
+    "mounts and cleans up %s:%d realtime=%s streaming=%s",
+    async (mode, port, realtime, streaming) => {
+      mockRoutes();
+      const cfg = config(mode, port, realtime);
+      if (streaming) {
+        cfg.tailscale.path = "/edge/voice/webhook";
+        cfg.serve.path = "/voice/webhook";
+        cfg.realtime.streamPath = "/voice/stream";
+      }
+      cfg.streaming.enabled = streaming;
+      const paths: Array<[string, string]> = [[cfg.tailscale.path, cfg.serve.path]];
+      if (streaming || realtime) {
+        const streamPath = streaming ? "/voice/stream" : "/voice/stream/realtime";
+        paths.push([streamPath, streamPath]);
+      }
+      const prefix = ["tailscale", mode, "--bg", "--yes"];
+      if (port === 8443) {
+        prefix.push("--https", "8443");
+      }
+      prefix.push("--set-path");
+      await expect(setupTailscaleExposure(cfg)).resolves.toBe(
+        `https://bot.example.ts.net${port === 443 ? "" : ":8443"}${cfg.tailscale.path}`,
+      );
+      await cleanupTailscaleExposure(cfg);
+      const expected = [["tailscale", "status", "--json", "--peers=false"]];
+      for (const [publicPath, localPath] of paths) {
+        expected.push([...prefix, publicPath, `http://127.0.0.1:8787${localPath}`]);
+      }
+      for (const [publicPath] of paths) {
+        expected.push(
+          port === 443 ? ["tailscale", mode, "off", publicPath] : [...prefix, publicPath, "off"],
+        );
+      }
+      expect(commands()).toEqual(expected);
+    },
+  );
 
   it("returns null when setup cannot resolve dns or route activation fails", async () => {
     runCommandMock
@@ -94,40 +124,6 @@ describe("voice-call tailscale helpers", () => {
     await expect(setupTailscaleExposure(config("off"))).resolves.toBeNull();
     await cleanupTailscaleExposure(config("off"));
     expect(runCommandMock).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])("mounts and cleans up streaming once (realtime=%s)", async (enabled) => {
-    mockRoutes();
-    const voiceCallConfig = config("funnel");
-    voiceCallConfig.tailscale.path = "/edge/voice/webhook";
-    voiceCallConfig.serve.path = "/voice/webhook";
-    Object.assign(voiceCallConfig.realtime, { enabled, streamPath: "/voice/stream" });
-    voiceCallConfig.streaming.enabled = true;
-
-    await setupTailscaleExposure(voiceCallConfig);
-    await cleanupTailscaleExposure(voiceCallConfig);
-
-    expectCommand([...funnel, "/voice/stream", "http://127.0.0.1:8787/voice/stream"]);
-    expectCommand(["tailscale", "funnel", "off", "/voice/stream"]);
-    expect(commands().filter((command) => command[5] === "/voice/stream")).toHaveLength(1);
-  });
-
-  it("uses HTTPS 8443 for legacy webhook and realtime routes and cleanup", async () => {
-    mockRoutes();
-    const voiceCallConfig = config("funnel", 8443, true);
-
-    await expect(setupTailscaleExposure(voiceCallConfig)).resolves.toBe(
-      "https://bot.example.ts.net:8443/voice/webhook",
-    );
-    await cleanupTailscaleExposure(voiceCallConfig);
-
-    expect(commands()).toEqual([
-      ["tailscale", "status", "--json", "--peers=false"],
-      [...funnel8443, "/voice/webhook", "http://127.0.0.1:8787/voice/webhook"],
-      [...funnel8443, "/voice/stream/realtime", "http://127.0.0.1:8787/voice/stream/realtime"],
-      [...funnel8443, "/voice/webhook", "off"],
-      [...funnel8443, "/voice/stream/realtime", "off"],
-    ]);
   });
 
   it("rolls back direct exposure when a stream route cannot be mounted", async () => {
