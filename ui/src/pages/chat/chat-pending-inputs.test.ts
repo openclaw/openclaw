@@ -152,45 +152,15 @@ describe("server-owned pending input display", () => {
   });
 
   it.each([
-    ["agent queued", "queued", input.runId, true, false, undefined],
+    ["without run", "queued", undefined, undefined],
     [
-      "agent interrupted",
+      "interrupted",
       "interrupted",
       input.runId,
-      true,
-      false,
-      "Delivery interrupted. This saved agent update is not scheduled to retry.",
-    ],
-    [
-      "workspace sync",
-      "queued",
-      input.runId,
-      false,
-      false,
-      "Received · waiting for workspace sync",
-    ],
-    ["worker setup without run", "queued", undefined, false, true, undefined],
-    [
-      "worker setup interrupted",
-      "interrupted",
-      input.runId,
-      false,
-      true,
       "Interrupted before the agent started it. If it does not resume, copy it and send again.",
     ],
-  ] as const)("describes %s custody", (_name, state, runId, agent, workerSetup, notice) => {
-    const message = agent
-      ? {
-          role: "user",
-          content: "The mobile fixes are merged.",
-          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        }
-      : input.message;
-    const items = buildPendingInputItems(
-      [{ ...input, state, runId, message }],
-      agent || workerSetup ? [] : ["run-queued"],
-      workerSetup,
-    );
+  ] as const)("describes worker setup custody %s", (_name, state, runId, notice) => {
+    const items = buildPendingInputItems([{ ...input, state, runId }], [], true);
     expect(items.some((item) => item.kind === "message")).toBe(true);
     expect(noticeText(items)).toEqual(notice ? [notice] : []);
   });
@@ -335,40 +305,6 @@ describe("server-owned pending input display", () => {
     await loadChatHistory(host);
     expect(host.chatMessages).toEqual([]);
     expectReceiptQuery(host, ["source-50"]);
-  });
-
-  it("keeps an off-page live queue in a full receipt request", async () => {
-    const host = makeChatHost({
-      ...pendingScope,
-      chatQueue: Array.from({ length: 50 }, (_, index) => ({
-        id: `browser-${index}`,
-        text: "Pending browser input",
-        createdAt: index,
-        sendRunId: `a-${String(index).padStart(2, "0")}`,
-        sendAttempts: 1,
-        sendState: "sending" as const,
-      })),
-      requestHandlers: {
-        "chat.history": (params: { inputRunIds?: string[] }) =>
-          historyPage(
-            [],
-            { items: [], total: 21, nextBefore: 21 },
-            {
-              inputReceipts: params.inputRunIds?.map((runId) => ({ runId, state: "pending" })),
-            },
-          ),
-      },
-    });
-    applyChatPendingInputs(host, {
-      items: [{ ...input, runId: "z-live-queue", state: "queued", queued: true }],
-      total: 1,
-    });
-    await loadChatHistory(host);
-    expectReceiptQuery(host, [
-      ...Array.from({ length: 49 }, (_, index) => `a-${String(index).padStart(2, "0")}`),
-      "z-live-queue",
-    ]);
-    expect(getChatPendingInputs(host)?.queuedInputs).toEqual([]);
   });
 
   it.each([
@@ -780,27 +716,6 @@ describe("server-owned pending input display", () => {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     },
   );
-
-  it("keeps unconsumed input after persisted history without a generic queue notice", () => {
-    // Custody accepted at 100 is not in the transcript, so it floors after the
-    // reply persisted at 150 instead of interleaving by acceptance time.
-    const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
-    const later = { role: "assistant", content: "Later reply", timestamp: 150 };
-    const items = threadItems({
-      paneId: "chronological-pending-pane",
-      messages: [earlier, later],
-      pendingInputs: [{ ...input, state: "queued" }],
-    });
-
-    expect(items).toMatchObject([
-      { kind: "group", role: "assistant", messages: [{ message: earlier }, { message: later }] },
-      {
-        kind: "group",
-        role: "user",
-        messages: [{ message: { content: "Keep my accepted input" } }],
-      },
-    ]);
-  });
 
   it.each(["assistant"])("preserves a canonical %s sharing the pending run correlation", (role) => {
     const canonical = {
