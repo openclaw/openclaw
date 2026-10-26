@@ -171,7 +171,7 @@ describe("Codex app-server attempt context", () => {
     ]);
   });
 
-  it("hashes immutable schemas once while mutable and replacement schemas stay current", () => {
+  it("reuses each Codex definition hash until its schema JSON changes", () => {
     const stabilize = vi.spyOn(fingerprints, "stabilizeJsonValue");
     const frozen = Object.freeze({
       type: "object",
@@ -180,6 +180,7 @@ describe("Codex app-server attempt context", () => {
     const mutable = { type: "object", properties: { query: { type: "string" } } };
     const shallow = Object.freeze(mutable);
     const tool = makeTool("search", { inputSchema: frozen });
+    const otherTool = makeTool("lookup", { inputSchema: shallow });
     const params: Parameters<typeof buildCodexSystemPromptReport>[0] = {
       attempt: { sessionId: "report" } as EmbeddedRunAttemptParams,
       sessionKey: "agent:main:report",
@@ -195,11 +196,12 @@ describe("Codex app-server attempt context", () => {
         .update(`{"properties":{"query":{"type":"${type}"}},"type":"object"}`)
         .digest("hex");
     expect(report()?.schemaHash).toBe(expectedHash("string"));
-    tool.inputSchema = shallow;
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    params.tools = [otherTool];
     expect(report()?.schemaHash).toBe(expectedHash("string"));
     mutable.properties.query.type = "integer";
     expect(report()?.schemaHash).toBe(expectedHash("integer"));
-    tool.inputSchema = frozen;
+    params.tools = [tool];
     expect(report()?.schemaHash).toBe(expectedHash("string"));
     const replacement = Object.freeze({
       type: "object",
@@ -207,8 +209,10 @@ describe("Codex app-server attempt context", () => {
     });
     tool.inputSchema = replacement;
     expect(report()?.schemaHash).toBe(expectedHash("boolean"));
-    tool.inputSchema = frozen;
-    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    params.tools = [otherTool];
+    expect(report()?.schemaHash).toBe(expectedHash("integer"));
+    params.tools = [tool];
+    expect(report()?.schemaHash).toBe(expectedHash("boolean"));
     expect(stabilize.mock.calls.filter(([schema]) => schema === frozen)).toHaveLength(1);
     expect(stabilize.mock.calls.filter(([schema]) => schema === shallow)).toHaveLength(2);
     expect(stabilize.mock.calls.filter(([schema]) => schema === replacement)).toHaveLength(1);

@@ -2,15 +2,18 @@
  * Codex report owner probe (40 tools, nested synthetic schemas).
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/codex-tool-report-measure.ts
  * --iterations 2000 --samples 5; run unchanged on base and candidate.
+ * --module <path> selects a baseline owner with the same dependencies.
+ * Run five base/candidate pairs, reversing launch order on alternate pairs.
  * CPU passes are untraced; separate allocation passes include collected objects.
  */
 import assert from "node:assert/strict";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { buildCodexSystemPromptReport } from "../../extensions/codex/src/app-server/attempt-context.js";
+import * as current from "../../extensions/codex/src/app-server/attempt-context.js";
 import type { CodexDynamicToolSpec } from "../../extensions/codex/src/app-server/protocol.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
@@ -18,6 +21,7 @@ const { values } = parseArgs({
   options: {
     iterations: { type: "string", default: "2000" },
     samples: { type: "string", default: "5" },
+    module: { type: "string" },
   },
 });
 const iterations = parseStrictIntegerOption({
@@ -32,6 +36,9 @@ const samples = parseStrictIntegerOption({
   min: 1,
   fallback: 5,
 });
+const { buildCodexSystemPromptReport }: typeof current = values.module
+  ? await import(pathToFileURL(values.module).href)
+  : current;
 assert.ok(globalThis.gc, "Run with --expose-gc");
 const tools: CodexDynamicToolSpec[] = Array.from({ length: 40 }, (_tool, index) => ({
   type: "function",
