@@ -46,11 +46,7 @@ it.each([
   const row = (key: string, ref = key): TestContentRow => ({
     kind: "content",
     key,
-    content: (
-      <div ref={refs.forKey(ref)} class="chat-bubble" data-entry-id={key}>
-        {key}
-      </div>
-    ),
+    content: <div ref={refs.forKey(ref)} class="chat-bubble" data-entry-id={key} />,
   });
   const rows = [row("first", projected ? "optimistic-first" : "first"), row("second")];
   const { container, session, renderRows } = await mountTestTranscript(

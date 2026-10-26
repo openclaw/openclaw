@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it, onTestFinished } from "vitest";
-import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
 import { getChatAttachmentBlob, getChatAttachmentDataUrl } from "../attachment-payload-store.ts";
 import { createAttachmentDraft } from "./chat-attachment-preparation.test-support.ts";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
@@ -8,8 +7,8 @@ import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 const browserMode = "__vitest_browser__" in globalThis;
 
 describe.runIf(browserMode)("oversized composer images", () => {
-  let source: File;
-  beforeAll(async () => {
+  let source: string;
+  beforeAll(() => {
     const canvas = document.createElement("canvas");
     Object.assign(canvas, { width: 1600, height: 1000 });
     const context = expectDefined(canvas.getContext("2d"), "fixture canvas");
@@ -24,13 +23,9 @@ describe.runIf(browserMode)("oversized composer images", () => {
     // Keep one transparent region to catch accidental conversion to opaque JPEG.
     pixels.data.fill(0, 0, canvas.width * 4 * 20);
     context.putImageData(pixels, 0, 0);
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, "image/png");
-    });
-    const png = expectDefined(blob, "fixture PNG");
-    source = new File([png], "screenshot.png", { type: "image/png" });
+    source = canvas.toDataURL("image/png");
     canvas.width = canvas.height = 0;
-    expect(source.size).toBeGreaterThan(5 * 1024 * 1024);
+    expect(atob(source.split(",")[1]!).length).toBeGreaterThan(5 * 1024 * 1024);
   });
 
   it("resizes an oversized data-URL paste before publishing a bounded transparent PNG", async () => {
@@ -42,8 +37,7 @@ describe.runIf(browserMode)("oversized composer images", () => {
     });
     onTestFinished(dispose);
     const transfer = new DataTransfer();
-    const sourceBytes = bytesToBase64(new Uint8Array(await source.arrayBuffer()));
-    transfer.setData("text/plain", `data:image/png;base64,${sourceBytes}`);
+    transfer.setData("text/plain", source);
     handleChatAttachmentPaste(new ClipboardEvent("paste", { clipboardData: transfer }), props);
     expect(reads.pendingReads).toBe(1);
     expect(attachments()).toEqual([]);

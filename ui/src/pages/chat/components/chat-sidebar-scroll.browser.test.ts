@@ -9,50 +9,6 @@ import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 
-async function mountDetailPanel(host: "Review" | "Files", content: ChatDetailPanelContent) {
-  const container = createChatSidebarContainer();
-  container.className = "side-panel__panel";
-  container.style.cssText = "width:480px;height:320px;";
-  const detailPanel = document.createElement("openclaw-chat-detail-panel");
-  detailPanel.className = "chat-sidebar";
-  detailPanel.embedded = true;
-  detailPanel.content = content;
-  const files = host === "Files" ? document.createElement("openclaw-chat-files-panel") : null;
-  if (files) {
-    files.previews = [{ id: "preview", label: "Long preview", content }];
-    files.activeId = "preview";
-    files.renderDetail = () => detailPanel;
-    files.onSelect = (id) => {
-      files.activeId = id;
-    };
-  }
-  container.append(files ?? detailPanel);
-  document.body.append(container);
-  onTestFinished(() => container.remove());
-  await files?.updateComplete;
-  const panel = detailPanel;
-  await panel.updateComplete;
-
-  return {
-    panel,
-    hideAndReselect: async () => {
-      for (const visible of [false, true]) {
-        if (files) {
-          files.selectHostedTab(visible ? "preview" : "browse");
-          await files.updateComplete;
-          if (visible) {
-            await panel.updateComplete;
-          }
-        } else {
-          container.hidden = !visible;
-        }
-        await new Promise(requestAnimationFrame);
-        expect(panel.checkVisibility()).toBe(visible);
-      }
-    },
-  };
-}
-
 it.runIf(browserMode).each([
   ["Review", "markdown"],
   ["Review", "file"],
@@ -70,12 +26,29 @@ it.runIf(browserMode).each([
           path: "src/long-example.ts",
           name: "long-example.ts",
           language: "typescript",
-          content: Array.from(
-            { length: 200 },
-            (_, i) => `export const value${i + 1} = ${i + 1};`,
-          ).join("\n"),
+          content: "export const value = 1;\n".repeat(199) + "export const value200 = 200;",
         };
-  const { panel, hideAndReselect } = await mountDetailPanel(host, content);
+  const container = createChatSidebarContainer();
+  container.className = "side-panel__panel";
+  container.style.cssText = "width:480px;height:320px;";
+  const panel = document.createElement("openclaw-chat-detail-panel");
+  panel.className = "chat-sidebar";
+  panel.embedded = true;
+  panel.content = content;
+  const files = host === "Files" ? document.createElement("openclaw-chat-files-panel") : null;
+  if (files) {
+    files.previews = [{ id: "preview", label: "Long preview", content }];
+    files.activeId = "preview";
+    files.renderDetail = () => panel;
+    files.onSelect = (id) => {
+      files.activeId = id;
+    };
+  }
+  container.append(files ?? panel);
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await files?.updateComplete;
+  await panel.updateComplete;
   const query = (selector: string) => panel.querySelector<HTMLElement>(selector)!;
   if (kind === "file") {
     await expect.poll(() => query(".cm-scroller"), { timeout: 5_000 }).not.toBeNull();
@@ -100,6 +73,18 @@ it.runIf(browserMode).each([
     await new Promise(requestAnimationFrame);
   }
   const readingTop = scroller.scrollTop;
-  await hideAndReselect();
+  for (const visible of [false, true]) {
+    if (files) {
+      files.selectHostedTab(visible ? "preview" : "browse");
+      await files.updateComplete;
+      if (visible) {
+        await panel.updateComplete;
+      }
+    } else {
+      container.hidden = !visible;
+    }
+    await new Promise(requestAnimationFrame);
+    expect(panel.checkVisibility()).toBe(visible);
+  }
   expect(scroller.scrollTop).toBe(readingTop);
 });

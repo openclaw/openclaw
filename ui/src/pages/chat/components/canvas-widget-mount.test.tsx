@@ -40,9 +40,7 @@ it("retains a widget through updates and hiding, but replaces changed identities
 
   const updated = {
     ...properties,
-    messageTimestamp: 2_000,
     title: "Updated counter",
-    preferredHeight: 320,
     allowScripts: false,
     connectionGeneration: 2,
   };
@@ -85,9 +83,7 @@ it("retains a widget through updates and hiding, but replaces changed identities
 const properties = {
   docId: "cv_counter",
   sessionKey: "agent:main:dashboard:counter",
-  messageTimestamp: 1_000,
   title: "Counter",
-  preferredHeight: 240,
   allowScripts: true,
   connectionGeneration: 1,
 };

@@ -22,14 +22,13 @@ function fixture(offset = 600) {
   element.scrollTop = offset;
   const anchor = new TranscriptEndAnchor(() => {});
   anchor.reconcile(element, false, false, vi.fn());
-  const commit = (changed: boolean, canFollow: boolean) =>
-    anchor.commitComposerResize(element, changed, canFollow, false);
   readHeight.mockClear();
   readContent.mockClear();
   return {
     element,
     anchor,
-    commit,
+    commit: (changed: boolean, canFollow: boolean) =>
+      anchor.commitComposerResize(element, changed, canFollow, false),
     readHeight,
     readContent,
     resize: (next: number) => (height = next),
@@ -59,22 +58,19 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "preserves follow permission across shrink and regrowth: %s",
-  (canFollow) => {
-    const { element, anchor, commit, resize } = fixture(canFollow ? 600 : 550);
-    anchor.invalidateComposerResize(canFollow);
-    resize(500);
-    element.scrollTop = 500;
-    expect(commit(true, canFollow)).toEqual(correction(canFollow ? 600 : 500, 500));
-    if (!canFollow) {
-      anchor.reconcile(element, false, false, vi.fn());
-    }
-    anchor.invalidateComposerResize(canFollow);
-    resize(canFollow ? 450 : 400);
-    expect(commit(true, canFollow)).toEqual(correction(500, canFollow ? 550 : 500));
-  },
-);
+it.each([true, false])("keeps follow through shrink/regrowth: %s", (canFollow) => {
+  const { element, anchor, commit, resize } = fixture(canFollow ? 600 : 550);
+  anchor.invalidateComposerResize(canFollow);
+  resize(500);
+  element.scrollTop = 500;
+  expect(commit(true, canFollow)).toEqual(correction(canFollow ? 600 : 500, 500));
+  if (!canFollow) {
+    anchor.reconcile(element, false, false, vi.fn());
+  }
+  anchor.invalidateComposerResize(canFollow);
+  resize(canFollow ? 450 : 400);
+  expect(commit(true, canFollow)).toEqual(correction(500, canFollow ? 550 : 500));
+});
 
 it("preserves a capped editor's end intent until late native ancestor scrolling settles", () => {
   const { element, anchor, commit, readHeight, readContent } = fixture();

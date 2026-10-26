@@ -68,40 +68,32 @@ async function startHeldTransfer() {
   return { held, finish, fetcher, attachments, chat, panel, container, observation };
 }
 
-it.each(["content", "destination"] as const)(
-  "the native detail bridge retires a held transfer before %s publication",
+it.each(["content", "destination", "reparent"] as const)(
+  "settles a held native transfer after %s changes",
   async (change) => {
-    const { held, finish, fetcher, attachments, chat, panel, observation } =
+    const { held, finish, fetcher, attachments, chat, panel, container, observation } =
       await startHeldTransfer();
+    const retained = change === "reparent";
     if (change === "content") {
       panel.content = { kind: "markdown", content: "Replacement preview" };
-    } else {
+    } else if (change === "destination") {
       panel.attachmentChat = { ...chat, sessionKey: "agent:main:replacement" };
+    } else {
+      container.appendChild(document.createElement("section")).append(panel);
+      await panel.updateComplete;
     }
-    expect(observation).toMatchObject({ signal: { aborted: true }, balance: 0 });
+    expect(observation).toMatchObject({
+      signal: { aborted: !retained },
+      balance: retained ? 1 : 0,
+    });
     await panel.updateComplete;
     finish();
     await held.promise;
     await Promise.resolve();
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(attachments).toEqual([]);
-    expect(observation.balance).toBe(0);
+    await waitForSolid(() => {
+      expect(attachments).toHaveLength(retained ? 1 : 0);
+      expect(observation.balance).toBe(0);
+    });
+    expect(fetcher).toHaveBeenCalledTimes(retained ? 1 : 0);
   },
 );
-
-it("keeps a held native transfer when the detail panel is reparented within the same turn", async () => {
-  const { finish, fetcher, attachments, panel, container, observation } = await startHeldTransfer();
-
-  const destination = document.createElement("section");
-  container.append(destination);
-  destination.append(panel);
-  await panel.updateComplete;
-  expect(observation).toMatchObject({ signal: { aborted: false }, balance: 1 });
-
-  finish();
-  await waitForSolid(() => {
-    expect(attachments).toHaveLength(1);
-    expect(observation.balance).toBe(0);
-  });
-  expect(fetcher).toHaveBeenCalledOnce();
-});

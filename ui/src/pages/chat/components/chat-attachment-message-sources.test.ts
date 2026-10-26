@@ -55,10 +55,9 @@ it("omits attachment anchors for unsafe transcript URLs", async () => {
   );
 
   await waitForSolid(() => expect(view.textContent).toContain("unsafe.pdf"));
-  expect(view.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
   expect(
     view.querySelector(
-      "openclaw-chat-audio-player, openclaw-chat-video-player, audio, video, iframe, table",
+      ".chat-assistant-attachments a, openclaw-chat-audio-player, openclaw-chat-video-player, audio, video, iframe, table",
     ),
   ).toBeNull();
 });
