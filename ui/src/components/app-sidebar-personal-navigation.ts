@@ -158,6 +158,11 @@ export function createSidebarPinnedSessions(
         return entry?.type === "session" ? [entry.key] : [];
       }),
     );
+    for (const group of host.sessionDataContext?.navigation.snapshot.personalSessionGroups ?? []) {
+      for (const key of group.sessionKeys) {
+        keys.add(key);
+      }
+    }
     for (const key of reads.keys()) {
       if (!keys.has(key)) {
         retire(key);
@@ -313,9 +318,6 @@ function readPersonalSidebarSession(
       navigationState,
       sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
     }) ?? host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === key);
-  if (live) {
-    host.pinnedSessions.seed([navigationState.toSidebarSession(live)]);
-  }
   return live ?? host.pinnedSessions.getRow(key);
 }
 
@@ -355,7 +357,7 @@ function resolvePersonalSidebarSession(
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
-  const navigationState = host.getSessionNavigationState();
+  let navigationState: SidebarSessionNavigationState | undefined;
   const groupKeys = new Set(
     (host.sessionDataContext?.navigation.snapshot.personalSessionGroups ?? []).flatMap(
       (group) => group.sessionKeys,
@@ -373,13 +375,20 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
   const canonical = new Map(rows.map((row) => [row.key, row]));
   const pins = [...new Set(keys)].flatMap((key) => {
     const projected = canonical.get(key);
-    if (projected) {
-      host.pinnedSessions.seed([projected]);
-    }
     const row =
-      projected ?? resolvePersonalSidebarSession(host, key, navigationState, groupKeys.has(key));
+      projected ??
+      resolvePersonalSidebarSession(
+        host,
+        key,
+        (navigationState ??= host.getSessionNavigationState()),
+        groupKeys.has(key),
+      );
     return row ? [row] : [];
   });
+  if (pins.length) {
+    // Visible references bridge query replacement until their owner observations settle.
+    host.pinnedSessions.seed(pins);
+  }
   return buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
     rows: [...pins, ...rows],

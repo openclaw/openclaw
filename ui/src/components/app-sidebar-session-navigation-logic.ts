@@ -13,6 +13,7 @@ import {
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
   isSessionTitlePending,
@@ -449,6 +450,34 @@ export function distinctSidebarSessionRows(
     seen.add(row.key);
     return true;
   });
+}
+
+export function handleSidebarSessionRowClick(
+  event: MouseEvent,
+  session: SidebarRecentSession,
+  selection: ReturnType<typeof createSidebarSessionSelection>,
+  selectSession: (key: string) => void,
+) {
+  if (
+    session.isChild
+      ? !shouldHandleNavigationClick(event)
+      : event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+  ) {
+    return;
+  }
+  if (!session.isChild && event.shiftKey) {
+    event.preventDefault();
+    selection.extend(session.key, session.selectionKey);
+    return;
+  }
+  if (!session.isChild && event.altKey) {
+    event.preventDefault();
+    selection.toggle(session.key, session.selectionKey);
+    return;
+  }
+  event.preventDefault();
+  selection.clear(session.selectionKey ?? session.key);
+  selectSession(session.key);
 }
 
 /** Menus read selection synchronously; the sidebar projection owns publication and parking. */

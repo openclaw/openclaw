@@ -6,7 +6,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   collectKnownSessionGroups,
@@ -53,6 +52,7 @@ import {
 import {
   createSidebarSessionRowsComparator,
   createSidebarSessionSelection,
+  handleSidebarSessionRowClick,
   distinctSidebarSessionRows,
   collectKnownSidebarSessionCatalogIds,
   findProjectedSidebarSession,
@@ -563,26 +563,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
-    if (
-      session.isChild
-        ? !shouldHandleNavigationClick(event)
-        : event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
-    ) {
-      return;
-    }
-    if (!session.isChild && event.shiftKey) {
-      event.preventDefault();
-      this.sessionSelection.extend(session.key, session.selectionKey);
-      return;
-    }
-    if (!session.isChild && event.altKey) {
-      event.preventDefault();
-      this.sessionSelection.toggle(session.key, session.selectionKey);
-      return;
-    }
-    event.preventDefault();
-    this.clearSessionSelection(session.selectionKey ?? session.key);
-    this.selectSession(session.key);
+    handleSidebarSessionRowClick(event, session, this.sessionSelection, this.selectSession);
   }
 
   /** Chip switching selects the agent for the application. */
