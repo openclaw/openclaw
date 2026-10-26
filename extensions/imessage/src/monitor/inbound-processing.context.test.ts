@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
+import { admitIMessageContext } from "./inbound-context.test-helpers.js";
 import {
   createInboundDecisionParams,
   type InboundDecisionParams,
@@ -9,13 +10,11 @@ type InboundProcessingModule = typeof import("./inbound-processing.js");
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
-let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 
 beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
-  ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
-    await import("./inbound-processing.js"));
+  ({ resolveIMessageInboundDecision } = await import("./inbound-processing.js"));
 });
 
 function resolveDecision(overrides: Parameters<typeof createInboundDecisionParams>[0] = {}) {
@@ -26,20 +25,7 @@ async function buildContext(
   messageOverrides: Partial<InboundDecisionParams["message"]>,
   overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  const params = createInboundDecisionParams({ ...overrides, message: messageOverrides });
-  const admitted = await resolveIMessageInboundDecision(params);
-  expect(admitted.kind).toBe("dispatch");
-  if (admitted.kind !== "dispatch") {
-    throw new Error("expected context fixture admission");
-  }
-  return buildIMessageInboundContext({
-    cfg: params.cfg,
-    accountService: undefined,
-    decision: admitted,
-    message: params.message,
-    historyLimit: params.historyLimit,
-    groupHistories: params.groupHistories,
-  });
+  return (await admitIMessageContext({ ...overrides, message: messageOverrides })).context();
 }
 
 describe("iMessage inbound context and admission", () => {

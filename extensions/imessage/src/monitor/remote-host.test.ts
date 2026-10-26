@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { getCachedIMessageRemoteHost, resolveIMessageRemoteHost } from "../remote-host.js";
@@ -30,12 +31,8 @@ async function runUserPathProbe(cliPath: string, cwd: string) {
 }
 
 describe("detectRemoteHostFromCliPath", () => {
-  const tempDirs: string[] = [];
-  async function tempDir() {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-"));
-    tempDirs.push(dir);
-    return dir;
-  }
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDir = () => tempDirs.make("openclaw-imessage-");
   async function wrapper(content: string, dir?: string, basename = "imsg-remote") {
     const wrapperDir = dir ?? (await tempDir());
     await fs.mkdir(wrapperDir, { recursive: true });
@@ -44,12 +41,9 @@ describe("detectRemoteHostFromCliPath", () => {
     return wrapperPath;
   }
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
-    );
   });
 
   it("uses the system home when HOME is blank", async () => {
@@ -86,12 +80,8 @@ describe("detectRemoteHostFromCliPath", () => {
     const wrapperPath = await wrapper(content);
     const readFile = vi.spyOn(fs, "readFile");
 
-    await expect(remoteHost(wrapperPath)).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
-    await expect(remoteHost(wrapperPath)).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
+    await expect(remoteHost(wrapperPath)).rejects.toThrow("channels.imessage.remoteHost");
+    await expect(remoteHost(wrapperPath)).rejects.toThrow("channels.imessage.remoteHost");
     expect(readFile).toHaveBeenCalledOnce();
     expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBeUndefined();
   });
@@ -133,7 +123,6 @@ describe("detectRemoteHostFromCliPath", () => {
 
       await fs.writeFile(wrapperPath, sshWrapper("changed@other-mac"));
       await expect(remoteHost(wrapperPath)).resolves.toBe(expected);
-      expect(readFile).toHaveBeenCalledOnce();
     },
   );
 

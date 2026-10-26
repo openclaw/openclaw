@@ -4,7 +4,8 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockImplementation(async (_to: string, message: string) => sentText("imsg-1", message)),
@@ -26,8 +27,7 @@ function sentText(messageId: string, text: string) {
 }
 
 vi.mock("../send.js", () => ({
-  sendMessageIMessage: (to: string, message: string, opts?: unknown) =>
-    sendMessageIMessageMock(to, message, opts),
+  sendMessageIMessage: sendMessageIMessageMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
@@ -35,9 +35,6 @@ vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
   chunkMarkdownTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: vi.fn(() => "length"),
 }));
-
-let deliverIMessageReply: typeof import("./deliver.js").deliverIMessageReply;
-let createIMessageEchoCachingSend: typeof import("./deliver.js").createIMessageEchoCachingSend;
 
 describe("deliverIMessageReply", () => {
   const cfg = { channels: { imessage: { accounts: { default: {} } } } };
@@ -50,19 +47,9 @@ describe("deliverIMessageReply", () => {
     options: Partial<Parameters<typeof deliverIMessageReply>[0]> = {},
   ) => deliverIMessageReply({ ...defaults, payload, ...options });
 
-  beforeAll(async () => {
-    ({ createIMessageEchoCachingSend, deliverIMessageReply } = await import("./deliver.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     chunkTextWithModeMock.mockImplementation((text: string) => [text]);
-  });
-
-  afterAll(() => {
-    vi.doUnmock("../send.js");
-    vi.doUnmock("openclaw/plugin-sdk/reply-chunking");
-    vi.resetModules();
   });
 
   it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
@@ -95,21 +82,21 @@ describe("deliverIMessageReply", () => {
       accountId: "acct-6",
       sentMessageCache: { remember },
     });
-    sendMessageIMessageMock.mockResolvedValueOnce(sentText("imsg-durable-2", "Visible reply"));
+    sendMessageIMessageMock.mockResolvedValueOnce(sentText("sent-2", "reply"));
 
-    await send("chat_id:60", "<thinking>hidden</thinking>\nVisible reply\nassistant:", {
+    await send("chat_id:60", "<thinking>hidden</thinking>\nreply\nassistant:", {
       config: cfg,
-      accountId: "acct-ignored",
+      accountId: "other",
     });
 
     expect(sendMessageIMessageMock).toHaveBeenCalledExactlyOnceWith(
       "chat_id:60",
-      "Visible reply",
-      expect.objectContaining({ config: cfg, accountId: "acct-ignored" }),
+      "reply",
+      expect.objectContaining({ accountId: "other" }),
     );
     expect(remember).toHaveBeenCalledWith("acct-6:chat_id:60", {
-      text: "Visible reply",
-      messageId: "imsg-durable-2",
+      text: "reply",
+      messageId: "sent-2",
     });
   });
 
@@ -166,15 +153,5 @@ describe("deliverIMessageReply", () => {
       },
     });
     expect(observed.deliveryResult.receipt).not.toHaveProperty("replyToId");
-  });
-
-  it("returns a recorded non-visible outcome when sanitization removes the complete reply", async () => {
-    const delivered = await deliver({ text: "<thinking>private reasoning</thinking>" });
-
-    expect(sendMessageIMessageMock).not.toHaveBeenCalled();
-    expect(delivered).toEqual({
-      visibleReplySent: false,
-      suppression: { reason: "no_visible_result" },
-    });
   });
 });

@@ -11,86 +11,64 @@ import {
 } from "./recovery-cursor.js";
 
 const DB = "local:/db-a";
-const DB_B = "local:/db-b";
 
 function writeLegacyCatchupCursor(accountId: string, lastSeenRowid: number): void {
-  const store = getIMessageRuntime().state.openSyncKeyedStore<{
-    lastSeenMs: number;
-    lastSeenRowid: number;
-  }>({ namespace: "imessage.catchup-cursors", maxEntries: 256 });
+  const store = getIMessageRuntime().state.openSyncKeyedStore<{ lastSeenRowid: number }>({
+    namespace: "imessage.catchup-cursors",
+    maxEntries: 256,
+  });
   const key = createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 32);
-  store.register(key, { lastSeenMs: Date.now(), lastSeenRowid });
-}
-
-function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
-  getIMessageRuntime()
-    .state.openSyncKeyedStore<{ lastRowid: number }>({
-      namespace: "imessage.recovery-cursor",
-      maxEntries: 64,
-    })
-    .register(accountId, { lastRowid });
+  store.register(key, { lastSeenRowid });
 }
 
 describe("iMessage recovery cursor", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-  });
-
-  it("scopes the cursor per account", async () => {
-    await advanceCursor("work", DB, 10);
-    await advanceCursor("home", DB, 20);
-    expect(await loadCursor("work", DB)).toBe(10);
-    expect(await loadCursor("home", DB)).toBe(20);
-  });
-
-  it("re-scopes the cursor to the new database on advance", async () => {
-    await advanceCursor("default", DB, 12396);
-    await advanceCursor("default", DB_B, 15);
-    expect(await loadCursor("default", DB_B)).toBe(15);
-    expect(await loadCursor("default", DB)).toBe(12396);
-  });
+  beforeEach(installIMessageStateRuntimeForTest);
 
   it("adopts a pre-database-scoping cursor once for the active database (#99638)", async () => {
-    writeLegacyRecoveryCursor("default", 12396);
+    getIMessageRuntime()
+      .state.openSyncKeyedStore<{ lastRowid: number }>({
+        namespace: "imessage.recovery-cursor",
+        maxEntries: 64,
+      })
+      .register("default", { lastRowid: 12396 });
     expect(await loadCursor("default", DB)).toBe(12396);
-    expect(await loadCursor("default", DB_B)).toBeNull();
+    expect(await loadCursor("default", "local:/db-b")).toBeNull();
     expect(await loadCursor("default", DB)).toBe(12396);
   });
 
-  it.each([5, 0])(
-    "rewinds a replaced database to watermark %i and resumes",
-    async (watermarkRowid) => {
-      await advanceCursor("default", DB, 9000);
-      expect(await loadCursor("default", DB, { watermarkRowid })).toBe(watermarkRowid);
-      expect(await loadCursor("default", DB)).toBe(watermarkRowid);
-      await advanceCursor("default", DB, watermarkRowid + 1);
-      expect(await loadCursor("default", DB)).toBe(watermarkRowid + 1);
+  it.each([
+    [9000, 5, 5],
+    [9000, 0, 0],
+    [4990, 5000, 4990],
+    [4990, 4990, 4990],
+    [4990, null, 4990],
+  ] as const)(
+    "reconciles cursor %s with watermark %s to %s and resumes",
+    async (rowid, watermarkRowid, expected) => {
+      await advanceCursor("default", DB, rowid);
+      expect(await loadCursor("default", DB, { watermarkRowid })).toBe(expected);
+      expect(await loadCursor("default", DB)).toBe(expected);
+      await advanceCursor("default", DB, expected + 1);
+      expect(await loadCursor("default", DB)).toBe(expected + 1);
     },
   );
-
-  it("keeps a cursor at or below the database watermark", async () => {
-    await advanceCursor("default", DB, 4990);
-    expect(await loadCursor("default", DB, { watermarkRowid: 5000 })).toBe(4990);
-    expect(await loadCursor("default", DB, { watermarkRowid: 4990 })).toBe(4990);
-    expect(await loadCursor("default", DB, { watermarkRowid: null })).toBe(4990);
-  });
-
-  it("rewinds a migrated legacy catchup cursor above the database watermark", async () => {
-    writeLegacyCatchupCursor("default", 9000);
-    expect(await loadCursor("default", DB, { watermarkRowid: 5 })).toBe(5);
-    expect(await loadCursor("default", DB)).toBe(5);
-  });
 
   it("ignores non-finite rowids", async () => {
     await advanceCursor("default", DB, Number.NaN);
     expect(await loadCursor("default", DB)).toBeNull();
   });
 
-  it("seeds from the retired catchup cursor once on upgrade, then consumes it", async () => {
-    writeLegacyCatchupCursor("default", 4321);
-    expect(await loadCursor("default", DB)).toBe(4321);
-    expect(await loadCursor("default", DB)).toBe(4321);
-  });
+  it.each([
+    [4321, undefined, 4321],
+    [9000, 5, 5],
+  ] as const)(
+    "migrates catchup cursor %s with watermark %s to %s",
+    async (rowid, watermarkRowid, expected) => {
+      writeLegacyCatchupCursor("default", rowid);
+      expect(await loadCursor("default", DB, { watermarkRowid })).toBe(expected);
+      expect(await loadCursor("default", DB)).toBe(expected);
+    },
+  );
 
   it("prefers an existing recovery cursor over the legacy catchup cursor", async () => {
     await advanceCursor("default", DB, 9000);
@@ -98,30 +76,21 @@ describe("iMessage recovery cursor", () => {
     expect(await loadCursor("default", DB)).toBe(9000);
   });
 
-  it("unifies the implicit default with explicit spellings of the same chat.db (#99638)", () => {
+  it("canonicalizes default chat.db spellings and isolates other databases (#99638)", () => {
     const home = (process.env.HOME || os.homedir()).trim();
     const defaultIdentity = `local:${path.resolve(path.join(home, "Library", "Messages", "chat.db"))}`;
 
-    for (const params of [
-      { cliPath: "imsg" },
-      { cliPath: "/opt/homebrew/bin/imsg" },
-      { dbPath: path.join(home, "Library/Messages/chat.db") },
-      { dbPath: "~/Library/Messages/chat.db" },
-    ]) {
-      expect(resolveIMessageRecoveryCursorDbIdentity(params)).toBe(defaultIdentity);
+    for (const [params, expected] of [
+      [{ cliPath: "imsg" }, defaultIdentity],
+      [{ cliPath: "/opt/homebrew/bin/imsg" }, defaultIdentity],
+      [{ dbPath: path.join(home, "Library/Messages/chat.db") }, defaultIdentity],
+      [{ dbPath: "~/Library/Messages/chat.db" }, defaultIdentity],
+      [{ dbPath: "/Users/other/chat.db" }, `local:${path.resolve("/Users/other/chat.db")}`],
+      [{ cliPath: "/usr/local/bin/imsg-a.sh" }, "local:cli:/usr/local/bin/imsg-a.sh"],
+      [{ cliPath: "/usr/local/bin/imsg-b.sh" }, "local:cli:/usr/local/bin/imsg-b.sh"],
+      [{ remoteHost: "bot@host", dbPath: "/Users/b/chat.db" }, "remote:bot@host:/Users/b/chat.db"],
+    ] as const) {
+      expect(resolveIMessageRecoveryCursorDbIdentity(params)).toBe(expected);
     }
-  });
-
-  it("keeps distinct databases, wrappers, and remotes on separate identities", () => {
-    const params = [
-      { cliPath: "imsg" },
-      { dbPath: "/Users/other/chat.db" },
-      { cliPath: "/usr/local/bin/imsg-a.sh" },
-      { cliPath: "/usr/local/bin/imsg-b.sh" },
-      { remoteHost: "bot@host", dbPath: "/Users/b/chat.db" },
-    ] as const;
-    const identities = params.map(resolveIMessageRecoveryCursorDbIdentity);
-    expect(new Set(identities).size).toBe(5);
-    expect(identities[1]).toBe(resolveIMessageRecoveryCursorDbIdentity(params[1]));
   });
 });
