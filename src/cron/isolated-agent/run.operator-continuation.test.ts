@@ -947,8 +947,10 @@ it.each([
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
-        expect(JSON.stringify(offered)).not.toContain('"inspect"');
-        expect(JSON.stringify(offered)).not.toContain("merge");
+        expect(admittedOperator).toBe(false);
+        expect(rejected).toContain(
+          "GitHub pull request actions require full operator write permission.",
+        );
         expect(results).toEqual([]);
       }
     }
