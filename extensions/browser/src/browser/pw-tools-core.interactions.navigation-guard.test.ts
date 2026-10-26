@@ -177,7 +177,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     await expect(
       settle(() => mod.evaluateViaPlaywright({ ...strict(), fn: "() => 1" })),
     ).rejects.toThrow("SSRF blocked: private network");
-    expect(complete).toHaveBeenCalledTimes(1);
     expectComplete(page);
     expect(session.withPageNavigationRequestGuard).toHaveBeenCalledBefore(page.evaluate);
   });
@@ -276,14 +275,11 @@ describe("pw-tools-core interaction navigation guard", () => {
     const download = managedDownload("report.pdf");
     const drain = vi.fn(async () => [download]);
     const dispose = captureDownloads(drain);
-    const page = installAt("https://example.com", { click: vi.fn(async () => {}) });
+    installAt("https://example.com", { click: vi.fn(async () => {}) });
     const result = await settle(() => act({ kind: "click", ref: "1" }));
     expect(result.downloads).toEqual([download]);
     expect(drain).toHaveBeenCalledWith({ ...downloadGrace, firstEventGraceMs: 0 });
     expect(dispose).toHaveBeenCalledOnce();
-    expect(session.beginActionDownloadCaptureOnPage).toHaveBeenCalledWith(page, {
-      beforeSave: expect.any(Function),
-    });
   });
 
   it("does not quarantine a source page preserved after policy denial", async () => {

@@ -94,7 +94,6 @@ describe("pw-tools-core", () => {
         expect(events.listenerCount("download")).toBeGreaterThan(0);
         events.emit("download", download);
       },
-      expectArmed: () => expect(events.listenerCount("download")).toBeGreaterThan(0),
       activeHandlerCount: () => events.listenerCount("download"),
     };
   }
@@ -199,7 +198,6 @@ describe("pw-tools-core", () => {
       });
 
       await awaitStarted(clicked.promise, p);
-      harness.expectArmed();
       await harness.deliver(download);
 
       const res = await p;

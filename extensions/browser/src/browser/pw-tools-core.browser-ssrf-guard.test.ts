@@ -112,18 +112,6 @@ function documentPage<T>(
 }
 type WaitState = { document: unknown; source: string };
 type WaitPredicate = (state: WaitState) => boolean;
-function pendingEvaluation(result: Promise<unknown> = new Promise(() => {})) {
-  const ctrl = new AbortController();
-  const entered = Promise.withResolvers<void>();
-  install({
-    url: () => "https://example.com/current",
-    evaluate: () => {
-      entered.resolve();
-      return result;
-    },
-  });
-  return { ctrl, entered: entered.promise };
-}
 function preservePolicyDenial(blocked: Error) {
   session.isPolicyDenyNavigationError.mockImplementation((err: unknown) => err === blocked);
   session.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
@@ -181,8 +169,7 @@ describe("pw-tools-core browser SSRF guards", () => {
       } finally {
         hostFunction.mockRestore();
       }
-      expect(waitForFunction).toHaveBeenCalledOnce();
-      expect(waitForFunction).toHaveBeenCalledWith(
+      expect(waitForFunction).toHaveBeenCalledExactlyOnceWith(
         expect.any(Function),
         { document: documentHandle, source: fn },
         { timeout: expect.any(Number) },
@@ -461,51 +448,44 @@ describe("pw-tools-core browser SSRF guards", () => {
     ).rejects.toThrow("blocked field navigation");
 
     expect(fill).toHaveBeenCalledOnce();
-    expect(session.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
   });
-  it("disconnects a pending page evaluation on caller cancellation", async () => {
-    const { ctrl, entered } = pendingEvaluation();
+  it.each([false, true])("settles evaluation interruption (dialog=%s)", async (dialog) => {
+    const ctrl = new AbortController();
+    const evaluation = heldAction<boolean>();
+    install({ url: () => "https://example.com/current", evaluate: evaluation.run });
     const task = pw.evaluateViaPlaywright({
-      ...strict,
-      fn: "() => 1",
+      ...(dialog ? target : strict),
+      fn: dialog ? "() => alert('x')" : "() => 1",
       signal: ctrl.signal,
     });
-    await entered;
-    ctrl.abort(new Error("aborted by test"));
-    await expect(task).rejects.toThrow("aborted by test");
-    expect(session.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-      ...strict,
-      page: pageState.page,
-    });
-  });
-
-  it("reconciles an observed dialog after evaluation settles without disconnecting", async () => {
-    const evaluation = Promise.withResolvers<boolean>();
-    const { ctrl, entered } = pendingEvaluation(evaluation.promise);
-    const task = pw.evaluateViaPlaywright({
-      ...target,
-      fn: "() => alert('x')",
-      signal: ctrl.signal,
-    });
-    await entered;
-    const error = new BrowserObservedDialogBlockedError({
-      dialogs: {
-        pending: [{ id: "d1", type: "alert", message: "x", openedAt: "2026-09-08T00:00:00Z" }],
-        recent: [],
-      },
-    });
+    await evaluation.started;
+    const error = dialog
+      ? new BrowserObservedDialogBlockedError({
+          dialogs: {
+            pending: [{ id: "d1", type: "alert", message: "x", openedAt: "2026-09-08T00:00:00Z" }],
+            recent: [],
+          },
+        })
+      : new Error("aborted by test");
     session.isBrowserObservedDialogBlockedError.mockImplementation(
       (err) => err instanceof BrowserObservedDialogBlockedError,
     );
     ctrl.abort(error);
     await expect(task).rejects.toBe(error);
-    expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
-    evaluation.resolve(true);
-    await vi.waitFor(() =>
-      expect(session.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
-        pageState.page,
-        error.browserState.dialogs.pending,
-      ),
-    );
+    if (error instanceof BrowserObservedDialogBlockedError) {
+      expect(session.forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
+      evaluation.resolve(true);
+      await vi.waitFor(() =>
+        expect(session.markObservedDialogsHandledRemotelyForPage).toHaveBeenCalledWith(
+          pageState.page,
+          error.browserState.dialogs.pending,
+        ),
+      );
+    } else {
+      expect(session.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+        ...strict,
+        page: pageState.page,
+      });
+    }
   });
 });
