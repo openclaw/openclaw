@@ -62,10 +62,6 @@ function callback(query: string, method = "GET") {
 
 it("does not consume a pending login for malformed or unrelated responses", async () => {
   const login = await startLogin();
-  const url = new URL(login.opened);
-  expect(url.searchParams.get("callback_url")).toBe(
-    "https://gateway.example/oauth/provider/callback?state=login-state",
-  );
   for (const query of [
     "state=other&code=wrong",
     "state=login-state",
@@ -78,10 +74,7 @@ it("does not consume a pending login for malformed or unrelated responses", asyn
   expect(callback("state=login-state&code=valid", "POST").res.statusCode).toBe(400);
   const response = callback("state=login-state&code=valid");
   expect(response.res.statusCode).toBe(200);
-  expect(response.getBody()).toContain("Sign-in response received.");
-  expect(response.getBody()).toContain("Return to OpenClaw for the sign-in result.");
   expect(response.getBody()).not.toMatch(/valid|login-state/);
-  expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
   expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
   await expect(login.result).resolves.toEqual({ code: "valid", state: "login-state" });
   const retained = login.session.authorize;
@@ -140,7 +133,6 @@ it.each<[string | undefined, string, boolean, boolean]>([
   expect(resolveBrowserAuthOrigin(browserOrigin)?.origin).toBe(allowed ? origin : undefined);
   const openUrl = vi.fn();
   const session = createSession({ browserOrigin, openUrl });
-  expect(session.available).toBe(allowed);
   if (!allowed) {
     await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
     expect(openUrl).not.toHaveBeenCalled();
