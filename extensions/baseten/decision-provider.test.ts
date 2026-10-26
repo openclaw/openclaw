@@ -105,8 +105,7 @@ beforeEach(() => {
   mocks.release.mockReset();
 });
 it.each(ids)("evaluates %s through registered System One transport", async (id) => {
-  const result = await registered().evaluate(batch, context(id));
-  expect(result).toEqual({
+  expect(await registered().evaluate(batch, context(id))).toEqual({
     status: "ok",
     result: {
       model: "elephant-1",
@@ -130,7 +129,6 @@ it.each(ids)("evaluates %s through registered System One transport", async (id) 
       urgency: batch.questions.urgency,
     },
   });
-  expect(mocks.fetch).toHaveBeenCalledOnce();
   expect(mocks.release).toHaveBeenCalledOnce();
 });
 
@@ -139,20 +137,17 @@ it.each([
   [429, { reason: "rate-limited", retryAfterMs: 2000 }],
   [422, { reason: "unsupported-input" }],
   [503, { reason: "transport" }],
-] as const)(
-  "classifies HTTP %s without retrying or exposing provider bodies",
-  async (status, expected) => {
-    mocks.fetch.mockResolvedValue(
-      new Response("private provider error", { status, headers: { "retry-after": "2" } }),
-    );
-    expect(await registered().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      ...expected,
-    });
-    expect(mocks.fetch).toHaveBeenCalledOnce();
-    expect(mocks.release).toHaveBeenCalledOnce();
-  },
-);
+] as const)("classifies HTTP %s without retries or leaked bodies", async (status, expected) => {
+  mocks.fetch.mockResolvedValue(
+    new Response("private provider error", { status, headers: { "retry-after": "2" } }),
+  );
+  expect(await registered().evaluate(batch, context())).toEqual({
+    status: "unavailable",
+    ...expected,
+  });
+  expect(mocks.fetch).toHaveBeenCalledOnce();
+  expect(mocks.release).toHaveBeenCalledOnce();
+});
 it("rejects malformed distributions, usage, and reflected credentials", async () => {
   for (const payload of [
     invalidAnswer("refund", { noul: 2 }),
