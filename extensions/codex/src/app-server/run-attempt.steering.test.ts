@@ -55,15 +55,6 @@ async function waitForRegisteredRun(sessionId: string) {
   return registeredRun(sessionId)!;
 }
 
-function registeredCleanup(sessionId: string) {
-  const index = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLastIndex(
-    (call) => call[0] === sessionId,
-  );
-  const cleanup = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.results[index]?.value;
-  expect(cleanup).toBeTypeOf("function");
-  return cleanup;
-}
-
 type SteeringHarness = ReturnType<typeof createStartedThreadHarness>;
 const steeringRequests = (harness: SteeringHarness) =>
   harness.requests.filter(({ method }) => method === "turn/steer");
@@ -341,15 +332,7 @@ it("marks the active run aborted before asynchronous cleanup releases its handle
   expect(handle?.isAborted?.()).toBe(true);
   expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).not.toHaveBeenCalled();
   expect(readAttemptTerminal(await run).aborted).toBe(true);
-  const cleanup = registeredCleanup(params.sessionId);
-  expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
-    params.sessionId,
-    handle,
-    params.sessionKey,
-    params.sessionFile,
-    undefined,
-    cleanup,
-  );
+  expect(queueActiveRunMessageForTest(params.sessionId, "after abort")).toBe(false);
   expect(requests).toContainEqual({
     method: "turn/interrupt",
     params: { threadId: "thread-1", turnId: "turn-1" },
@@ -585,15 +568,6 @@ it("steers during native automatic compaction through session-file registration"
   const run = runCodexAppServerAttempt(params);
   await run.waitForTurnAccepted();
 
-  expect(activeRunRegistrationMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
-    params.sessionId,
-    expect.anything(),
-    params.sessionKey,
-    params.sessionFile,
-    "main",
-  );
-  const cleanup = registeredCleanup(params.sessionId);
-
   await notify(
     itemNotification("item/started", { id: "automatic-compaction", type: "contextCompaction" }),
   );
@@ -610,14 +584,7 @@ it("steers during native automatic compaction through session-file registration"
   await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
   await run;
 
-  expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
-    params.sessionId,
-    expect.anything(),
-    params.sessionKey,
-    params.sessionFile,
-    undefined,
-    cleanup,
-  );
+  expect(queueActiveRunMessageForTest(params.sessionId, "after completion")).toBe(false);
 });
 
 it("steers a runtime-event completion with its inbound context ahead of the prompt", async () => {

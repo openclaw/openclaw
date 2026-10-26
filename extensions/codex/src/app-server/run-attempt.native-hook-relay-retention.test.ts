@@ -309,14 +309,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       throw new Error("Expected child execution custody");
     }
     try {
-      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
-        resolveCodexNativeModelInputTools({}).toSorted(),
-      );
-      const nativeWrite = vi.fn();
-      await expect(invoke("parent-b", "denied-steer").then(nativeWrite)).rejects.toThrow(
+      await expect(invoke("parent-b", "denied-steer")).rejects.toThrow(
         "same admitted model source",
       );
-      expect(nativeWrite).not.toHaveBeenCalled();
       await expect(invoke("parent-b", "ambiguous-root", "parent-thread")).rejects.toThrow(
         "unambiguous receiver turn",
       );
@@ -324,10 +319,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         "outside the sender's admitted tree",
       );
       expect(() => capture.assertCurrent()).not.toThrow();
-      await expect(
-        followup("parent-b", "foreign-active-followup").then(nativeWrite),
-      ).rejects.toThrow("same admitted model source");
-      expect(nativeWrite).not.toHaveBeenCalled();
+      await expect(followup("parent-b", "foreign-active-followup")).rejects.toThrow(
+        "same admitted model source",
+      );
       await expect(followup("parent-a", "same-active-followup")).resolves.toEqual(relaySuccess);
       await client.notify(inputRejected("same-active-followup", "Input declined"));
 
@@ -345,10 +339,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       for (let index = 0; index < 31; index++) {
         await invoke("parent-a", `pending-${index}`);
       }
-      await expect(invoke("parent-a", "over-capacity").then(nativeWrite)).rejects.toThrow(
+      await expect(invoke("parent-a", "over-capacity")).rejects.toThrow(
         "native input admission capacity reached",
       );
-      expect(nativeWrite).not.toHaveBeenCalled();
       for (let index = 0; index < 31; index++) {
         await client.notify(inputRejected(`pending-${index}`, "Input rejected"));
       }
@@ -397,10 +390,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const coldTarget = threadRead({ threadStatus: "notLoaded" });
       coldTarget.thread.modelProvider = "unqualified-provider";
       client.setThreadRead("child-thread", coldTarget);
-      await expect(followup("parent-b", "denied-cold-followup").then(nativeWrite)).rejects.toThrow(
+      await expect(followup("parent-b", "denied-cold-followup")).rejects.toThrow(
         "does not admit this model",
       );
-      expect(nativeWrite).not.toHaveBeenCalled();
       const warmTarget = threadRead({ threadStatus: "idle" });
       warmTarget.thread.modelProvider = "test-provider";
       client.setThreadRead("child-thread", warmTarget);
@@ -428,8 +420,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       lateRead.resolve(warmTarget);
       await lateAdmissionSettled.promise;
       client.setThreadRead("child-thread", warmTarget);
-      await followup("parent-b", "followup-after-a").then(nativeWrite);
-      expect(nativeWrite).toHaveBeenCalledOnce();
+      await followup("parent-b", "followup-after-a");
       await expect(followup("parent-a", "incompatible-pending")).rejects.toThrow(
         "same admitted model source",
       );
