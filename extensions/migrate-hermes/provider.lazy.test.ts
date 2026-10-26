@@ -26,15 +26,12 @@ const mocks = vi.hoisted(() => ({
   apply: vi.fn<typeof applyHermesPlan>(),
 }));
 
-// mock-isolation: Detect source-module loading without importing real Hermes filesystem readers.
+// mock-isolation: Track lazy imports without loading filesystem readers or executing migrations.
 vi.mock("./source.js", () =>
   mocks.load("source", { discoverHermesSource: mocks.discover, hasHermesSource: mocks.hasSource }),
 );
-// mock-isolation: Track lazy memory-module loading without importing its runtime dependencies.
 vi.mock("./memory.js", () => mocks.load("memory", { isMemoryOnlyMigration: mocks.memoryOnly }));
-// mock-isolation: Track plan loading and hold fixture-owned planning promises.
 vi.mock("./plan.js", () => mocks.load("plan", { buildHermesPlan: mocks.plan }));
-// mock-isolation: Track apply loading without executing real migration writes.
 vi.mock("./apply.js", () => mocks.load("apply", { applyHermesPlan: mocks.apply }));
 
 it("registers synchronously and loads only the invoked migration operations", async () => {
@@ -98,8 +95,7 @@ it("registers synchronously and loads only the invoked migration operations", as
   const planned = await Promise.all([firstPlan, secondPlan]);
   expect(planned[0]).toBe(plan);
   expect(planned[1]).toBe(plan);
-  expect(mocks.plan).toHaveBeenNthCalledWith(1, ctx);
-  expect(mocks.plan).toHaveBeenNthCalledWith(2, ctx);
+  expect(mocks.plan.mock.calls).toEqual([[ctx], [ctx]]);
   expect(mocks.loaded).toEqual(["source", "memory", "plan"]);
 
   const result: MigrationApplyResult = { ...plan, reportDir: "/report" };
