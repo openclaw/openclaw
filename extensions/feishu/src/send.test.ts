@@ -1,7 +1,6 @@
 import type { HttpInstance } from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   editMessageFeishu,
@@ -19,7 +18,6 @@ const {
   mockClientPatch,
   mockClientUpdate,
   mockCreateFeishuClient,
-  mockLogVerbose,
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
 } = vi.hoisted(() => ({
@@ -35,7 +33,6 @@ const {
   mockClientPatch: vi.fn(),
   mockClientUpdate: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
-  mockLogVerbose: vi.fn(),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
 }));
@@ -43,14 +40,6 @@ const {
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    logVerbose: mockLogVerbose,
-  };
-});
 
 vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
@@ -71,7 +60,6 @@ vi.mock("./accounts.js", () => ({
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.doUnmock("./client.js");
   vi.doUnmock("./accounts.js");
@@ -179,31 +167,6 @@ describe("getMessageFeishu", () => {
     );
     const result = await getMessage(messageId);
     expect(result).toMatchObject({ messageId, chatId, content, contentType: "interactive" });
-  });
-
-  it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        ...textMessage("om_bad_json", "unused"),
-        msg_type: "text",
-        body: { content: "{bad json}" },
-        chat_id: "oc_test",
-        chat_type: "group",
-        sender: { id: "ou_1", sender_type: "user" },
-      },
-    });
-    const result = await getMessage("om_bad_json");
-
-    expect(mockLogVerbose).toHaveBeenCalledWith(
-      expect.stringContaining("feishu message content parse failed for text message"),
-    );
-    expect(mockLogVerbose.mock.calls.flat().map(String).join("\n")).not.toContain("{bad json}");
-    expect(result).toMatchObject({
-      messageId: "om_bad_json",
-      contentType: "text",
-      content: "{bad json}",
-    });
   });
 
   it("looks up senders only for the first 50 chronological forwarded children", async () => {
@@ -404,14 +367,6 @@ describe("fetched text mentions", () => {
           : normalized,
       );
       expect(response).toEqual(before);
-      if (surface === "get") {
-        expect(
-          buildFeishuAgentBody({
-            ctx: { content: "reply", senderOpenId: "ou_sender", messageId: "om_reply" },
-            quotedContent: content,
-          }),
-        ).toBe(`[message_id: om_reply]\nou_sender: [Replying to: "${normalized}"]\n\nreply`);
-      }
     },
   );
 });

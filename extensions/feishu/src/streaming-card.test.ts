@@ -157,14 +157,21 @@ describe("FeishuStreamingSession", () => {
     }
   });
 
-  function mockFetches(
-    updateBodies: string[],
-    failedContentUpdateIndexes: ReadonlySet<number> = new Set<number>(),
-    replaceBodies: string[] = [],
-    failedContentUpdateStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
-    failedReplaceStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
-  ): StreamingFetchDeps {
-    return createMemoryFetch((url, body) => {
+  function mockActiveSession(
+    options: Omit<Parameters<typeof createActiveSession>[1], "log">,
+    failures: {
+      updateIndexes?: ReadonlySet<number>;
+      updateStatuses?: ReadonlyMap<number, number>;
+      replaceStatuses?: ReadonlyMap<number, number>;
+      bodyErrors?: Record<string, { code: number; msg: string }>;
+    } = {},
+  ) {
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    const noteBodies: string[] = [];
+    const settingsBodies: string[] = [];
+    const log = vi.fn();
+    const deps = createMemoryFetch((url, body) => {
       let status = 200;
       if (url.pathname.includes("/auth/")) {
         return jsonResponse(createStreamingTokenPayload());
@@ -172,47 +179,36 @@ describe("FeishuStreamingSession", () => {
       if (url.pathname.includes("/elements/content/content")) {
         const updateIndex = updateBodies.length;
         updateBodies.push(body);
-        if (failedContentUpdateIndexes.has(updateIndex)) {
+        if (failures.updateIndexes?.has(updateIndex)) {
           throw new Error(`content update ${updateIndex} failed`);
         }
-        const failedStatus = failedContentUpdateStatuses.get(updateIndex);
+        const failedStatus = failures.updateStatuses?.get(updateIndex);
         if (failedStatus !== undefined) {
           status = failedStatus;
         }
       } else if (url.pathname.includes("/elements/content")) {
         const replaceIndex = replaceBodies.length;
         replaceBodies.push(body);
-        const failedStatus = failedReplaceStatuses.get(replaceIndex);
+        const failedStatus = failures.replaceStatuses?.get(replaceIndex);
         if (failedStatus !== undefined) {
           status = failedStatus;
         }
+      } else if (url.pathname.includes("/elements/note/content")) {
+        noteBodies.push(body);
+      } else if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
       }
-      return jsonResponse({ code: 0, msg: "ok" }, status);
+      const error = Object.entries(failures.bodyErrors ?? {}).find(([path]) =>
+        url.pathname.endsWith(path),
+      )?.[1];
+      return jsonResponse(error ?? { code: 0, msg: "ok" }, status);
     });
-  }
-
-  function mockActiveSession(
-    options: Omit<Parameters<typeof createActiveSession>[1], "log">,
-    failures: {
-      updateIndexes?: ReadonlySet<number>;
-      updateStatuses?: ReadonlyMap<number, number>;
-      replaceStatuses?: ReadonlyMap<number, number>;
-    } = {},
-  ) {
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const log = vi.fn();
-    const deps = mockFetches(
-      updateBodies,
-      failures.updateIndexes,
-      replaceBodies,
-      failures.updateStatuses,
-      failures.replaceStatuses,
-    );
     return {
       session: createActiveSession(deps, { ...options, log }),
       updateBodies,
       replaceBodies,
+      noteBodies,
+      settingsBodies,
       log,
     };
   }
@@ -560,32 +556,22 @@ describe("FeishuStreamingSession", () => {
   it("retries the same throttled snapshot after a CardKit body error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_500);
-    const updateBodies: string[] = [];
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
-      }
-      if (url.pathname.includes("/elements/content/content")) {
-        updateBodies.push(body);
-        return jsonResponse(
-          updateBodies.length === 1
-            ? { code: 19_001, msg: "sequence rejected" }
-            : { code: 0, msg: "ok" },
-        );
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const log = vi.fn();
-    const session = createActiveSession(deps, {
-      cardId: "card_rejected_flush",
-      messageId: "om_rejected_flush",
-      text: "hello",
-      lastUpdateTime: 1_500,
-      log,
-    });
+    const bodyErrors: NonNullable<Parameters<typeof mockActiveSession>[1]>["bodyErrors"] = {
+      "/elements/content/content": { code: 19_001, msg: "sequence rejected" },
+    };
+    const { session, updateBodies, log } = mockActiveSession(
+      {
+        cardId: "card_rejected_flush",
+        messageId: "om_rejected_flush",
+        text: "hello",
+        lastUpdateTime: 1_500,
+      },
+      { bodyErrors },
+    );
 
     await session.update("hello small");
     await vi.advanceTimersByTimeAsync(160);
+    delete bodyErrors["/elements/content/content"];
     await session.update("hello small");
     await vi.advanceTimersByTimeAsync(160);
 
@@ -640,7 +626,11 @@ describe("FeishuStreamingSession", () => {
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
     const payload = JSON.parse(replaceBodies[0] ?? "{}") as { element?: string };
-    expect(JSON.parse(payload.element ?? "{}")).toMatchObject({ content: next });
+    expect({ ...payload, element: JSON.parse(payload.element ?? "{}") }).toEqual({
+      element: { tag: "markdown", content: next, element_id: "content" },
+      sequence: 2,
+      uuid: "r_card_pending_reasoning_close_2",
+    });
   });
 
   it("retains prior visible content when CardKit rejects a divergent close replacement", async () => {
@@ -696,30 +686,20 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("logs CardKit body errors for note updates and streaming close settings", async () => {
-    const noteBodies: string[] = [];
-    const settingsBodies: string[] = [];
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
-      }
-      if (url.pathname.includes("/elements/note/content")) {
-        noteBodies.push(body);
-        return jsonResponse({ code: 19_003, msg: "note rejected" });
-      }
-      if (url.pathname.includes("/settings")) {
-        settingsBodies.push(body);
-        return jsonResponse({ code: 19_004, msg: "settings rejected" });
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const log = vi.fn();
-    const session = createActiveSession(deps, {
-      cardId: "card_rejected_note_and_close",
-      messageId: "om_rejected_note_and_close",
-      text: "visible answer",
-      hasNote: true,
-      log,
-    });
+    const { session, noteBodies, settingsBodies, log } = mockActiveSession(
+      {
+        cardId: "card_rejected_note_and_close",
+        messageId: "om_rejected_note_and_close",
+        text: "visible answer",
+        hasNote: true,
+      },
+      {
+        bodyErrors: {
+          "/elements/note/content": { code: 19_003, msg: "note rejected" },
+          "/settings": { code: 19_004, msg: "settings rejected" },
+        },
+      },
+    );
 
     const error = await session
       .closeWithResult(undefined, { note: "model note" })
@@ -766,39 +746,6 @@ describe("FeishuStreamingSession", () => {
       ]);
     },
   );
-
-  it("replaces content when final text removes transient streamed status", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_000);
-    const { session, updateBodies, replaceBodies } = mockActiveSession({
-      cardId: "card_4",
-      messageId: "om_4",
-      text: "Web Search\n\nfinal answer",
-      lastUpdateTime: 3_000,
-    });
-
-    await session.closeWithResult("final answer");
-
-    expect(updateBodies).toHaveLength(0);
-    expect(replaceBodies).toHaveLength(1);
-    const replacePayload = JSON.parse(replaceBodies[0] ?? "{}") as {
-      element?: string;
-      sequence?: number;
-      uuid?: string;
-    };
-    expect({
-      ...replacePayload,
-      element: JSON.parse(replacePayload.element ?? "{}"),
-    }).toEqual({
-      element: {
-        tag: "markdown",
-        content: "final answer",
-        element_id: "content",
-      },
-      sequence: 2,
-      uuid: "r_card_4_2",
-    });
-  });
 
   it("drops a surrogate pair whole when truncating the closeout summary", async () => {
     vi.useFakeTimers();
