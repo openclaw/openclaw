@@ -62,6 +62,10 @@ function hostEvent(sessions: unknown[]) {
 }
 const noActions = { continueSession: false, archive: false };
 const createTarget = { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" };
+const creationCapabilities = () => ({
+  ...noActions,
+  createSession: { model: createTarget.model },
+});
 function useCreationTarget(
   resolveCreateSession: ReturnType<typeof provider>["resolveCreateSession"],
 ) {
@@ -372,17 +376,9 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("rejects host cursors without a catalog selector", async () => {
-    const respond = await listCatalogs({
-      cursors: { "gateway:local": "next" },
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "catalogId is required when cursors are provided",
-      }),
+    expectInvalidRequest(
+      await listCatalogs({ cursors: { "gateway:local": "next" } }),
+      "catalogId is required when cursors are provided",
     );
   });
 
@@ -394,13 +390,7 @@ describe("session catalog Gateway methods", () => {
 
     const respond = await listCatalogs({}, config);
 
-    expectCatalog(respond, {
-      id: "claude",
-      capabilities: {
-        ...noActions,
-        createSession: { model: createTarget.model },
-      },
-    });
+    expectCatalog(respond, { id: "claude", capabilities: creationCapabilities() });
 
     createSession = undefined;
     expectCreateCapability(await listCatalogs({}, config));
@@ -447,12 +437,7 @@ describe("session catalog Gateway methods", () => {
       { agents: { entries: { main: {}, research: {} } } },
     );
     expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
-    expectCatalog(available, {
-      capabilities: {
-        ...noActions,
-        createSession: { model: createTarget.model },
-      },
-    });
+    expectCatalog(available, { capabilities: creationCapabilities() });
   });
 
   it("resolves the private runtime target separately from the public capability", () => {
