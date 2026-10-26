@@ -1,29 +1,19 @@
 import { describe, it } from "vitest";
-import {
-  validateChatSendParams,
-  validateMentionsChangedEvent,
-  validateMentionsDismissParams,
-  validateMentionsListParams,
-  validateMentionsListResult,
-  validateSessionsCreateParams,
-  validateSessionsSendParams,
-  validateUsersMentionableParams,
-  validateUsersMentionableResult,
-} from "../index.js";
+import * as S from "../index.js";
 import { copies, validation } from "./protocol-validation.test-support.js";
 
-const directory = validation(validateUsersMentionableParams);
-const users = validation(validateUsersMentionableResult);
-const list = validation(validateMentionsListParams);
-const dismiss = validation(validateMentionsDismissParams);
-const inbox = validation(validateMentionsListResult);
-const changed = validation(validateMentionsChangedEvent);
+const directory = validation(S.validateUsersMentionableParams);
+const users = validation(S.validateUsersMentionableResult);
+const list = validation(S.validateMentionsListParams);
+const dismiss = validation(S.validateMentionsDismissParams);
+const inbox = validation(S.validateMentionsListResult);
+const changed = validation(S.validateMentionsChangedEvent);
 
 describe("human mention protocol", () => {
   it.each([
-    ["chat.send", validateChatSendParams, { sessionKey: "agent:main:main" }],
-    ["sessions.create", validateSessionsCreateParams, { agentId: "main" }],
-    ["sessions.send", validateSessionsSendParams, { key: "agent:main:main" }],
+    ["chat.send", S.validateChatSendParams, { sessionKey: "agent:main:main" }],
+    ["sessions.create", S.validateSessionsCreateParams, { agentId: "main" }],
+    ["sessions.send", S.validateSessionsSendParams, { key: "agent:main:main" }],
   ] as const)("preserves bounded mentions on %s", (_method, validate, target) => {
     const method = validation(validate);
     const base = { ...target, message: "🙂 @Ada", idempotencyKey: "run-mentions" };

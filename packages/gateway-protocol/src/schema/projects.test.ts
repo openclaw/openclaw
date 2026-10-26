@@ -1,20 +1,5 @@
 import { describe, it } from "vitest";
-import {
-  PROJECTS_LIST_DEFAULT_LIMIT,
-  PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
-  ProjectRecordSchema,
-  ProjectsAddResultSchema,
-  ProjectSummarySchema,
-  ProjectsListResultSchema,
-  ProjectsSearchRemoteResultSchema,
-  validateProjectsAddParams as add,
-  validateProjectsListParams as list,
-  validateProjectsCheckoutOptionsParams as checkout,
-  validateProjectsRegisterParams as register,
-  validateProjectsRemoveParams as remove,
-  validateProjectsSearchRemoteParams as search,
-  validateSessionsCreateParams as createSession,
-} from "../index.js";
+import * as S from "../index.js";
 import { check, copies, schemaValidation } from "./protocol-validation.test-support.js";
 
 const gitUrl = "https://github.com/openclaw/openclaw.git";
@@ -25,29 +10,33 @@ const project = {
   originUrl: gitUrl,
   source: "registered",
 };
-const listResult = schemaValidation(ProjectsListResultSchema);
-const summary = schemaValidation(ProjectSummarySchema);
+const listResult = schemaValidation(S.ProjectsListResultSchema);
+const summary = schemaValidation(S.ProjectSummarySchema);
 
 describe("project protocol schemas", () => {
   it("validates closed project method inputs", () => {
     check(
-      checkout,
+      S.validateProjectsCheckoutOptionsParams,
       [{ projectId: "project", agentId: "main" }],
       [{ projectId: "project" }, { projectId: "project", agentId: "main", cwd: "/private" }],
     );
     check(
-      list,
+      S.validateProjectsListParams,
       [{}, { includeObserved: true }, { includeObserved: false }],
       [{ includeObserved: "yes" }, { extra: true }],
     );
-    check(register, [{ path: "/repo", name: "OpenClaw" }], [{ path: "" }]);
-    check(add, [{ gitUrl }], [{ gitUrl: "", unexpected: true }]);
-    check(search, [{ query: "openclaw" }], [{ query: "" }]);
-    check(remove, [{ id: "openclaw-2", deleteCheckout: true }], [{ id: "workspace:main" }]);
+    check(S.validateProjectsRegisterParams, [{ path: "/repo", name: "OpenClaw" }], [{ path: "" }]);
+    check(S.validateProjectsAddParams, [{ gitUrl }], [{ gitUrl: "", unexpected: true }]);
+    check(S.validateProjectsSearchRemoteParams, [{ query: "openclaw" }], [{ query: "" }]);
+    check(
+      S.validateProjectsRemoveParams,
+      [{ id: "openclaw-2", deleteCheckout: true }],
+      [{ id: "workspace:main" }],
+    );
   });
   it("accepts bounded remote search and clone results", () => {
-    schemaValidation(ProjectsAddResultSchema).accepts({ ...project, source: "cloned" });
-    schemaValidation(ProjectsSearchRemoteResultSchema).accepts({
+    schemaValidation(S.ProjectsAddResultSchema).accepts({ ...project, source: "cloned" });
+    schemaValidation(S.ProjectsSearchRemoteResultSchema).accepts({
       credential: "missing",
       projects: [
         {
@@ -63,7 +52,7 @@ describe("project protocol schemas", () => {
     });
   });
   it("accepts workspace and stored project records", () => {
-    schemaValidation(ProjectRecordSchema).accepts({
+    schemaValidation(S.ProjectRecordSchema).accepts({
       id: "workspace:main",
       displayName: "openclaw",
       source: "workspace",
@@ -94,14 +83,14 @@ describe("project protocol schemas", () => {
       lastUsedAt: 1,
     };
     summary.accepts(observed);
-    const checkouts = copies(observed.checkouts[0], PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT + 1);
+    const checkouts = copies(observed.checkouts[0], S.PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT + 1);
     summary.rejects({ ...observed, checkouts });
-    const observedProjects = copies(observed, PROJECTS_LIST_DEFAULT_LIMIT + 1);
+    const observedProjects = copies(observed, S.PROJECTS_LIST_DEFAULT_LIMIT + 1);
     listResult.rejects({ projects: [], observedProjects });
   });
   it("bounds additive session project IDs and remote URLs", () => {
     check(
-      createSession,
+      S.validateSessionsCreateParams,
       [
         { agentId: "main", projectId: "openclaw" },
         { agentId: "main", projectGitUrl: gitUrl },

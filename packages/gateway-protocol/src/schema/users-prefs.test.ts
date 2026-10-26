@@ -1,24 +1,15 @@
-import type { TSchema } from "typebox";
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
-  GatewayErrorDetailCodes,
-  GatewayErrorDetailsSchema,
   normalizeUiAppearancePreference as normalize,
   UI_APPEARANCE_PREFERENCE_KEYS as keys,
-  UserPrefsLimitExceededErrorDetailsSchema,
-  UserProfileSchema,
-  UsersPrefsChangedEventSchema,
-  UsersPrefsGetResultSchema,
-  UsersPrefsSetResultSchema,
-  validateUsersPrefsGetParams as getPrefs,
-  validateUsersPrefsSetParams as setPrefs,
-  validateUsersSetRoleParams as setRole,
 } from "../index.js";
+import * as S from "../index.js";
+import { validation } from "./protocol-validation.test-support.js";
+import { accepts, rejects } from "./schema.test-support.js";
 
-function check(schema: TSchema, expected: boolean, value: unknown) {
-  expect(Value.Check(schema, value)).toBe(expected);
-}
+const getPrefs = validation(S.validateUsersPrefsGetParams);
+const setPrefs = validation(S.validateUsersPrefsSetParams);
+const setRole = validation(S.validateUsersSetRoleParams);
 
 describe("user preference protocol schemas", () => {
   it("normalizes only supported profile appearance values and canonicalizes accent colors", () => {
@@ -76,64 +67,65 @@ describe("user preference protocol schemas", () => {
   });
 
   it("bounds profile preference change events to their owning profile and written keys", () => {
-    check(UsersPrefsChangedEventSchema, true, {
+    accepts(S.UsersPrefsChangedEventSchema, {
       profileId: "profile-1",
       keys: [keys.accent, keys.fontUi, keys.fontChat],
     });
-    check(UsersPrefsChangedEventSchema, false, { profileId: "", keys: [] });
-    check(UsersPrefsChangedEventSchema, false, {
-      profileId: "profile-1",
-      keys: Array.from({ length: 33 }, (_, index) => `key-${index}`),
-    });
+    rejects(
+      S.UsersPrefsChangedEventSchema,
+      { profileId: "", keys: [] },
+      { profileId: "profile-1", keys: Array.from({ length: 33 }, (_, index) => `key-${index}`) },
+    );
   });
 
   it("bounds self-scoped preference requests", () => {
     const entries = Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [`key-${index}`, { index }]),
     );
-    expect(getPrefs({})).toBe(true);
-    expect(getPrefs({ keys: Object.keys(entries) })).toBe(true);
-    expect(setPrefs({ entries })).toBe(true);
-    expect(setPrefs({ entries: {}, expectedEntries: entries })).toBe(true);
-    expect(setPrefs({ entries: {}, expectedEntries: { missing: null } })).toBe(true);
-    expect(setPrefs({ entries: {}, expectedEntries: { ...entries, overflow: true } })).toBe(false);
-    expect(setPrefs({ entries: { deleted: null } })).toBe(true);
-    expect(getPrefs({ keys: [...Object.keys(entries), "overflow"] })).toBe(false);
-    expect(getPrefs({ keys: ["same", "same"] })).toBe(false);
-    expect(setPrefs({ entries: { ...entries, overflow: true } })).toBe(false);
+    getPrefs.accepts({}, { keys: Object.keys(entries) });
+    setPrefs.accepts(
+      { entries },
+      { entries: {}, expectedEntries: entries },
+      { entries: {}, expectedEntries: { missing: null } },
+      { entries: { deleted: null } },
+    );
+    getPrefs.rejects({ keys: [...Object.keys(entries), "overflow"] }, { keys: ["same", "same"] });
+    setPrefs.rejects(
+      { entries: {}, expectedEntries: { ...entries, overflow: true } },
+      { entries: { ...entries, overflow: true } },
+    );
   });
 
   it("exposes typed per-profile quota details", () => {
     const details = {
-      code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+      code: S.GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
       limit: 128,
       currentCount: 128,
     };
-    check(GatewayErrorDetailsSchema, true, details);
-    check(UserPrefsLimitExceededErrorDetailsSchema, true, details);
+    accepts(S.GatewayErrorDetailsSchema, details);
+    accepts(S.UserPrefsLimitExceededErrorDetailsSchema, details);
   });
 
   it("keeps no-identity results distinct from successful values", () => {
-    check(UsersPrefsGetResultSchema, true, { status: "no_durable_identity" });
-    check(UsersPrefsGetResultSchema, true, { status: "ok", entries: { theme: "claw" } });
-    check(UsersPrefsSetResultSchema, true, { status: "ok" });
-    check(UsersPrefsSetResultSchema, true, { status: "conflict" });
-    check(UsersPrefsSetResultSchema, true, { status: "no_durable_identity" });
+    accepts(
+      S.UsersPrefsGetResultSchema,
+      { status: "no_durable_identity" },
+      { status: "ok", entries: { theme: "claw" } },
+    );
+    accepts(
+      S.UsersPrefsSetResultSchema,
+      ...["ok", "conflict", "no_durable_identity"].map((status) => ({ status })),
+    );
   });
 
   it("accepts bounded role assignments and explicit role removal", () => {
-    expect(setRole({ profileId: "profile-1", role: "guest" })).toBe(true);
-    expect(setRole({ profileId: "profile-1", role: null })).toBe(true);
-
-    for (const invalid of [
-      { profileId: "profile-1" },
-      { profileId: "profile-1", role: "" },
-      { profileId: "profile-1", role: "   " },
-      { profileId: "profile-1", role: "x".repeat(129) },
-      { profileId: "profile-1", role: "guest", scopes: ["operator.admin"] },
-    ]) {
-      expect(setRole(invalid)).toBe(false);
-    }
+    const profile = { profileId: "profile-1" };
+    setRole.accepts({ ...profile, role: "guest" }, { ...profile, role: null });
+    setRole.rejects(
+      profile,
+      ...["", "   ", "x".repeat(129)].map((role) => Object.assign({}, profile, { role })),
+      { ...profile, role: "guest", scopes: ["operator.admin"] },
+    );
   });
 
   it("keeps profile roles additive and preserves role-free profile payloads", () => {
@@ -149,8 +141,7 @@ describe("user preference protocol schemas", () => {
       hasAvatar: false,
     };
 
-    check(UserProfileSchema, true, profile);
-    check(UserProfileSchema, true, { ...profile, role: "guest" });
-    check(UserProfileSchema, false, { ...profile, role: null });
+    accepts(S.UserProfileSchema, profile, { ...profile, role: "guest" });
+    rejects(S.UserProfileSchema, { ...profile, role: null });
   });
 });
