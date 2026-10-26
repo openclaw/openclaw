@@ -10,7 +10,13 @@ import {
 import { createOpenAIServiceTierObservationWrapper } from "./openai-service-tier-observation.js";
 import { createOpenAIFastModeWrapper } from "./openai.js";
 
-const log = vi.hoisted(() => ({ info: vi.fn(), debug: vi.fn() }));
+const log = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
+  isEnabled: () => false,
+}));
 // mock-isolation: Capture records without opening process-global file/console sinks.
 vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 const provider = vi.hoisted(() => ({
