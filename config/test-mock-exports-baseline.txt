@@ -931,7 +931,6 @@
 ["extensions/typesafe/src/registration.lazy.test.ts","openclaw/plugin-sdk/secret-input-runtime","6c2596e056cf990586d24c1f25cd4401f640abb79b308e68b3ae3bee814288be",1]
 ["extensions/typesafe/src/registration.test.ts","openclaw/plugin-sdk/secret-input-runtime","6068d85a7c77e4ea1002a64baced1facc68327f3937585faa8e4a2a27eb13965",1]
 ["extensions/typesafe/src/registration.transport.test.ts","openclaw/plugin-sdk/secret-input-runtime","6068d85a7c77e4ea1002a64baced1facc68327f3937585faa8e4a2a27eb13965",1]
-["extensions/vercel-ai-gateway/provider-catalog.test.ts","openclaw/plugin-sdk/ssrf-runtime","e885bb481dec3631fe8166a33e076df02a0dd1edbc39120a256b9c0c700c0a05",1]
 ["extensions/voice-call/doctor-contract-api.test.ts","openclaw/plugin-sdk/doctor-repair-runtime","f84822af928a9089f77bee9e636713593c1da93bafd0b646a2beb9b5bb7d1694",1]
 ["extensions/voice-call/index.test.ts","./runtime-entry.js","f529f5573b8f2036634221d124d76854986eece6c9e49d56645666b1fad1fe24",1]
 ["extensions/voice-call/src/providers/shared/guarded-json-api.test.ts","../../../api.js","eefef02ad50d20545a54af6c1ca61acfcfdcb463003af11bad2ffa6259776320",1]
