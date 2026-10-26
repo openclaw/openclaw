@@ -18,6 +18,7 @@ import {
   publishRuntimeToolInputSchema,
 } from "../../packages/ai/src/providers/tool-schema-json-projection.js";
 import type { Tool } from "../../packages/ai/src/types.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -86,7 +87,7 @@ function fixtures() {
   if (values.mode === "published") {
     for (const tool of catalogs[0]!) {
       const projection = publishRuntimeToolInputSchema(tool.parameters);
-      assert.ok(projection.schema && typeof projection.schema === "object");
+      assert.ok(isRecord(projection.schema));
       tool.parameters = projection.schema;
     }
   }
