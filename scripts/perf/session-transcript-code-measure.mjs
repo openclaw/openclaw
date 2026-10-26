@@ -10,6 +10,8 @@
 // first/last replies are compared across arms outside measured work. No Gateway claims.
 // Accept reduced allocation/CPU with byte/order-identical replies and no material adverse
 // matched timing/GC result; run --control before treating noisy tails as regressions.
+// Separate GC diagnosis: add --gc-details to save per-collection heap-space snapshots;
+// launch Node with --trace-gc --trace-incremental-marking to record collection reasons.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -32,6 +34,7 @@ const { values } = parseArgs({
     samples: { type: "string", default: "5" },
     control: { type: "boolean", default: false },
     snapshots: { type: "boolean", default: false },
+    "gc-details": { type: "boolean", default: false },
     messages: { type: "string", default: "2" },
     sessions: { type: "string", default: "1" },
     "payload-bytes": { type: "string", default: "0" },
@@ -404,6 +407,9 @@ for (let sample = 0; sample < samples; sample++) {
             ).href,
             prewarmHistory,
             captureGc: iterations > 0,
+            gcDetails: values["gc-details"]
+              ? path.join(output, `${sample}-${prewarmHistory}-${kind}-${side}-gc.json`)
+              : undefined,
             diagnostics: diagnostics.port2,
             baselineDir:
               values.control || side === "baseline" ? preparedBaselineDir : preparedCandidateDir,
