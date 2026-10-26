@@ -94,9 +94,14 @@ Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
 `--control-bundle-dir` add candidate and A/A control builds. Reports retain the
 metric time domain: WebKit Inspector durations are wall time, while Chromium
-CDP uses thread CPU. Untraced WebKit runs leave those counters null; Inspector
-collection is enabled only by `--trace`. Compare automation wall time across engines; do not divide
-their script measurements as though they were the same CPU metric. Mock routing
+CDP uses thread CPU. Untraced WebKit runs leave those counters null. `--cpu-only`
+collects WebKit's sampled process utilization without Timeline or ScriptProfiler;
+its estimate requires at least one second of interior sample coverage. The explicit
+`provider-model-picker-cycles` and `cron-held-typing-cycles` steps repeat eight
+fixed actions for longer CPU intervals, retaining their selection and held-request
+contracts. Use separate untraced runs for timing. Compare automation wall time
+across engines; do not divide their script or CPU measurements as though they
+were the same metric. Mock routing
 disables HTTP caching; warm reload measures persisted state in the same context.
 Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing

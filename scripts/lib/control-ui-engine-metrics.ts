@@ -54,7 +54,7 @@ export type EngineMeasurement = {
   cpuSamples?: WebKitCpuEvent[];
 };
 
-type MeasurementOptions = { trace: boolean };
+type MeasurementOptions = { trace: boolean; cpuOnly?: boolean };
 
 /** Union nested same-category records so recursive calls are counted once. */
 function intervalMilliseconds(intervals: Array<{ startTime: number; endTime: number }>) {
@@ -69,7 +69,7 @@ function intervalMilliseconds(intervals: Array<{ startTime: number; endTime: num
   return total * 1_000;
 }
 
-async function startWebKitMeasurement(page: Page) {
+async function startWebKitMeasurement(page: Page, trace: boolean) {
   // SAFETY: Playwright 1.64.1 has no public WebKit inspector session. This
   // validated private contract uses its existing in-process pipe; absent
   // shapes fail explicitly below, and a changed target fails at stop.
@@ -106,12 +106,14 @@ async function startWebKitMeasurement(page: Page) {
   const started: string[] = [];
   let timelineEnabled = false;
   try {
-    await session.send("Timeline.enable");
-    timelineEnabled = true;
-    await session.send("Timeline.start", { maxCallStackDepth: 20 });
-    started.push("Timeline.stop");
-    await session.send("ScriptProfiler.startTracking", { includeSamples: true });
-    started.push("ScriptProfiler.stopTracking");
+    if (trace) {
+      await session.send("Timeline.enable");
+      timelineEnabled = true;
+      await session.send("Timeline.start", { maxCallStackDepth: 20 });
+      started.push("Timeline.stop");
+      await session.send("ScriptProfiler.startTracking", { includeSamples: true });
+      started.push("ScriptProfiler.stopTracking");
+    }
     await session.send("CPUProfiler.startTracking");
     started.push("CPUProfiler.stopTracking");
   } catch (error) {
@@ -171,23 +173,28 @@ async function startWebKitMeasurement(page: Page) {
           metrics: {
             collection: "webkit-inspector",
             timeDomain: "monotonic-wall",
-            scriptMs: intervalMilliseconds(scriptEvents),
+            scriptMs: trace ? intervalMilliseconds(scriptEvents) : null,
             taskMs: null,
-            layoutMs: intervalMilliseconds(layout),
-            styleMs: intervalMilliseconds(style),
-            layoutCount: layout.length,
-            styleCount: style.length,
+            layoutMs: trace ? intervalMilliseconds(layout) : null,
+            styleMs: trace ? intervalMilliseconds(style) : null,
+            layoutCount: trace ? layout.length : null,
+            styleCount: trace ? style.length : null,
             jsHeapUsedBytes: null,
             cpuMs: sampledCpu ? sampledCpuMs : null,
             ...(sampledCpu ? { sampledCpu } : {}),
             notes: [
-              "WebKit ScriptProfiler and Timeline report elapsed monotonic wall time, not thread CPU. Script intervals include native work invoked by JavaScript and Playwright automation.",
-              "Timeline/ScriptProfiler and stack sampling add overhead. Compare timings in separate untraced runs.",
+              ...(trace
+                ? [
+                    "WebKit ScriptProfiler and Timeline report elapsed monotonic wall time, not thread CPU. Script intervals include native work invoked by JavaScript and Playwright automation.",
+                    "Timeline/ScriptProfiler and stack sampling add overhead. Compare timings in separate untraced runs.",
+                  ]
+                : [
+                    "CPU-only collection omits Timeline and ScriptProfiler; their counters are null.",
+                  ]),
               "CPUProfiler samples are process/thread usage percentages, not cumulative CPU time. cpuMs is an estimate over sampledCpu.coveredMs only when that interior span is at least 1 s; boundary intervals are excluded. Short spans, task and heap counters are null. Do not compare WebKit wall durations with Chromium threadTicks as CPU ratios.",
             ],
           },
-          timeline: records,
-          profile: { scriptEvents, samples, cpuSamples },
+          ...(trace ? { timeline: records, profile: { scriptEvents, samples, cpuSamples } } : {}),
           cpuSamples,
         };
       } finally {
@@ -195,7 +202,9 @@ async function startWebKitMeasurement(page: Page) {
           await Promise.allSettled(started.map((method) => session.send(method)));
         }
         try {
-          await session.send("Timeline.disable");
+          if (timelineEnabled) {
+            await session.send("Timeline.disable");
+          }
         } finally {
           detach();
         }
@@ -211,7 +220,7 @@ export async function startEngineMeasurement(
   options: MeasurementOptions,
 ) {
   if (engine === "webkit") {
-    if (!options.trace) {
+    if (!options.trace && !options.cpuOnly) {
       // Inspector instrumentation has measurable cost. Keep cross-engine wall
       // comparisons untraced; collect attribution in a separate --trace run.
       return {
@@ -236,7 +245,7 @@ export async function startEngineMeasurement(
         },
       };
     }
-    return startWebKitMeasurement(page);
+    return startWebKitMeasurement(page, options.trace);
   }
   const session = await page.context().newCDPSession(page);
   const timeline: unknown[] = [];

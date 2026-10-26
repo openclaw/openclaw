@@ -19,6 +19,7 @@ import {
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
+import { createEngineActionScenarios } from "./lib/control-ui-engine-action-scenarios.ts";
 import {
   createEngineBootScenarios,
   type EngineScenario,
@@ -46,6 +47,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "cpu-only": { type: "boolean", default: false },
   },
 });
 const pairs = Number(values.pairs);
@@ -63,6 +65,9 @@ if (!["desktop", "mobile", "both"].includes(values.viewport)) {
 }
 if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
   throw new Error("--control-bundle-dir requires --compare-bundle-dir");
+}
+if (values.trace && values["cpu-only"]) {
+  throw new Error("Choose --trace or --cpu-only; use separate untraced timing runs");
 }
 const artifactDir = createControlUiE2eArtifactDir("engines", values.output);
 const viewports = [
@@ -137,14 +142,22 @@ try {
           })),
     );
   }
+  const ids = values.steps?.split(",");
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
+    ...createEngineActionScenarios(),
     ...interactionScenarios.filter(
-      (scenario) => !scenario.resourceOnly && !scenario.projectionFamily && !scenario.dataPage,
+      (scenario) =>
+        ids?.includes(scenario.id) ||
+        (!scenario.explicitOnly &&
+          !scenario.resourceOnly &&
+          !scenario.projectionFamily &&
+          !scenario.dataPage),
     ),
   ];
-  const ids = values.steps?.split(",");
-  const scenarios = catalog.filter(({ id }) => !ids || ids.includes(id));
+  const scenarios = catalog.filter(({ id, explicitOnly }) =>
+    ids ? ids.includes(id) : !explicitOnly,
+  );
   if (!scenarios.length || ids?.some((id) => !scenarios.some((scenario) => scenario.id === id))) {
     throw new Error("Unknown or empty --steps selection");
   }
@@ -159,9 +172,12 @@ try {
     pairs,
     viewports,
     trace: values.trace,
+    cpuOnly: values["cpu-only"],
     collection: values.trace
       ? "Playwright tracing and engine Inspector/Profiler; overhead included"
-      : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
+      : values["cpu-only"]
+        ? "WebKit sampled process CPU and Chromium CDP thread CPU; no timeline or script profiler"
+        : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
       "Serial engine and bundle order alternates each pair; fresh browser context per observation",
     acceptance:
@@ -305,7 +321,10 @@ try {
                   sources: true,
                 });
               }
-              measurement = await startEngineMeasurement(page, engine, { trace: values.trace });
+              measurement = await startEngineMeasurement(page, engine, {
+                trace: values.trace,
+                cpuOnly: values["cpu-only"],
+              });
               phase = "measurement";
               const start = performance.now();
               observation.evidence = (await scenario.run(page, gateway)) ?? undefined;
@@ -315,7 +334,7 @@ try {
               measurement = undefined;
               const captured = await activeMeasurement.stop();
               observation.metrics = captured.metrics;
-              if (values.trace) {
+              if (values.trace || values["cpu-only"]) {
                 await writeJson(`${artifactPrefix}.inspector.json`, captured);
               }
               observation.requests = {};
@@ -470,7 +489,7 @@ await writeFile(
   [
     "# Control UI engine comparison",
     "",
-    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
+    `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
     "",

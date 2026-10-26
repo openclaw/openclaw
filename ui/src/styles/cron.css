@@ -86,6 +86,11 @@
   min-width: 0;
 }
 
+/* Keep caret edits off the shared backing of the retained job rows in WebKit. */
+.cron-search-box:focus-within {
+  will-change: transform;
+}
+
 .cron-search-box__icon {
   position: absolute;
   left: 10px;
