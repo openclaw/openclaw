@@ -513,11 +513,11 @@ export async function snapshotUpdateCandidateState(
   );
   const admittedDatabases = new Set(sourceInput.databaseInventory);
   const sourceRoot = path.resolve(sourceInput.stateDir);
-  // Missing selectors from a released parent cannot prove which historical partition was default.
-  const sourceCronDefaultStoreKey =
+  // Released parents omit source selectors and launch us in the rehearsal namespace.
+  const sourceEnv =
     sourceInput.env?.OPENCLAW_STATE_DIR?.trim() || sourceInput.env?.OPENCLAW_CONFIG_PATH?.trim()
-      ? resolveLegacyCronDefaultStoreKey(sourceInput.env)
-      : undefined;
+      ? sourceInput.env
+      : { ...sourceInput.env, OPENCLAW_STATE_DIR: sourceRoot };
   // Discovery uses the selected installation; cron identity retains the source selectors above.
   const input = { ...sourceInput, env: { ...sourceInput.env, OPENCLAW_STATE_DIR: sourceRoot } };
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
@@ -611,10 +611,10 @@ export async function snapshotUpdateCandidateState(
               contentVersion = readStateSchemaContentVersion(db);
               // Preserve the known source selector before rehearsal changes the state root.
               // The migration still refuses an unmatched historical partition.
-              if (tableExists(db, "config_machine_state") && sourceCronDefaultStoreKey) {
+              if (tableExists(db, "config_machine_state")) {
                 migrateCronDefaultStoreIdentity(db, {
                   previousVersion: contentVersion ?? userVersion,
-                  legacyDefaultStoreKey: sourceCronDefaultStoreKey,
+                  legacyDefaultStoreKey: resolveLegacyCronDefaultStoreKey(sourceEnv),
                 });
               }
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
