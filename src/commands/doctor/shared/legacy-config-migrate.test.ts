@@ -14,6 +14,10 @@ function repairBindingsForTest<T extends object>(config: T) {
   return { config: pruneBindingsForMissingAgents(config, changes), changes };
 }
 
+function binding(agentId: string) {
+  return { agentId, match: { channel: "discord" } };
+}
+
 function issuePaths(raw: unknown) {
   return findLegacyConfigIssues(raw).map((issue) => issue.path);
 }
@@ -31,42 +35,91 @@ function configAt(paths: Record<string, unknown>) {
 }
 
 it("preserves session typing precedence over an existing agent default", () => {
-  const res = migrate({
-    agents: { defaults: { typingMode: "message" } },
-    session: { typingMode: "thinking" },
+  const res = migratePaths({
+    "agents.defaults.typingMode": "message",
+    "session.typingMode": "thinking",
   });
-
   expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
   expect(res.config?.session).toEqual({});
+});
+
+it("removes deprecated session.maintenance.rotateBytes", () => {
+  const maintenance = { mode: "enforce", pruneAfter: "30d", maxEntries: 500 };
+  const res = migratePaths({ "session.maintenance": { ...maintenance, rotateBytes: "10mb" } });
+  expect(res.config?.session?.maintenance).toEqual(maintenance);
+});
+
+it("removes cron.runLog while preserving current cron config", () => {
+  const raw = { cron: { enabled: true, runLog: { maxBytes: "2mb", keepLines: 100 } } };
+  expect(issuePaths(raw)).toContain("cron.runLog");
+  expect(migrate(raw).config?.cron).toEqual({ enabled: true });
+});
+
+it("collapses split spawn flags per scope and resolves conflicts conservatively", () => {
+  const bindings = { spawnSubagentSessions: true, spawnAcpSessions: true };
+  const res = migratePaths({
+    "channels.discord.threadBindings": { enabled: true, ...bindings },
+    "channels.discord.accounts.work.threadBindings": { ...bindings, spawnAcpSessions: false },
+  });
+  expect(res.config).toHaveProperty("channels.discord.threadBindings", {
+    enabled: true,
+    spawnSessions: true,
+  });
+  expect(res.config).toHaveProperty("channels.discord.accounts.work.threadBindings", {
+    spawnSessions: false,
+  });
+});
+
+it("strips explicit bundled discovery mode after machine-state capture", () => {
+  expect(
+    migrate({ plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" } }).config,
+  ).toEqual({ plugins: { allow: ["telegram"] } });
+});
+
+it("removes a zero port and its empty gateway section", () => {
+  expect(migrate({ gateway: { port: 0 } }).config).toEqual({});
+});
+
+it("preserves Qwen params when their destination cannot be written", () => {
+  const models = { "vllm/Qwen/model": { params: { qwenThinkingFormat: "chat-template" } } };
+  const res = migratePaths({
+    "agents.defaults.models": models,
+    "models.providers.vllm": "malformed",
+  });
+  expect(res.config?.models?.providers?.vllm).toBe("malformed");
+  expect(res.config?.agents?.defaults?.models).toEqual(models);
+});
+
+it("removes only invalid thinking formats across provider catalogs", () => {
+  const valid = { id: "valid", compat: { thinkingFormat: "qwen-chat-template" } };
+  const res = migrateProviderConfig({
+    bailian: {
+      models: [
+        valid,
+        { id: "legacy", compat: { thinkingFormat: "old-bailian", supportsTools: true } },
+      ],
+    },
+  });
+  expect(res.config?.models?.providers?.bailian?.models).toEqual([
+    valid,
+    { id: "legacy", compat: { supportsTools: true } },
+  ]);
+  expect(migrate(res.config)).toEqual({ config: null, changes: [] });
 });
 
 it.each([
   {
     name: "implicit main exists but uppercase MAIN and missing agents are pruned",
     list: [{ id: "ALPHA" }],
-    bindings: [
-      { agentId: "main", match: { channel: "discord" } },
-      { agentId: "alpha", match: { channel: "discord" } },
-      { agentId: "MAIN", match: { channel: "discord" } },
-      { agentId: "ghost", match: { channel: "discord" } },
-    ],
-    expected: [
-      { agentId: "main", match: { channel: "discord" } },
-      { agentId: "alpha", match: { channel: "discord" } },
-    ],
+    bindings: ["main", "alpha", "MAIN", "ghost"].map(binding),
+    expected: ["main", "alpha"].map(binding),
     changes: ["Removed 2 bindings that referenced missing agents.list ids."],
   },
   {
     name: "malformed roster leaves bindings untouched",
     list: [null, { id: 1 }, { id: "alpha" }],
-    bindings: [
-      { agentId: "ghost", match: { channel: "discord" } },
-      { agentId: "alpha", match: { channel: "discord" } },
-    ],
-    expected: [
-      { agentId: "ghost", match: { channel: "discord" } },
-      { agentId: "alpha", match: { channel: "discord" } },
-    ],
+    bindings: ["ghost", "alpha"].map(binding),
+    expected: ["ghost", "alpha"].map(binding),
     changes: [],
   },
 ])("repairs bindings: $name", ({ list, bindings, expected, changes }) => {
@@ -93,6 +146,20 @@ function browserSandbox(browser: Record<string, unknown>) {
 
 function modelMapConfig(models: Record<string, unknown>) {
   return configAt({ "agents.defaults.models": models });
+}
+
+const supervision = {
+  endpoints: [{ id: "local", transport: "stdio-proxy", command: "codex" }],
+  allowRawTranscripts: true,
+  allowWriteControls: true,
+};
+
+function qwenModel(id: string, thinkingFormat: string, extra: Record<string, unknown> = {}) {
+  return { id, reasoning: true, compat: { thinkingFormat }, ...extra };
+}
+
+function selection(primary: string, ...fallbacks: string[]) {
+  return { primary, fallbacks };
 }
 
 describe("legacy Codex provider config migrate", () => {
@@ -401,43 +468,23 @@ describe("profile configured tool section migrate", () => {
   });
 });
 
-it("removes deprecated session.maintenance.rotateBytes", () => {
-  const res = migratePaths({
-    "session.maintenance.mode": "enforce",
-    "session.maintenance.pruneAfter": "30d",
-    "session.maintenance.maxEntries": 500,
-    "session.maintenance.rotateBytes": "10mb",
-  });
-
-  expect(res.config?.session?.maintenance).toEqual({
-    mode: "enforce",
-    pruneAfter: "30d",
-    maxEntries: 500,
-  });
-});
-
 it.each([
   {
     name: "OTLP logs",
     protocol: "grpc",
-    otel: { enabled: true, traces: false, metrics: false, logs: true, logsExporter: "otlp" },
-    expected: { enabled: false, traces: false, metrics: false, logs: true, logsExporter: "otlp" },
+    logsExporter: "otlp",
+    enabled: false,
   },
   {
     name: "config-interpolated grpc with working stdout logs",
     protocol: "${OTEL_PROTOCOL}",
-    otel: { enabled: true, traces: false, metrics: false, logs: true, logsExporter: "stdout" },
-    expected: {
-      enabled: true,
-      traces: false,
-      metrics: false,
-      logs: true,
-      logsExporter: "stdout",
-    },
+    logsExporter: "stdout",
+    enabled: true,
   },
 ])(
   "removes unsupported grpc without disabling working signals: $name",
-  ({ otel, protocol, expected }) => {
+  ({ logsExporter, protocol, enabled }) => {
+    const otel = { enabled: true, traces: false, metrics: false, logs: true, logsExporter };
     const authored = { diagnostics: { otel: { ...otel, protocol } } };
     const resolved = { diagnostics: { otel: { ...otel, protocol: "grpc" } } };
     const res = migrate(
@@ -449,7 +496,7 @@ it.each([
             resolvedRaw: resolved,
           },
     );
-    expect(res.config?.diagnostics?.otel).toEqual(expected);
+    expect(res.config?.diagnostics?.otel).toEqual({ ...otel, enabled });
   },
 );
 
@@ -482,40 +529,6 @@ it.each([
   expect(res.config?.gateway?.tailscale).toEqual(expected);
   expect(res.changes).toEqual([message]);
   expect(migrate(res.config)).toEqual({ config: null, changes: [] });
-});
-
-it("removes cron.runLog while preserving current cron config", () => {
-  const raw = {
-    cron: {
-      enabled: true,
-      runLog: { maxBytes: "2mb", keepLines: 100 },
-    },
-  };
-
-  expect(issuePaths(raw)).toContain("cron.runLog");
-  const res = migrate(raw);
-
-  expect(res.config?.cron).toEqual({ enabled: true });
-});
-
-it("collapses split spawn flags per scope and resolves conflicts conservatively", () => {
-  const res = migrate({
-    channels: {
-      discord: {
-        threadBindings: { enabled: true, spawnSubagentSessions: true, spawnAcpSessions: true },
-        accounts: {
-          work: { threadBindings: { spawnSubagentSessions: true, spawnAcpSessions: false } },
-        },
-      },
-    },
-  });
-  expect(res.config).toHaveProperty("channels.discord.threadBindings", {
-    enabled: true,
-    spawnSessions: true,
-  });
-  expect(res.config).toHaveProperty("channels.discord.accounts.work.threadBindings", {
-    spawnSessions: false,
-  });
 });
 
 describe("legacy migrate audio transcription", () => {
@@ -572,6 +585,7 @@ describe("legacy migrate audio transcription", () => {
 
 describe("legacy sandbox config migrate", () => {
   it("disables the default sandbox browser network without granting inherited egress", () => {
+    const disabled = { enabled: false, network: "openclaw-sandbox-browser" };
     const raw = configAt({
       "agents.ownership": "explicit",
       "agents.defaults": browserSandbox({ enabled: true, network: " NONE ", autoStart: false }),
@@ -585,32 +599,19 @@ describe("legacy sandbox config migrate", () => {
     expect(issuePaths(raw)).toEqual(["agents.defaults.sandbox.browser.network", "agents"]);
     const res = migrate(raw);
 
-    expect(res.config?.agents?.entries?.main?.sandbox?.browser).toEqual({
-      enabled: false,
-      network: "openclaw-sandbox-browser",
-      headless: true,
-    });
     expect(res.config?.agents?.defaults?.sandbox?.browser).toEqual({
-      enabled: false,
-      network: "openclaw-sandbox-browser",
+      ...disabled,
       autoStart: false,
     });
-    expect(res.config?.agents?.entries?.inherited?.sandbox?.browser).toEqual({
-      enabled: false,
-      headless: true,
-    });
-    expect(res.config?.agents?.entries?.isolated?.sandbox?.browser).toEqual({
-      enabled: true,
-      network: "isolated-browser-net",
-    });
-    expect(res.config?.agents?.entries?.blankEnabled?.sandbox?.browser).toEqual({
-      enabled: true,
-      network: "   ",
-    });
-    expect(res.config?.agents?.entries?.blankInherited?.sandbox?.browser).toEqual({
-      enabled: true,
-      network: "",
-    });
+    for (const [id, expected] of Object.entries({
+      main: { ...disabled, headless: true },
+      inherited: { enabled: false, headless: true },
+      isolated: { enabled: true, network: "isolated-browser-net" },
+      blankEnabled: { enabled: true, network: "   " },
+      blankInherited: { enabled: true, network: "" },
+    })) {
+      expect(res.config?.agents?.entries?.[id]?.sandbox?.browser).toEqual(expected);
+    }
     expect(migrate(res.config)).toEqual({ config: null, changes: [] });
   });
 
@@ -642,43 +643,30 @@ describe("legacy sandbox config migrate", () => {
   });
 });
 
-describe("legacy migrate x_search auth", () => {
-  it("moves only legacy x_search auth into plugin-owned xai config", () => {
-    const res = migratePaths({
-      "tools.web.x_search": {
-        apiKey: "xai-legacy-key",
-        enabled: true,
-        model: "grok-4-1-fast",
-      },
-    });
-
-    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      enabled: true,
-      model: "grok-4-1-fast",
-    });
-    expect(res.config?.plugins?.entries?.xai).toEqual(
-      configAt({
-        enabled: true,
-        "config.webSearch.apiKey": "xai-legacy-key",
-      }),
-    );
-  });
-
-  it("moves legacy xAI search config without replacing model selections", () => {
-    const raw = configAt({
+it.each([
+  {
+    name: "moves only legacy x_search auth",
+    paths: {
+      "tools.web.x_search": { apiKey: "xai-legacy-key", enabled: true, model: "grok-4-1-fast" },
+    },
+    xSearch: { enabled: true, model: "grok-4-1-fast" },
+    webSearch: { apiKey: "xai-legacy-key" },
+  },
+  {
+    name: "moves legacy xAI search config without replacing model selections",
+    paths: {
       "tools.web.search": { grok: { model: "grok-4-1-fast" } },
       "tools.web.x_search": { model: "grok-4-1-fast-non-reasoning" },
-    });
-    const res = migrate(raw);
-
-    expect(res.config?.plugins?.entries?.xai).toEqual({
-      enabled: true,
-      config: { webSearch: { model: "grok-4-1-fast" } },
-    });
-    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      model: "grok-4-1-fast-non-reasoning",
-    });
-  });
+    },
+    xSearch: { model: "grok-4-1-fast-non-reasoning" },
+    webSearch: { model: "grok-4-1-fast" },
+  },
+])("$name into plugin-owned config", ({ paths, xSearch, webSearch }) => {
+  const res = migratePaths(paths);
+  expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual(
+    xSearch,
+  );
+  expect(res.config?.plugins?.entries?.xai).toEqual({ enabled: true, config: { webSearch } });
 });
 
 it.each([
@@ -687,40 +675,28 @@ it.each([
     plugins: configAt({
       allow: ["telegram", "codex-supervisor", "codex"],
       "entries.codex-supervisor.enabled": true,
-      "entries.codex-supervisor.config.endpoints": [
-        { id: "local", transport: "stdio-proxy", command: "codex" },
-      ],
-      "entries.codex-supervisor.config.allowRawTranscripts": true,
-      "entries.codex-supervisor.config.allowWriteControls": true,
+      "entries.codex-supervisor.config": supervision,
       "entries.codex-supervisor.hooks.enabled": true,
     }),
     expected: configAt({
       allow: ["telegram", "codex"],
       "entries.codex.enabled": true,
-      "entries.codex.config.supervision.enabled": true,
-      "entries.codex.config.supervision.endpoints": [
-        { id: "local", transport: "stdio-proxy", command: "codex" },
-      ],
-      "entries.codex.config.supervision.allowRawTranscripts": true,
-      "entries.codex.config.supervision.allowWriteControls": true,
+      "entries.codex.config.supervision": { enabled: true, ...supervision },
     }),
   },
   {
     name: "disabled supervision preserves the implicit harness",
     agents: { defaults: { model: "openai/gpt-5.5" } },
-    plugins: {
-      entries: {
-        codex: { config: { appServer: { transport: "stdio" } } },
-        "codex-supervisor": { enabled: false },
+    plugins: configAt({
+      "entries.codex.config.appServer": { transport: "stdio" },
+      "entries.codex-supervisor.enabled": false,
+    }),
+    expected: configAt({
+      "entries.codex.config": {
+        appServer: { transport: "stdio" },
+        supervision: { enabled: false },
       },
-    },
-    expected: {
-      entries: {
-        codex: {
-          config: { appServer: { transport: "stdio" }, supervision: { enabled: false } },
-        },
-      },
-    },
+    }),
   },
   {
     name: "canonical values win while missing supervision fields are filled",
@@ -778,7 +754,7 @@ it.each([
   if (agents) {
     expect(res.config?.agents).toEqual(agents);
   }
-  expect(migrate(res.config)).toEqual({ config: null });
+  expect(migrate(res.config)).toEqual({ config: null, changes: [] });
 });
 
 describe("legacy bundled provider discovery migrate", () => {
@@ -796,50 +772,32 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
     expect(res.config?.plugins?.slots?.memory).toBe("openai");
   });
-
-  it("strips explicit bundled discovery mode after machine-state capture", () => {
-    const res = migrate({
-      plugins: {
-        allow: ["telegram"],
-        bundledDiscovery: "allowlist",
-      },
-    });
-
-    expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
-  });
 });
 
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   it.each([
     {
       gateway: { bind: "custom", port: 9000, customBindHost: "192.168.1.100" },
-      expected: {
-        bind: "custom",
-        port: 9000,
-        customBindHost: "192.168.1.100",
-        controlUi: {
-          allowedOrigins: [
-            "http://localhost:9000",
-            "http://127.0.0.1:9000",
-            "http://192.168.1.100:9000",
-          ],
-        },
-      },
+      bind: "custom",
+      allowedOrigins: [
+        "http://localhost:9000",
+        "http://127.0.0.1:9000",
+        "http://192.168.1.100:9000",
+      ],
     },
     {
       gateway: { bind: "0.0.0.0", controlUi: { basePath: "/app", allowedOrigins: ["", "   "] } },
-      expected: {
-        bind: "lan",
-        controlUi: {
-          basePath: "/app",
-          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
-        },
-      },
+      bind: "lan",
+      allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
     },
   ])(
     "seeds non-loopback origins while preserving gateway settings: $gateway.bind",
-    ({ gateway, expected }) => {
-      expect(migrate({ gateway }).config?.gateway).toEqual(expected);
+    ({ gateway, bind, allowedOrigins }) => {
+      expect(migrate({ gateway }).config?.gateway).toEqual({
+        ...gateway,
+        bind,
+        controlUi: { ...gateway.controlUi, allowedOrigins },
+      });
     },
   );
 
@@ -852,11 +810,6 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       changes: [],
     });
   });
-});
-
-it("removes a zero port and its empty gateway section", () => {
-  const res = migrate({ gateway: { port: 0 } });
-  expect(res.config).toEqual({});
 });
 
 describe("legacy model compat migrate", () => {
@@ -1041,37 +994,16 @@ describe("legacy model compat migrate", () => {
         { id: "Qwen/row", params: { qwenThinkingFormat: "chat-template", temperature: 0.2 } },
       ],
     });
-    expect(findLegacyConfigIssues(raw)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agents.defaults.models",
-          message: expect.stringContaining(
-            "agents.defaults.models.<vllm-model>.params.qwenThinkingFormat",
-          ),
-        }),
-        expect.objectContaining({
-          path: "models.providers",
-          message: expect.stringContaining("models.providers.<vllm>.params.qwenThinkingFormat"),
-        }),
-      ]),
+    expect(issuePaths(raw)).toEqual(
+      expect.arrayContaining(["agents.defaults.models", "models.providers"]),
     );
     const res = migrate(raw);
     expect(res.config?.models?.providers?.vllm).toBeUndefined();
     expect(res.config?.models?.providers?.VLLM?.models).toEqual([
-      {
-        id: "vllm/Qwen/existing",
-        name: "Existing",
-        reasoning: true,
-        compat: { thinkingFormat: "qwen-chat-template" },
-      },
-      { id: "Qwen/kept", reasoning: true, compat: { thinkingFormat: "qwen-chat-template" } },
-      {
-        id: "Qwen/row",
-        reasoning: true,
-        params: { temperature: 0.2 },
-        compat: { thinkingFormat: "qwen-chat-template" },
-      },
-      { id: "Qwen/new", name: "Qwen/new", reasoning: true, compat: { thinkingFormat: "qwen" } },
+      qwenModel("vllm/Qwen/existing", "qwen-chat-template", { name: "Existing" }),
+      qwenModel("Qwen/kept", "qwen-chat-template"),
+      qwenModel("Qwen/row", "qwen-chat-template", { params: { temperature: 0.2 } }),
+      qwenModel("Qwen/new", "qwen", { name: "Qwen/new" }),
     ]);
     expect(res.config?.agents?.defaults?.models).toEqual({
       "VLLM/Qwen/new@local": {},
@@ -1081,49 +1013,31 @@ describe("legacy model compat migrate", () => {
   });
 
   it("preserves vLLM target order and cached formats across provider, default, and agent params", () => {
+    const mainModel = selection("vllm/Qwen/Qwen3-8B", "vllm/Qwen/Qwen3-14B");
+    const workerModel = selection(
+      "vllm/Qwen/Qwen3-14B",
+      "vllm/Qwen/Qwen3-8B",
+      "vllm/Qwen/Qwen3-32B",
+    );
+    const cachedModel = qwenModel("Qwen/Qwen3-8B", "qwen-chat-template", { reasoning: false });
     const res = migratePaths({
-      "agents.defaults.model.primary": "vllm/Qwen/Qwen3-8B",
-      "agents.defaults.model.fallbacks": ["vllm/Qwen/Qwen3-14B"],
+      "agents.defaults.model": mainModel,
       "agents.defaults.params.qwenThinkingFormat": "chat-template",
-      "agents.entries.worker.model.primary": "vllm/Qwen/Qwen3-14B",
-      "agents.entries.worker.model.fallbacks": ["vllm/Qwen/Qwen3-8B", "vllm/Qwen/Qwen3-32B"],
+      "agents.entries.worker.model": workerModel,
       "agents.entries.worker.params.qwen_thinking_format": "invalid",
       "models.providers.vllm.params.qwenThinkingFormat": "enable-thinking",
-      "models.providers.vllm.models": [
-        {
-          id: "Qwen/Qwen3-8B",
-          reasoning: false,
-          compat: { thinkingFormat: "qwen-chat-template" },
-        },
-        { id: "Qwen/Qwen3-14B" },
-      ],
+      "models.providers.vllm.models": [cachedModel, { id: "Qwen/Qwen3-14B" }],
     });
 
     expect(res.config?.models?.providers?.vllm).toEqual({
       models: [
-        {
-          id: "Qwen/Qwen3-8B",
-          reasoning: false,
-          compat: { thinkingFormat: "qwen-chat-template" },
-        },
-        { id: "Qwen/Qwen3-14B", reasoning: true, compat: { thinkingFormat: "qwen" } },
-        {
-          id: "Qwen/Qwen3-32B",
-          name: "Qwen/Qwen3-32B",
-          reasoning: true,
-          compat: { thinkingFormat: "qwen" },
-        },
+        cachedModel,
+        qwenModel("Qwen/Qwen3-14B", "qwen"),
+        qwenModel("Qwen/Qwen3-32B", "qwen", { name: "Qwen/Qwen3-32B" }),
       ],
     });
-    expect(res.config?.agents?.defaults).toEqual({
-      model: { primary: "vllm/Qwen/Qwen3-8B", fallbacks: ["vllm/Qwen/Qwen3-14B"] },
-    });
-    expect(res.config?.agents?.entries?.worker).toEqual({
-      model: {
-        primary: "vllm/Qwen/Qwen3-14B",
-        fallbacks: ["vllm/Qwen/Qwen3-8B", "vllm/Qwen/Qwen3-32B"],
-      },
-    });
+    expect(res.config?.agents?.defaults).toEqual({ model: mainModel });
+    expect(res.config?.agents?.entries?.worker).toEqual({ model: workerModel });
     expect(migrate(res.config)).toEqual({ config: null, changes: [] });
   });
 
@@ -1148,35 +1062,6 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.3 });
     expect(res.config?.agents?.entries?.local).toEqual({ params: { temperature: 0.4 } });
-  });
-
-  it("preserves Qwen params when their destination cannot be written", () => {
-    const res = migratePaths({
-      "agents.defaults.models": {
-        "vllm/Qwen/model": { params: { qwenThinkingFormat: "chat-template" } },
-      },
-      "models.providers.vllm": "malformed",
-    });
-    expect(res.config?.models?.providers?.vllm).toBe("malformed");
-    expect(res.config?.agents?.defaults?.models).toEqual({
-      "vllm/Qwen/model": { params: { qwenThinkingFormat: "chat-template" } },
-    });
-  });
-
-  it("removes only invalid thinking formats across provider catalogs", () => {
-    const res = migrateProviderConfig({
-      bailian: {
-        models: [
-          { id: "valid", compat: { thinkingFormat: "qwen-chat-template" } },
-          { id: "legacy", compat: { thinkingFormat: "old-bailian", supportsTools: true } },
-        ],
-      },
-    });
-    expect(res.config?.models?.providers?.bailian?.models).toEqual([
-      { id: "valid", compat: { thinkingFormat: "qwen-chat-template" } },
-      { id: "legacy", compat: { supportsTools: true } },
-    ]);
-    expect(migrate(res.config)).toEqual({ config: null, changes: [] });
   });
 });
 

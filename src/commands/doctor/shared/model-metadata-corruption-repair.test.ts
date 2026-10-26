@@ -6,22 +6,22 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { repairGeneratedModelMetadataCorruption } from "./model-metadata-corruption-repair.js";
 
 const configPath = path.resolve("/tmp/openclaw-model-metadata-corruption.json");
+type RepairParams = Parameters<typeof repairGeneratedModelMetadataCorruption>[0];
 function corruptedConfig(): OpenClawConfig {
+  const model = {
+    id: "gpt-5.6-sol",
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 8192,
+  };
   return {
     models: {
       providers: {
         openai: {
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          models: [
-            {
-              id: "gpt-5.6-sol",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 8192,
-            },
-          ],
+          models: [model],
         },
       },
     },
@@ -79,10 +79,7 @@ function writeRecord(
   };
 }
 
-function repair(
-  config = corruptedConfig(),
-  overrides: Partial<Parameters<typeof repairGeneratedModelMetadataCorruption>[0]> = {},
-) {
+function repair(config = corruptedConfig(), overrides: Partial<RepairParams> = {}) {
   return repairGeneratedModelMetadataCorruption({
     config,
     authoredRoot: structuredClone(config),
@@ -105,7 +102,7 @@ it.each(["failed write", "unrelated paths", "custom route", "included models"])(
   "leaves an exact fingerprint unchanged with %s",
   (scenario) => {
     const config = corruptedConfig();
-    const overrides: Partial<Parameters<typeof repairGeneratedModelMetadataCorruption>[0]> = {};
+    const overrides: Partial<RepairParams> = {};
     if (scenario === "failed write") {
       overrides.auditRecords = [writeRecord({ result: "failed", nextHash: null })];
     } else if (scenario === "unrelated paths") {

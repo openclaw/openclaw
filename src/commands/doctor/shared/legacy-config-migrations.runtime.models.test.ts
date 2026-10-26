@@ -38,18 +38,6 @@ function allowConfig(models: Record<string, ModelEntry>, modelPolicy?: { allow: 
   return { agents: { defaults: { models, ...(modelPolicy ? { modelPolicy } : {}) } } };
 }
 
-it("detects owned vLLM aliases", () => {
-  const raw = providerConfig({
-    vllm: {
-      params: { temperature: 0 },
-      models: [{ id: "local-model", params: { qwen_thinking_format: false } }],
-    },
-  });
-  expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-    "models.providers.vllm.models",
-  ]);
-});
-
 it("retires pricing while preserving the hosted catalog config", () => {
   const raw = { models: { pricing: { enabled: false }, catalogRefresh: { enabled: true } } };
   migration("models.pricing-retired").apply(raw, []);

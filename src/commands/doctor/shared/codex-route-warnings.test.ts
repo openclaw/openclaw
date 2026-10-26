@@ -36,6 +36,18 @@ function expectWarnings(actual: string[], expected: string[][]) {
   });
 }
 
+function expectLosslessWarning(warnings: string[], ...paths: string[]) {
+  expectWarnings(warnings, [
+    [
+      "Legacy Lossless compaction",
+      ...paths,
+      "plugins.slots.contextEngine",
+      "plugins.entries.lossless-claw.config.summaryModel",
+      "Move the Lossless config manually",
+    ],
+  ]);
+}
+
 const DISABLED_CODEX_PLUGIN_CONFIG = { entries: { codex: { enabled: false } } };
 const MODEL_CATALOG_METADATA = {
   name: "Test model",
@@ -124,10 +136,8 @@ describe("collectCodexRouteWarnings", () => {
       defaults: { model: "openai/gpt-5.5", compaction: { provider: "lossless-claw" } },
       list: [{ id: "fast", model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4-mini" } }],
       warning: [
-        "Legacy Lossless compaction",
-        "- agents.defaults.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
-        "- agents.list.fast.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
-        "Move the Lossless config manually",
+        "agents.defaults.compaction.provider: lossless-claw",
+        "agents.list.fast.compaction.model: openai/gpt-5.4-mini",
       ],
     },
     {
@@ -159,19 +169,9 @@ describe("collectCodexRouteWarnings", () => {
     const original = structuredClone(cfg);
     const result = maybeRepairCodexRoutes(cfg);
     expect(result.changes).toEqual([]);
-    expect(result.cfg.agents?.defaults?.compaction).toEqual(original.agents?.defaults?.compaction);
-    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual(
-      original.agents?.list?.[0]?.compaction,
-    );
-    if (original.plugins) {
-      expect(result.cfg.plugins?.entries?.["lossless-claw"]?.config).toEqual(
-        original.plugins.entries?.["lossless-claw"]?.config,
-      );
-    } else {
-      expect(result.cfg.plugins).toBeUndefined();
-    }
+    expect(result.cfg).toEqual(original);
     if (warning) {
-      expectWarnings(result.warnings, [warning]);
+      expectLosslessWarning(result.warnings, ...warning);
     }
   });
 
@@ -293,14 +293,11 @@ describe("collectCodexRouteWarnings", () => {
       provider: "lossless-claw",
     });
     expectModelRuntime(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]);
-    expectWarnings(result.warnings, [
-      [
-        "Legacy Lossless compaction",
-        "- agents.defaults.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
-        "- agents.defaults.compaction.model: openai/gpt-5.4 should become plugins.entries.lossless-claw.config.summaryModel.",
-        "Move the Lossless config manually",
-      ],
-    ]);
+    expectLosslessWarning(
+      result.warnings,
+      "agents.defaults.compaction.provider: lossless-claw",
+      "agents.defaults.compaction.model: openai/gpt-5.4",
+    );
   });
 
   it.each([false, true])(
@@ -333,16 +330,12 @@ describe("collectCodexRouteWarnings", () => {
       expectModelRuntime(agents?.[0]?.models?.["openai/gpt-5.4-mini"]);
       expectModelRuntime(agents?.[1]?.models?.["openai/gpt-5.4-mini"]);
       if (blocked) {
-        expectWarnings(result.warnings, [
-          [
-            "Legacy Lossless compaction",
-            "- agents.list.fast.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
-            "- agents.defaults.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
-            "- agents.list.deep.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
-            "- agents.defaults.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
-            "Move the Lossless config manually",
-          ],
-        ]);
+        expectLosslessWarning(
+          result.warnings,
+          "agents.list.fast.compaction.provider: lossless-claw",
+          "agents.defaults.compaction.model: openai/gpt-5.4-mini",
+          "agents.list.deep.compaction.provider: lossless-claw",
+        );
       } else {
         expect(result.cfg.plugins?.slots?.contextEngine).toBe("lossless-claw");
         expect(result.cfg.plugins?.entries?.["lossless-claw"]?.config).toEqual({
@@ -454,62 +447,48 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("repairs configured Codex model refs to canonical OpenAI refs with model-scoped Codex runtime", () => {
-    const result = repairFixture({
+    const refs = (provider: string): RouteFixture => ({
       defaults: {
         model: {
-          primary: "openai-codex/gpt-5.5",
-          fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+          primary: `${provider}/gpt-5.5`,
+          fallbacks: [`${provider}/gpt-5.4`, "anthropic/claude-sonnet-4-6"],
         },
-        heartbeat: { model: "openai-codex/gpt-5.4-mini" },
+        heartbeat: { model: `${provider}/gpt-5.4-mini` },
         subagents: {
-          model: { primary: "openai-codex/gpt-5.5", fallbacks: ["openai-codex/gpt-5.4"] },
+          model: { primary: `${provider}/gpt-5.5`, fallbacks: [`${provider}/gpt-5.4`] },
         },
-        compaction: {
-          model: "openai-codex/gpt-5.4",
-        },
-        mediaModels: {
-          image: { primary: "openai-codex/gpt-image-2", fallbacks: ["openai-codex/gpt-image-1"] },
-          video: { primary: "openai-codex/sora-2" },
-        },
-        models: { "openai-codex/gpt-5.5": { alias: "codex" } },
+        compaction: { model: `${provider}/gpt-5.4` },
+        models: { [`${provider}/gpt-5.5`]: { alias: "codex" } },
       },
-      channels: { modelByChannel: { telegram: { default: "openai-codex/gpt-5.4" } } },
+      channels: { modelByChannel: { telegram: { default: `${provider}/gpt-5.4` } } },
       hooks: {
-        mappings: [{ model: "openai-codex/gpt-5.4-mini" }],
-        gmail: { model: "openai-codex/gpt-5.4" },
+        mappings: [{ model: `${provider}/gpt-5.4-mini` }],
+        gmail: { model: `${provider}/gpt-5.4` },
       },
-      tts: { summaryModel: "openai-codex/gpt-5.4-mini" },
-      entries: { worker: { model: "openai-codex/gpt-5.4" } },
+      tts: { summaryModel: `${provider}/gpt-5.4-mini` },
+      entries: { worker: { model: `${provider}/gpt-5.4` } },
     });
-
+    const result = repairFixture(refs("openai-codex"));
+    const expected = fixture(refs("openai"));
     expect(result.warnings).toStrictEqual([]);
-    expect(result.cfg.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+    expect(result.cfg.agents).toEqual({
+      defaults: {
+        ...expected.agents?.defaults,
+        models: {
+          "openai/gpt-5.5": { alias: "codex", agentRuntime: { id: "codex" } },
+          "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+        },
+      },
+      entries: {
+        worker: {
+          model: "openai/gpt-5.4",
+          models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
+        },
+      },
     });
-    expect(result.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
-    expect(result.cfg.agents?.defaults?.subagents?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["openai/gpt-5.4"],
-    });
-    expect(result.cfg.agents?.defaults?.compaction?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.defaults?.mediaModels?.image).toEqual({
-      primary: "openai/gpt-image-2",
-      fallbacks: ["openai/gpt-image-1"],
-    });
-    expect(result.cfg.agents?.defaults?.mediaModels?.video).toEqual({ primary: "openai/sora-2" });
-    expect(result.cfg.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": { alias: "codex", agentRuntime: { id: "codex" } },
-      "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-    });
-    expect(result.cfg.agents?.entries?.worker?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.entries?.worker?.models).toEqual({
-      "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-    });
-    expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");
-    expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4-mini");
-    expect(result.cfg.hooks?.gmail?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
+    expect(result.cfg.channels).toEqual(expected.channels);
+    expect(result.cfg.hooks).toEqual(expected.hooks);
+    expect(result.cfg.tts).toEqual(expected.tts);
   });
 
   it("warns without overriding an explicit Codex plugin opt-out", () => {

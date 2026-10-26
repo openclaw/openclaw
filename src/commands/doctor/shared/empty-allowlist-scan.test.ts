@@ -34,30 +34,32 @@ function scan(
   );
 }
 
+async function scanWithContexts(channels: OpenClawConfig["channels"]) {
+  const contexts: unknown[] = [];
+  const warnings = await scan(channels, {
+    extraWarningsForAccount: ({ prefix, dmPolicy, effectiveAllowFrom }) => {
+      contexts.push({ prefix, dmPolicy, effectiveAllowFrom });
+      return [];
+    },
+  });
+  return { warnings, contexts };
+}
+
 describe("doctor empty allowlist policy scan", () => {
   it("projects malformed selected fields without falling through to inherited hook values", async () => {
-    const contexts: unknown[] = [];
-    const warnings = await scan(
-      {
-        "legacy-channel": {
-          dmPolicy: "allowlist",
-          allowFrom: ["parent"],
-          accounts: {
-            work: {
-              dmPolicy: 42,
-              allowFrom: "not-a-list",
-              dm: { policy: "allowlist", allowFrom: ["nested"] },
-            },
+    const { warnings, contexts } = await scanWithContexts({
+      "legacy-channel": {
+        dmPolicy: "allowlist",
+        allowFrom: ["parent"],
+        accounts: {
+          work: {
+            dmPolicy: 42,
+            allowFrom: "not-a-list",
+            dm: { policy: "allowlist", allowFrom: ["nested"] },
           },
         },
       },
-      {
-        extraWarningsForAccount: ({ prefix, dmPolicy, effectiveAllowFrom }) => {
-          contexts.push({ prefix, dmPolicy, effectiveAllowFrom });
-          return [];
-        },
-      },
-    );
+    });
 
     expect(warnings).toEqual([]);
     expect(contexts).toEqual([
@@ -122,26 +124,17 @@ describe("doctor empty allowlist policy scan", () => {
   });
 
   it("keeps inherited top-level allowlists ahead of nested account values in warnings and hooks", async () => {
-    const accountContexts: unknown[] = [];
-    const warnings = await scan(
-      {
-        "legacy-channel": {
-          allowFrom: [],
-          accounts: { work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } } },
-        },
+    const { warnings, contexts } = await scanWithContexts({
+      "legacy-channel": {
+        allowFrom: [],
+        accounts: { work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } } },
       },
-      {
-        extraWarningsForAccount: ({ dmPolicy, effectiveAllowFrom, prefix }) => {
-          accountContexts.push({ dmPolicy, effectiveAllowFrom, prefix });
-          return [];
-        },
-      },
-    );
+    });
 
     expect(warnings).toEqual([
       '- channels.legacy-channel.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.legacy-channel.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
-    expect(accountContexts).toContainEqual({
+    expect(contexts).toContainEqual({
       dmPolicy: "allowlist",
       effectiveAllowFrom: [],
       prefix: "channels.legacy-channel.accounts.work",
