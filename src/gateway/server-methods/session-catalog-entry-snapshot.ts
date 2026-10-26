@@ -183,10 +183,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     ];
     catalogEntries = [];
     for (const agentId of agentIds) {
-      const pairs = captureAgentEntries(agentId)?.pairs ?? [];
-      // oxlint-disable-next-line typescript/prefer-for-of -- Read pairs directly without per-row iterators.
-      for (let index = 0; index < pairs.length; index++) {
-        const pair = pairs[index]!;
+      for (const pair of captureAgentEntries(agentId)?.pairs ?? []) {
         catalogEntries.push(Object.freeze({ sessionKey: pair[0], entry: pair[1], agentId }));
       }
     }

@@ -47,8 +47,12 @@ const ownerSource = readFileSync(values["owner-file"] ?? ownerUrl, "utf8");
 // Stub only imports at the selected owner boundary; execute the actual owner source.
 const fixtureUrl = `data:text/javascript,${encodeURIComponent(`
 export const agentIds = Object.freeze(Array.from({length: 40}, (_, i) => 'agent-' + i));
+export let temporaryArrays = 0;
+class CountedPairs extends Array {
+  static get [Symbol.species]() { temporaryArrays++; return Array; }
+}
 export const pairs = new Map(agentIds.map(agentId => [agentId,
-  Array.from({length: 270}, (_, i) => [
+  ${values.mode === "counts" ? "CountedPairs" : "Array"}.from({length: 270}, (_, i) => [
     'agent:' + agentId + ':' + i,
     Object.freeze({sessionId: agentId + '-' + i, updatedAt: i + 1})
   ])
@@ -86,6 +90,7 @@ type Entry = Readonly<{ sessionId: string; updatedAt: number }>;
 type CatalogEntry = { sessionKey: string; entry: Entry; agentId: string };
 type Fixture = {
   agentIds: readonly string[];
+  temporaryArrays: number;
   pairs: Map<string, readonly (readonly [string, Entry])[]>;
   cfg: object;
   projection: { state: { revision: object }; needsSelectionPreparation: () => boolean };
@@ -120,8 +125,8 @@ const run = (count: number) => {
   }
 };
 run(100);
-let temporaryArrays = 0;
-const originalMap = Array.prototype.map;
+// Only counting fixtures use Array species; timing/allocation retain ordinary arrays.
+const arraysBefore = fixture.temporaryArrays;
 const inspector = new Session();
 let allocatedBytes: number | undefined;
 const loadStart = loadavg();
@@ -134,19 +139,6 @@ if (values.mode === "allocation") {
   });
 }
 try {
-  if (values.mode === "counts") {
-    // oxlint-disable-next-line no-extend-native -- Count per-agent mapped arrays only during this pass; restore in finally.
-    Array.prototype.map = function <T, U>(
-      this: T[],
-      callback: (value: T, index: number, array: T[]) => U,
-      thisArg?: unknown,
-    ): U[] {
-      if (this.length === 270 && Array.isArray(this[0])) {
-        temporaryArrays++;
-      }
-      return Reflect.apply(originalMap, this, [callback, thisArg]);
-    };
-  }
   const cpuStart = process.threadCpuUsage();
   const started = performance.now();
   run(iterations);
@@ -172,6 +164,7 @@ try {
     }
   }
   assert.equal(capture(), output, "final revision must reuse flattened entries");
+  const temporaryArrays = fixture.temporaryArrays - arraysBefore;
   if (expectedArrays !== undefined) {
     assert.equal(temporaryArrays / iterations, expectedArrays, "temporary arrays per call");
   }
@@ -194,7 +187,5 @@ try {
     }),
   );
 } finally {
-  // oxlint-disable-next-line no-extend-native -- Restore after count instrumentation.
-  Array.prototype.map = originalMap;
   inspector.disconnect();
 }
