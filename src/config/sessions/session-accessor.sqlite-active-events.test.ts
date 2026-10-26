@@ -6,6 +6,7 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync as inTransaction } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -81,17 +82,6 @@ const toolEvent = (id: string, parentId: string | null, content: string) => ({
   parentId,
   message: { role: "toolResult", content },
 });
-
-function inTransaction(db: { exec(sql: string): void }, run: () => void) {
-  db.exec("BEGIN IMMEDIATE;");
-  try {
-    run();
-    db.exec("COMMIT;");
-  } catch (error) {
-    db.exec("ROLLBACK;");
-    throw error;
-  }
-}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const countMessages = (scope: Parameters<typeof readPage>[0]): number =>

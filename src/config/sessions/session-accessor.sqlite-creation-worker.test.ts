@@ -60,6 +60,7 @@ import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcrip
 import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const it = baseIt.extend<{ state: OpenClawTestState }>({
   state: [
@@ -124,10 +125,9 @@ function creationFixture(sessionKey: string) {
   };
 }
 
-const keepExisting = ({ existingEntry }: SessionEntryCreateWithTranscriptContext) => ({
-  ok: true as const,
-  entry: existingEntry!,
-});
+const accepted = (entry: SessionEntry) => ({ ok: true as const, entry });
+const keepExisting = ({ existingEntry }: SessionEntryCreateWithTranscriptContext) =>
+  accepted(existingEntry!);
 
 it.for([false, true])(
   "prepares a new custom-store suffix only while absent (appeared=%s)",
@@ -233,10 +233,12 @@ it("creates through an admitted store alias with prepared facts and atomic owner
         await Promise.resolve();
         assertCreation();
         expect(snapshot.labelInUse).toBe(false);
-        return {
-          ok: true,
-          entry: { sessionId: "created", updatedAt: 2, category: "Created", label: "available" },
-        };
+        return accepted({
+          sessionId: "created",
+          updatedAt: 2,
+          category: "Created",
+          label: "available",
+        });
       },
       {
         label: "available",
@@ -297,7 +299,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
         storePath: state.statePath("first-use.sqlite"),
         sessionKey: "agent:main:first-use",
       },
-      () => ({ ok: true, entry: { sessionId: "first-use", updatedAt: 1 } }),
+      () => accepted({ sessionId: "first-use", updatedAt: 1 }),
     );
     expect(firstUse.ok).toBe(true);
     expect(sql.queries).toEqual([]);
@@ -348,7 +350,7 @@ it.for(["replaced", "closed"] as const)(
               await fs.symlink(replacement, alias, "junction");
             }
             expect(assertCreation).toThrow(message);
-            return { ok: true, entry: { sessionId: "must-not-publish", updatedAt: 1 } };
+            return accepted({ sessionId: "must-not-publish", updatedAt: 1 });
           },
           {
             bindCreation: (operation) => {
@@ -377,11 +379,9 @@ it("does not initialize a transcript or invoke follow-up when creation rejects",
     afterCommitted: followup,
   });
   expect(result).toEqual({ ok: false, phase: "entry", error: "rejected" });
-  const invalid = await createEntry(
-    scope,
-    () => ({ ok: true, entry: { sessionId: "", updatedAt: 1 } }),
-    { afterCommitted: followup },
-  );
+  const invalid = await createEntry(scope, () => accepted({ sessionId: "", updatedAt: 1 }), {
+    afterCommitted: followup,
+  });
   expect(invalid).toMatchObject({ ok: false, phase: "transcript" });
   expect(transcriptRows(database, "")).toEqual([]);
   expect(followup).not.toHaveBeenCalled();
@@ -413,19 +413,15 @@ it.each(["maintenance", "alias replacement"] as const)(
     });
     let followed = false;
     const create = () =>
-      createEntry(
-        scope,
-        () => ({ ok: true, entry: { sessionId: "native-created", updatedAt: 1 } }),
-        {
-          afterCommitted: async (_entry, source) => {
-            source.assertCurrent();
-            expect(readEntry(database, scope.sessionKey)?.entry.sessionId).toBe("native-created");
-            await Promise.resolve();
-            source.assertCurrent();
-            followed = true;
-          },
+      createEntry(scope, () => accepted({ sessionId: "native-created", updatedAt: 1 }), {
+        afterCommitted: async (_entry, source) => {
+          source.assertCurrent();
+          expect(readEntry(database, scope.sessionKey)?.entry.sessionId).toBe("native-created");
+          await Promise.resolve();
+          source.assertCurrent();
+          followed = true;
         },
-      );
+      });
     try {
       const created = await maintenance.run(create);
       expect(created.ok).toBe(true);
@@ -500,7 +496,7 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ({ existingEntry, targetEntry }) => {
         expect(existingEntry).toMatchObject(original);
         expect(targetEntry).toBeUndefined();
-        return { ok: true, entry: { ...existingEntry!, label: "adopted" } };
+        return accepted({ ...existingEntry!, label: "adopted" });
       },
       {
         resolveOwnerAssignment: () => owner,
@@ -555,14 +551,7 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
   const sibling = matrixKey.toLowerCase();
   writeSessionEntry(database, matrixKey, { sessionId: "matrix-target", updatedAt: 1 });
   writeSessionEntry(database, sibling, { sessionId: "matrix-sibling", updatedAt: 2 });
-  expect(
-    (
-      await createEntry({ ...scope, sessionKey: matrixKey }, ({ existingEntry }) => ({
-        ok: true,
-        entry: existingEntry!,
-      }))
-    ).ok,
-  ).toBe(true);
+  expect((await createEntry({ ...scope, sessionKey: matrixKey }, keepExisting)).ok).toBe(true);
   expect(readEntry(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
 });
 
@@ -739,10 +728,7 @@ it.each([false, true])(
         await initialize(...args);
         throw failure;
       });
-    const create = vi.fn(() => ({
-      ok: true as const,
-      entry: { sessionId: "cleanup-header", updatedAt: 1 },
-    }));
+    const create = vi.fn(() => accepted({ sessionId: "cleanup-header", updatedAt: 1 }));
     const committed = vi.fn();
     try {
       const work = createEntry(scope, create, { onLifecycleCommitted: committed });
@@ -769,14 +755,12 @@ it("rolls back a failed fresh entry and recovers a previously committed standalo
     await expect(
       createEntry(
         scope,
-        () => ({
-          ok: true,
-          entry: {
+        () =>
+          accepted({
             sessionId: "failed-create",
             updatedAt: 1,
             parentSessionKey: "AGENT:main:parent",
-          },
-        }),
+          }),
         {
           onLifecycleCommitted: committed,
           afterCommitted: async () => {
@@ -801,12 +785,7 @@ it("rolls back a failed fresh entry and recovers a previously committed standalo
   expect(header).toHaveLength(1);
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   expect(
-    (
-      await createEntry(scope, () => ({
-        ok: true,
-        entry: { sessionId: "failed-create", updatedAt: 2 },
-      }))
-    ).ok,
+    (await createEntry(scope, () => accepted({ sessionId: "failed-create", updatedAt: 2 }))).ok,
   ).toBe(true);
   const reopened = openOpenClawAgentDatabase({ agentId: "main", path: database.path });
   expect(transcriptRows(reopened, "failed-create")).toEqual(header);
