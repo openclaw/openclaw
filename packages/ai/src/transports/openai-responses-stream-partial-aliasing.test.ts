@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createResponsesAssistantOutput } from "../providers/openai-responses-shared.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
-import type { AssistantMessageEvent } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
   expectReplaceAppendText,
   outputItem,
+  wireMessage,
   type TextOrDelta,
 } from "./openai-stream-cases.test-support.js";
 
@@ -44,16 +45,7 @@ function reasoningThenMessageEvents(firstDelta: string, secondDelta: string): un
     textEvent("delta", firstDelta),
     textEvent("delta", secondDelta),
     textEvent("done", `${firstDelta}${secondDelta}`),
-    outputItem(
-      "done",
-      {
-        type: "message",
-        id: "msg_1",
-        status: "completed",
-        content: [{ type: "output_text", text: `${firstDelta}${secondDelta}` }],
-      },
-      1,
-    ),
+    outputItem("done", wireMessage("msg_1", `${firstDelta}${secondDelta}`), 1),
     { type: "response.completed", response: { id: "resp_1", status: "completed" } },
   ];
 }
@@ -62,43 +54,34 @@ async function* sourceOf(events: readonly unknown[]) {
   yield* events;
 }
 
-describe("Responses stream partial snapshots", () => {
-  it("consumer replace/append state stays byte-exact with the wire text", async () => {
-    for (const firstDelta of [WIRE_TEXT.slice(0, 9), WIRE_TEXT.slice(0, 2)]) {
-      const output = { ...createResponsesAssistantOutput(model), timestamp: 0 };
-      const stream = new AssistantMessageEventStream();
-      const emitted: AssistantMessageEvent[] = [];
-      const collect = (async () => {
-        for await (const event of stream) {
-          emitted.push(event);
-        }
-      })();
-      await processResponsesStream(
-        sourceOf(reasoningThenMessageEvents(firstDelta, WIRE_TEXT.slice(firstDelta.length))),
-        output,
-        stream,
-        model,
-      );
-      stream.end();
-      await collect;
-      expectReplaceAppendText(emitted, WIRE_TEXT);
-      const transportText = output.content
-        .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-      expect(transportText).toBe(WIRE_TEXT);
-      // Text detaches; thinking retains WeakMap append facts (#123120).
-      const liveBlocks = new Set(output.content);
-      const partialBlocks = emitted.flatMap(
-        (event) => (event as TextOrDelta).partial?.content ?? [],
-      );
-      for (const type of ["text", "thinking"]) {
-        const blocks = partialBlocks.filter((block) => block.type === type);
-        expect(blocks.length).toBeGreaterThan(0);
-        for (const block of blocks) {
-          expect(liveBlocks.has(block)).toBe(type === "thinking");
-        }
+it("consumer replace/append state stays byte-exact with the wire text", async () => {
+  for (const firstDelta of [WIRE_TEXT.slice(0, 9), WIRE_TEXT.slice(0, 2)]) {
+    const output = { ...createResponsesAssistantOutput(model), timestamp: 0 };
+    const stream = new AssistantMessageEventStream();
+    const collected = collect(stream);
+    await processResponsesStream(
+      sourceOf(reasoningThenMessageEvents(firstDelta, WIRE_TEXT.slice(firstDelta.length))),
+      output,
+      stream,
+      model,
+    );
+    stream.end();
+    const emitted = await collected;
+    expectReplaceAppendText(emitted, WIRE_TEXT);
+    const transportText = output.content
+      .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    expect(transportText).toBe(WIRE_TEXT);
+    // Text detaches; thinking retains WeakMap append facts (#123120).
+    const liveBlocks = new Set(output.content);
+    const partialBlocks = emitted.flatMap((event) => (event as TextOrDelta).partial?.content ?? []);
+    for (const type of ["text", "thinking"]) {
+      const blocks = partialBlocks.filter((block) => block.type === type);
+      expect(blocks.length).toBeGreaterThan(0);
+      for (const block of blocks) {
+        expect(liveBlocks.has(block)).toBe(type === "thinking");
       }
     }
-  });
+  }
 });
