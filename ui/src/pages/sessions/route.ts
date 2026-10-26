@@ -29,8 +29,6 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
       return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
     loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
-      // Config decorates the page; it is not a prerequisite for the session roster.
-      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
       const options = routeOptions(location);
       // Intent fills the same managed window the page subscribes to. Ordinary
       // navigation still leaves issuance to the page's current search/filter intent.

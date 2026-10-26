@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { listCronJobsFromGateway } from "../cli/cron-cli/list-jobs.js";
 import {
@@ -165,7 +166,7 @@ export async function backupEnableCommand(
     const origin = await executeGitCommand(spec.repository, ["remote", "get-url", "origin"]);
     if (origin.code !== 0) {
       throw new Error(
-        `--push requires an origin remote. Run: openclaw backup git init --repository ${shortenHomePath(spec.repository)} --remote <url>`,
+        `--push requires an origin remote. Run: openclaw backup git init --repository ${sanitizeTerminalText(shortenHomePath(spec.repository))} --remote <url>`,
       );
     }
     if (!spec.excludeSecrets) {
@@ -183,7 +184,9 @@ export async function backupEnableCommand(
   }
   const updated = result.created === false;
   runtime.log(
-    `Scheduled ${spec.mode === "git" ? "Git" : "offsite"} backups ${updated ? "updated" : "enabled"}: every ${every} to ${spec.mode === "git" ? shortenHomePath(spec.repository) : spec.location}`,
+    sanitizeTerminalText(
+      `Scheduled ${spec.mode === "git" ? "Git" : "offsite"} backups ${updated ? "updated" : "enabled"}: every ${every} to ${spec.mode === "git" ? shortenHomePath(spec.repository) : spec.location}`,
+    ),
   );
   return { id, updated };
 }

@@ -9,6 +9,7 @@ import {
   processResponsesStream,
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
+import { outputItem, completedResponse } from "./openai-stream-cases.test-support.js";
 
 const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
@@ -47,35 +48,23 @@ describe("processResponsesStream request activity", () => {
         { type: "response.created", response: { id: "resp_activity" } },
         // Ignored bookkeeping event: no consumer-visible event is pushed.
         { type: "response.in_progress", response: { id: "resp_activity" } },
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { id: "reasoning_activity", type: "reasoning", summary: [] },
-        },
+        outputItem("added", { id: "reasoning_activity", type: "reasoning", summary: [] }),
         {
           type: "response.reasoning_text.delta",
           output_index: 0,
           delta: "Synthetic hidden progress",
         },
         { type: "response.reasoning_text.delta", output_index: 0, delta: "" },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            id: "reasoning_activity",
-            type: "reasoning",
-            summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            id: "reasoning_activity",
-            type: "reasoning",
-            summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
-          },
-        },
+        outputItem("done", {
+          id: "reasoning_activity",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
+        }),
+        outputItem("done", {
+          id: "reasoning_activity",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
+        }),
         // Hosted tools do not use the model-output tracker. Repeated lifecycle
         // echoes must not masquerade as fresh model output.
         ...[
@@ -87,10 +76,7 @@ describe("processResponsesStream request activity", () => {
           output_index: 1,
           item: { id: "hosted_activity", type: "web_search_call", status: "completed" },
         })),
-        {
-          type: "response.completed",
-          response: { id: "resp_activity", status: "completed", output: [] },
-        },
+        completedResponse("resp_activity", []),
       ];
       await processResponsesStream(eventStream(events), createOutput(), { push: () => {} }, model, {
         signal: abortController.signal,

@@ -14,6 +14,7 @@ import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
+import { collectCheckoutDiff } from "../../sessions/session-diff.runtime.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -566,6 +567,52 @@ describe("loadSessionDiff", () => {
       truncated: true,
     });
   });
+
+  it.each([100, 101, 10_000])(
+    "bounds untracked filename materialization for a %i-path inventory",
+    async (count) => {
+      initRepo(repoRoot);
+      const displayed = Array.from(
+        { length: 100 },
+        (_, index) => `loose-${String(index).padStart(5, "0")}.txt`,
+      );
+      for (const name of displayed) {
+        write(name, "one line\n");
+      }
+      const listing = Array.from(
+        { length: count },
+        (_, index) => `loose-${String(index).padStart(5, "0")}.txt\0`,
+      ).join("");
+      const runCommand = execRunner.runCommandWithTimeout;
+      vi.spyOn(execRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const result = await runCommand(argv, options);
+        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes("ls-files")
+          ? { ...result, stdout: listing }
+          : result;
+      });
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the original string receiver.
+      const split = String.prototype.split;
+      let materializedPaths = 0;
+      vi.spyOn(String.prototype, "split").mockImplementation(function (
+        this: string,
+        separator,
+        limit,
+      ) {
+        const parts = split.call(this, separator, limit);
+        if (this === listing) {
+          materializedPaths += parts.length - Number(parts.at(-1) === "");
+        }
+        return parts;
+      });
+
+      const result = await collectCheckoutDiff({ cwd: repoRoot, summaryOnly: true });
+
+      expect(result.files).toEqual(displayed.map((name) => addedFile(name, 1, {})));
+      expect(result.additions).toBe(100);
+      expect(result.truncated).toBe(count > 100 ? true : undefined);
+      expect(materializedPaths).toBeLessThanOrEqual(101);
+    },
+  );
 
   it.each([false, true])(
     "batches untracked Git reads without changing native output (summary: %s)",

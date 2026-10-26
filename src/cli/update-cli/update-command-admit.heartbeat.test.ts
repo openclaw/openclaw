@@ -148,6 +148,56 @@ function fixture(scenario: Scenario, withDatabase = true) {
   return { config, configPath, contextPath, sourcePath, snapshot };
 }
 
+it.each(["absent", "file", "unreadable"] as const)(
+  "checks unresolved cron update admission (heartbeat source: %s)",
+  async (sourceKind) => {
+    const f = fixture({
+      name: sourceKind,
+      scratch: source,
+      invalidSource: sourceKind === "unreadable",
+    });
+    fs.writeFileSync(
+      f.configPath,
+      JSON.stringify({
+        agents: { entries: { main: { workspace: path.dirname(f.sourcePath) } } },
+      }),
+    );
+    if (sourceKind === "absent") {
+      fs.unlinkSync(f.sourcePath);
+    }
+    {
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      const oldKey = path.join(
+        path.dirname(process.env.OPENCLAW_STATE_DIR!),
+        "old",
+        "cron",
+        "jobs.json",
+      );
+      db.prepare("UPDATE cron_jobs SET store_key = ?").run(oldKey);
+      db.prepare("UPDATE cron_job_scratch SET store_key = ?").run(oldKey);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    const blocked = sourceKind === "unreadable";
+    expect(process.exitCode).toBe(blocked ? 3 : 0);
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: blocked ? "refuse" : "admit",
+      reasons: blocked
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("regular file"),
+            }),
+          ]
+        : [],
+    });
+    expect(f.snapshot()).toEqual(before);
+  },
+);
+
 it.each<Scenario>([
   {
     name: "conflicting operator scratch",

@@ -15,6 +15,7 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   createPlacementPane,
   selectPlacementConfiguration,
@@ -26,7 +27,6 @@ import {
   activePlacementSession as placementSession,
   offlineDeviceSession,
   createTestChatPane,
-  createGatewayBrowserClientFixture,
 } from "./chat-pane.test-support.ts";
 
 function activePlacementSession() {

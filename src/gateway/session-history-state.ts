@@ -15,10 +15,10 @@ import {
   projectChatDisplayMessagesWithState,
   createCurrentUserProfileMessageProjector,
 } from "./chat-display-projection.core.js";
+import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import {
   createSubagentCoordinationHistoryProjection,
-  prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
 } from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";

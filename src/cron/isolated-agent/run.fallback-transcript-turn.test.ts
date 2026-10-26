@@ -48,9 +48,9 @@ it.each([true, false])(
         onInterrupt: () => {},
       });
       expect(promptState.activePrompt).toMatchObject({
-        internal: dispatched,
+        internal: false,
         persisted: true,
-        override: dispatched ? params.prompt : undefined,
+        override: undefined,
       });
       expect(promptState.suppressNextUserMessagePersistence).toBe(true);
       return { payloads: [{ text: "fallback report" }], meta: { agentMeta: {} } };

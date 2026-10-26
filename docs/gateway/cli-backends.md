@@ -395,7 +395,8 @@ remain authorized by the Gateway rather than receiving duplicate native
 approval. Other MCP tools stay host-permission controlled.
 
 Claude's native `AskUserQuestion` uses OpenClaw's structured question flow and
-the canonical `ask_user` tool capability. When
+the canonical `ask_user` tool capability. Long option descriptions are shortened
+for display; question text and option labels keep their exact limits. When
 OpenClaw rejects malformed questions, it reports the failed field and
 constraint without repeating the submitted text, and asks Claude to correct
 the field and retry. Invalid questions do not prompt the user. If the user

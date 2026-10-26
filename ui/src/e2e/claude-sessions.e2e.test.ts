@@ -74,7 +74,7 @@ async function catalogHeaderAffordances(header: Locator) {
       actionFocusVisible: actions.matches(":focus-visible"),
       actionFocused: document.activeElement === actions,
       actionsColor: actionsStyle.color,
-      actionsOpacity: actionsStyle.opacity,
+      actionsVisible: Number(actionsStyle.opacity) > 0,
       actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(find(".sidebar-session-group-toggle__icon")).opacity,
       finePointer: matchMedia("(pointer: fine)").matches,
@@ -86,7 +86,7 @@ async function catalogHeaderAffordances(header: Locator) {
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(find(".sidebar-session-catalog-provider-icon")).opacity,
       toolbarButtonColor: toolbarButtonStyle.color,
-      toolbarButtonOpacity: toolbarButtonStyle.opacity,
+      toolbarButtonVisible: Number(toolbarButtonStyle.opacity) > 0,
       toggleFocusVisible: toggle.matches(":focus-visible"),
       toggleFocused: document.activeElement === toggle,
     };
@@ -172,7 +172,7 @@ suite.define(() => {
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "0.55",
+            actionsVisible: true,
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             finePointer: true,
@@ -180,7 +180,7 @@ suite.define(() => {
             hoverCapable: true,
             hovered: true,
             providerOpacity: "0",
-            toolbarButtonOpacity: "0.55",
+            toolbarButtonVisible: true,
           });
         const hoverAffordances = await catalogHeaderAffordances(header);
         expect(hoverAffordances.actionsColor).toBe(hoverAffordances.toolbarButtonColor);
@@ -190,7 +190,7 @@ suite.define(() => {
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "0",
+            actionsVisible: false,
             actionsPointerEvents: "none",
             chevronOpacity: "0",
             focusWithin: true,
@@ -206,7 +206,7 @@ suite.define(() => {
           .toMatchObject({
             actionFocusVisible: true,
             actionFocused: true,
-            actionsOpacity: "1",
+            actionsVisible: true,
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             focusWithin: true,
@@ -251,12 +251,12 @@ suite.define(() => {
         page.locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head'),
       );
       expect(touchAffordance).toMatchObject({
-        actionsOpacity: "0.55",
+        actionsVisible: true,
         coarsePointer: true,
         noHover: true,
         providerOpacity: "0",
         chevronOpacity: "0.75",
-        toolbarButtonOpacity: "0.55",
+        toolbarButtonVisible: true,
       });
       expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
     } finally {

@@ -1,4 +1,4 @@
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";

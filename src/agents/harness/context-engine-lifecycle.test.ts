@@ -108,6 +108,40 @@ function toolCallMessage(id: string, timestamp: number) {
 }
 
 describe("harness context engine lifecycle", () => {
+  it.each(["assemble", "prompt"] as const)(
+    "does not enumerate the enclosing attempt during %s",
+    async (operation) => {
+      const messages = [textMessage("user", "Current request", 1)];
+      const assemble = vi.fn(
+        async ({ messages: input }: Parameters<ContextEngine["assemble"]>[0]) => ({
+          messages: input,
+          estimatedTokens: 0,
+        }),
+      );
+      const ownKeys = vi.fn(Reflect.ownKeys);
+      const params = new Proxy(
+        {
+          ...promptDefaults,
+          messages,
+          contextEngine: createContextEngine({ assemble }),
+          tokenBudget: 2000,
+          warn: vi.fn(),
+        },
+        { ownKeys: (target) => ownKeys(target) },
+      );
+      const result = await (operation === "assemble"
+        ? assembleHarnessContextEngine(params)
+        : prepareHarnessContextEnginePrompt(params));
+      expect(result?.messages).toEqual(messages);
+      expect(assemble).toHaveBeenCalledOnce();
+      expect(assemble.mock.calls[0]?.[0]).toMatchObject({
+        tokenBudget: 2000,
+        runtimeSettings: { limits: { promptTokenBudget: 2000, maxOutputTokens: 0 } },
+      });
+      expect(ownKeys).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([true, false])(
     "repairs the final tool conversation (context engine=%s)",
     async (withEngine) => {

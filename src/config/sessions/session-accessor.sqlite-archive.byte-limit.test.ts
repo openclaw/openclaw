@@ -37,7 +37,7 @@ async function* buffers(...parts: string[]) {
 async function records(source: AsyncIterable<Uint8Array>, limit?: number) {
   const collected: string[] = [];
   for await (const record of readTranscriptArchiveRecords(source, limit)) {
-    collected.push(record.toString("utf8"));
+    collected.push(record);
   }
   return collected;
 }
@@ -139,9 +139,27 @@ it("bounds each framed record before reading more input and excludes its final n
   }
   await expect(records(buffers('{\n"x":0', "}\n{}"), 8)).resolves.toEqual(['{\n"x":0}', "{}"]);
   await expect(readTranscriptArchiveRecords(buffers('{"x":"xx"}')).next()).resolves.toMatchObject({
-    value: Buffer.from('{"x":"xx"}'),
+    value: '{"x":"xx"}',
     done: false,
   });
+});
+
+it("decodes complete records without copying their bytes or retaining mutable input", async () => {
+  const text = JSON.stringify({ value: "Archive 🦞" });
+  const input = Buffer.from(`padding${text}\n${text}`);
+  const source = new Uint8Array(input.buffer, input.byteOffset + 7, input.byteLength - 7);
+  const concat = vi.spyOn(Buffer, "concat");
+  try {
+    async function* chunks() {
+      yield source;
+    }
+    const result = await records(chunks());
+    expect(concat).not.toHaveBeenCalled();
+    source.fill(0);
+    expect(result).toEqual([text, text]);
+  } finally {
+    concat.mockRestore();
+  }
 });
 
 it("frames quoted controls and invalid raw newlines across chunk boundaries", async () => {

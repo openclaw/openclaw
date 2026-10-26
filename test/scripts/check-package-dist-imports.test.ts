@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
+  preparePackageDistJavaScript,
 } from "../../scripts/lib/package-dist-imports.mjs";
+import { collectPackageRootImports } from "../../src/infra/package-root-imports.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -94,6 +96,39 @@ describe("collectPackageDistImportErrors", () => {
 });
 
 describe("collectPackageDistImports", () => {
+  it.each(["ts", "mts", "cts"])("opts into runtime imports from typed %s helpers", (extension) => {
+    const file = `dist/helper.${extension}`;
+    const source =
+      'import type { Missing } from "./types-only.ts";\n' +
+      (extension === "cts"
+        ? 'const runtime: Missing = require("./runtime.cts");'
+        : 'import runtime from "./runtime.mts"; const value: Missing = runtime; new URL("./worker.ts", import.meta.url);');
+    const input = { files: [file], readText: () => source };
+    expect(collectPackageDistImports(input)).toEqual([]);
+    const imports = collectPackageDistImports({ ...input, includeTypeScript: true });
+    const expected = extension === "cts" ? ["runtime.cts"] : ["runtime.mts", "worker.ts"];
+    expect(imports).toEqual(
+      expected.map((target) => ({
+        importerPath: file,
+        importedPath: `dist/${target}`,
+        ...(extension === "cts" ? { kind: "require" } : {}),
+      })),
+    );
+    expect(collectPackageDistImportErrors({ files: [file], imports })).toEqual(
+      expected.map((target) => `${file} imports missing dist/${target}`),
+    );
+  });
+
+  it("normalizes typed native require aliases for package-root import analysis", () => {
+    const source = `import { createRequire } from "node:module";
+const load = createRequire(import.meta.url) as NodeRequire;
+load("./native.cjs");`;
+    expect(collectPackageRootImports(preparePackageDistJavaScript("helper.mts", source))).toContain(
+      "./native.cjs",
+    );
+    expect(preparePackageDistJavaScript("helper.mjs", source)).toBe(source);
+  });
+
   it.each(["mjs", "cjs"])(
     "keeps binding searches bounded while rejecting a redeclaration in a large %s artifact",
     (extension) => {
@@ -142,7 +177,12 @@ return require("./leaf.cjs");`;
   it("leaves installed dependency modules to their own package scope", () => {
     expect(
       collectPackageDistImports({
-        files: ["node_modules/vendor/index.js", "dist/node_modules/vendor/index.mjs"],
+        files: [
+          "node_modules/vendor/index.js",
+          "dist/node_modules/vendor/index.mjs",
+          "node_modules/vendor/index.ts",
+        ],
+        includeTypeScript: true,
         readText: () => {
           throw new Error("Dependency source belongs to a separate package scope");
         },

@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { sendFrame } from "../../packages/gateway-client/src/client.transport.test-support.js";
 import {
   validateSessionsDescribeParams,
   validateSessionsListParams,
@@ -55,14 +56,12 @@ it("describes sessions over the published wire without changing legacy key seman
         } else if (frame.method === "sessions.list" && validateSessionsListParams(frame.params)) {
           reply({ defaults });
         } else {
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: { code: "INVALID_REQUEST", message: "Unexpected metadata request shape" },
-            }),
-          );
+          sendFrame(socket, {
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "Unexpected metadata request shape" },
+          });
         }
       });
     });

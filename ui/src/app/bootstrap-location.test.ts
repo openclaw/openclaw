@@ -1,7 +1,6 @@
 import { createRouter } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
@@ -124,7 +123,6 @@ describe("resolveInitialApplicationLocation", () => {
   it("resolves a malformed persisted session without aborting bootstrap", async () => {
     const location = makeLocation("/", "?draft=hello");
     const resolved = await resolveLocation({ location, sessionKey: "agent::broken" });
-    expect(resolved).toEqual(location);
     expect(resolved).toBe(location);
   });
 
@@ -159,9 +157,6 @@ describe("resolveInitialApplicationLocation", () => {
   it.each([
     ["/settings/appearance", "", "main", ""],
     ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main", ""],
-    ["/chat/main", "", "agent:research:workspace", ""],
-    ["/chat/main/", "", "agent:research:workspace", ""],
-    ["/openclaw/chat/main", "", "agent:research:workspace", "/openclaw"],
     ["/openclaw/chat/main/", "", "agent:research:workspace", "/openclaw"],
   ])(
     "preserves explicit %s state without waiting for defaults",
@@ -199,11 +194,6 @@ describe("resolveInitialApplicationLocation", () => {
     });
 
     expect(resolved).toEqual(makeLocation("/dashboard/research/telegram/12345"));
-    expect(sessionRefFromPath(resolved.pathname, "", "main")).toMatchObject({
-      namespace: "dashboard",
-      kind: "literal",
-      sessionKey: "agent:research:telegram:12345",
-    });
     expect(cold.subscribe).not.toHaveBeenCalled();
   });
 

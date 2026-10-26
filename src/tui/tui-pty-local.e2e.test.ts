@@ -391,7 +391,7 @@ async function startLocalModeTui(
 
     run = await startRuntimePty(
       process.execPath,
-      buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]),
+      await buildTuiProcessArgs(opts.cliArgs ?? ["tui", "--local"]),
       {
         cwd: process.cwd(),
         env,
@@ -530,7 +530,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
     });
     run = await startRuntimePty(
       process.execPath,
-      buildTuiProcessArgs([
+      await buildTuiProcessArgs([
         "tui",
         "--url",
         gateway.url,
@@ -672,7 +672,7 @@ async function startIsolatedGatewayPty(params: {
     if (sessionKey) {
       cliArgs.push("--session", sessionKey);
     }
-    run = await startRuntimePty(process.execPath, buildTuiProcessArgs(cliArgs), {
+    run = await startRuntimePty(process.execPath, await buildTuiProcessArgs(cliArgs), {
       cwd: process.cwd(),
       env: {
         ...gateway.env,
@@ -825,7 +825,7 @@ describe("TUI PTY real backends", () => {
     async ({ onTestFinished }) => {
       const run = await startRuntimePty(
         process.execPath,
-        buildTuiProcessArgs(["chat", "--url", "ws://127.0.0.1:1"]),
+        await buildTuiProcessArgs(["chat", "--url", "ws://127.0.0.1:1"]),
         {
           cwd: process.cwd(),
           env: {

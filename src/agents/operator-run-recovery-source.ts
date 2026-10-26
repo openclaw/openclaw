@@ -47,7 +47,7 @@ export function createOperatorInputRecoverySource(
       : {}),
     sourceRunId: params.sourceRunId,
     snapshot: {
-      ...structuredClone(snapshot),
+      ...snapshot,
       scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes),
     },
   };

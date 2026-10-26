@@ -22,7 +22,10 @@ import {
   preserveSessionEntryCacheAcrossWrite,
   publishSessionEntryPlaceholderInsertion,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   selectTranscriptAppendState,

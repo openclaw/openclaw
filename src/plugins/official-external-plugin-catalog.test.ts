@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as catalogSource from "./official-external-plugin-catalog-source.js";
 import {
   getOfficialExternalChannelSecretContract as channelSecrets,
   getOfficialExternalPluginCatalogEntry as findEntry,
   getOfficialExternalPluginCatalogEntryForPackage as findPackage,
   isOfficialExternalPluginId as isOfficialId,
   isOfficialExternalPluginCatalogFeed as isFeed,
+  listOfficialExternalPluginCatalogEntries as listEntries,
   resolveOfficialExternalProviderContractPluginIds as capabilityOwners,
   resolveOfficialExternalProviderPluginIds as providerOwners,
   resolveOfficialExternalProviderPluginIdsForEnv as providerEnvOwners,
@@ -21,6 +23,35 @@ import {
 const sha256 = "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9";
 
 describe("official external plugin catalog", () => {
+  it("reuses admitted bundled identities across inventory reads without sharing the list array", () => {
+    const entries = listEntries();
+    const entry = findEntry("fish-audio-speech");
+    expect(entry).toBeDefined();
+    const candidates = vi.spyOn(catalogSource, "getFeedEntryInstallCandidateRecords");
+    const manifests = vi.spyOn(catalogSource, "getOfficialExternalPluginCatalogManifest");
+    try {
+      for (let read = 0; read < 3; read++) {
+        const listed = listEntries();
+        expect(listed).not.toBe(entries);
+        expect(listed).toEqual(entries);
+        listed.length = 0;
+        expect(findEntry(" fish-audio-speech ")).toBe(entry);
+        expect(findPackage(" @openclaw/fish-audio-speech ")).toBe(entry);
+        expect(isOfficialId(" FISH-AUDIO-SPEECH ")).toBe(true);
+        expect(findEntry("FISH-AUDIO-SPEECH")).toBeUndefined();
+        expect(findPackage("@openclaw/FISH-AUDIO-SPEECH")).toBeUndefined();
+        expect(findEntry("synthetic-community-plugin")).toBeUndefined();
+        expect(findPackage("@synthetic/community-plugin")).toBeUndefined();
+        expect(isOfficialId("synthetic-community-plugin")).toBe(false);
+      }
+      expect(candidates.mock.calls.length).toBe(0);
+      expect(manifests.mock.calls.length).toBe(0);
+    } finally {
+      candidates.mockRestore();
+      manifests.mockRestore();
+    }
+  });
+
   it("routes Abliteration and either credential variable to its official package", () => {
     const entry = findPackage("@openclaw/abliteration-provider");
     expect(entry).toBeDefined();

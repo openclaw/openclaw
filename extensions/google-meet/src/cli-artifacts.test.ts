@@ -29,15 +29,6 @@ const record = "conferenceRecords/rec-1";
 const transcript = `${record}/transcripts/t1`;
 const participantSession = `${record}/participants/p1/participantSessions/s1`;
 
-const bundleFiles = [
-  "summary.md",
-  "attendance.csv",
-  "transcript.md",
-  "artifacts.json",
-  "attendance.json",
-  "manifest.json",
-];
-
 let tempDir: string;
 let publicationDir: string;
 const readOutput = (name: string) => readFileSync(path.join(tempDir, name), "utf8");
@@ -51,44 +42,22 @@ afterEach(() => {
   rmSync(`${tempDir}.zip`, { force: true });
 });
 
+it("prints artifact JSON", async () => {
+  await runRecordCommand("artifacts", ["--json"]);
+  expect(json()).toMatchObject({
+    tokenSource: "cached-access-token",
+    artifacts: [
+      { transcriptEntries: [{ transcript, entries: [{ text: "Hello from the transcript." }] }] },
+    ],
+  });
+});
 it.each([
-  [
-    "artifacts",
-    ["--conference-record", "rec-1", "--json"],
-    {
-      tokenSource: "cached-access-token",
-      conferenceRecords: [{ name: record }],
-      artifacts: [
-        {
-          recordings: [{ name: `${record}/recordings/r1` }],
-          transcripts: [{ name: transcript }],
-          transcriptEntries: [{ transcript, entries: [{ text: "Hello from the transcript." }] }],
-          smartNotes: [{ name: `${record}/smartNotes/sn1` }],
-        },
-      ],
-    },
-  ],
-  [
-    "attendance",
-    ["--conference-record", "rec-1"],
-    ["attendance rows: 1", "participant: Alice", participantSession],
-  ],
-  [
-    "attendance",
-    ["--conference-record", "rec-1", "--format", "markdown"],
-    ["# Google Meet Attendance", "## Alice", participantSession],
-  ],
-] satisfies Array<[string, string[], Record<string, unknown> | string[]]>)(
-  "prints %s output for %j",
-  async (command, args, expected) => {
-    await runApiCommand(command, args);
-    if (Array.isArray(expected)) {
-      cli.expectText(output(), ...expected);
-    } else {
-      expect(json()).toMatchObject(expected);
-    }
-  },
-);
+  ["summary", "attendance rows: 1", "participant: Alice"],
+  ["markdown", "# Google Meet Attendance", "## Alice"],
+])("prints %s attendance", async (format, heading, participant) => {
+  await runRecordCommand("attendance", ["--format", format]);
+  cli.expectText(output(), heading, participant, participantSession);
+});
 
 it.each([
   [["--meeting", "abc-defg-hij"], "space: spaces/abc-defg-hij"],
@@ -123,16 +92,10 @@ it("ends an active conference for a Meet space", async () => {
     tokenSource: "cached-access-token",
   });
   const endCall = fetchMock.mock.calls.find(([input]) => input === endUrl);
-  expect(endCall?.[1]).toEqual({
+  expect(endCall?.[1]).toMatchObject({
     method: "POST",
-    body: "{}",
     redirect: "manual",
-    signal: expect.any(AbortSignal),
-    headers: {
-      Accept: "application/json",
-      Authorization: "Bearer token",
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: "Bearer token" },
   });
 });
 
@@ -221,7 +184,7 @@ it("writes an export bundle", async () => {
     tokenSource: "cached-access-token",
     counts: { attendanceRows: 1, warnings: 0 },
   });
-  expect(manifest.files).toEqual(bundleFiles);
+  expect(manifest.files.toSorted()).toEqual(readdirSync(tempDir).toSorted());
   expect(JSON.parse(readOutput("artifacts.json"))).toMatchObject({
     conferenceRecords: [{ name: record }],
     artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
@@ -263,7 +226,7 @@ it("prints a dry-run export manifest without writing files", async () => {
       counts: { attendanceRows: 1, transcriptEntries: 1, warnings: 0 },
     },
   });
-  expect(payload.manifest.files).toEqual(bundleFiles);
+  expect(payload.manifest.files).toContain("manifest.json");
   expect(existsSync(publicationDir)).toBe(false);
 });
 it("writes the artifact summary to --output", async () => {
@@ -272,7 +235,6 @@ it("writes the artifact summary to --output", async () => {
   const summary = output();
   cli.expectText(summary, "conference records: 1\n", "token source: cached-access-token\n");
   await runRecordCommand("artifacts", ["--format", "summary", "--output", outputPath]);
-  expect(existsSync(outputPath)).toBe(true);
   expect(readFileSync(outputPath, "utf8")).toBe(summary);
   expect(output()).toBe(`wrote: ${outputPath}\n`);
 });

@@ -182,7 +182,8 @@ function labelOverflowRef(
   let refresh: (() => void) | undefined;
   onCleanup(() => dispose());
   createEffect(
-    () => labels(),
+    // Overflow copy also follows live locale and deferred catalog changes.
+    () => [labels(), t("workboard.cardMoreLabels")],
     () => refresh?.(),
   );
   return (element: Element | undefined) => {
@@ -260,27 +261,27 @@ function labelOverflowRef(
   };
 }
 export function CardMeta(input: { card: WorkboardCard; archived: boolean }) {
+  const labels = createMemo(() => input.card.labels, {
+    equals: (previous, next) =>
+      previous.length === next.length && previous.every((label, index) => label === next[index]),
+  });
   const chips = createElementRefs<HTMLElement>();
   let overflow: HTMLElement | undefined;
   const orderedChips = () =>
-    input.card.labels.flatMap((label) => {
+    labels().flatMap((label) => {
       const chip = chips.get(label);
       return chip ? [chip] : [];
     });
   return (
     <>
-      {!input.card.labels.length && !input.archived ? null : (
+      {!labels().length && !input.archived ? null : (
         <div class="workboard-card__meta">
-          {input.card.labels.length ? (
+          {labels().length ? (
             <div
               class="workboard-card__labels"
-              ref={labelOverflowRef(
-                () => input.card.labels,
-                orderedChips,
-                () => overflow,
-              )}
+              ref={labelOverflowRef(labels, orderedChips, () => overflow)}
             >
-              <For each={input.card.labels} keyed={(label) => label}>
+              <For each={labels()} keyed={(label) => label}>
                 {(label) => (
                   <span
                     class="workboard-chip workboard-truncate workboard-card__label"

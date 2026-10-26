@@ -14,7 +14,7 @@ import {
 } from "./scratch-contract.js";
 import { readScratchStateFromDatabase } from "./scratch-read.kernel.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
-import { cronStoreKey } from "./store/key.js";
+import { prepareMutableCronStoreKey, resolveCronStoreKeyInDatabase } from "./store/paths.js";
 
 /** Doctor's synchronous transaction reads stay with the maintenance owner. */
 export function readCronJobScratchState(
@@ -23,26 +23,48 @@ export function readCronJobScratchState(
   options: OpenClawStateDatabaseOptions = {},
 ): CronJobScratchState {
   const { db } = openOpenClawStateDatabase(options);
-  return readScratchStateFromDatabase(db, cronStoreKey(storePath), jobId);
+  return readScratchStateFromDatabase(
+    db,
+    resolveCronStoreKeyInDatabase(db, storePath, options.env),
+    jobId,
+  );
 }
+
+type CronScratchWriteParams = {
+  jobId: string;
+  content: string | null;
+  expectedRevision?: number;
+  sourceSha256?: string;
+  nowMs?: number;
+  options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+};
+
+type CronScratchWriteAdmission = {
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+  expectedConfigRevision?: string;
+  createdAtMsFallback?: number;
+};
 
 /** Writes through the existing actor while retaining the original caller's admission. */
 export async function writeCronJobScratch(
-  params: {
-    storePath: string;
-    jobId: string;
-    content: string | null;
-    expectedRevision?: number;
-    sourceSha256?: string;
-    nowMs?: number;
-    options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
-  },
-  admission?: {
-    context?: OpenClawStateWorkerContext;
-    assertCurrent?: () => void;
-    expectedConfigRevision?: string;
-    createdAtMsFallback?: number;
-  },
+  params: CronScratchWriteParams & { storePath: string },
+  admission?: CronScratchWriteAdmission,
+): Promise<CronJobScratchWriteResult> {
+  const captured = { ...params };
+  const context = admission?.context ?? captureOpenClawStateWorkerContext(captured.options);
+  const storeKey = await prepareMutableCronStoreKey(
+    captured.storePath,
+    context,
+    captured.options?.env,
+  );
+  return writeCronJobScratchByKey({ ...captured, storeKey }, { ...admission, context });
+}
+
+/** Writes an already-selected partition without interpreting the key as a pathname. */
+export async function writeCronJobScratchByKey(
+  params: CronScratchWriteParams & { storeKey: string },
+  admission?: CronScratchWriteAdmission,
 ): Promise<CronJobScratchWriteResult> {
   if (params.content !== null) {
     assertCronJobScratchContent(params.content);
@@ -54,7 +76,7 @@ export async function writeCronJobScratch(
     context,
     type: "cron.writeScratch",
     input: {
-      storeKey: cronStoreKey(params.storePath),
+      storeKey: params.storeKey,
       jobId: params.jobId,
       content: params.content,
       expectedRevision: params.expectedRevision,

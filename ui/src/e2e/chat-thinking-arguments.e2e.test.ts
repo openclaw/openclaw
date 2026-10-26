@@ -16,7 +16,7 @@ const VIEWPORTS = [
 const key = "agent:main:main";
 async function openComposer(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
   await page.goto(`${suite.server.baseUrl}chat`);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible" });
   await expect.poll(() => composer.isEnabled()).toBe(true);

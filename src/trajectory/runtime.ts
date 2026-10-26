@@ -1,12 +1,12 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import { hash } from "node:crypto";
-import { isProxy } from "node:util/types";
 import type { DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
 import { projectPreparedDiagnosticValue } from "@openclaw/ai/internal/shared";
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -176,7 +176,7 @@ function limitTrajectoryPayloadValue(
   value: unknown,
   depth = 0,
   seen: WeakSet<object> = new WeakSet(),
-  serialization?: { needsSafeJson: boolean },
+  serialization?: { needsSafeJson?: boolean; jsonCacheable?: boolean },
 ): unknown {
   if (typeof value === "string") {
     if (value.length > TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS) {
@@ -190,6 +190,14 @@ function limitTrajectoryPayloadValue(
   if (typeof value !== "object" || value === null) {
     if (serialization && (typeof value === "bigint" || typeof value === "function")) {
       serialization.needsSafeJson = true;
+    }
+    if (
+      serialization?.jsonCacheable &&
+      value !== null &&
+      typeof value !== "boolean" &&
+      (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0))
+    ) {
+      serialization.jsonCacheable = false;
     }
     return value;
   }
@@ -209,9 +217,17 @@ function limitTrajectoryPayloadValue(
       limited.push(limitTrajectoryPayloadValue(value[index], depth + 1, seen, serialization));
     }
     if (value.length > TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS) {
+      const originalLength = value.length;
+      // A proxy's length enters the marker without passing through leaf classification.
+      if (
+        serialization?.jsonCacheable &&
+        (!Number.isFinite(originalLength) || Object.is(originalLength, -0))
+      ) {
+        serialization.jsonCacheable = false;
+      }
       limited.push(
         truncatedTrajectoryValue("trajectory-array-size-limit", {
-          originalLength: value.length,
+          originalLength,
           limitItems: TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS,
         }),
       );
@@ -224,6 +240,9 @@ function limitTrajectoryPayloadValue(
   const limited: Record<string, unknown> = {};
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen, serialization);
+    if (serialization?.jsonCacheable && key === "__proto__") {
+      serialization.jsonCacheable = false;
+    }
   }
   if (keys.length > TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS) {
     limited["_truncated"] = truncatedTrajectoryValue("trajectory-object-size-limit", {
@@ -257,45 +276,15 @@ function sanitizeTrajectoryPayload(
   ) as Record<string, unknown>;
 }
 
-function isTrajectoryJsonData(value: unknown, depth = 0): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return true;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) && !Object.is(value, -0);
-  }
-  if (
-    typeof value !== "object" ||
-    depth > TRAJECTORY_RUNTIME_DATA_MAX_DEPTH + 1 ||
-    isProxy(value)
-  ) {
-    return false;
-  }
-  const array = Array.isArray(value);
-  if (Object.getPrototypeOf(value) !== (array ? Array.prototype : Object.prototype)) {
-    return false;
-  }
-  const keys = Reflect.ownKeys(value).filter((key) => !array || key !== "length");
-  if (array && keys.length !== value.length) {
-    return false;
-  }
-  return keys.every((key, index) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-    return (
-      typeof key === "string" &&
-      (!array || key === String(index)) &&
-      "value" in descriptor &&
-      descriptor.enumerable &&
-      isTrajectoryJsonData(descriptor.value, depth + 1)
-    );
-  });
-}
-
 function projectTrajectoryToolParameters(parameters: unknown): unknown {
   const published = getPublishedRuntimeToolInputSchema(parameters);
   // Publication owns immutable JSON; mutable or opaque inputs still need current bounds.
-  const bounded = published ? undefined : limitTrajectoryPayloadValue(parameters);
-  if (!published && !isTrajectoryJsonData(bounded)) {
+  // The bounds pass creates plain data and records leaves that cannot round-trip through JSON.
+  const serialization = { jsonCacheable: true };
+  const bounded = published
+    ? undefined
+    : limitTrajectoryPayloadValue(parameters, 0, new WeakSet(), serialization);
+  if (!published && !serialization.jsonCacheable) {
     return projectPreparedDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
   const content = published?.json ?? JSON.stringify(bounded);
@@ -323,6 +312,11 @@ function projectTrajectoryToolParameters(parameters: unknown): unknown {
   }
   return projected;
 }
+
+const projectTrajectoryToolObjectParameters = memoizeFrozenPlainDataProjection(
+  projectTrajectoryToolParameters,
+);
+
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -332,11 +326,15 @@ export function toTrajectoryToolDefinitions(
       if (!name) {
         return [];
       }
+      const { description, parameters } = tool;
       return [
         {
           name,
-          description: tool.description,
-          parameters: projectTrajectoryToolParameters(tool.parameters),
+          description,
+          parameters:
+            parameters !== null && typeof parameters === "object"
+              ? projectTrajectoryToolObjectParameters(parameters)
+              : projectTrajectoryToolParameters(parameters),
         },
       ];
     })

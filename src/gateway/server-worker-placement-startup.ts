@@ -9,6 +9,7 @@ import {
   getGatewayRestartDrainSignal,
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -109,6 +110,7 @@ export type GatewayWorkerPlacementRuntime = ReturnType<typeof createGatewayWorke
 
 export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlacementRuntimeParams) {
   const { scheduler } = params;
+  const spawnBroker = getSpawnBroker();
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
   const isStopping = () =>
@@ -474,7 +476,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         operations.get("reconcile") ??
         trackOperation(
           "reconcile",
-          (async () => {
+          runWithSpawnBroker(spawnBroker, async () => {
             await reconcilePhase("reconcile.session-retirement", () =>
               sessionRetirement.reconcile(optionalWorkSignal),
             );
@@ -491,7 +493,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
             if (!isReconciliationPaused()) {
               void nodeWorkspaceRetention.schedule();
             }
-          })(),
+          }),
           "Worker placement reconcile sweep failed",
         )
       );
@@ -550,9 +552,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           }
           // The sweep owns reporting and settlement; returning it would create an
           // unobserved rejecting promise for this best-effort event subscriber.
-          const resume = () => {
-            void reconcileActivePlacements();
-          };
+          const resume = () => void reconcileActivePlacements();
           void pending.then(resume, resume);
         }
       }),

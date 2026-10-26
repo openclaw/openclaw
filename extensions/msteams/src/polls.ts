@@ -278,15 +278,12 @@ export function createMSTeamsPollStoreState(params?: {
     const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
     const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
     const existing = await voteBucketStore.lookup(key);
-    await voteBucketStore.register(
-      key,
-      toPluginJsonValue({
-        pollId,
-        bucket,
-        votes: { ...existing?.votes, [voterId]: selections },
-        updatedAt,
-      }),
-    );
+    await voteBucketStore.register(key, {
+      pollId,
+      bucket,
+      votes: { ...existing?.votes, [voterId]: selections },
+      updatedAt,
+    });
   };
 
   const prunePollStoreToLimit = async (): Promise<void> => {
@@ -353,7 +350,7 @@ export function createMSTeamsPollStoreState(params?: {
       const normalized = normalizeMSTeamsPollSelections(poll, vote.selections);
       const updatedAt = new Date().toISOString();
       poll.updatedAt = updatedAt;
-      await pollStore.register(pollKey, toPluginJsonValue(poll));
+      await pollStore.register(pollKey, poll);
       await registerPollVote(vote.pollId, vote.voterId, normalized, updatedAt);
       await prunePollStoreToLimit();
       return true;

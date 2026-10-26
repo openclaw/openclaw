@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import pMap from "p-map";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
@@ -57,13 +57,11 @@ export async function readSessionsDirFiles(sessionsDir: string): Promise<Session
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
   // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
-  const tasks = dirEntries
-    .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
-    .map((dirent) => () => readSessionFileStat(path.join(sessionsDir, dirent.name)));
-  const { results } = await runTasksWithConcurrency({
-    tasks,
-    limit: SESSIONS_DIR_STAT_CONCURRENCY,
-  });
+  const results = await pMap(
+    dirEntries.filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name)),
+    (dirent) => readSessionFileStat(path.join(sessionsDir, dirent.name)),
+    { concurrency: SESSIONS_DIR_STAT_CONCURRENCY },
+  );
   return results.filter((file): file is SessionsDirFileStat => Boolean(file));
 }
 

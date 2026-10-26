@@ -414,6 +414,48 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
   });
 
+  it("models a computed checkout module member only while its binding and call exist", () => {
+    const consumerPath = path.resolve(
+      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
+    );
+    const consumerSource = fs.readFileSync(consumerPath, "utf8");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcreateScenarioCommandEnvironment as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/\.agents\/skills\/telegram-e2e-userbot\/scripts\/run-mock-sut-user-e2e\.mjs";/u,
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const compileWithConsumer = (source: string) => {
+      readFile.mockImplementation((file, options) =>
+        path.resolve(String(file)) === consumerPath ? source : readFileSync(file, options),
+      );
+      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    };
+
+    const withoutBinding = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        'const harness = await import(pathToFileURL(join(scripts, "run-mock-sut-user-e2e.mjs")));',
+        "const harness = {};",
+      ),
+    );
+    expect(withoutBinding).not.toContain("run-mock-sut-user-e2e.mjs");
+
+    const withoutCall = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        "  const commandEnv = harness.createScenarioCommandEnvironment({",
+        '  // harness.createScenarioCommandEnvironment({ is not a call.\n  const mention = "harness.createScenarioCommandEnvironment(";\n  const commandEnv = Object.freeze({',
+      ),
+    );
+    expect(withoutCall).not.toContain("createScenarioCommandEnvironment as");
+    expect(withoutCall).toContain("run-mock-sut-user-e2e.mjs");
+    expect(withoutCall).toContain("runtimeProcessDeployManifest");
+    expect(withoutCall).toContain("observeNativeMcpProbe");
+  });
+
   it("removes projected MCP and Python edges with their actual consumers", () => {
     const runtimePath = path.resolve("src/agents/agent-bundle-mcp-runtime.ts");
     const instrumenterPath = path.resolve("scripts/perf/session-row-churn-instrument.py");

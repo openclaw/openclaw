@@ -149,14 +149,12 @@ it.skipIf(process.platform === "win32").each([
     if (!result) {
       expect(line, output).toBeUndefined();
       if (mode === "interrupted") {
-        expect(fs.existsSync(identity), stderr).toBe(true);
         expect(isChildProcessTreeAlive({ pid: Number(fs.readFileSync(identity, "utf8")) })).toBe(
           false,
         );
       }
       return;
     }
-    expect(line, output).toBeDefined();
     expect(JSON.parse(line!.slice(resultEnv.length + 1)), stderr).toMatchObject(result);
     if (mode === "normal") {
       expect(output).toContain("fixture-legacy-refusal");

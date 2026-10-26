@@ -4,7 +4,7 @@ import {
   type SessionsPatchManyResult,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   readSessionMethodAccess,

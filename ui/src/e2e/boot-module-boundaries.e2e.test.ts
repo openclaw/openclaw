@@ -4,10 +4,12 @@ import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-s
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineGatewayModuleBoundaryTests } from "./gateway-module-boundaries.test-support.ts";
 import { defineNativeModuleBoundaryTests } from "./native-module-boundaries.test-support.ts";
+import { defineStartupRecoveryModuleBoundaryTests } from "./new-session-page.cloud-startup.runtime-load.test-support.ts";
 import { defineSessionPlacementModuleBoundaryTests } from "./session-placement-module-boundaries.test-support.ts";
 import { defineTypographyModuleBoundaryTests } from "./typography-module-boundaries.test-support.ts";
 
 const tempDirs = createTempDirTracker();
+const buildId = "e2e";
 let buildRoot: string;
 const suite = createControlUiE2eSuite({
   name: "Control UI module boundaries",
@@ -17,7 +19,7 @@ const suite = createControlUiE2eSuite({
     try {
       // Fault individual import owners without changing production preload,
       // service-worker, or reload behavior. Other suites retain shipped grouping.
-      const server = await startProductionControlUiE2eServer(buildRoot, "e2e", undefined, {
+      const server = await startProductionControlUiE2eServer(buildRoot, buildId, undefined, {
         includeBootGroups: false,
       });
       return {
@@ -39,5 +41,6 @@ suite.define(() => {
   defineGatewayModuleBoundaryTests(suite, moduleRequest);
   defineNativeModuleBoundaryTests(suite, moduleRequest);
   defineSessionPlacementModuleBoundaryTests(suite, moduleRequest);
+  defineStartupRecoveryModuleBoundaryTests(suite, moduleRequest, buildId);
   defineTypographyModuleBoundaryTests(suite, moduleRequest);
 });

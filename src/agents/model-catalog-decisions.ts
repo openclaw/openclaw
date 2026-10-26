@@ -134,7 +134,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   const modelKeyOf = createModelCatalogIdentityKeyResolver();
   const primaryKey = modelKeyOf(primaryEntry);
   const configuredPinForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    modelKeyOf(entry) === primaryKey ? configuredProfileId : undefined;
+    configuredProfileId !== undefined && modelKeyOf(entry) === primaryKey
+      ? configuredProfileId
+      : undefined;
   // Runtime choices are read after preparation; CLI backends belong to the owner's registry.
   const cliRuntimeBindings = params.pluginRegistry
     ? withPluginRuntimeRegistryScope(params.pluginRegistry, () =>

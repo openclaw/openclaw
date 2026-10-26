@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";

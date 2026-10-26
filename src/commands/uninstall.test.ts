@@ -110,21 +110,18 @@ describe("uninstallCommand", () => {
   });
 
   it("continues state and app cleanup when retired workspace cleanup returns failures", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    using _ = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     removeWorkspaceDirs.mockResolvedValueOnce(["retired state failed"]);
-    try {
-      await expectFailure({ state: true, app: true });
 
-      expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
-      expect(removePath).toHaveBeenCalledWith(
-        "/Applications/OpenClaw.app",
-        runtime,
-        expect.any(Object),
-      );
-      expect(cleanupCommandErrorMessages(runtime).join("\n")).toContain("retired state");
-    } finally {
-      platform.mockRestore();
-    }
+    await expectFailure({ state: true, app: true });
+
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+    expect(removePath).toHaveBeenCalledWith(
+      "/Applications/OpenClaw.app",
+      runtime,
+      expect.any(Object),
+    );
+    expect(cleanupCommandErrorMessages(runtime).join("\n")).toContain("retired state");
   });
 
   it("fails when workspace cleanup returns failures", async () => {

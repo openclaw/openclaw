@@ -6,8 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { deepFreezeDiagnosticValue } from "../infra/diagnostic-event-snapshot.js";
-import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 
 const STARTUP_PHASES = new Set<string>(ChatRunStartupPhaseSchema.anyOf.map((phase) => phase.const));
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
@@ -34,8 +33,12 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
       throw new RangeError("Progress event exceeds replay budget");
     }
   };
-  const primitive = (value: unknown) =>
-    charge(boundedJsonUtf8Bytes(value, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes).bytes);
+  const primitive = (value: unknown) => {
+    if (typeof value === "string" && value.length + 2 > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes) {
+      throw new RangeError("Progress event exceeds replay budget");
+    }
+    charge(Buffer.byteLength(JSON.stringify(value), "utf8"));
+  };
 
   // Native traversal owns getters and toJSON. Only already-observed primitives
   // are measured separately, so producer callbacks execute exactly once.
@@ -72,7 +75,7 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
         // each time native JSON revisits a shared, non-cyclic container.
         containers.set(value, { array: Array.isArray(value), count: 0 });
       }
-    } else {
+    } else if (typeof value !== "bigint") {
       primitive(value);
     }
     return value;
@@ -89,7 +92,7 @@ function captureProgressEvent(event: AgentEventPayload) {
     // Own the wire representation; producers and replay readers cannot change
     // captured content or invalidate its size after this synchronous receipt.
     const captured: AgentEventPayload = JSON.parse(json);
-    deepFreezeDiagnosticValue(captured);
+    freezeTrustedJsonSnapshot(captured);
     if (!asNullableRecord(captured.data)) {
       return undefined;
     }

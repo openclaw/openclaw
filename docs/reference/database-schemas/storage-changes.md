@@ -145,6 +145,8 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+### PostgreSQL index ordering migrations
+
 Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
 primary-key columns, and for direct keys proven non-null by the index's own
 `IS NOT NULL` predicate. Other nullable columns and expression keys retain SQLite's
@@ -164,6 +166,18 @@ existing migration progress and recovery handling.
 The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
 `postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
 owners share that cutover and exact predecessor reconstruction for generated DDL.
+
+State schema 34 records the default cron partition's existing opaque key in
+`config_machine_state`. SQLite and PostgreSQL publish the binding in the existing
+schema migration transaction without rewriting jobs, scratch, receipts, or history.
+Partition discovery includes retained legacy run logs before their history import.
+The binding survives state-directory moves and restored backups. If an older store
+has already moved and its original default cannot be established, the Gateway
+starts with cron paused and reports the available partitions. Run
+`openclaw doctor --fix` interactively to select the default partition. Until that
+selection, noninteractive Doctor preserves retired heartbeat settings and reports
+the combined selection and migration step. Rollback restores the verified
+pre-migration backup with its matching binary.
 
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
@@ -189,10 +203,10 @@ SET LOCAL standard_conforming_strings = on;
 COMMIT;
 ```
 
-Use a disposable schema for this readiness check; it does not enable shared-state
-PostgreSQL support or migrate an existing store.
+Use a disposable schema for this generation check; it does not configure runtime
+engine selection or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 25). Every
+Both engines use the same [shared-state schema version](/reference/database-schemas/state-schema-history). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -203,7 +217,7 @@ owner's retired index names and the canonical replacement index definitions.
 It contains forward DDL only; the caller supplies the transaction, namespace,
 and version publication. PostgreSQL conformance verifies the upgraded index
 definitions against a fresh schema and preserves retained rows and local indexes.
-This readiness artifact does not enable shared-state PostgreSQL runtime support.
+Applying this artifact alone does not configure PostgreSQL runtime selection.
 
 Schema 25 adds `state-v24-v25.postgres.sql`, a metadata-only forward migration
 registered with the existing PostgreSQL engine owner. It updates the shared-state

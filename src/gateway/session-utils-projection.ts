@@ -112,6 +112,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
     parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
       updatedAt: entry.updatedAt,
       archivedAt: entry.archivedAt,
       status: entry.status,
@@ -119,6 +120,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
       endedAt: entry.endedAt,
       spawnedBy: entry.spawnedBy,
       parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
       createdActor: entry.createdActor,
       visibility: entry.visibility,
       incognito: entry.incognito,

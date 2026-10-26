@@ -3,8 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import type { DiscordCommand } from "./commands.js";
-import { ComponentRegistry } from "./component-registry.js";
-import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
+import { parseCustomId } from "./components.base.js";
 import { DiscordError } from "./rest.js";
 import {
   attachRestMock,
@@ -44,7 +43,7 @@ function wildcardParser(customId: string) {
     id === customId || id.startsWith("occomp:") ? { key: "*", data: {} } : parseCustomId(id);
 }
 
-describe("ComponentRegistry", () => {
+describe("Client component handlers", () => {
   it("preserves digit-only custom id values as strings", () => {
     const parsed = parseCustomId("agent:user=123456789012345678;count=42;enabled=true");
 
@@ -52,7 +51,7 @@ describe("ComponentRegistry", () => {
   });
 
   it("resolves wildcard parser entries by component type", () => {
-    const registry = new ComponentRegistry<BaseMessageInteractiveComponent>();
+    const registry = createInternalTestClient().componentHandler;
     const components = [ComponentType.Button, ComponentType.StringSelect].map((type) => ({
       type,
       customId: `__wildcard_${type}__`,

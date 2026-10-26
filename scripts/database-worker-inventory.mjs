@@ -2263,13 +2263,13 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-cold-storage-backup.ts",
+    "src/config/sessions/session-cold-storage-backup.worker.ts",
     [
       {
-        tier: "T3",
-        operations: ["embedSessionColdArchivesInSnapshot"],
+        tier: "W",
+        operations: ["embedSessionColdArchivesInSnapshotInWorker"],
         evidence:
-          "infra/backup-sqlite-snapshot.ts:292 via backup-create.ts:320,332,352; snapshot/openclaw-snapshot-copy.ts:72 via local-repository.ts:148 and git-backup.ts:310. Roots are commands/backup.ts:52, backup-sqlite.ts:80, backup-git.ts:131, Doctor/update backup and developer reliability scripts; SQL targets a temporary snapshot.",
+          "Only session-accessor.sqlite-archive.worker.ts cold-embed-snapshot dispatch and snapshot/database-backup-core.worker.ts PostgreSQL export call this kernel. The host facade awaits the existing archive worker, including the public SDK deleteSessionEntry backupDir path; SQL targets the retained private snapshot.",
       },
     ],
   ],
@@ -3561,12 +3561,13 @@ const workerModules = new Set([
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
 
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
   "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
   "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
-  "src/config/sessions/session-cold-storage-selection.ts", // Cold preparation and mutation kernels in session-cold-storage-worker.ts only.
-  "src/config/sessions/session-cold-storage-worker.ts", // Archive worker cold-prepare and cold-mutate dispatchers only.
+  "src/config/sessions/session-cold-storage-selection.ts", // Archive-worker preparation and cold-mutation kernels only.
+  "src/config/sessions/session-cold-storage-worker.ts", // Archive-worker cold-mutate dispatcher only.
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.

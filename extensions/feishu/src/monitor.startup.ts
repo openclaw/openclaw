@@ -10,12 +10,6 @@ import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
 
-type FetchBotOpenIdOptions = {
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  allowCachedFallback?: boolean;
-};
-
 export type FeishuMonitorBotIdentity = {
   botOpenId?: string;
   source?: "provider" | "cache";
@@ -23,7 +17,11 @@ export type FeishuMonitorBotIdentity = {
 
 export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
+  options: {
+    runtime?: RuntimeEnv;
+    abortSignal?: AbortSignal;
+    allowCachedFallback?: boolean;
+  } = {},
 ): Promise<FeishuMonitorBotIdentity> {
   if (options.abortSignal?.aborted) {
     return {};

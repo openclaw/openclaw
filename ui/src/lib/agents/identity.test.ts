@@ -290,9 +290,9 @@ it.each(["local", "Gateway"])(
   },
 );
 
-it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
+it("retains a large roster across overlapping and repeated identity updates", async () => {
   const pending = createDeferred();
-  const ids = Array.from({ length: 24 }, (_, index) => `agent-${index}`);
+  const ids = Array.from({ length: 300 }, (_, index) => `agent-${index}`);
   const request = vi.fn((_method: string, params: unknown) => {
     const { agentId } = params as { agentId: string };
     return pending.promise.then(() => ({ agentId, name: agentId, avatar: "" }));
@@ -310,6 +310,7 @@ it("publishes each fetched snapshot once under overlapping roster and stream upd
   expect(capability.entries()).toHaveLength(ids.length);
   expect(publish).toHaveBeenCalledTimes(1);
   await capability.ensure(ids);
+  expect(request).toHaveBeenCalledTimes(ids.length);
   expect(publish).toHaveBeenCalledTimes(1);
 });
 

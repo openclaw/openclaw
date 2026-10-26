@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
@@ -16,8 +17,6 @@ import {
   isWindowsAbsolutePath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
-import { resolveUserPath } from "../utils.js";
-import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export type LocalAgentAvatarFailureReason =
   | "missing"
@@ -116,6 +115,21 @@ export type PreparedLocalAgentAvatarFile = Omit<OpenedLocalAgentAvatarFile, "fd"
   body?: Buffer;
 };
 
+const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
+
+/** An unchanged, revalidated file retains its prepared object and inline representation. */
+export function localAgentAvatarDataUrl(file: PreparedLocalAgentAvatarFile): string | undefined {
+  if (!file.body) {
+    return undefined;
+  }
+  let dataUrl = inlineFiles.get(file);
+  if (!dataUrl) {
+    dataUrl = `data:${resolveAvatarMime(file.path)};base64,${file.body.toString("base64")}`;
+    inlineFiles.set(file, dataUrl);
+  }
+  return dataUrl;
+}
+
 export type LocalAgentAvatarResult =
   | { ok: true; file: PreparedLocalAgentAvatarFile }
   | { ok: false; reason: LocalAgentAvatarFailureReason };
@@ -186,6 +200,7 @@ export async function prepareLocalAgentAvatarFile(params: {
 }): Promise<LocalAgentAvatarResult> {
   try {
     const { prepareLocalAgentAvatar } = await import("./identity-avatar-file-runtime.js");
+    const { resolveAgentWorkspaceDir } = await import("./agent-scope-config.js");
     return await prepareLocalAgentAvatar({
       workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
       source: params.source,
@@ -221,7 +236,5 @@ export async function resolveAgentAvatarUrlFromSource(
     source: normalized,
     readBody: true,
   });
-  return prepared.ok && prepared.file.body
-    ? `data:${resolveAvatarMime(prepared.file.path)};base64,${prepared.file.body.toString("base64")}`
-    : undefined;
+  return prepared.ok ? localAgentAvatarDataUrl(prepared.file) : undefined;
 }

@@ -8,6 +8,36 @@ import {
 } from "./vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "./vitest-cli-mode.mts";
 
+// These built-CLI proofs still read source owners, but their only compiled
+// declarations belong to the production runtime registry.
+const runtimeOnlyBuiltCliFiles = new Set([
+  "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+  "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+]);
+
+/** Broad or mixed selections retain the complete test-fixture compiler graph. */
+export function shouldUseRuntimeOnlyVitestWorkers(
+  config: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const files = collectVitestFileFilters(args).map((file) =>
+    file.replaceAll("\\", "/").replace(/^\.\//u, ""),
+  );
+  if (files.length === 0) {
+    return false;
+  }
+  if (config === "test/vitest/vitest.e2e.config.ts") {
+    return files.every((file) => runtimeOnlyBuiltCliFiles.has(file));
+  }
+  // Local PTY tests select openclaw.mjs before importing source TUI fixtures.
+  return (
+    config === "test/vitest/vitest.tui-pty.config.ts" &&
+    env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1" &&
+    files.every((file) => file === "src/tui/tui-pty-local.e2e.test.ts")
+  );
+}
+
 /** Bind installed CLI matching without adding runtime dependencies to CI planning. */
 export function resolveVitestRuntimeCliSelections(
   config: string,

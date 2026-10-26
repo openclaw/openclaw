@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, onSettled } from "solid-js";
+import { createEffect, createMemo, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
@@ -114,8 +114,10 @@ export function SessionStatus(props: {
     });
   };
   const clearTimer = () => {
-    clearTimeout(timer);
-    timer = undefined;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
   };
   const dismiss = () => {
     clearTimer();
@@ -123,8 +125,10 @@ export function SessionStatus(props: {
     if (open && panel?.isConnected) {
       panel.hidePopover();
     }
-    open = false;
-    trigger?.setAttribute("aria-expanded", "false");
+    if (open) {
+      open = false;
+      trigger?.setAttribute("aria-expanded", "false");
+    }
   };
   const show = () => {
     clearTimer();
@@ -166,7 +170,8 @@ export function SessionStatus(props: {
       }
     }, 150);
   };
-  createEffect(() => `${props.context.id}:${props.presentation.visible}`, dismiss);
+  const identity = createMemo(() => `${props.context.id}:${props.presentation.visible}`);
+  createEffect(identity, dismiss);
   onSettled(() => () => dismiss());
   return (
     <openclaw-workboard-session-status

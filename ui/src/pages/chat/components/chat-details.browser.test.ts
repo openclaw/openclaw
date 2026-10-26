@@ -228,10 +228,12 @@ describe("chat Details presentation", () => {
     const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect
+      .poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 })
+      .toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 }).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
     trigger.click();

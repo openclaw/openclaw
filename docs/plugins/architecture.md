@@ -168,6 +168,8 @@ Plugin enablement readers can pass `rootConfig` to `resolveEffectiveEnableState`
 
 Plugin inventory responses share prepared enablement and package-ownership facts between install-health diagnostics and catalog presentation. Those facts belong to one synchronous response preparation, after hosted catalog loading and before optional category loading; maintenance operations still prepare their own current ownership checks.
 
+Bundled official catalog identities are admitted and indexed once per process. Inventory reads reuse those static entries instead of rescanning the bundled catalog for each installed plugin. Hosted catalog refresh and installed-package provenance checks keep their own lifecycles.
+
 Runs outside the agent's resolved workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's resolved workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
 
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
@@ -253,7 +255,10 @@ Install, update, registry refresh, and doctor flows may read fresh package metad
 Inference verification fingerprints the artifact selected by the runtime's
 source/build preference, including explicit bundled source overrides. Loading an
 unchanged plugin preserves that proof; changing its selected runtime files
-invalidates it.
+invalidates it. For bundled modules embedded in a standalone executable, the
+fingerprint combines the image's build identity, compilation mode, and build
+flavor with the retained plugin sidecar files. Embedded JavaScript does not need
+a second copy on disk.
 
 A managed runtime instance owns its module results, registered callables, and
 runtime-store slots. Non-bundled instances also own a captured source artifact.

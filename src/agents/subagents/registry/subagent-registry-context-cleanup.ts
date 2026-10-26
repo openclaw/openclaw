@@ -2,6 +2,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { retryAfterPluginReplacement } from "../../../plugins/plugin-replacement-retry.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
@@ -57,6 +58,8 @@ export function createSubagentRegistryContextCleanup(config: {
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
+      agentId: parseAgentSessionKey(params.childSessionKey)?.agentId,
+      agentDir: params.agentDir,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       allowGatewaySubagentBinding: true,
     });
@@ -231,6 +234,8 @@ export function createSubagentRegistryContextCleanup(config: {
       const cfg = getRuntimeConfig();
       const registry = await loadSubagentRegistryPluginRuntimeHandle({
         config: cfg,
+        agentId: parseAgentSessionKey(entry.childSessionKey)?.agentId,
+        agentDir: entry.agentDir,
         ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
         allowGatewaySubagentBinding: true,
       });

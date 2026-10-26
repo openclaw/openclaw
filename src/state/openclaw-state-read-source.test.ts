@@ -52,6 +52,28 @@ function readFixture() {
   };
 }
 
+it("shares read setup methods while each read retains independent task custody", async () => {
+  const { location, authority } = readFixture();
+  const factories = new Set();
+  const readers = new Set();
+  const validators = new Set();
+  const closers = new Set();
+  for (let index = 0; index < 16; index += 1) {
+    const captured = captureOpenClawStateReadSource();
+    const transport = captured.createTransport(backupRead);
+    factories.add(captured.createTransport);
+    readers.add(transport.startRead);
+    validators.add(transport.startValidateFresh);
+    closers.add(transport.startClose);
+    const task = readyTask();
+    await expect(transport.startRead(location, authority)).resolves.toEqual({ value: emptyReply });
+    await transport.startClose();
+    expect(task.close).toHaveBeenCalledOnce();
+  }
+  expect(mock.create).toHaveBeenCalledOnce();
+  expect([factories.size, readers.size, validators.size, closers.size]).toEqual([1, 1, 1, 1]);
+});
+
 it("retires cached readers after independent custody joins and permits reuse", async () => {
   const { read } = readFixture();
   const nativeSource = captureRetainedNativeWorkerSource();

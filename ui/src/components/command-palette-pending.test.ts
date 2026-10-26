@@ -249,7 +249,7 @@ describe("CommandPalette pending searches", () => {
   it.each([
     ["partial", {}, "Transcript search unavailable"],
     ["model failure", {}, "Model search unavailable"],
-    ["indexing", { indexing: true }, "Indexing older messages — search again shortly."],
+    ["indexing", { indexing: true }, "Results may be incomplete — search again shortly."],
     ["archived", { archivedTranscriptsExcluded: 2 }, "archived"],
   ] as const)(
     "does not announce empty success for %s transcript results",

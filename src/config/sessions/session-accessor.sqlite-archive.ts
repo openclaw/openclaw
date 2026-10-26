@@ -29,6 +29,7 @@ import {
 } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
+  SessionColdBatchInput,
   SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
   SqliteArchiveOneShotWorkerData,
@@ -105,7 +106,11 @@ type TranscriptArchiveWorkerOperation<Result> = {
   assertCurrent?: () => void;
   signal?: AbortSignal;
 } & (
-  | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
+  | {
+      expectedMessageType: "done" | "published" | "sized";
+      workerData: object;
+      nativeLocations?: readonly string[];
+    }
   | {
       expectedMessageType: "reclaimed";
       workerData: SessionColdWorkerData;
@@ -121,7 +126,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
 ): Promise<Result[]> {
   let worker: Worker;
   try {
-    worker = createSqliteTranscriptArchiveWorker(params.workerData);
+    worker = createSqliteTranscriptArchiveWorker(params.workerData, params.nativeLocations);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -347,6 +352,25 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
     params.assertCurrent?.();
     return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
   }, params.signal);
+}
+
+export function prepareSqliteColdArchiveBatch(
+  input: SessionColdBatchInput,
+  assertCurrent: () => void,
+  signal: AbortSignal,
+) {
+  return withSqliteTranscriptArchiveSession(input.databaseOptions, async () => {
+    const result = await runScopedSqliteArchiveOperation(
+      { operation: "cold-prepare", input },
+      createSqliteTranscriptArchiveWorker,
+      (run) =>
+        runExclusiveSqliteTranscriptArchiveWorker(() => {
+          assertCurrent();
+          return run();
+        }, signal),
+    );
+    return result!.results;
+  });
 }
 
 function runSqliteTranscriptArchiveWorker(

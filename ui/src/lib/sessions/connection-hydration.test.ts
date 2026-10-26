@@ -8,11 +8,8 @@ import { afterEach, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";

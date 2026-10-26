@@ -161,3 +161,12 @@ export async function settleChatPage(
   await Promise.resolve();
   flush();
 }
+
+export async function showSession(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+  sessionKey: string,
+): Promise<void> {
+  page.data = { sessionKey };
+  await settleChatPage(page);
+  await settleChatPage(page);
+}

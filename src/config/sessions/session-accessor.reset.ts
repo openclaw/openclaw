@@ -17,6 +17,7 @@ import type {
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { withSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -35,7 +36,6 @@ import type {
 import { withSessionActorStorage } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import type { SessionEntryCreationCommit } from "./session-entry-creation.types.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";

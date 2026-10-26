@@ -475,6 +475,7 @@ suite.define(() => {
         metadata: { models },
       };
       const gateway = await installPlacementGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         featureMethods: ["chat.startup", "sessions.move"],
         historyMessages,

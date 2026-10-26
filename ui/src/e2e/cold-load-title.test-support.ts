@@ -247,9 +247,7 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
   restores.push(() => observer.disconnect());
   window.coldLoadTitleTrace = {
     holdCacheRead() {
-      cacheReadGate = new Promise<void>((resolve) => {
-        releaseCacheRead = resolve;
-      });
+      ({ promise: cacheReadGate, resolve: releaseCacheRead } = Promise.withResolvers<void>());
     },
     releaseCacheRead() {
       releaseCacheRead?.();

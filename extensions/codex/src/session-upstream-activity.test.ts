@@ -41,7 +41,7 @@ function turn(
   };
 }
 
-function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
+function createActivityChecker(overrides: Partial<CodexSessionCatalogControl>, linked = false) {
   const control = {
     connectionFingerprint: "connection-1",
     async withPinnedConnection<T>(run: (value: CodexSessionCatalogControl) => Promise<T>) {
@@ -49,16 +49,12 @@ function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
     },
     ...overrides,
   } as CodexSessionCatalogControl;
-  return control;
-}
-
-function createActivityChecker(control: CodexSessionCatalogControl, linked = false) {
   const session = {
     resolveStorePath: () => "/activity-store",
     getSessionEntryAsync: async () => (linked ? { sessionId: "session-1" } : undefined),
   };
   const bindingStore = {
-    readAsync: vi.fn(async () =>
+    readAsync: async () =>
       linked
         ? {
             threadId: "thread-canonical",
@@ -66,7 +62,6 @@ function createActivityChecker(control: CodexSessionCatalogControl, linked = fal
             supervisionSourceThreadId: "thread-1",
           }
         : undefined,
-    ),
   } as unknown as CodexAppServerBindingStore;
   return createChecker({
     api: { runtime: { agent: { session } } } as unknown as OpenClawPluginApi,
@@ -98,11 +93,13 @@ describe("Codex upstream activity", () => {
       const readThread = vi.fn(async () =>
         missing ? fail("thread/read") : { id: "thread-canonical", projectId: null },
       );
-      const control = createControl({
-        listTurnPage: async () => (missing ? fail("thread/turns/list") : { data: [] }),
-        readThread,
-      });
-      const check = createActivityChecker(control, !missing);
+      const check = createActivityChecker(
+        {
+          listTurnPage: async () => (missing ? fail("thread/turns/list") : { data: [] }),
+          readThread,
+        },
+        !missing,
+      );
       await expect(check([probe()])).resolves.toEqual(
         missing ? [{ kind: "missing", sessionKey: "agent:main:adopted:codex" }] : [],
       );
@@ -112,7 +109,7 @@ describe("Codex upstream activity", () => {
 
   it("keeps a failed turns read inconclusive without another request", async () => {
     const readThread = vi.fn();
-    const control = createControl({
+    const check = createActivityChecker({
       listTurnPage: async ({ threadId }) => {
         if (threadId === "thread-stale") {
           throw new CodexAppServerRpcError(
@@ -126,10 +123,7 @@ describe("Codex upstream activity", () => {
     });
 
     await expect(
-      createActivityChecker(control)([
-        probe({ threadId: "thread-stale" }),
-        probe({ sessionKey: "healthy" }),
-      ]),
+      check([probe({ threadId: "thread-stale" }), probe({ sessionKey: "healthy" })]),
     ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy" })]);
     expect(readThread).not.toHaveBeenCalled();
   });
@@ -154,9 +148,10 @@ describe("Codex upstream activity", () => {
             },
           ]
         : ["userMessage", "agentMessage", "userMessage"];
-      const turns = [turn("turn-1", items, 100)];
-      const control = createControl({ listTurnPage: async () => ({ data: turns }) });
-      await expect(createActivityChecker(control)([activityProbe])).resolves.toEqual([
+      const check = createActivityChecker({
+        listTurnPage: async () => ({ data: [turn("turn-1", items, 100)] }),
+      });
+      await expect(check([activityProbe])).resolves.toEqual([
         {
           kind: "activity",
           sessionKey: "agent:main:adopted:codex",

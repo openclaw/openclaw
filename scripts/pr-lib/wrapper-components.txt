@@ -90,6 +90,7 @@ packages/memory-host-sdk/package.json
 packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
+packages/memory-host-sdk/src/host/memory-path-postgres.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
 packages/memory-host-sdk/src/host/memory-schema-catalog.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
@@ -1291,6 +1292,7 @@ src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
+src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -1600,7 +1602,6 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
-src/plugins/plugin-instance-replacement.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1719,6 +1720,7 @@ src/process/exec-runner.ts
 src/process/exec-spawn.ts
 src/process/exec-termination.ts
 src/process/exec.ts
+src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-oom-score.ts
@@ -1748,6 +1750,7 @@ src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/projects/project-checkout.ts
 src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
@@ -1890,9 +1893,11 @@ src/state/openclaw-agent-board-schema.ts
 src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
 src/state/openclaw-agent-canonical-validation-schema.ts
+src/state/openclaw-agent-cold-archive-chunks-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
+src/state/openclaw-agent-db-borrower.ts
 src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
@@ -1908,6 +1913,7 @@ src/state/openclaw-agent-db-maintenance-authority.ts
 src/state/openclaw-agent-db-metadata-write.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
+src/state/openclaw-agent-db-owner-read.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
 src/state/openclaw-agent-db-readonly-open.ts
@@ -1945,6 +1951,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
@@ -1995,6 +2002,7 @@ src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
+src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-engine.ts
@@ -2210,6 +2218,7 @@ scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs
 src/config/sessions/legacy-sqlite-marker.ts
 src/config/sessions/lifecycle-timestamps.ts
+src/config/sessions/session-accessor.sqlite-read-scope.ts
 src/config/sessions/session-accessor.sqlite-scope.ts
 src/config/sessions/session-accessor.sqlite-transcript-anchor.ts
 src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts
@@ -2347,6 +2356,7 @@ packages/ai/src/transports/json-unsafe-integers.ts
 packages/ai/src/transports/model-request-body.ts
 packages/ai/src/transports/model-transport-debug.ts
 packages/ai/src/transports/model-transport-url.ts
+packages/ai/src/transports/openai-reasoning-compat.ts
 packages/ai/src/transports/openai-responses-contracts.ts
 packages/ai/src/transports/openai-responses-service-tier.ts
 packages/ai/src/transports/openai-responses-stream-errors.ts
@@ -2370,7 +2380,6 @@ packages/ai/src/utils/sanitize-unicode.ts
 packages/ai/src/utils/stream-first-event-timeout.ts
 packages/ai/src/utils/streaming-byte-guard.ts
 packages/ai/src/utils/system-prompt-cache-boundary.ts
-packages/ai/src/utils/tls-certificate-errors.ts
 packages/ai/src/utils/usage.ts
 packages/gateway-protocol/src/chat-work-context.ts
 packages/gateway-protocol/src/schema/agent-database-admission.ts
@@ -2593,6 +2602,7 @@ src/sessions/user-turn-transcript.message.ts
 src/shared/assistant-display-content.ts
 src/shared/chat-content.ts
 src/shared/chat-envelope.ts
+src/shared/keyboard-shortcuts.generated.ts
 src/shared/keyboard-shortcuts.ts
 src/shared/markdown-code.ts
 src/shared/provider-login-command.ts
@@ -2670,6 +2680,8 @@ src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
 src/interactive/payload.ts
 src/media/media-reference.ts
+src/media/inbound-media-path.ts
+src/media/store-path.ts
 src/media/store.shared.ts
 src/media/store.ts
 src/sessions/session-run-error-presentation.ts

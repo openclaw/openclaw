@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  writeConfigMachineState,
+  writeConfigMachineStateInDatabase,
+} from "../state/config-machine-state-write.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,7 +19,7 @@ import {
   recordDefaultProactiveJobInDatabase,
 } from "./proactive-job-receipt.js";
 import { getCronJobsStoreRevision, loadCronJobsStore, saveCronJobsStore } from "./store.js";
-import { cronStoreKey } from "./store/key.js";
+import { resolveCronStoreKeyInDatabase } from "./store/paths.js";
 
 const config: OpenClawConfig = {
   agents: {
@@ -106,10 +109,13 @@ it.each([
   async ({ phase, expected }) => {
     await withOpenClawTestState({ label: "proactive-cutover-refusal" }, async (state) => {
       const storePath = state.statePath("cron", "jobs.json");
-      writeConfigMachineState(`automation-default:${cronStoreKey(storePath)}:main`, {
-        jobId: "recorded-job",
-        provisionedAtMs: 1,
-        phase,
+      runOpenClawStateWriteTransaction(({ db }) => {
+        const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
+        writeConfigMachineStateInDatabase(db, `automation-default:${storeKey}:main`, {
+          jobId: "recorded-job",
+          provisionedAtMs: 1,
+          phase,
+        });
       });
       await expect(
         provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 }),
@@ -127,9 +133,10 @@ it("reports complete receipt jobs primary-first while excluding incomplete cutov
     const pending = createDefaultProactiveJob(config, "helper", 3);
     await saveCronJobsStore(storePath, { version: 1, jobs: [converted, pending, primary] });
     runOpenClawStateWriteTransaction(({ db }) => {
-      recordDefaultProactiveJobInDatabase(db, storePath, "main", primary.id, 1);
-      recordConvertedProactiveJobInDatabase(db, storePath, "main", converted.id);
-      recordDefaultProactiveJobInDatabase(db, storePath, "helper", pending.id, 3, "pending");
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
+      recordDefaultProactiveJobInDatabase(db, storeKey, "main", primary.id, 1);
+      recordConvertedProactiveJobInDatabase(db, storeKey, "main", converted.id);
+      recordDefaultProactiveJobInDatabase(db, storeKey, "helper", pending.id, 3, "pending");
     });
     const sql = observeMainThreadSql();
     try {

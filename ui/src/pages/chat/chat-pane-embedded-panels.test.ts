@@ -10,7 +10,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   createReviewFixture as createUnboundReviewFixture,
   renderPanelFixture,
@@ -22,12 +22,12 @@ import { restorePropertyDescriptor } from "../../test-helpers/property-descripto
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
-import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
-import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
-} from "./chat-pane.test-support.ts";
+} from "./chat-application-context.test-support.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";

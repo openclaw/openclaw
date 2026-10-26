@@ -1,4 +1,4 @@
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import {
   isHiddenAssistantStreamText,
   isVisibleChatHistoryMessage,

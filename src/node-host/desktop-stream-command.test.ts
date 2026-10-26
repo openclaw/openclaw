@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -11,10 +10,10 @@ import {
   invokeNodeDesktopStream,
   invokeNodeWorkerDesktopStream,
 } from "./desktop-stream-command.js";
-import { portOf, streamParams, TICKET } from "./stream-command.test-support.js";
+import { portOf, streamParams, TICKET, useStreamFixture } from "./stream-command.test-support.js";
 
-const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { cleanups, closeServer } = useStreamFixture();
 
 async function listenRfbSecurity(securityTypes: number[]) {
   const peers = new Set<net.Socket>();
@@ -30,15 +29,7 @@ async function listenRfbSecurity(securityTypes: number[]) {
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const port = portOf(server);
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve) => {
-        for (const peer of peers) {
-          peer.destroy();
-        }
-        server.close(() => resolve());
-      }),
-  );
+  closeServer(server, peers);
   return { port, peers };
 }
 
@@ -47,10 +38,6 @@ function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
     throw error;
   }
 }
-
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-});
 
 describe("node desktop stream command", () => {
   it("refuses streaming when the node-local setting is disabled", async () => {
@@ -143,10 +130,9 @@ describe("node desktop stream command", () => {
 
   it("bounds the provider-owned VNC password file", async () => {
     const rfb = await listenRfbSecurity([2]);
-    const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-password-"));
+    const root = tempDirs.make("desktop-password-");
     const oversized = path.join(root, "oversized");
     await fs.writeFile(oversized, "x".repeat(4 * 1024 + 1));
-    cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
 
     for (const [passwordFilePath, message] of [
       [root, "must be a regular file"],
@@ -168,10 +154,9 @@ describe("node desktop stream command", () => {
 
   it("honors cancellation before reading a VNC password file", async () => {
     const rfb = await listenRfbSecurity([2]);
-    const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-password-"));
+    const root = tempDirs.make("desktop-password-");
     const passwordFilePath = path.join(root, "password");
     await fs.writeFile(passwordFilePath, "secret");
-    cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
     const controller = new AbortController();
     controller.abort(new Error("desktop owner closed"));
 
@@ -203,8 +188,7 @@ describe("node desktop stream command", () => {
   it("refuses an attach path that changes the connected gateway origin", async () => {
     await expect(
       invokeNodeDesktopStream({
-        paramsJSON: JSON.stringify({
-          ticket: TICKET,
+        paramsJSON: streamParams("desktop", {
           attachPath: `//attacker.example/node-desktop/attach?ticket=${TICKET}`,
         }),
         gatewayUrl: "ws://127.0.0.1:1",

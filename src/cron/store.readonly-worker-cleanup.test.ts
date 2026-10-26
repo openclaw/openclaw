@@ -8,6 +8,7 @@ import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-st
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
 import { withCronStore } from "./store.worker.test-support.js";
+import { resolveCronStoreKeyAsync } from "./store/paths.js";
 
 it.each(["worker", "snapshot"] as const)(
   "retains %s cleanup custody without losing a completed read",
@@ -16,6 +17,8 @@ it.each(["worker", "snapshot"] as const)(
       "cron-readonly-cleanup",
       async (state) => {
         await state.createDatabase();
+        // Fault the dedicated cron reader after its separate binding selection.
+        await resolveCronStoreKeyAsync(state.storePath, state.env);
         const failure = new Error("controlled worker retirement failure");
         const terminate = vi.spyOn(Worker.prototype, "terminate");
         const fault =
@@ -88,6 +91,7 @@ it.each(["worker", "snapshot"] as const)(
 it("refuses new reader admission while canonical close is draining an earlier reader", async () => {
   await withCronStore("cron-readonly-drain", async (state) => {
     await state.createDatabase();
+    await resolveCronStoreKeyAsync(state.storePath, state.env);
     const entered = createDeferred();
     const finish = createDeferred();
     const draining = createDeferred();

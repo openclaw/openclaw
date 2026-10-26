@@ -54,13 +54,16 @@ endpoint rejects `reasoning_effort`, the request error points to that opt-out.
 Advanced levels such as `xhigh` and `max` require a model declaration or mapping
 before the CLI accepts them. Use `compat.supportedReasoningEfforts` to declare the
 endpoint's accepted values, and `compat.reasoningEffortMap` or `thinkingLevelMap`
-to map thinking levels to those values. Requested enabled efforts are clamped to
-a declared ladder. Sending a level does not guarantee that the server or model
+to map thinking levels to those values. These explicit reasoning declarations
+take precedence over live catalog guesses, including a catalog that reports no
+scalar effort support. Requested enabled efforts are clamped to a declared
+ladder. Sending a level does not guarantee that the server or model
 distinguishes it from other levels: some models offer only binary thinking, and
 some servers ignore the field.
 
-`/think off` omits `reasoning_effort` by default on custom routes, because many
-servers accept only `low`, `medium`, and `high`. Omission leaves the server's own
+`/think off` omits scalar effort by default on unknown Completions and Responses
+routes, because many servers accept only enabled effort values. This also applies
+to one-shot utility and title requests. Omission leaves the server's own
 default in effect and does not guarantee zero reasoning. If the endpoint accepts
 `none` to disable thinking, declare it explicitly on the model:
 
@@ -76,6 +79,10 @@ default in effect and does not guarantee zero reasoning. If the endpoint accepts
 
 These defaults apply to custom routes. Bundled provider plugins retain their
 provider-specific thinking contracts, including native Ollama's `think` control.
+For Ollama's OpenAI-compatible `/v1` endpoint, `none` disables thinking on models
+that support it, such as Qwen3 8B and Qwen3.5 4B; omitting effort keeps the model's
+default. Always verify the server and model together: a mandatory-thinking model
+cannot be made non-thinking by changing an effort label.
 
 ## Resolution order
 
