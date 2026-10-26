@@ -42,7 +42,7 @@ async function startEveryJob(text: string) {
       payload: { kind: "systemEvent", text },
     }),
   );
-  return { ...fixture, store, clock, job, wake };
+  return { ...fixture, clock, job, wake };
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
@@ -51,7 +51,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     ["restart signal admission rollback", "rollback-tick"],
   ])("resumes due cron work after %s", async (variant, text) => {
     const fixture = await startEveryJob(text);
-    const { cron, state, runSessionEvent, finished, store, clock, job } = fixture;
+    const { cron, state, runSessionEvent, finished, clock, job } = fixture;
     resetGatewayWorkAdmission();
     let wake: Promise<void> | undefined;
 
@@ -91,7 +91,6 @@ describe("CronService interval/cron jobs fire on time", () => {
       cron.stop();
       resetGatewayWorkAdmission();
       await wake;
-      await store.cleanup();
     }
   });
 
@@ -150,6 +149,5 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     cron.stop();
-    await store.cleanup();
   });
 });
