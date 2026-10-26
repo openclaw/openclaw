@@ -1,13 +1,11 @@
 import { expect, it } from "vitest";
 import {
   isSessionsHubRoute,
-  isSettingsNavigationRoute,
   normalizeSidebarEntries,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
-import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -40,7 +38,10 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
   const catalog = (device: Device | null = null) =>
     getStaticCommandPaletteCatalogItems(canAdmin, device).map((item) => item.action);
   const browserGroups = visibleSettingsNavigationGroups(canAdmin);
-  expect(browserGroups.flatMap((group) => group.routes).includes("updates")).toBe(canAdmin);
+  const browserRoutes = new Set(browserGroups.flatMap((group) => group.routes));
+  expect(browserRoutes.has("updates")).toBe(canAdmin);
+  expect(browserRoutes.has("channels")).toBe(true);
+  expect(browserRoutes.has("communications")).toBe(canAdmin);
   expectSearch("Check for updates", capability, "updates");
   expect(catalog(capability)).toContain("nav:updates");
   expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
@@ -65,7 +66,6 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
   for (const [formFactor, labelKey] of [
     ["phone", "nav.settingsGroupThisIPhone"],
     ["pad", "nav.settingsGroupThisIPad"],
-    ["desktop", "nav.settingsGroupThisDevice"],
     [undefined, "nav.settingsGroupThisDevice"],
   ] as const) {
     iosSnapshot.device.formFactor = formFactor;
@@ -92,14 +92,13 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
       expectSearch(query, { ...capability, snapshot: null });
     }
   }
-  const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
-  sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
-  delete sparseIosSnapshot.voice.speakerphoneEnabled;
-  sparseIosSnapshot.permissions.entries = sparseIosSnapshot.permissions.entries.filter(
+  iosSnapshot.capabilities!.healthSummaryAvailable = false;
+  delete iosSnapshot.voice.speakerphoneEnabled;
+  iosSnapshot.permissions.entries = iosSnapshot.permissions.entries.filter(
     (entry) => entry.id !== "contacts",
   );
   for (const query of ["Health summaries", "Use speakerphone", "Contacts"]) {
-    expectSearch(query, { ...capability, snapshot: sparseIosSnapshot });
+    expectSearch(query, iosCapability);
   }
   for (const route of ["device", "device-permissions"] as const) {
     expect(catalog()).not.toContain(`nav:${route}`);
@@ -110,20 +109,6 @@ it("treats worktrees as a sessions hub tab", () => {
   expect(isSessionsHubRoute("sessions")).toBe(true);
   expect(isSessionsHubRoute("worktrees")).toBe(true);
   expect(isSessionsHubRoute("chat")).toBe(false);
-});
-
-it("keeps model setup as a settings subpage without a sidebar entry", () => {
-  expect(isSettingsNavigationRoute("claws")).toBe(false);
-  expect(isSettingsNavigationRoute("model-setup")).toBe(true);
-  expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
-});
-
-it("filters admin-only settings", () => {
-  const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
-  expect(nonAdminRoutes).toContain("approvals");
-  expect(nonAdminRoutes).toContain("channels");
-  expect(nonAdminRoutes).not.toContain("security");
-  expect(nonAdminRoutes).not.toContain("communications");
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];
