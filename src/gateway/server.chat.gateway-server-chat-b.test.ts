@@ -258,7 +258,7 @@ function chatResult(ok: boolean, payload: unknown) {
   return { ok, payload };
 }
 
-function chatResponse(ok: boolean, payload: unknown, error: unknown = undefined) {
+function chatResponse(ok: boolean, payload: unknown, error?: unknown) {
   return { ok, payload, error };
 }
 
@@ -3175,7 +3175,7 @@ describe("gateway server chat", () => {
         }),
       ]);
 
-      const page = await historyPage<HistoryPage>(ws, {
+      const page = await historyPage(ws, {
         limit: 1,
         offset: 1,
         maxChars: 100,
@@ -3764,12 +3764,12 @@ describe("gateway server chat", () => {
         }),
       ]);
 
-      const firstPage = await historyPage<HistoryPage>(ws, { limit: 1, offset: 0, maxChars: 100 });
+      const firstPage = await historyPage(ws, { limit: 1, offset: 0, maxChars: 100 });
       expect(firstPage.ok).toBe(true);
       expect(JSON.stringify(firstPage.payload?.messages)).toContain("latest visible answer");
       expect(firstPage.payload?.nextOffset).toBe(1);
 
-      const olderPage = await historyPage<HistoryPage>(ws, {
+      const olderPage = await historyPage(ws, {
         limit: 2,
         offset: firstPage.payload?.nextOffset,
         maxChars: 100,
@@ -3874,7 +3874,7 @@ describe("gateway server chat", () => {
         }
         await writeMainSessionTranscript(events);
 
-        const first = await historyPage<HistoryPage>(ws, { limit: 4, offset: 0 });
+        const first = await historyPage(ws, { limit: 4, offset: 0 });
         expect(first.ok).toBe(true);
         expect(
           first.payload?.messages?.map(readOpenClawSeq),
@@ -3888,7 +3888,7 @@ describe("gateway server chat", () => {
           totalMessages,
         });
 
-        const older = await historyPage<HistoryPage>(ws, {
+        const older = await historyPage(ws, {
           limit: 4,
           offset: first.payload?.nextOffset,
         });
@@ -4047,7 +4047,7 @@ describe("gateway server chat", () => {
           }),
         ]);
 
-        const firstPage = await historyPage<HistoryPage>(ws, {
+        const firstPage = await historyPage(ws, {
           // Keep the older row for paging while selecting every oversized sibling.
           limit: projectedSiblingCount,
           offset: 0,
@@ -4090,7 +4090,7 @@ describe("gateway server chat", () => {
           expect(page.payload?.hasMore).toBe(true);
           expect(nextOffset).toBeGreaterThan(offset);
           offset = nextOffset;
-          page = await historyPage<HistoryPage>(ws, { limit: 2, offset, maxBytes });
+          page = await historyPage(ws, { limit: 2, offset, maxBytes });
         }
         expect(complete).toBe(true);
         const olderMessages = messages.filter(

@@ -88,6 +88,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
+// mock-isolation: lifecycle cleanup uses synthetic transports, not live Crabline clients.
 vi.mock("./crabline-transport.js", () => {
   const create = vi.fn(async () => ({
     ...createTransport("telegram", "Crabline Telegram"),

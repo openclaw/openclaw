@@ -218,7 +218,7 @@ describe("gateway-status command", () => {
   let capture: ReturnType<typeof createRuntimeCapture>;
   const run = (opts: Parameters<typeof gatewayStatusCommand>[0] = {}) =>
     gatewayStatusCommand({ timeout: "1000", json: true, ...opts }, capture.runtime);
-  const output = <T = unknown>() => JSON.parse(capture.runtimeLogs.join("\n")) as T;
+  const output = (): unknown => JSON.parse(capture.runtimeLogs.join("\n"));
   beforeEach(() => {
     capture = createRuntimeCapture();
     vi.clearAllMocks();
@@ -412,17 +412,21 @@ describe("gateway-status command", () => {
 
     expect(capture.runtimeErrors).toHaveLength(0);
     expect(output()).toMatchObject({ ok: false, primaryTargetId: null });
-    const warnings = output<{ warnings: unknown[] }>().warnings;
-    expect(warnings).toContainEqual({
-      code: "auth_secretref_unresolved",
-      message: "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
-      targetIds: ["localLoopback"],
-    });
-    expect(warnings).toContainEqual({
-      code: "no_gateway_reachable",
-      message:
-        "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
-      targetIds: ["localLoopback"],
+    expect(output()).toMatchObject({
+      warnings: expect.arrayContaining([
+        {
+          code: "auth_secretref_unresolved",
+          message:
+            "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
+          targetIds: ["localLoopback"],
+        },
+        {
+          code: "no_gateway_reachable",
+          message:
+            "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+          targetIds: ["localLoopback"],
+        },
+      ]),
     });
   });
 
@@ -511,15 +515,19 @@ describe("gateway-status command", () => {
     expect(tunnelCall?.signal).toBe(tunnelSignal);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
-    const sshTarget = output<{ targets: Array<{ kind: string; tunnel: unknown }> }>().targets.find(
-      (target: { kind: string }) => target.kind === "sshTunnel",
-    );
-    expect(sshTarget?.tunnel).toEqual({
-      kind: "ssh",
-      target: "me@studio",
-      localPort: 18789,
-      remotePort: 18789,
-      pid: 123,
+    expect(output()).toMatchObject({
+      targets: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "sshTunnel",
+          tunnel: {
+            kind: "ssh",
+            target: "me@studio",
+            localPort: 18789,
+            remotePort: 18789,
+            pid: 123,
+          },
+        }),
+      ]),
     });
   });
 
@@ -563,9 +571,7 @@ describe("gateway-status command", () => {
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
     expect(localProbeCall.timeoutMs).toBeGreaterThan(0);
     expect(localProbeCall.timeoutMs).toBeLessThanOrEqual(15_000);
-    expect(output<{ network: { localLoopbackUrl: string } }>().network.localLoopbackUrl).toBe(
-      "wss://127.0.0.1:18789",
-    );
+    expect(output()).toMatchObject({ network: { localLoopbackUrl: "wss://127.0.0.1:18789" } });
   });
 
   it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
