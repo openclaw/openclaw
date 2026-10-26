@@ -116,12 +116,7 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     for (const limit of [0, false, "", -1, "invalid"]) {
       validate.rejects(limit, /Validation failed for tool "nullable-limit"/);
     }
-    // TypeBox recovers fractional integers by truncating; JSON Schema rejects them.
-    if (schema === optionalLimit) {
-      validate.accepts(1.5, 1);
-    } else {
-      validate.rejects(1.5, /Validation failed for tool "nullable-limit"/);
-    }
+    validate.rejects(1.5, /Validation failed for tool "nullable-limit"/);
   });
 
   it.each([
@@ -192,6 +187,8 @@ describe.each(profiles)("validateToolArguments (%s)", (profile) => {
     const input = { counts: { first: "1" }, choice: "2", value: "00123", limit: null };
     const expected = { ...input, counts: { first: 1 }, choice: 2 };
     expect(validate(input)).toEqual(expected);
+    // A TypeBox root retains its fractional integer conversion contract.
+    expect(validate({ ...input, limit: 1.5 })).toEqual({ ...expected, limit: 1 });
     const invalid = { ...input, limit: 0 };
     expect(() => validate(invalid)).toThrow(/Validation failed for tool "typed-record"/);
   });

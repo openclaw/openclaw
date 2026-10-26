@@ -104,7 +104,7 @@ it("isolates caller messages while chaining replacements through a shared handle
     if (contexts.length === 1) {
       current.push(messages[0]);
       expect(messages).toHaveLength(2);
-      return;
+      return undefined;
     }
     if (contexts.length === 2) {
       expect(current).toHaveLength(3);

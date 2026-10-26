@@ -23,16 +23,21 @@ vi.mock("../../infra/clawhub-promotions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/clawhub-promotions.js")>()),
   fetchClawHubPromotion: mocks.fetch,
 }));
+// mock-isolation: Model credential availability is fixture-owned, never read from host auth storage.
 vi.mock("../../agents/model-auth.js", () => ({ hasAvailableAuthForProvider: mocks.auth }));
+// mock-isolation: Test auth flow outcomes without interactive sign-in or credential writes.
 vi.mock("../../plugins/provider-auth-choice.js", () => ({
   applyAuthChoiceLoadedPluginProvider: mocks.applyAuth,
 }));
+// mock-isolation: Supply auth-choice ownership independently of installed host plugins.
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice: mocks.choice,
 }));
+// mock-isolation: Exercise catalog-only installation with a fixed package catalog.
 vi.mock("../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntry: mocks.catalog,
 }));
+// mock-isolation: Package ownership uses synthetic manifest metadata, not the host registry.
 vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: mocks.metadata,
 }));
@@ -52,11 +57,15 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     return transformed;
   },
 }));
+// mock-isolation: Confirmation decisions are fixture-controlled without terminal interaction.
 vi.mock("../../cli/prompt.js", () => ({ promptYesNo: mocks.prompt }));
+// mock-isolation: Exercise allowed and denied plugin policy without changing host plugin state.
 vi.mock("../../plugins/enable.js", () => ({ enablePluginWithCapabilityConsent: mocks.enable }));
+// mock-isolation: Observe repair requests without downloading or installing runtime plugins.
 vi.mock("../runtime-plugin-install.js", () => ({
   repairModelSelectionRuntimePlugins: mocks.repair,
 }));
+// mock-isolation: Auth flow mocks do not need an interactive terminal prompter.
 vi.mock("../../wizard/clack-prompter.js", () => ({ createClackPrompter: vi.fn(() => ({})) }));
 
 const { ClawHubRequestError } = await import("../../infra/clawhub-client.js");
