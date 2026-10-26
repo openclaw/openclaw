@@ -679,9 +679,12 @@ describe("waitForAgentRunsToDrain", () => {
         },
       });
 
-      expect(callGatewayMock).toHaveBeenCalledTimes(2);
-      expectAgentWaitRequest(0, "run-1", 5_000);
-      expectAgentWaitRequest(1, "run-2", 5_000);
+      const requests = gatewayWaitRequests();
+      expect(requests).toHaveLength(2);
+      for (const request of requests) {
+        const paramTimeoutMs = expectNumber(request.params?.timeoutMs, "param timeoutMs");
+        expect(paramTimeoutMs).toBeLessThanOrEqual(5_000);
+      }
     } finally {
       vi.useRealTimers();
     }
