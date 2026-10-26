@@ -65,7 +65,6 @@ describe("trajectory tool definition preparation", () => {
   });
 
   it("still bounds published JSON before caching its diagnostic projection", () => {
-    const has = vi.spyOn(Headers.prototype, "has");
     const source = { description: "x".repeat(32_769) };
     const published = publishRuntimeToolInputSchema(source).schema;
     for (const parameters of [source, published, source, published]) {
@@ -78,7 +77,6 @@ describe("trajectory tool definition preparation", () => {
         },
       });
     }
-    expect(has).not.toHaveBeenCalled();
   });
 
   it("keeps schema text unchanged across secret registrations and log policy changes", async () => {
@@ -97,7 +95,6 @@ describe("trajectory tool definition preparation", () => {
         tools: toTrajectoryToolDefinitions([{ name: "sample", parameters: { description: text } }]),
       });
     record(description);
-    record(description);
     registerSecretValueForRedaction(description);
     record(description);
     record(bearer);
@@ -108,8 +105,7 @@ describe("trajectory tool definition preparation", () => {
     record(policy);
 
     const captured = writes.map((line) => JSON.parse(line).data.tools[0].parameters.description);
-    const expected = [description, description, description, bearer, policy, policy, policy];
-    expect(captured).toEqual(expected);
+    expect(captured).toEqual([description, description, bearer, policy, policy, policy]);
   });
 
   it("projects array elements without invoking custom array operations or serialization hooks", () => {

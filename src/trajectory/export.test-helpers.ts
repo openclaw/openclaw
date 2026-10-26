@@ -6,19 +6,15 @@ const zeroCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const emptyUsage: Usage = { ...zeroCounts, totalTokens: 0, cost: { ...zeroCounts, total: 0 } };
 const textContent = (text: string): [{ type: "text"; text: string }] => [{ type: "text", text }];
 
-export function createLargeTrajectoryUsage() {
-  return {
-    input: 384_954,
-    output: 5_624,
-    cacheRead: 333_824,
-    reasoningTokens: 2_038,
-    total: 724_402,
-  };
-}
+export const createLargeTrajectoryUsage = () => ({
+  input: 384_954,
+  output: 5_624,
+  cacheRead: 333_824,
+  reasoningTokens: 2_038,
+  total: 724_402,
+});
 
-export function userMessage(content: string): Message {
-  return { role: "user", content, timestamp: 1 };
-}
+export const userMessage = (content: string): Message => ({ role: "user", content, timestamp: 1 });
 
 export function assistantMessage(
   content: Extract<Message, { role: "assistant" }>["content"],
@@ -48,15 +44,13 @@ function toolResultMessage(text: string): Message {
   };
 }
 
-export function sessionHeader(workspaceDir: string, id = "session-1") {
-  return {
-    type: "session",
-    version: 3,
-    id,
-    timestamp: "2026-04-01T05:46:39.000Z",
-    cwd: workspaceDir,
-  };
-}
+export const sessionHeader = (workspaceDir: string, id = "session-1") => ({
+  type: "session",
+  version: 3,
+  id,
+  timestamp: "2026-04-01T05:46:39.000Z",
+  cwd: workspaceDir,
+});
 
 export function messageEntry(
   id: string,
@@ -91,7 +85,7 @@ export function simpleSessionEntries(
       ...messageEntry("entry-user", null, params.userMessage ?? userMessage("hello"), 40),
       timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
     },
-    messageEntry("entry-assistant", "entry-user", assistantMessage(textContent("done"))),
+    messageEntry("entry-assistant", "entry-user", assistantText("done")),
   ];
 }
 
@@ -119,7 +113,7 @@ export function toolCallSessionEntries(workspaceDir: string, toolResultText = "R
       readCall(path.join(workspaceDir, "skills", "weather", "SKILL.md")),
     ),
     messageEntry("entry-tool-result", "entry-tool-call", toolResultMessage(toolResultText), 42),
-    messageEntry("entry-assistant", "entry-tool-result", assistantMessage(textContent("done")), 43),
+    messageEntry("entry-assistant", "entry-tool-result", assistantText("done"), 43),
   ];
 }
 

@@ -60,12 +60,9 @@ export function appendSerializedTrajectoryRuntimeEvents(
     Atomics.store(lease, 0, 1);
     try {
       let refreshes = 0;
+      const prepare = () => prepareTrajectoryRuntimeRetention(database.db, input, now);
       let sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
-      let snapshot: TrajectoryRuntimeRetentionPlan | undefined = prepareTrajectoryRuntimeRetention(
-        database.db,
-        input,
-        now,
-      );
+      let snapshot: TrajectoryRuntimeRetentionPlan | undefined = prepare();
       for (;;) {
         const batch = selectTrajectoryRuntimeRetentionBatch(database.db, { sweepId, snapshot });
         snapshot = undefined;
@@ -83,7 +80,7 @@ export function appendSerializedTrajectoryRuntimeEvents(
             break;
           }
           sweepId = beginTrajectoryRuntimeRetention(database.db, lease);
-          snapshot = prepareTrajectoryRuntimeRetention(database.db, input, now);
+          snapshot = prepare();
         }
       }
     } catch (error) {
