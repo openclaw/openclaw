@@ -535,7 +535,7 @@ function UsageView(
         </section>
 
         <Show when={props.report.scope} keyed>
-          {() => (
+          {(_scope) => (
             <Loading on={reportReset()} fallback={<UsageLoading />}>
               <UsageAnalytics
                 {...props.report.read()}
