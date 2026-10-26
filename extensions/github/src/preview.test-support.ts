@@ -3,7 +3,6 @@ import { vi } from "vitest";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import { loadControlUiGitHubPreview } from "./preview.js";
 
-// List endpoints such as /pulls/{n}/commits return arrays, not objects.
 export function githubJson(
   body: unknown,
   status = 200,
@@ -28,10 +27,6 @@ export function previewFetch(
   respond: (url: string, init?: RequestInit) => Response | Promise<Response>,
 ) {
   return vi.fn<typeof fetch>(async (input, init) => respond(requestUrl(input), init));
-}
-
-function conditionalJson(body: unknown, etag: string) {
-  return Response.json(body, { headers: { etag } });
 }
 
 export function coauthorTrailers(...authors: [string, number][]) {
@@ -140,7 +135,7 @@ export function conditionalPreviewFixture(
       options.avatarUrl === null
         ? undefined
         : (options.avatarUrl ?? "https://avatars.githubusercontent.com/u/58493");
-    return conditionalJson(
+    return githubJson(
       commits
         ? options.authors?.length
           ? coauthorTrailers(...options.authors)
@@ -149,7 +144,8 @@ export function conditionalPreviewFixture(
             title: `Version ${state.item}`,
             user: { login: state.login, avatar_url: avatarUrl },
           }),
-      etag,
+      200,
+      { etag },
     );
   });
   const target = previewTarget(number, kind);

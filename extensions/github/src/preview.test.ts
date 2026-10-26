@@ -1,5 +1,4 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatControlUiGitHubPreviewError } from "./github-api.js";
@@ -45,8 +44,6 @@ const itemResponse = (overrides: Record<string, unknown> = {}) =>
   githubJson(previewPayload(overrides));
 const authorOnly = (overrides: Record<string, unknown> = {}) =>
   itemResponse({ user: { login: "octocat" }, ...overrides });
-const commitResponse = (message: string) => githubJson([{ commit: { message } }]);
-const adaTrailer = "Co-authored-by: Ada <20+ada@users.noreply.github.com>";
 const expectStatus = (pending: Promise<unknown>, statusCode: number) =>
   expect(pending).rejects.toMatchObject({ statusCode });
 const expectPreview = (
@@ -57,6 +54,27 @@ const delay = (ms: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+function fixtureResponse(url: string, overrides = {}, commits = coauthorTrailers(["Ada", 20])) {
+  return url.includes("avatars.githubusercontent.com")
+    ? pngResponse()
+    : url.endsWith("/repos/openclaw/openclaw")
+      ? publicRepository()
+      : url.includes("/commits")
+        ? githubJson(commits)
+        : itemResponse(overrides);
+}
+function mockDeadlineTimers(onCreate?: (controller: AbortController, ms: number) => void) {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController();
+    if (onCreate) {
+      onCreate(controller, ms);
+    } else {
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+    }
+    return controller.signal;
+  });
+}
 
 it.each([
   ["kind", "comment"],
@@ -141,13 +159,8 @@ describe("loadControlUiGitHubPreview", () => {
   it.each(["repository", "body", "commits", "co-author avatar"])(
     "bounds slow %s reads with the preview deadline and reuses the settled cache",
     async (stage) => {
-      vi.useFakeTimers();
       // Native AbortSignal timers do not use Vitest's clock.
-      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-        const controller = new AbortController();
-        setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
-        return controller.signal;
-      });
+      mockDeadlineTimers();
       const identity = managedIdentity(`deadline-${stage}`);
       const fetchMock = previewFetch(async (url, init) => {
         const signal = init?.signal;
@@ -185,13 +198,7 @@ describe("loadControlUiGitHubPreview", () => {
         }
         // Metadata/commits consume budget before a later slow request starts.
         await delay(200);
-        if (currentStage === "repository") {
-          return publicRepository();
-        }
-        if (currentStage === "commits") {
-          return commitResponse(adaTrailer);
-        }
-        return currentStage === "item" ? itemResponse() : pngResponse();
+        return fixtureResponse(url);
       });
       const target = previewTarget(930307, "pull");
       const settled = vi.fn();
@@ -266,13 +273,7 @@ describe("loadControlUiGitHubPreview", () => {
             return githubRedirect(url.replace("/openclaw/openclaw", "/openclaw/renamed"));
           }
         }
-        return githubJson(
-          url.includes("/commits")
-            ? []
-            : url.includes("/pulls/")
-              ? previewPayload({ user: { login: "octocat" } })
-              : { private: false, visibility: "public" },
-        );
+        return fixtureResponse(url, { user: { login: "octocat" } }, []);
       });
       await expect(
         loadPreview(previewTarget(88123, "pull"), identity, fetchMock),
@@ -344,19 +345,13 @@ describe("loadControlUiGitHubPreview", () => {
                 : "other",
           );
           await delay(100);
-          if (url.includes("avatars.githubusercontent.com")) {
-            return pngResponse();
-          }
-          if (url.includes("/commits")) {
-            return commitResponse(adaTrailer);
-          }
           if (url.endsWith("/repos/openclaw/openclaw")) {
             repositoryReads += 1;
-            return repositoryReads === 1 || isPublic
-              ? publicRepository()
-              : githubJson({ private: true, visibility: "private" });
+            if (repositoryReads > 1 && !isPublic) {
+              return githubJson({ private: true, visibility: "private" });
+            }
           }
-          return itemResponse();
+          return fixtureResponse(url);
         });
         const settled = vi.fn();
         const pending = loadPreview(
@@ -436,15 +431,7 @@ describe("loadControlUiGitHubPreview", () => {
     messages.push(
       ...coauthorTrailers(["Mira", 7], ["steipete", 58493], ["Alan", 31], ["Grace", 99]),
     );
-    const fetchMock = previewFetch(async (url) => {
-      if (url.includes("/commits")) {
-        return githubJson(messages);
-      }
-      if (url.includes("avatars.githubusercontent.com")) {
-        return pngResponse();
-      }
-      return itemResponse();
-    });
+    const fetchMock = previewFetch((url) => fixtureResponse(url, {}, messages));
 
     const preview = await loadPreview(previewTarget(88101, "pull"), undefined, fetchMock);
 
@@ -453,19 +440,14 @@ describe("loadControlUiGitHubPreview", () => {
       deletions: 12,
       changedFiles: 3,
       avatarDataUrl,
-      kind: "pull",
       login: "steipete",
       mergedAt: "2026-07-04T09:53:52Z",
-      number: 88101,
-      owner: "openclaw",
-      repo: "openclaw",
+      ...previewTarget(88101, "pull"),
     });
     expect(preview.coAuthorCount).toBe(4);
-    expect(preview.coAuthors).toEqual([
-      { login: "ada", avatarDataUrl },
-      { login: "mira", avatarDataUrl },
-      { login: "alan", avatarDataUrl },
-    ]);
+    expect(preview.coAuthors).toEqual(
+      ["ada", "mira", "alan"].map((login) => ({ login, avatarDataUrl })),
+    );
     // Noreply account IDs supply bounded avatars without per-person API lookups.
     const urls = fetchMock.mock.calls.map(([input]) => requestUrl(input));
     expect(urls.filter((url) => url.startsWith("https://api.github.com/"))).toEqual([
@@ -558,10 +540,7 @@ describe("loadControlUiGitHubPreview", () => {
           },
         });
       }
-      if (url.includes("avatars.githubusercontent.com")) {
-        return pngResponse();
-      }
-      return itemResponse();
+      return fixtureResponse(url);
     });
 
     const preview = await loadPreview(previewTarget(88201, "pull"), identity, fetchMock);
@@ -723,61 +702,36 @@ describe("GitHub preview decoration cache", () => {
   });
 
   it("shares anonymous avatars across distinct previews while keeping metadata credential-scoped", async () => {
-    let avatarReads = 0;
-    const avatarHeaders: (string | undefined)[] = [];
-    await withServer(
-      (request, response) => {
-        if (request.url?.startsWith("/u/")) {
-          avatarReads += 1;
-          avatarHeaders.push(request.headers.authorization);
-          response.writeHead(200, { "Content-Type": "image/png" });
-          response.end(new Uint8Array([137, 80, 78, 71]));
-          return;
-        }
-        response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(
-          JSON.stringify(
-            request.url?.includes("/issues/")
-              ? previewPayload({ title: request.headers.authorization })
-              : { private: false, visibility: "public" },
-          ),
-        );
-      },
-      async (baseUrl) => {
-        const transport: typeof fetch = (input, init) => {
-          const url = new URL(requestUrl(input));
-          return fetch(`${baseUrl}${url.pathname}${url.search}`, init);
-        };
-        const identities = [managedIdentity("first"), managedIdentity("second")];
-        const previews = await Promise.all(
-          [1, 2].map((number) =>
-            loadPreview(previewTarget(number), identities[number % 2], transport),
-          ),
-        );
-        expect(previews.map((preview) => preview.title)).toEqual([
-          "Bearer token-second",
-          "Bearer token-first",
-        ]);
-        expect(previews.every((preview) => preview.avatarDataUrl === avatarDataUrl)).toBe(true);
-        expect(avatarReads).toBe(1);
-        expect(avatarHeaders).toEqual([undefined]);
-        await loadPreview(previewTarget(5), identities[0], transport);
-        expect(avatarReads).toBe(1);
-      },
+    const avatarHeaders: (string | null)[] = [];
+    const transport = previewFetch((url, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      if (url.includes("avatars.githubusercontent.com")) {
+        avatarHeaders.push(authorization);
+      }
+      return fixtureResponse(url, { title: authorization });
+    });
+    const identities = [managedIdentity("first"), managedIdentity("second")];
+    const previews = await Promise.all(
+      [1, 2].map((number) => loadPreview(previewTarget(number), identities[number % 2], transport)),
     );
+    expect(previews.map(({ title }) => title)).toEqual([
+      "Bearer token-second",
+      "Bearer token-first",
+    ]);
+    expect(previews.every((preview) => preview.avatarDataUrl === avatarDataUrl)).toBe(true);
+    expect(avatarHeaders).toEqual([null]);
+    await loadPreview(previewTarget(5), identities[0], transport);
+    expect(avatarHeaders).toEqual([null]);
   });
 
   it.each(["older", "newer"] as const)(
     "keeps independent deadlines when the %s preview starts a shared avatar fetch",
     async (initiator) => {
-      vi.useFakeTimers();
       const deadlines: AbortController[] = [];
-      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-        const controller = new AbortController();
+      mockDeadlineTimers((controller, ms) => {
         if (ms === 2_000) {
           deadlines.push(controller);
         }
-        return controller.signal;
       });
       const metadata = createDeferred<Response>();
       const avatar = createDeferred<Response>();
