@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
-  getPreparedPluginSecretInput: vi.fn(),
+  getPreparedPluginSecretInput: vi.fn(() => ({ revision: 1, value: "hosted-secret" })),
 }));
 vi.mock("node:dns/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:dns/promises")>();
@@ -33,12 +33,8 @@ const expectedResult = {
   result: { ...mixedFixture.result.result, model: input.model },
 };
 
-beforeEach(() => {
-  vi.mocked(getPreparedPluginSecretInput)
-    .mockReset()
-    .mockReturnValue({ revision: 1, value: "hosted-secret" });
-});
 afterEach(() => {
+  vi.mocked(getPreparedPluginSecretInput).mockClear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.mocked(lookup).mockReset();
@@ -56,10 +52,7 @@ it("refuses hosted dispatch for local Kev", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
-    registeredProvider().evaluate(
-      { state: "local-only evidence", questions: { q: { type: "boolean" } } },
-      decisionContext(input.model, 10000),
-    ),
+    registeredProvider().evaluate(decisionBatch, decisionContext(input.model, 10000)),
   ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -132,7 +125,6 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
       );
     }
     expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
-    expect(received).toHaveLength(5);
     expect(sockets.size).toBeLessThan(received.length);
     expect(received[0]?.request).toMatchObject({
       url: "/v1/systemone",

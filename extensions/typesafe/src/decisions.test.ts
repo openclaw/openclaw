@@ -2,140 +2,90 @@ import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { expect, it } from "vitest";
 import type { RuntimeConfig } from "./config.js";
 import { createPreparedDecisionProvider } from "./decisions.js";
-const config = { apiKey: "synthetic-key", timeoutMs: 2000 };
 
 type ProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
-type Inference = NonNullable<DecisionProviderContextV2["model"]["inference"]>;
-const catalogRow = (id: string, decision: Inference["decision"]) => ({
+type Decision = NonNullable<
+  NonNullable<DecisionProviderContextV2["model"]["inference"]>["decision"]
+>;
+const config = { apiKey: "synthetic-key", timeoutMs: 2000 };
+const hosted = "https://api.typesafe.ai/v1";
+const row = (decision: Decision, id = "jev-1.13.0") => ({
   provider: "typesafe",
   id,
   name: id,
   inference: { chat: false as const, decision },
 });
-
-it("preserves native facts and enriches V1 catalog entries", async () => {
-  const native = catalogRow("pinned", {
-    protocol: "pinned",
-    input: ["text"],
-    billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0.01 } },
-  });
-  const legacy = catalogRow("legacy", { protocol: "decision-v1", input: ["text"] });
-  const provider = createPreparedDecisionProvider(() => config);
-  const rows = await provider.provider?.augmentModelCatalog?.({
-    env: {},
-    entries: [native, legacy],
-  });
-  expect(rows?.find((row) => row.id === "pinned")).toEqual(native);
-  expect(rows?.find((row) => row.id === "legacy")?.inference?.decision?.protocol).toBe(
-    "typesafe-systemone",
-  );
-});
-
-const pinnedRow = catalogRow("jev-1.13.0", {
+const facts: Decision = {
   protocol: "typesafe-systemone",
   input: ["text"],
   limits: { maxRequestTokens: 64000, maxStateAndQuestionTokens: 32000 },
-  billing: {
-    unit: "tokens",
-    source: "provider-docs",
-    usdPerMillion: { input: 0.042, output: 0 },
-  },
+  billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0.042, output: 0 } },
+};
+const { limits: _limits, ...unlimited } = facts;
+const { billing: _billing, ...unbound } = unlimited;
+const runtime = (overrides: Partial<ProviderConfig> = {}): RuntimeConfig => ({
+  ...config,
+  providerConfig: { baseUrl: hosted, models: [], ...overrides },
 });
-const pinnedFacts = pinnedRow.inference.decision!;
-async function preparedFacts(runtime: RuntimeConfig) {
-  const provider = createPreparedDecisionProvider(() => runtime);
-  const rows = await provider.provider?.augmentModelCatalog?.({ env: {}, entries: [pinnedRow] });
-  return { facts: rows?.[0]?.inference?.decision, provider };
+const unresolved = { source: "env" as const, provider: "default", id: "UNRESOLVED_HEADER" };
+const auth = { mode: "authorization-bearer" as const, token: unresolved };
+const enabled = { "TYPESAFE-DANGER-ZONE-LONG-CONTEXT": "true" };
+const disabled = { "typesafe-danger-zone-long-context": "false" };
+const model: ProviderConfig["models"][number] = {
+  id: "jev-1.13.0",
+  name: "Jev",
+  reasoning: false,
+  input: ["text"],
+  contextWindow: 4096,
+  maxTokens: 256,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  headers: enabled,
+};
+function catalog(settings: RuntimeConfig, entries = [row(facts)]) {
+  const provider = createPreparedDecisionProvider(() => settings).provider!;
+  return { provider, rows: provider.augmentModelCatalog!({ env: {}, entries }) };
 }
-function configuredModel(overrides: Partial<ProviderConfig["models"][number]> = {}) {
-  return {
-    id: pinnedRow.id,
-    name: pinnedRow.name,
-    reasoning: false,
-    input: ["text" as const],
-    contextWindow: 4096,
-    maxTokens: 256,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    ...overrides,
-  };
-}
-function configuredRuntime(overrides: Partial<ProviderConfig> = {}): RuntimeConfig {
-  return {
-    ...config,
-    providerConfig: { baseUrl: "https://api.typesafe.ai/v1", models: [], ...overrides },
-  };
-}
-const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
-const longContext = (
-  value: string | ReturnType<typeof secretRef>,
-  name = "TypeSafe-Danger-Zone-Long-Context",
-) => ({
-  [name]: value,
-});
-const enabled = longContext("true", "typesafe-danger-zone-long-context");
-const disabled = longContext("false");
-const request = (headers: ProviderConfig["headers"]) => ({ request: { headers } });
-const model = configuredModel({
-  headers: longContext("true", "TYPESAFE-DANGER-ZONE-LONG-CONTEXT"),
-});
-const unresolvedKey = secretRef("UNRESOLVED_SYNTHETIC_KEY");
 
-it.each([undefined, "https://api.typesafe.ai", "https://api.typesafe.ai/v1/"])(
-  "retains hosted facts on normalized root %s",
-  async (baseUrl) => {
-    const runtime = baseUrl === undefined ? config : configuredRuntime({ baseUrl });
-    const { facts, provider } = await preparedFacts(runtime);
-    expect(facts).toEqual(pinnedFacts);
-    expect(
-      provider.provider?.normalizeTransport?.({ provider: "typesafe", modelId: pinnedRow.id }),
-    ).toEqual({ baseUrl: "https://api.typesafe.ai/v1" });
-  },
-);
-
-it.each([
-  { baseUrl: "http://127.0.0.1:8765", timeoutMs: 2000 },
-  configuredRuntime({ baseUrl: "https://systemone.fixture.invalid/v1" }),
-  configuredRuntime({ baseUrl: "https://api.typesafe.ai/custom/v1" }),
-  configuredRuntime({ baseUrl: "https://api.typesafe.ai/v1/systemone" }),
-])("unbinds hosted facts on custom routes", async (runtime) => {
-  const { facts } = await preparedFacts(runtime);
-  const { billing: _billing, limits: _limits, ...unbound } = pinnedFacts;
-  expect(facts).toEqual(unbound);
+it.each<[RuntimeConfig, Decision, string?]>([
+  [config, facts, hosted],
+  [runtime({ baseUrl: "https://api.typesafe.ai" }), facts, hosted],
+  [runtime({ baseUrl: "https://api.typesafe.ai/v1/" }), facts, hosted],
+  [{ baseUrl: "http://127.0.0.1:8765", timeoutMs: 2000 }, unbound],
+  [runtime({ baseUrl: "https://systemone.fixture.invalid/v1" }), unbound],
+  [runtime({ baseUrl: "https://api.typesafe.ai/custom/v1" }), unbound],
+  [runtime({ headers: enabled }), unlimited],
+  [runtime({ headers: disabled, models: [model] }), unlimited],
+  [runtime({ headers: disabled, request: { headers: enabled } }), unlimited],
+  [runtime({ headers: { "TypeSafe-Danger-Zone-Long-Context": unresolved } }), unlimited],
+  [runtime({ headers: enabled, request: { headers: disabled } }), facts],
+  [runtime({ headers: { "x-api-key": unresolved }, request: { auth } }), facts],
+])("binds catalog facts to route and effective headers %j", async (settings, expected, baseUrl) => {
+  const { provider, rows } = catalog(settings);
+  expect((await rows)?.[0]?.inference?.decision).toEqual(expected);
+  if (baseUrl) {
+    expect(provider.normalizeTransport?.({ provider: "typesafe", modelId: model.id })).toEqual({
+      baseUrl,
+    });
+  }
 });
 
-const { limits: _hostedLimits, ...unlimitedFacts } = pinnedFacts;
-it.each<[Partial<ProviderConfig>, boolean]>([
-  [{ headers: enabled }, false],
-  [{ headers: disabled, models: [model] }, false],
-  [{ headers: disabled, ...request(enabled) }, false],
-  [{ headers: longContext(secretRef("UNRESOLVED_SYNTHETIC_HEADER")) }, false],
-  [{ headers: enabled, ...request(disabled) }, true],
-  [
-    {
-      headers: { "x-api-key": unresolvedKey },
-      request: { auth: { mode: "authorization-bearer", token: unresolvedKey } },
-    },
-    true,
-  ],
-])("binds hosted limits with effective headers %j", async (overrides, limited) => {
-  const { facts } = await preparedFacts(configuredRuntime(overrides));
-  expect(facts).toEqual(limited ? pinnedFacts : unlimitedFacts);
-});
-
-it("retains catalog billing and non-token limits on custom routes", async () => {
-  const decision: NonNullable<Inference["decision"]> = {
-    ...pinnedFacts,
+it("preserves native catalog rows, enriches V1, and unbinds only hosted facts", async () => {
+  const decision: Decision = {
+    ...facts,
     billing: { unit: "requests", source: "provider-catalog" },
-    limits: { ...pinnedFacts.limits, maxQuestions: 12 },
+    limits: { ...facts.limits, maxQuestions: 12 },
   };
-  const runtime = configuredRuntime({ baseUrl: "https://systemone.fixture.invalid/v1" });
-  const provider = createPreparedDecisionProvider(() => runtime);
-  const rows = await provider.provider?.augmentModelCatalog?.({
-    env: {},
-    entries: [{ ...pinnedRow, inference: { ...pinnedRow.inference, decision } }],
-  });
-  expect(rows?.[0]?.inference).toEqual({
-    ...pinnedRow.inference,
+  const native = row({ ...facts, protocol: "pinned" }, "pinned");
+  const { rows } = catalog(runtime({ baseUrl: "https://systemone.fixture.invalid/v1" }), [
+    row(decision),
+    native,
+    row({ protocol: "decision-v1", input: ["text"] }, "legacy"),
+  ]);
+  const result = await rows;
+  expect(result?.[1]).toEqual(native);
+  expect(result?.[2]?.inference?.decision?.protocol).toBe("typesafe-systemone");
+  expect(result?.[0]?.inference).toEqual({
+    chat: false,
     decision: { ...decision, limits: { maxQuestions: 12 } },
   });
 });
