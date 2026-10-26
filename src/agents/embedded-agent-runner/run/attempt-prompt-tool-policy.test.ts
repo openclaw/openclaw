@@ -1,5 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
-import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
+import { expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
@@ -7,13 +6,6 @@ import {
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
 } from "./attempt-prompt-support.js";
-
-// mock-isolation: Observe policy facts without creating the process-global logger or warning budget.
-vi.mock("../../../decisions/diagnostics.js", () => ({
-  logDecisionToolPrefilter: vi.fn(),
-}));
-
-beforeEach(() => void vi.mocked(logDecisionToolPrefilter).mockClear());
 
 const named = (...names: string[]) => names.map((name) => ({ name }));
 
@@ -42,12 +34,13 @@ function createPolicyFixture(
   activeToolNames: string[],
   tools = named(...activeToolNames),
   catalogRef?: ToolSearchCatalogRef,
+  forceToolNames?: string[],
 ) {
   let names = [...activeToolNames];
   const session = {
     getActiveToolNames: () => [...names],
     getToolDefinition: (name: string) => createStubTool(name),
-    setActiveToolsByName: vi.fn((next: string[]) => void (names = [...next])),
+    setActiveToolsByName: (next: string[]) => void (names = [...next]),
   };
   const params = {
     session,
@@ -55,13 +48,10 @@ function createPolicyFixture(
     uncompactedEffectiveTools: tools,
     tools,
     catalogRef,
+    forceToolNames,
     codeModeControlsEnabled: false,
   };
-  return {
-    params,
-    apply: (toolsAllow: string[] = [], forceToolNames?: string[]) =>
-      createPromptBuildToolPolicy({ ...params, forceToolNames }).apply(toolsAllow),
-  };
+  return { session, policy: createPromptBuildToolPolicy(params) };
 }
 
 function expectSurface(
@@ -91,8 +81,7 @@ it.each(["before", "after"] as const)(
     const oldRead = { name: "read", generation: "old" };
     const tools = [oldRead];
     const catalogRef = catalog([oldRead]);
-    const fixture = createPolicyFixture(["tool_search"], tools, catalogRef);
-    const policy = createPromptBuildToolPolicy(fixture.params);
+    const { session, policy } = createPolicyFixture(["tool_search"], tools, catalogRef);
     if (hookTiming === "before") {
       policy.apply(["read"]);
     }
@@ -102,7 +91,7 @@ it.each(["before", "after"] as const)(
     const freshExec = { name: "exec", generation: "new" };
     tools.splice(0, tools.length, freshRead, freshWrite, freshExec);
     catalogRef.current!.entries = catalog(tools).current!.entries;
-    fixture.params.session.setActiveToolsByName(["tool_search"]);
+    session.setActiveToolsByName(["tool_search"]);
     policy.refresh();
     if (hookTiming === "after") {
       policy.apply(["read"]);
@@ -110,47 +99,39 @@ it.each(["before", "after"] as const)(
 
     expect(policy.current.tools).toEqual([freshRead]);
     expect(catalogRef.current!.entries.map((entry) => entry.tool)).toEqual([freshRead]);
-    expect(fixture.params.session.getActiveToolNames()).toEqual(["tool_search"]);
+    expect(session.getActiveToolNames()).toEqual(["tool_search"]);
 
     // A subsequent hook revision may use the new full host baseline, never the old generation.
     policy.apply(["write"]);
     expect(catalogRef.current!.entries.map((entry) => entry.tool)).toEqual([freshWrite]);
-    expect(logDecisionToolPrefilter).not.toHaveBeenCalled();
   },
 );
 
-it("removes every submitted tool and catalog entry for an empty hook allowlist", () => {
-  const catalogRef = catalog(named("read", "write"));
-  const fixture = createPolicyFixture(
-    ["tool_search", "message"],
-    named("read", "write", "message"),
-    catalogRef,
-  );
-  const result = fixture.apply();
-
-  expectSurface(result, []);
-  expect(catalogRef.current?.entries).toEqual([]);
-  expect(fixture.params.session.getActiveToolNames()).toEqual([]);
-  expect(finalize(result.activeToolNames)).toBe("cron:false");
-});
-
-it("keeps host-required tools when a hook denies optional tools", () => {
-  const fixture = createPolicyFixture(["message", "read"]);
-  const result = fixture.apply([], ["message"]);
-
-  expectSurface(result, ["message"]);
-  expect(finalize(result.activeToolNames)).toBe("cron:true");
-});
-
-it("cannot add a tool that the host-resolved surface already removed", () => {
-  expectSurface(createPolicyFixture(["read"]).apply(["exec"]), []);
-});
+it.each([
+  { active: ["tool_search", "message"], allow: [], force: [], expected: [] },
+  { active: ["message", "read"], allow: [], force: ["message"], expected: ["message"] },
+  { active: ["read"], allow: ["exec"], force: [], expected: [] },
+])(
+  "intersects hook $allow and host $active while retaining $force",
+  ({ active, allow, force, expected }) => {
+    const tools = named(...active);
+    const catalogRef = catalog(tools);
+    const { session, policy } = createPolicyFixture(active, tools, catalogRef, force);
+    const result = policy.apply(allow);
+    expectSurface(result, expected);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(expected);
+    expect(session.getActiveToolNames()).toEqual(expected);
+    expect(finalize(result.activeToolNames)).toBe(
+      `cron:${expected.some((name) => name === "message")}`,
+    );
+  },
+);
 
 it("keeps cataloged plugin tools allowed through the plugin group", () => {
   const pluginTool = createStubTool("plugin_lookup");
   setPluginToolMeta(pluginTool, { pluginId: "example", optional: false });
   const catalogRef = catalog([pluginTool]);
-  const result = createPolicyFixture(["tool_search"], [pluginTool], catalogRef).apply([
+  const result = createPolicyFixture(["tool_search"], [pluginTool], catalogRef).policy.apply([
     "group:plugins",
   ]);
 

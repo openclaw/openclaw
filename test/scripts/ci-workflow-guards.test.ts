@@ -2513,6 +2513,72 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
+  it("prepares the selected Control UI Gateway runtime before Vitest and stops on preparation failure", () => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-ui-e2e"].steps,
+      "Test Control UI end-to-end",
+    );
+    const root = tempDirs.make("openclaw-ui-runtime-preparation-");
+    const bin = path.join(root, "bin");
+    const vitest = path.join(root, "node_modules/vitest");
+    const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
+    mkdirSync(bin);
+    mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
+    writeFileSync(path.join(root, suite), "");
+    writeFileSync(
+      path.join(vitest, "package.json"),
+      JSON.stringify({ type: "module", exports: { "./node": "./node.js" } }),
+    );
+    writeFileSync(
+      path.join(vitest, "node.js"),
+      `export async function createVitest() {
+        return {
+          config: { sequence: { sequencer: class { async shard(files) { return files; } } } },
+          async globTestSpecifications() {
+            return process.env.SELECT_RUNTIME === "1" ? [{ moduleId: ${JSON.stringify(path.join(root, suite))} }] : [];
+          },
+          async close() {},
+        };
+      }`,
+    );
+    writeExecutable(path.join(bin, "node"), [
+      "#!/bin/sh",
+      'case "$1" in',
+      '  scripts/run-node.mjs) echo prepare >> "$EVENTS"; exit "${PREPARE_EXIT:-0}" ;;',
+      '  scripts/run-vitest.mjs) echo test >> "$EVENTS" ;;',
+      "  *) exit 1 ;;",
+      "esac",
+    ]);
+    const events = path.join(root, "events");
+    for (const [selected, exit, expected] of [
+      ["0", "0", "test\n"],
+      ["1", "0", "prepare\ntest\n"],
+      ["1", "7", "prepare\n"],
+    ]) {
+      writeFileSync(events, "");
+      // Actions invokes Bash with -e; retain that failure contract in the local harness.
+      const result = runWorkflowShellScript(
+        `set -e\n${expectDefined(step.run, "UI E2E command")}`,
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            EVENTS: events,
+            SELECT_RUNTIME: selected,
+            PREPARE_EXIT: exit,
+            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+            VITEST_SHARD_INDEX: "1",
+            VITEST_SHARD_COUNT: "1",
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(Number(exit));
+      expect(readFileSync(events, "utf8")).toBe(expected);
+    }
+  });
+
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
@@ -5754,7 +5820,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expectIncludes(run.slice(tui, wait(tui, true)), [
       "src/tui/tui-pty-local.e2e.test.ts",
       "--testNamePattern",
-      "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
+      "launches openclaw chat as local mode through a real PTY",
     ]);
     const upload = requiredWorkflowStep(steps, "Upload Discord component attachment proof");
     expect(upload.with["if-no-files-found"]).toBe("error");

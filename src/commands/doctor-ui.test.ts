@@ -17,15 +17,12 @@ const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 type UiProtocolFreshnessIssue = Awaited<ReturnType<typeof detectUiProtocolFreshnessIssues>>[number];
 
-function issue(overrides: Partial<UiProtocolFreshnessIssue> = {}): UiProtocolFreshnessIssue {
-  return {
-    kind: "missing-assets",
-    root: "/repo/openclaw",
-    uiIndexPath: "/repo/openclaw/dist/control-ui/index.html",
-    canBuild: true,
-    ...overrides,
-  } as UiProtocolFreshnessIssue;
-}
+const issue = {
+  kind: "missing-assets",
+  root: "/repo/openclaw",
+  uiIndexPath: "/repo/openclaw/dist/control-ui/index.html",
+  canBuild: true,
+} satisfies UiProtocolFreshnessIssue;
 
 async function createOpenClawRoot(prefix = "openclaw-doctor-ui-"): Promise<string> {
   const root = await fs.realpath(tempRoots.make(prefix));
@@ -39,26 +36,9 @@ async function touch(filePath: string, date: Date): Promise<void> {
   await fs.utimes(filePath, date, date);
 }
 
-function inspectRoot(root: string) {
-  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
-  return detectUiProtocolFreshnessIssues();
-}
-
-function mockGitLog(stdout: string | null) {
-  const result = createCommandResult({ stdout: stdout ?? "", code: stdout === null ? 1 : 0 });
-  vi.spyOn(commands, "runCommandWithTimeout").mockResolvedValue(result);
-}
-
-async function buildUi(root: string, date = "2026-01-01") {
-  await touch(path.join(root, "ui/package.json"), new Date(date));
-  await touch(path.join(root, "dist/control-ui/index.html"), new Date(date));
-}
-
 it.each(["missing-assets", "stale-assets"] as const)("maps %s findings/effects", (kind) => {
   const stale = kind === "stale-assets";
-  const current = stale
-    ? issue({ kind: "stale-assets", changesSinceBuild: ["abc123 schema change"] })
-    : issue();
+  const current = stale ? { ...issue, kind, changesSinceBuild: ["abc123 schema change"] } : issue;
   expect(uiProtocolFreshnessIssueToHealthFinding(current)).toMatchObject({
     checkId: "core/doctor/ui-protocol-freshness",
     severity: "warning",
@@ -76,14 +56,47 @@ it.each(["missing-assets", "stale-assets"] as const)("maps %s findings/effects",
   ]);
 });
 
-it("passes the source root as one argument in the stale-assets manual repair", async () => {
+it("gives packaged installs an actionable recovery hint instead of a missing build command", () => {
+  const current = { ...issue, canBuild: false };
+  const finding = uiProtocolFreshnessIssueToHealthFinding(current);
+  expect(uiProtocolFreshnessIssueToRepairEffects(current)).toEqual([]);
+  expect(finding.message).not.toContain("pnpm ui:build");
+  expect(finding.fixHint).toContain("Reinstall OpenClaw");
+});
+
+it.each([true, false])("inspects real protocol history (available=%s)", async (available) => {
   const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
   const unrelated = await createOpenClawRoot();
-  await buildUi(root);
+  await touch(path.join(root, "ui/package.json"), new Date("2026-01-02"));
+  await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-02"));
   vi.spyOn(process, "cwd").mockReturnValue(unrelated);
-  mockGitLog("abc123 protocol changed");
-  const findings = await inspectRoot(root);
-  expect(findings).toEqual([expect.objectContaining({ kind: "stale-assets" })]);
+  await touch(
+    path.join(root, "packages/gateway-protocol/src/schema/sessions.ts"),
+    new Date("2026-01-03"),
+  );
+  if (available) {
+    const git = fixtureGit(root, {
+      GIT_AUTHOR_DATE: "2026-01-03T00:00:00Z",
+      GIT_COMMITTER_DATE: "2026-01-03T00:00:00Z",
+    });
+    git("init", "--quiet");
+    git("add", "packages/gateway-protocol/src/schema/sessions.ts");
+    git("commit", "--quiet", "-m", "update nested protocol schema");
+  } else {
+    vi.spyOn(commands, "runCommandWithTimeout").mockResolvedValue(createCommandResult({ code: 1 }));
+  }
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  const findings = await detectUiProtocolFreshnessIssues();
+  if (!available) {
+    expect(findings).toEqual([]);
+    return;
+  }
+  expect(findings).toEqual([
+    expect.objectContaining({
+      kind: "stale-assets",
+      changesSinceBuild: [expect.stringMatching(/update nested protocol schema$/)],
+    }),
+  ]);
   const finding = uiProtocolFreshnessIssueToHealthFinding(findings[0]!);
   const command = finding.fixHint?.match(/pnpm [^`\n]+/u)?.[0];
   expect(command).toBeDefined();
@@ -101,42 +114,4 @@ ${command!}`;
     { cwd: unrelated, timeout: 10_000, encoding: "utf8" },
   );
   expect(output.split("\0")).toEqual(["--dir", root, "ui:build", ""]);
-});
-
-it("gives packaged installs an actionable recovery hint instead of a missing build command", () => {
-  const current = issue({ canBuild: false });
-  const finding = uiProtocolFreshnessIssueToHealthFinding(current);
-  expect(uiProtocolFreshnessIssueToRepairEffects(current)).toEqual([]);
-  expect(finding.message).not.toContain("pnpm ui:build");
-  expect(finding.fixHint).toContain("Reinstall OpenClaw");
-});
-
-it("reads committed nested protocol changes from the real complete-package git pathspec", async () => {
-  const root = await createOpenClawRoot();
-  await buildUi(root, "2026-01-02");
-  await touch(
-    path.join(root, "packages/gateway-protocol/src/schema/sessions.ts"),
-    new Date("2026-01-03"),
-  );
-  const git = fixtureGit(root, {
-    GIT_AUTHOR_DATE: "2026-01-03T00:00:00Z",
-    GIT_COMMITTER_DATE: "2026-01-03T00:00:00Z",
-  });
-  git("init", "--quiet");
-  git("add", "packages/gateway-protocol/src/schema/sessions.ts");
-  git("commit", "--quiet", "-m", "update nested protocol schema");
-  await expect(inspectRoot(root)).resolves.toEqual([
-    expect.objectContaining({
-      kind: "stale-assets",
-      changesSinceBuild: [expect.stringMatching(/update nested protocol schema$/)],
-    }),
-  ]);
-});
-
-it("does not report stale assets when git history is unavailable", async () => {
-  const root = await createOpenClawRoot();
-  await buildUi(root);
-  await touch(path.join(root, "packages/gateway-protocol/src/schema.ts"), new Date("2026-01-02"));
-  mockGitLog(null);
-  await expect(inspectRoot(root)).resolves.toEqual([]);
 });

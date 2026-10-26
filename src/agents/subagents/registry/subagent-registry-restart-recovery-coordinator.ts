@@ -155,6 +155,7 @@ export function createInterruptedRecoveryCoordinator(params: {
         return true;
       }
       recovering.add(owner);
+      let releaseRecovery: (() => void) | undefined;
       try {
         return await limitRecovery(async () => {
           if (!isCurrent(runId, entry)) {
@@ -187,6 +188,7 @@ export function createInterruptedRecoveryCoordinator(params: {
             isGatewayCurrent,
             warn: params.warn,
           });
+          releaseRecovery = result.status === "terminal" ? result.release : undefined;
           if (!isGatewayCurrent() || !isSameSubagentRunOwner(params.runs.get(runId), entry)) {
             return true;
           }
@@ -246,6 +248,7 @@ export function createInterruptedRecoveryCoordinator(params: {
             },
             sessionEffects: result.sessionEffects,
             error: result.error,
+            terminalStatus: result.terminalStatus,
             endedAt: result.endedAt,
             suppressSessionEffects: result.suppressSessionEffects,
           });
@@ -258,6 +261,7 @@ export function createInterruptedRecoveryCoordinator(params: {
           return true;
         });
       } finally {
+        releaseRecovery?.();
         // Reset retires observations, but accepted recovery keeps its exclusion until settled.
         recovering.delete(owner);
       }

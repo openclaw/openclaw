@@ -16,9 +16,8 @@ import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conforman
 
 function writeLegacyCapture(sourcePath: string): void {
   fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-  const source = openNodeSqliteDatabase(sourcePath);
-  try {
-    source.exec(`
+  using source = openNodeSqliteDatabase(sourcePath);
+  source.exec(`
       CREATE TABLE capture_sessions (
         id TEXT PRIMARY KEY, started_at INTEGER, ended_at INTEGER, mode TEXT,
         source_scope TEXT, source_process TEXT, proxy_url TEXT, db_path TEXT, blob_dir TEXT
@@ -31,23 +30,20 @@ function writeLegacyCapture(sourcePath: string): void {
         data_sha256 TEXT, error_text TEXT, meta_json TEXT
       );
     `);
-    source
-      .prepare(
-        "INSERT INTO capture_sessions VALUES ('migration-session', 100, NULL, 'record', 'synthetic', 'test', NULL, ?, ?)",
-      )
-      .run(sourcePath, path.join(path.dirname(sourcePath), "blobs"));
-    const insert = source.prepare(
-      `INSERT INTO capture_events (
+  source
+    .prepare(
+      "INSERT INTO capture_sessions VALUES ('migration-session', 100, NULL, 'record', 'synthetic', 'test', NULL, ?, ?)",
+    )
+    .run(sourcePath, path.join(path.dirname(sourcePath), "blobs"));
+  const insert = source.prepare(
+    `INSERT INTO capture_events (
         session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
         method, status, close_code, data_text
       ) VALUES ('migration-session', 100, 'synthetic', 'test', 'http', 'request', 'request', 'flow', ?, ?, ?, ?)`,
-    );
-    insert.run(null, null, null, null);
-    insert.run(null, null, null, null);
-    insert.run("GET", 200, 1000, "");
-  } finally {
-    source.close();
-  }
+  );
+  insert.run(null, null, null, null);
+  insert.run(null, null, null, null);
+  insert.run("GET", 200, 1000, "");
 }
 
 for (const engine of ["sqlite", "postgres"] as const) {

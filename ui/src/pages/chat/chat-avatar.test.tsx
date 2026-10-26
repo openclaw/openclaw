@@ -259,6 +259,37 @@ describe("resolveChatAvatarUrl", () => {
 });
 
 describe("ChatAvatar", () => {
+  it.each(["local", "profile", "assistant"] as const)(
+    "exposes one accessible %s avatar before and after image failure",
+    (kind) => {
+      const portrait = "/avatar/accessibility";
+      const view = mountSolid(() => (
+        <ChatAvatar
+          role={kind === "assistant" ? "assistant" : "user"}
+          assistant={
+            kind === "assistant"
+              ? { agentId: "accessibility", name: "Riley", avatar: portrait }
+              : undefined
+          }
+          user={kind === "local" ? { name: "Riley", avatar: portrait } : undefined}
+          sender={
+            kind === "profile"
+              ? { id: "riley", name: "Riley", profileAvatarUrl: portrait }
+              : undefined
+          }
+        />
+      ));
+      const image = view.container.querySelector("img")!;
+      const frame = view.getByRole("img", { name: "Riley" });
+      expect(view.getAllByRole("img", { name: "Riley" })).toHaveLength(1);
+      image.dispatchEvent(new Event("load"));
+      flush();
+      expect(view.getAllByRole("img", { name: "Riley" })).toEqual([frame]);
+      image.dispatchEvent(new Event("error"));
+      flush();
+      expect(view.getAllByRole("img", { name: "Riley" })).toEqual([frame]);
+    },
+  );
   it("updates an image avatar's hat when the theme changes", () => {
     const previous = currentThemeBranding();
     const adorned = { ...previous, avatarHat: "party" as const };

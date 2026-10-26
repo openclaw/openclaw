@@ -140,6 +140,9 @@ it("keeps one-shot state worker stdout parseable with SQLite debug logging enabl
       stagingRoot: root,
       backupRoot,
       inspectionPlan,
+      // Manual original capture still needs the engine snapshot; automatic capture
+      // reuses its generation image and need not emit this worker diagnostic.
+      originalCaptureSourcePaths: [database],
     },
   });
 

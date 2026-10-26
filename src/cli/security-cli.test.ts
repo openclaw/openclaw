@@ -132,15 +132,12 @@ describe("security CLI", () => {
 
   it("prints the audit counts in the human summary", async () => {
     runSecurityAuditCore.mockResolvedValueOnce(auditReport(2, 3, 5));
-    const richSpy = vi.spyOn(terminalTheme, "isRich").mockReturnValue(false);
-    try {
-      await run();
-      expect(runtimeLogs).toEqual([
-        expect.stringContaining("\nSummary: 2 critical · 3 warn · 5 info\n"),
-      ]);
-    } finally {
-      richSpy.mockRestore();
-    }
+    using _ = vi.spyOn(terminalTheme, "isRich").mockReturnValue(false);
+
+    await run();
+    expect(runtimeLogs).toEqual([
+      expect.stringContaining("\nSummary: 2 critical · 3 warn · 5 info\n"),
+    ]);
   });
 
   it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {

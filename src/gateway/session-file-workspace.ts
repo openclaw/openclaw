@@ -89,10 +89,10 @@ export async function prepareSessionFileWorkspace(
           spawnedWorkspaceDir: prior.workspaceDir,
         }
       : current;
-  const expectedCurrent = structuredClone(selection(policy(cfg, entry)));
   const selectedEntry = sourceEntry(entry);
   const selected = policy(cfg, selectedEntry);
   const expected = structuredClone(selection(selected));
+  const expectedCurrent = historical ? structuredClone(selection(policy(cfg, entry))) : expected;
   let roots = selected.roots;
   // Managed projects retain their established checkpoint/publication owner.
   // Explicit ro/rw already admits the selected agent workspace to the sandbox.
@@ -146,7 +146,8 @@ export async function prepareSessionFileWorkspace(
       if (
         !isDeepStrictEqual(expectedCurrent, selection(policy(config, current))) ||
         !isDeepStrictEqual(entry.priorWorkspace, current.priorWorkspace) ||
-        !isDeepStrictEqual(expected, selection(policy(config, sourceEntry(current))))
+        (historical &&
+          !isDeepStrictEqual(expected, selection(policy(config, sourceEntry(current)))))
       ) {
         throw sessionMutationForbiddenError("Session workspace changed during file access");
       }

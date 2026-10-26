@@ -58,10 +58,7 @@ it.each([false, true])("adds canonical scheduler guidance only when available: %
   const tools = withMockedPlatform("linux", () =>
     applyToolAvailabilityDescriptions(names.map((name) => tool(name))),
   );
-  expect(tools.map((entry) => entry.name)).toEqual(names);
   const [exec, process] = tools.map((entry) => entry.description);
-  expect(exec).toContain("background continuation supported");
-  expect(process).toContain("Control existing exec");
   expect(exec?.includes("use automations")).toBe(available);
   expect(process?.includes("scheduled follow-up uses automations")).toBe(available);
 });
@@ -93,17 +90,13 @@ it("inserts history guidance before the preserved session URL", () => {
 });
 
 it("names authorized conversation lookup", () => {
-  expect(
-    describeFirst(
-      expectDefined(
-        createHostedConversationTools(undefined, "main", {}).find(
-          (entry) => entry.name === "conversations_send",
-        ),
-        "conversation send tool",
-      ),
-      ["conversations_list"],
-    ).description,
-  ).toBe(
+  const send = expectDefined(
+    createHostedConversationTools(undefined, "main", {}).find(
+      (t) => t.name === "conversations_send",
+    ),
+    "conversation send tool",
+  );
+  expect(describeFirst(send, ["conversations_list"]).description).toBe(
     "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
   );
 });

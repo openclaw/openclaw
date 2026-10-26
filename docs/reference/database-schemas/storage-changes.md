@@ -167,6 +167,18 @@ The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
 `postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
 owners share that cutover and exact predecessor reconstruction for generated DDL.
 
+State schema 34 records the default cron partition's existing opaque key in
+`config_machine_state`. SQLite and PostgreSQL publish the binding in the existing
+schema migration transaction without rewriting jobs, scratch, receipts, or history.
+Partition discovery includes retained legacy run logs before their history import.
+The binding survives state-directory moves and restored backups. If an older store
+has already moved and its original default cannot be established, the Gateway
+starts with cron paused and reports the available partitions. Run
+`openclaw doctor --fix` interactively to select the default partition. Until that
+selection, noninteractive Doctor preserves retired heartbeat settings and reports
+the combined selection and migration step. Rollback restores the verified
+pre-migration backup with its matching binary.
+
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
 calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
@@ -407,8 +419,10 @@ and current-authority checks inside the worker admission boundary. The existing
 terminal replay keys, JSON payloads, retention limits, schema, and restart
 recovery policy remain unchanged.
 
-Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
-consumption execute in the shared-state worker. Replay expires and publishes due
+Ordinary operator approval lookups, verdicts, expiry, and allow-once
+consumption execute in the shared-state worker. Pending replay uses a per-session
+view seeded in bounded read-worker pages and maintained by committed approval
+receipts. Closing or replacing the database retires the view. Replay expires and publishes due
 approvals before listing the pending set; the pending query excludes expired rows
 without repeating that sweep. Lookups retain expiry, and both reads retain
 corrupt-row repair transactions; history pages use the read-only worker. The
@@ -2947,6 +2961,51 @@ Cross-agent reports fold worker summaries in global session order on the Gateway
 to preserve floating-point addition. Reports reuse completed results only while
 their transcript, usage, session metadata,
 visibility, profile, and configuration revisions remain current.
+
+The `session-cost-usage-quarters-v1` scope stores a report-only numeric
+companion of every month partition: per quarter-hour totals with cost parts,
+message counts, latency count/sum/min/max/p95 and first/last offsets, plus
+per-quarter model and tool tables, in two typed sections (unsigned 32-bit and
+float64) with a small JSON header. It uses the partition's key and is written in
+the same writer transaction with the same `updated_at`; every partition deletion,
+replacement, month removal and prune deletes it too. Readers count a quarter row
+only while a partition with the same key and `updated_at` exists, so a partition
+rewritten by an older build never pairs with a stale summary. No table, index or
+schema version changes; older builds ignore the scope, so rollback needs no
+migration.
+
+The Usage overview (`sessions.usage` with `projection: "overview"`) and the
+`usage.cost` summary read rollup envelopes and quarter rows only. One worker pass
+per agent folds them column by column per family and report day in the requested
+time zone and returns packed rows in a shared, immutable buffer; no bucket JSON is
+parsed and no hashes are checked on this path, and the former cumulative report
+byte allowance no longer applies to it. The Gateway keeps the packed rows in its
+report snapshot, selects and re-checks visible sessions, and a compute worker
+expands those rows and runs the shared overview aggregation, returning only the
+page, selected rows and aggregates.
+Quarter grain is exact for zones whose offsets and transitions fall on quarter
+hours (including +05:30, +05:45 and DST changes). A per-day p95 is the largest
+quarter p95. Ranges or zones that split a quarter with activity report
+`aggregate-boundary` for the overview; `usage.cost` replays those transcripts
+within its bounded allowance. Overview freshness compares the checkpoint with the
+session window's last mutation time and rewrite generation instead of transcript
+statistics. Session detail reads keep using the month partitions.
+
+Upgraded installs have partitions without quarter rows. The usage refresh owner
+finds partitions without a paired quarter row with one anti-join, derives the
+rows from the stored partitions (no transcript scan) in its bounded batches, and
+inserts each row only while the partition header it decoded is still current.
+The work is idempotent and resumes after a restart.
+
+Both reports first let pending transcript publications land. When a pass finds
+instances without quarter rows, with invalid rows or older than their
+transcript, it asks the refresh owner for exactly those sessions (which also
+runs the upgrade backfill for them), waits up to 10 seconds inside the
+15-second usage request budget, and runs once more, so the answer includes
+them. Only a refresh that outlasts that wait leaves the second answer `partial`
+with reason `summarizing` and the summarized/total counts. Archived JSONL
+transcripts resolve through the same read cache as session detail reads and
+count in both reports.
 
 Transcripts remain authoritative; the projection changes neither retention nor
 billing data. Exact partial-quarter ranges and arithmetic that cannot be

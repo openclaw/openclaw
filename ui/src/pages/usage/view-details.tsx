@@ -28,8 +28,44 @@ export function SessionDetailPanel(props: {
 }) {
   const logsSource = createMemo(() => props.detail.sessionLogs);
   const entries = createMemo(() => (logsSource() ?? []).map(parseSessionLog));
-  const range = createMemo(() => prepareUsageDateRange(props.range));
-  const series = createMemo(() => deriveTimeSeries(props.detail, range(), props.session.usage));
+  const rangeInputs = createMemo(
+    () => ({
+      startDate: props.range.startDate,
+      endDate: props.range.endDate,
+      selectedDays: props.range.selectedDays,
+      timeZone: props.range.timeZone,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.startDate === next.startDate &&
+        previous.endDate === next.endDate &&
+        previous.selectedDays === next.selectedDays &&
+        previous.timeZone === next.timeZone,
+    },
+  );
+  const range = createMemo(() => prepareUsageDateRange(rangeInputs()));
+  const seriesInputs = createMemo(
+    () => ({
+      timeSeries: props.detail.timeSeries,
+      timeSeriesStatus: props.detail.timeSeriesStatus,
+      timeSeriesMode: props.detail.timeSeriesMode,
+      timeSeriesBreakdownMode: props.detail.timeSeriesBreakdownMode,
+      timeSeriesCursorStart: props.detail.timeSeriesCursorStart,
+      timeSeriesCursorEnd: props.detail.timeSeriesCursorEnd,
+      usage: props.session.usage,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.timeSeries === next.timeSeries &&
+        previous.timeSeriesStatus === next.timeSeriesStatus &&
+        previous.timeSeriesMode === next.timeSeriesMode &&
+        previous.timeSeriesBreakdownMode === next.timeSeriesBreakdownMode &&
+        previous.timeSeriesCursorStart === next.timeSeriesCursorStart &&
+        previous.timeSeriesCursorEnd === next.timeSeriesCursorEnd &&
+        previous.usage === next.usage,
+    },
+  );
+  const series = createMemo(() => deriveTimeSeries(seriesInputs(), range(), seriesInputs().usage));
   const intervalEntries = createMemo(() => {
     const { timeSeriesCursorStart: start, timeSeriesCursorEnd: end } = props.detail;
     if (start === null || end === null) {
@@ -449,6 +485,7 @@ function SessionLogsContent(props: {
   loading: boolean;
 }) {
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
+  const formatLogTimestamp = createMemo(() => createMsFormatter(undefined, t("common.na")));
   const state = createMemo(() => {
     const detail = props.detail;
     const {
@@ -468,7 +505,6 @@ function SessionLogsContent(props: {
     const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
     const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
 
-    const formatLogTimestamp = createMsFormatter();
     const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
     const toolOptions = Array.from(
       new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
@@ -501,7 +537,6 @@ function SessionLogsContent(props: {
       toolOptions,
       toolSelected,
       filteredEntries,
-      formatLogTimestamp,
       initialLoading,
       initialError,
       message,
@@ -619,7 +654,7 @@ function SessionLogsContent(props: {
                   <div class={["session-log-entry", log.role === "user" ? "user" : "assistant"]}>
                     <div class="session-log-meta">
                       <span class="session-log-role">{roleLabel()}</span>
-                      <span>{state().formatLogTimestamp(log.timestamp)}</span>
+                      <span>{formatLogTimestamp()(log.timestamp)}</span>
                       {log.tokens ? (
                         <>
                           {" "}

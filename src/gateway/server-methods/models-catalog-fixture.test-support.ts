@@ -158,3 +158,18 @@ export function catalogModelIds(
 ) {
   return result.models.filter((row) => row.provider === provider).map((row) => row.id);
 }
+
+export function catalogTransportModels(
+  provider: string,
+  requestHeader: string,
+): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      [provider]: {
+        baseUrl: "",
+        models: [],
+        request: { allowPrivateNetwork: true, headers: { "X-Dispatch-Request": requestHeader } },
+      },
+    },
+  };
+}

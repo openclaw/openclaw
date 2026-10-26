@@ -18,6 +18,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { PluginLoadOptions } from "./loader-types.js";
 import { adoptProcessPluginCache, createPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -101,7 +102,6 @@ let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegist
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let makeEmptyPluginMetadataOwners: typeof import("./current-plugin-metadata.test-support.js").makeEmptyPluginMetadataOwners;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
@@ -380,7 +380,7 @@ describe("resolvePluginTools optional tools", () => {
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ makeEmptyPluginMetadataOwners, setCurrentPluginMetadataSnapshot } =
+    ({ setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata.test-support.js"));
   });
 

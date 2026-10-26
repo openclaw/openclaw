@@ -1,9 +1,10 @@
-// Setup migration import tests cover importing existing config into onboarding.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
+// Setup migration import tests cover importing existing config into onboarding.
+import { createMigrationSummaryFixture } from "../plugin-sdk/migration.test-support.js";
 import type { MigrationPlan } from "../plugins/migration-provider.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -66,15 +67,7 @@ describe("setup migration import freshness", () => {
       providerId: "fixture",
       source: link,
       items: [{ id: "memory", kind: "memory", action: "copy", status: "planned", source: link }],
-      summary: {
-        total: 1,
-        planned: 1,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: createMigrationSummaryFixture(1, 1, 0),
     };
     const target = { config: {}, stateDir: path.join(root, "state"), workspaceDir };
     const originalSource = await buildSetupMigrationPlanSourceSnapshot(plan);

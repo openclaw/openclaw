@@ -9,8 +9,7 @@ import type { ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 export const DEMO_ARCHIVE_INTEGRITY = "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=";
 export const DEMO_ARCHIVE_SHA256 =
   "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af";
-export const DEMO_CLAWPACK_SHA256 =
-  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+export const DEMO_CLAWPACK_SHA256 = "a".repeat(64);
 export const DEMO_CLAWPACK_INTEGRITY = `sha256-${Buffer.from(DEMO_CLAWPACK_SHA256, "hex").toString(
   "base64",
 )}`;
@@ -28,13 +27,9 @@ export function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-export type ClawHubArchiveFile = {
-  path: string;
-  size: number;
-  sha256: string;
-};
+export type ClawHubArchiveFile = ReturnType<typeof clawHubArchiveFile>;
 
-export function clawHubArchiveFile(filePath: string, contents: string): ClawHubArchiveFile {
+export function clawHubArchiveFile(filePath: string, contents: string) {
   return { path: filePath, size: Buffer.byteLength(contents), sha256: sha256Hex(contents) };
 }
 
@@ -87,12 +82,9 @@ export function clawHubPackageDetail(overrides: Record<string, unknown> = {}) {
   return {
     package: {
       name: "demo",
-      displayName: "Demo",
       family: "code-plugin",
       channel: "official",
       isOfficial: true,
-      createdAt: 0,
-      updatedAt: 0,
       compatibility: { pluginApiRange: ">=2026.3.22", minGatewayVersion: "2026.3.0" },
       ...overrides,
     },
@@ -109,17 +101,9 @@ export type PackageLookupCall = Partial<
   Record<"artifact" | "baseUrl" | "name" | "version", string>
 >;
 
-export type ArchiveInstallCall = {
-  archivePath?: string;
-  expectedPluginId?: string;
-  onInstallPolicyWarning?: unknown;
-  installPolicyRequest?: {
-    kind?: string;
-    requestedSpecifier?: string;
-    source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
-  };
-  trustedSourceLinkedOfficialInstall?: boolean;
-};
+export type ArchiveInstallCall = Partial<
+  Parameters<typeof import("./install.js").installPluginFromArchive>[0]
+>;
 
 type InstallResult = Awaited<ReturnType<typeof import("./clawhub.js").installPluginFromClawHub>>;
 type InstallSuccess = Extract<InstallResult, { ok: true }>;
@@ -130,10 +114,7 @@ type InstallFailure = Extract<InstallResult, { ok: false }> & {
 
 export function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  if (call.length <= argIndex) {
+  if (!call || call.length <= argIndex) {
     throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
   }
   return call[argIndex];

@@ -64,7 +64,6 @@ function expectRotation(result: Awaited<ReturnType<typeof resolve>>, oldId: stri
 
 it("keeps a provider-owned CLI session with the default reset policy", async () => {
   seedSession("old-session-id", DAY_MS, {
-    model: "claude-opus-4-6",
     modelProvider: "claude-cli",
     cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
   });

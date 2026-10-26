@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { sqliteFamilyHashes as familyHashes } from "../../test/helpers/sqlite-family-hashes.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
 import {
@@ -108,15 +108,6 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
     .run("plugins.installedIndex", JSON.stringify({ revision: 1, index: value }), 123);
   await closeOpenClawStateDatabaseAsync();
   return database.path;
-}
-
-function familyHashes(databasePath: string) {
-  return ["", "-wal", "-shm", "-journal"].map((suffix) => {
-    const file = `${databasePath}${suffix}`;
-    return fs.existsSync(file)
-      ? [suffix, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]
-      : [suffix, null];
-  });
 }
 
 it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {

@@ -300,7 +300,7 @@ it.skipIf(Boolean(process.versions.bun))(
 
 it.each([
   ["alternating limits", 20, 1, [64, 96], 2],
-  ["concurrent continuations", 2, 4, [128, 160], 4],
+  ["concurrent continuations", 2, 8, [64, 96], 8],
 ] as const)(
   "keeps workers warm across %s",
   async (scenario, rounds, concurrency, limits, maxWorkers) => {

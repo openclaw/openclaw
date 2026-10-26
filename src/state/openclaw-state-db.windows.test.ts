@@ -7,31 +7,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  borrowOpenClawStateDatabaseForAsyncRead,
-  captureOpenClawStateDatabaseReadAdmission,
-  closeOpenClawStateDatabaseByPath,
-} from "./openclaw-state-db-cache.js";
+import * as cache from "./openclaw-state-db-cache.js";
 import * as stateOpen from "./openclaw-state-db-open.js";
-import {
-  withDisposableOpenClawStateReads,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "./openclaw-state-db-readonly.js";
-import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  isOpenClawStateDatabaseOpen,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "./openclaw-state-db.js";
+import * as reads from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateSchema as inSchema } from "./openclaw-state-db-schema-policy.js";
+import * as state from "./openclaw-state-db.js";
 import { resolveLeaseDatabasePath } from "./openclaw-state-lease-storage.js";
-import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateReadWorkerContext as captureContext } from "./openclaw-state-worker-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await state.closeOpenClawStateDatabaseAsync();
+    state.closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
     syncBuiltinESMExports();
     cleanup();
@@ -45,8 +32,8 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     const root = tempDirs.make("openclaw-shared-windows-alias-");
     const env = { OPENCLAW_STATE_DIR: root };
     const options = (pathname: string) => ({ env, path: pathname });
-    const physical = openOpenClawStateDatabase({ env }).path;
-    await closeOpenClawStateDatabaseAsync();
+    const physical = state.openOpenClawStateDatabase({ env }).path;
+    await state.closeOpenClawStateDatabaseAsync();
     const ordinary = path.win32.join(windowsRoot, "state", "openclaw.sqlite");
     const namespaced = path.win32.toNamespacedPath(ordinary);
     const spellings = new Set([ordinary, namespaced]);
@@ -81,8 +68,8 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     mockProcessPlatform("win32");
     syncBuiltinESMExports();
 
-    const first = openOpenClawStateDatabase(options(namespaced));
-    const second = openOpenClawStateDatabase(options(ordinary));
+    const first = state.openOpenClawStateDatabase(options(namespaced));
+    const second = state.openOpenClawStateDatabase(options(ordinary));
     expect(second.db).toBe(first.db);
     expect(
       resolveLeaseDatabasePath({
@@ -91,37 +78,37 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
         options: { path: namespaced },
       }),
     ).toBe(first.path);
-    expect(captureOpenClawStateDatabaseReadAdmission(namespaced)).toBe(
-      captureOpenClawStateDatabaseReadAdmission(ordinary),
+    expect(cache.captureOpenClawStateDatabaseReadAdmission(namespaced)).toBe(
+      cache.captureOpenClawStateDatabaseReadAdmission(ordinary),
     );
-    expect(isOpenClawStateDatabaseOpen(namespaced)).toBe(true);
-    const borrow = borrowOpenClawStateDatabaseForAsyncRead(namespaced);
+    expect(state.isOpenClawStateDatabaseOpen(namespaced)).toBe(true);
+    const borrow = cache.borrowOpenClawStateDatabaseForAsyncRead(namespaced);
     expect(borrow?.database.db).toBe(first.db);
     borrow?.release();
-    runOpenClawStateWriteTransaction(({ db }) => {
-      runOpenClawStateWriteTransaction(
+    state.runOpenClawStateWriteTransaction(({ db }) => {
+      state.runOpenClawStateWriteTransaction(
         ({ db: nested }) => expect(nested).toBe(db),
         options(ordinary),
       );
     }, options(namespaced));
-    withExistingOpenClawStateSchema({ path: namespaced }, () => {
-      const context = captureOpenClawStateReadWorkerContext(options(namespaced));
-      withExistingOpenClawStateSchema({ path: ordinary }, () => {
-        expect(captureOpenClawStateReadWorkerContext(options(ordinary)).existingSchemaPath).toBe(
+    inSchema({ path: namespaced }, () => {
+      const context = captureContext(options(namespaced));
+      inSchema({ path: ordinary }, () => {
+        expect(captureContext(options(ordinary)).existingSchemaPath).toBe(
           context.existingSchemaPath,
         );
         expect(context.existingSchemaPath).toBe(first.path);
       });
     });
-    const closedReadScope = await withDisposableOpenClawStateReads(namespaced, async () =>
+    const closedReadScope = await reads.withDisposableOpenClawStateReads(namespaced, async () =>
       AsyncLocalStorage.snapshot(),
     );
     expect(() =>
       closedReadScope(() =>
-        withExistingOpenClawStateDatabaseReadOnly(() => undefined, options(ordinary)),
+        reads.withExistingOpenClawStateDatabaseReadOnly(() => undefined, options(ordinary)),
       ),
     ).toThrow("Shared-state read scope is closing or closed");
-    expect(closeOpenClawStateDatabaseByPath(namespaced)).toBe(true);
-    expect(isOpenClawStateDatabaseOpen(ordinary)).toBe(false);
+    expect(cache.closeOpenClawStateDatabaseByPath(namespaced)).toBe(true);
+    expect(state.isOpenClawStateDatabaseOpen(ordinary)).toBe(false);
   },
 );

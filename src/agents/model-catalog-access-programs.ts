@@ -30,7 +30,7 @@ export function resolveModelCatalogAccessPrograms(params: {
   if (
     !native &&
     (!credential ||
-      credential.source !== "profile" ||
+      credential.source === "harness" ||
       !route ||
       route.requestTransportOverrides === "present")
   ) {
@@ -43,7 +43,9 @@ export function resolveModelCatalogAccessPrograms(params: {
     (candidate) =>
       normalizeProviderId(candidate.provider) === normalizeProviderId(entry.provider) &&
       (native ||
-        (credential?.source === "profile" && candidate.profileId === credential.profileId)),
+        (credential?.source === "profile"
+          ? candidate.profileId === credential.profileId
+          : credential?.source === "direct" && candidate.profileId === undefined)),
   );
   if (outcome?.status !== "ready") {
     return undefined;

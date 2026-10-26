@@ -49,71 +49,55 @@ it.each(["", "https://example.com/report.pdf"])(
   },
 );
 
-it.each(["The report", ""])("publishes a quiet native file with caption %j", async (text) => {
+it.each([
+  [true, "The report"],
+  [true, ""],
+  [false, "The report"],
+  [undefined, "The report"],
+] as const)("publishes a native file with silent=%s and caption %j", async (silent, text) => {
   await withTalk(async ({ ctx, requests, bytes }) => {
-    const result = await nextcloudTalkPlugin.message!.send!.media!({ ...ctx, text, silent: true });
+    const result = await nextcloudTalkPlugin.message!.send!.media!({ ...ctx, text, silent });
     const share = requests.find(({ url }) => url.pathname.endsWith("/shares"));
     const metadata = JSON.parse(new URLSearchParams(share?.body.toString()).get("talkMetaData")!);
-    expect(metadata).toEqual({ caption: text, replyTo: 41, silent: true });
+    expect(metadata).toEqual({ caption: text, replyTo: 41, ...(silent ? { silent: true } : {}) });
     expect(requests.find(({ method }) => method === "PUT")?.body).toEqual(bytes);
     expect(result).toMatchObject({ messageId: "42", receipt: { replyToId: "41" } });
     expect(requests.some(({ url }) => url.pathname.includes("/bot/"))).toBe(false);
+    if (!silent) {
+      expect(requests.some(({ url }) => url.pathname.endsWith("/capabilities"))).toBe(false);
+    }
   });
 });
 
-it.each([false, undefined])(
-  "keeps ordinary native file sends unchanged with silent=%s",
-  async (silent) => {
-    await withTalk(async ({ ctx, requests }) => {
-      await nextcloudTalkPlugin.message!.send!.media!({ ...ctx, silent });
-      expect(requests.some(({ url }) => url.pathname.endsWith("/capabilities"))).toBe(false);
-      const share = requests.find(({ url }) => url.pathname.endsWith("/shares"));
-      expect(JSON.parse(new URLSearchParams(share?.body.toString()).get("talkMetaData")!)).toEqual({
-        caption: "The report",
-        replyTo: 41,
-      });
+it.each([
+  [
+    200,
+    { capabilities: { spreed: { features: ["silent-send", "silent-send-state"] } } },
+    /silent.*media-caption/i,
+  ],
+  [200, { capabilities: {} }, /silent.*media-caption/i],
+  [503, {}, /503/],
+] as const)(
+  "rejects quiet file publication before reading or uploading (%s, %j)",
+  async (status, data, error) => {
+    await withTalk(async (fixture) => {
+      fixture.respond = (request, response) => {
+        if (!request.url.pathname.endsWith("/capabilities")) {
+          return false;
+        }
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ocs: { data } }));
+        return true;
+      };
+      const mediaReadFile = vi.fn(async () => fixture.bytes);
+      await expect(
+        nextcloudTalkPlugin.message!.send!.media!({ ...fixture.ctx, silent: true, mediaReadFile }),
+      ).rejects.toThrow(error);
+      expect(mediaReadFile).not.toHaveBeenCalled();
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
     });
   },
 );
-
-it.each([
-  { capabilities: { spreed: { features: ["silent-send", "silent-send-state"] } } },
-  { capabilities: {} },
-])("rejects unsupported quiet file publication before reading or uploading (%j)", async (data) => {
-  await withTalk(async (fixture) => {
-    fixture.respond = (request, response) => {
-      if (!request.url.pathname.endsWith("/capabilities")) {
-        return false;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ocs: { data } }));
-      return true;
-    };
-    const mediaReadFile = vi.fn(async () => fixture.bytes);
-    await expect(
-      nextcloudTalkPlugin.message!.send!.media!({ ...fixture.ctx, silent: true, mediaReadFile }),
-    ).rejects.toThrow(/silent.*media-caption/i);
-    expect(mediaReadFile).not.toHaveBeenCalled();
-    expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
-  });
-});
-
-it("does not downgrade a quiet file send when capability lookup fails", async () => {
-  await withTalk(async (fixture) => {
-    fixture.respond = (request, response) => {
-      if (!request.url.pathname.endsWith("/capabilities")) {
-        return false;
-      }
-      response.writeHead(503);
-      response.end();
-      return true;
-    };
-    await expect(
-      nextcloudTalkPlugin.message!.send!.media!({ ...fixture.ctx, silent: true }),
-    ).rejects.toThrow(/503/);
-    expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
-  });
-});
 
 it.each(["cancel", "revoke"])(
   "stops a quiet file send after capability lookup (%s)",

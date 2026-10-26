@@ -180,12 +180,16 @@ export async function readDatabasePathIdentity(
     }
   }
   // Resolve the existing ancestor before a first open so directory aliases share admission.
+  const canonicalPath = await resolveDatabasePathKeyAsync(databasePath);
+  return { key: `path:${canonicalPath}`, canonicalPath };
+}
+
+export async function resolveDatabasePathKeyAsync(databasePath: string): Promise<string> {
   const missing: string[] = [];
-  let ancestor = databasePath;
+  let ancestor = path.resolve(databasePath);
   while (true) {
     try {
-      const canonicalPath = normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
-      return { key: `path:${canonicalPath}`, canonicalPath };
+      return normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
     } catch (error) {
       ancestor = missingAncestorParent(ancestor, missing, error);
     }

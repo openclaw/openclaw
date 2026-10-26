@@ -64,6 +64,7 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   const group = element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!;
   expect(group.open).toBe(true);
+  expect(group.querySelector("summary")?.textContent).toContain("Pull requests");
   group.open = false;
   group.dispatchEvent(new Event("toggle"));
   flush();
@@ -274,9 +275,7 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   );
   const link = element.querySelector(".chat-pr__link")!;
   expect(link.getAttribute("href")).toBe("https://github.com/example/project/pull/7");
-  const automation = element.querySelector("openclaw-chat-ci-automation");
-  expect(automation).toHaveProperty("sessionId", "incarnation-7");
-  expect(automation).toHaveProperty("presented", false);
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBeNull();
   element.querySelector<HTMLButtonElement>(".chat-pr__actions button")!.click();
   flush();
   const menu = element.querySelector(".chat-pr__actions")!;
@@ -287,9 +286,15 @@ it("uses the current PR renderer and preserves CI session identity and branch di
     expect(menu.querySelector("button")?.getAttribute("aria-expanded")).toBe("true"),
   );
   menu.querySelector<HTMLButtonElement>('[data-value="monitoring"]')!.click();
-  flush();
-  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
+  await waitForSolid(() =>
+    expect(element.querySelector("openclaw-chat-ci-automation")).not.toBeNull(),
+  );
+  const automation = element.querySelector("openclaw-chat-ci-automation");
+  expect(automation).toHaveProperty("sessionId", "incarnation-7");
   expect(automation).toHaveProperty("presented", true);
+  menu.querySelector<HTMLButtonElement>("button")!.click();
+  await waitForSolid(() => expect(automation).toHaveProperty("presented", false));
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
   const branch = {
     owner: "example",
     repo: "project",

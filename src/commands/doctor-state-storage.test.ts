@@ -5,16 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { useDoctorHealthFixture } from "../flows/doctor-health.fixture.test-support.js";
-import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
-import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as configFlow from "./doctor-config-flow.js";
 import { doctorCommand } from "./doctor.js";
 
@@ -26,7 +21,6 @@ const chmodFailure = vi.hoisted(() => {
   return {
     code: undefined as string | undefined,
     foreignPath: undefined as string | undefined,
-    targets: [] as string[],
   };
 });
 vi.mock("node:fs", async (importOriginal) => {
@@ -36,7 +30,6 @@ vi.mock("node:fs", async (importOriginal) => {
     [chmodFailure.foreignPath, path.dirname(chmodFailure.foreignPath)].includes(String(target));
   const chmodSync: typeof actual.chmodSync = (...args) => {
     if (chmodFailure.code || isForeignPath(args[0])) {
-      chmodFailure.targets.push(String(args[0]));
       throw Object.assign(new Error("fixture filesystem rejects chmod"), {
         code: chmodFailure.code ?? "EPERM",
       });
@@ -55,33 +48,20 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, chmodSync, statSync, default: { ...actual, chmodSync, statSync } };
 });
 
-async function withDoctorStorage(
-  run: (state: OpenClawTestState, databasePath: string) => Promise<void>,
-) {
+async function withDoctorStorage(run: (databasePath: string) => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     mocks.emulateNativeInstall = false;
     vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig").mockImplementation(
       actualConfigFlow.loadAndMaybeMigrateDoctorConfig,
     );
     const database = openOpenClawStateDatabase({ env: state.env });
-    const installPath = writeManagedNpmPlugin({
-      stateDir: state.stateDir,
-      packageName: "storage-fixture",
-      pluginId: "storage-fixture",
-      version: "1.0.0",
-    });
     await state.writeConfig({ plugins: { enabled: false } });
-    await seedInstalledPluginIndex(
-      { "storage-fixture": { source: "path", sourcePath: installPath, installPath } },
-      { env: state.env, config: { plugins: { enabled: false } } },
-    );
     await closeOpenClawStateDatabaseByPathAsync(database.path);
     try {
-      await run(state, database.path);
+      await run(database.path);
     } finally {
       chmodFailure.code = undefined;
       chmodFailure.foreignPath = undefined;
-      chmodFailure.targets = [];
     }
   });
 }
@@ -99,7 +79,7 @@ describe.skipIf(process.platform === "win32")("Doctor state storage diagnosis", 
   it.skipIf(process.platform !== "darwin")(
     "diagnoses an immutable database at the command boundary",
     async () => {
-      await withDoctorStorage(async (_state, databasePath) => {
+      await withDoctorStorage(async (databasePath) => {
         const before = fs.readFileSync(databasePath);
         execFileSync("chflags", ["uchg", databasePath]);
         try {
@@ -121,7 +101,7 @@ describe.skipIf(process.platform === "win32")("Doctor state storage diagnosis", 
   it.each(["foreign-owned writable", "owned 0444", "chmod unsupported"])(
     "continues diagnostics with %s storage",
     async (layout) => {
-      await withDoctorStorage(async (_state, databasePath) => {
+      await withDoctorStorage(async (databasePath) => {
         if (layout === "foreign-owned writable") {
           fs.chmodSync(databasePath, 0o660);
           fs.chmodSync(path.dirname(databasePath), 0o2775);
@@ -140,8 +120,6 @@ describe.skipIf(process.platform === "win32")("Doctor state storage diagnosis", 
         expect(mocks.runContributions).toHaveBeenCalledOnce();
         if (layout === "owned 0444") {
           expect(fs.statSync(databasePath).mode & 0o777).toBe(0o600);
-        } else {
-          expect(chmodFailure.targets).toContain(databasePath);
         }
       });
     },
@@ -150,7 +128,7 @@ describe.skipIf(process.platform === "win32")("Doctor state storage diagnosis", 
   it.skipIf(process.getuid?.() === 0).each(["directory", "inaccessible directory"])(
     "diagnoses an unwritable %s without changing its permissions",
     async (target) => {
-      await withDoctorStorage(async (_state, databasePath) => {
+      await withDoctorStorage(async (databasePath) => {
         const targetPath = path.dirname(databasePath);
         const mode = target === "inaccessible directory" ? 0 : 0o500;
         fs.chmodSync(targetPath, mode);

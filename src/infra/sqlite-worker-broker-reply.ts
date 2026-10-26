@@ -40,6 +40,7 @@ import {
   bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
+  type SqliteWorkerAdmissionFactory,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
@@ -77,27 +78,34 @@ export async function dispatchSqliteWorkerJob(
     const deliveredStateContext = prepareSqliteWorkerActorContext(actor, job);
     const stateAccess = actor?.stateAccess;
     const databasePath = stateAccess?.canonicalPath;
+    let assertStateAccess:
+      | Awaited<ReturnType<NonNullable<typeof stateAccess>["prepareAccess"]>>
+      | undefined;
     // Retirement must drain even after ordinary database access is revoked.
     if (stateAccess && job.request.type !== "close") {
-      const assertAccessAllowed = () => {
+      const prepareAccess = async () => {
         job.signal?.throwIfAborted();
         assertCurrentJob();
-        stateAccess.assertAccessAllowed({
+        const assertAccess = await stateAccess.prepareAccess({
           maintenanceScope: job.maintenanceScope,
           schemaLease: job.cleanupAccess,
         });
+        job.signal?.throwIfAborted();
+        assertCurrentJob();
+        assertAccess();
+        return assertAccess;
       };
       const isPending = (error: unknown) =>
         error instanceof StateDatabaseAdmissionPendingError && error.databasePath === databasePath;
       try {
-        assertAccessAllowed();
+        assertStateAccess = await prepareAccess();
       } catch (error) {
         if (!isPending(error)) {
           throw error;
         }
         // Keep the queue slot, but create no admission and send no command until custody clears.
-        await acquireWithWait({
-          acquire: assertAccessAllowed,
+        assertStateAccess = await acquireWithWait({
+          acquire: prepareAccess,
           shouldRetry: isPending,
           deadlineMs: performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
           pollIntervalMs: 10,
@@ -108,7 +116,7 @@ export async function dispatchSqliteWorkerJob(
     if (job.createAdmission || databasePath) {
       const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       job.settleNative = settlement.resolve;
-      const retained = job.createAdmission
+      const retained: ReturnType<SqliteWorkerAdmissionFactory> = job.createAdmission
         ? job.createAdmission({ settled: settlement.promise })
         : {
             admission: createSqliteWorkerOperationAdmission(() => {
@@ -120,6 +128,18 @@ export async function dispatchSqliteWorkerJob(
             nativeLocations: databasePath ? [databasePath] : [],
           };
       try {
+        if (retained.databaseIdentity) {
+          const existing = job.request.databaseIdentity;
+          if (
+            existing &&
+            (existing.databasePath !== retained.databaseIdentity.databasePath ||
+              existing.key !== retained.databaseIdentity.key ||
+              existing.birthtime !== retained.databaseIdentity.birthtime)
+          ) {
+            throw new SqliteWorkerError("SQLite request physical identities differ", "closed");
+          }
+          job.request.databaseIdentity = retained.databaseIdentity;
+        }
         bindSqliteWorkerDatabaseAdmissionCursor(
           retained.admission,
           slot.databaseAdmissionCursor,
@@ -160,13 +180,20 @@ export async function dispatchSqliteWorkerJob(
           const assertAccess = () => {
             assertCurrentJob();
             job.maintenanceScope?.assertAdmission();
-            actor?.stateAccess.assertReadAllowed({
+            const captured = {
               maintenanceScope: job.maintenanceScope,
               schemaLease: schemaLease ?? job.cleanupAccess,
-            });
+            };
+            if (assertStateAccess) {
+              assertStateAccess(captured);
+            } else {
+              // Closing still services native cleanup under its original schema custody.
+              actor?.stateAccess.assertReadAllowed(captured);
+            }
           };
           retained.admission.bindDatabaseAuthority({
             databasePath,
+            databaseIdentity: job.request.databaseIdentity,
             ...(job.request.type === "open" &&
             !job.request.existingIdentity &&
             resolveIdentityPathViaExistingAncestorSync(job.request.databasePath) ===
@@ -221,6 +248,7 @@ export async function dispatchSqliteWorkerJob(
       // A carrier can be created before boot selects its database engines.
       request.postgresPool = withDatabaseEngineSelection(selection, createPostgresPoolEndpoints);
     }
+    assertStateAccess?.();
     job.custody.accept();
     job.detach();
     if (actor && request.type !== "close") {

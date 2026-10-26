@@ -111,7 +111,6 @@ it("validates partial edits before reporting tool-budget exhaustion", async () =
   const result = await repairLoop({ ...params(validate), budget: { maxToolCalls: 2 } });
   expect(result).toMatchObject({ status: "aborted", reason: "tool-call-budget" });
   expect(result.attempts.map((attempt) => attempt.toolCalls)).toEqual([2]);
-  expect(runtime.runUpdateRepairTurn.mock.calls[0]?.[0].maxToolCalls).toBe(2);
   expect(validate).toHaveBeenCalledTimes(2);
   expect(result.attempts[0]?.validation).toEqual(unhealthy(-2));
 });

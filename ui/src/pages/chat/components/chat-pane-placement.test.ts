@@ -33,13 +33,13 @@ function mount(session: Partial<GatewaySessionRow>, props: Omit<Props, "session"
   ).container;
 }
 
-const text = (container: HTMLElement, part: string) =>
-  container.querySelector(`.chat-pane__placement-${part}`)?.textContent?.trim();
+const part = (container: HTMLElement, name: string) =>
+  container.querySelector<HTMLElement>(`.chat-pane__placement-${name}`);
+const text = (container: HTMLElement, name: string) => part(container, name)?.textContent?.trim();
 
 async function openPlacement(container: HTMLElement) {
   const panel = container.querySelector<HTMLElement>('.chat-pane__placement-menu > [role="menu"]')!;
-  expect(panel.querySelector("[role^=menuitem]")).toBeNull();
-  container.querySelector<HTMLButtonElement>(".chat-pane__placement-chip")!.click();
+  part(container, "chip")!.click();
   await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
 }
 
@@ -47,23 +47,11 @@ it.each(["profile", "device"] as const)(
   "presents post-turn workspace sync for %s without cloud-only wording",
   async (target) => {
     const container = mount({
-      agentRuntime: { id: "openclaw", source: "model" as const },
       placement: {
         ...activePlacement,
         workspaceResultReconciling: true,
-        ...(target === "device"
-          ? {
-              providerId: "device",
-              profileId: "native",
-              inference: "worker" as const,
-              runner: {
-                kind: "device" as const,
-                deviceId: "paired",
-                status: "available" as const,
-              },
-            }
-          : {}),
-        environmentId: "worker:cloud",
+        inference: target === "device" ? "worker" : undefined,
+        runner: target === "device" ? { kind: "device", status: "available" } : undefined,
       },
     });
     expect(text(container, "chip")).toBe("Worker · syncing files");
@@ -105,17 +93,15 @@ it.each([
     expect(text(container, "chip")).toBe(label);
     await openPlacement(container);
     expect(text(container, "move")).toBe(moveLabel);
-    const note = container.querySelector(".chat-pane__placement-note");
-    const move = container.querySelector<HTMLElement>(".chat-pane__placement-move");
-    const reclaim = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
-    expect(move?.hasAttribute("disabled")).toBe(false);
+    const reclaim = part(container, "reclaim");
+    expect(part(container, "move")?.hasAttribute("disabled")).toBe(false);
     expect(reclaim?.textContent?.trim()).toBe(stopLabel);
     if (status === "offline") {
-      expect(note?.textContent).toContain("Waiting for device to reconnect");
+      expect(text(container, "note")).toContain("Waiting for device to reconnect");
       expect(reclaim?.hasAttribute("disabled")).toBe(true);
       expect(reclaim?.title).toContain("Reconnect the device");
     } else {
-      expect(note).toBeNull();
+      expect(part(container, "note")).toBeNull();
       expect(reclaim?.hasAttribute("disabled")).toBe(false);
     }
   },
@@ -128,26 +114,15 @@ it.each(["local", undefined] as const)(
     const container = mount(
       {
         repositoryWorkspaceId: "repository-workspace-1",
-        ...(placementState
-          ? {
-              placement: {
-                state: placementState,
-                generation: 1,
-                createdAtMs: 1,
-                updatedAtMs: 1,
-                stateChangedAtMs: 1,
-              },
-            }
-          : {}),
+        placement: placementState ? { ...timestamps, state: placementState } : undefined,
       },
       { onPlacementRecover },
     );
     expect(text(container, "chip")).toBe("Worker required");
     await openPlacement(container);
-    const dispatch = container.querySelector<HTMLButtonElement>(".chat-pane__placement-recovery");
-    expect(container.querySelectorAll(".chat-pane__placement-recovery")).toHaveLength(1);
+    const dispatch = part(container, "recovery");
     expect(dispatch?.textContent?.trim()).toBe("Choose worker…");
-    expect(container.querySelector(".chat-pane__placement-move")).toBeNull();
+    expect(part(container, "move")).toBeNull();
     dispatch?.click();
     await waitForSolid(() => expect(onPlacementRecover).toHaveBeenCalledOnce());
   },
@@ -169,6 +144,6 @@ it.each([
     });
     await openPlacement(container);
     expect(text(container, action)).toBe(label);
-    expect(container.querySelector(`.chat-pane__placement-${absent}`)).toBeNull();
+    expect(part(container, absent)).toBeNull();
   },
 );

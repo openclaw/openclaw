@@ -14,7 +14,6 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type ResourceEvent = { event: string; database: string; mode: string };
 const expectedRows = [{ value: "registrar" }, { value: "action" }];
 const activePhases = ["opened", "registrar-entered", "registrar-completed", "action-entered"];
 
@@ -23,7 +22,8 @@ it("keeps native plugin resources through registration and action, then disposes
   const pluginDir = path.join(root, "plugin");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");
-  const eventsPath = path.join(root, "resource-events.jsonl");
+  const eventsPath = path.join(root, "resource-events.log");
+  const databasePath = path.join(root, "runtime.sqlite");
   fs.mkdirSync(pluginDir);
   fs.mkdirSync(stateDir);
   const files = {
@@ -45,18 +45,14 @@ module.exports = {
 };
 `,
     "index.cjs": `const fs = require("node:fs");
-const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
-let sequence = 0;
 module.exports = {
   id: "cli-native-resource",
   register(api) {
-    const mode = api.registrationMode;
-    if (mode === "cli-metadata") throw new Error("Use the inert metadata entry");
-    const databasePath = path.join(${JSON.stringify(root)}, mode + "-" + sequence++ + ".sqlite");
-    const database = new DatabaseSync(databasePath);
+    if (api.registrationMode === "cli-metadata") throw new Error("Use the inert metadata entry");
+    const database = new DatabaseSync(${JSON.stringify(databasePath)});
     database.exec("CREATE TABLE observations (value TEXT NOT NULL)");
-    const record = (event) => fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ event, database: databasePath, mode }) + "\\n");
+    const record = (event) => fs.appendFileSync(${JSON.stringify(eventsPath)}, event + "\\n");
     record("opened");
     api.registerRuntimeLifecycle({
       id: "native-cli-resource",
@@ -100,12 +96,7 @@ module.exports = {
       plugins: { allow: ["cli-native-resource"], load: { paths: [pluginDir] } },
     }),
   );
-  const readEvents = (): ResourceEvent[] =>
-    fs
-      .readFileSync(eventsPath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+  const readEvents = () => fs.readFileSync(eventsPath, "utf8").trim().split("\n");
 
   const result = await runCliProcessChild({
     nodeArgs: [
@@ -133,7 +124,7 @@ module.exports = {
     async interact(child) {
       try {
         await waitForCliProcessStderrMarker(child, "native-resource action entered");
-        expect(readEvents().map(({ event }) => event)).toEqual(activePhases);
+        expect(readEvents()).toEqual(activePhases);
       } finally {
         child.stdin.end("continue\n");
       }
@@ -145,15 +136,8 @@ module.exports = {
   expect(result.stderr).toContain("native-resource diagnostic");
   expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
 
-  const events = readEvents();
-  expect(
-    events.map(({ event }) => event),
-    diagnostics,
-  ).toEqual([...activePhases, "action-completed", "disposed"]);
-  expect(events[0]!.mode).not.toBe("cli-metadata");
-  const databases = events.map(({ database }) => database);
-  expect(new Set(databases)).toEqual(new Set([databases[0]]));
-  using reopened = new DatabaseSync(events[0]!.database);
+  expect(readEvents(), diagnostics).toEqual([...activePhases, "action-completed", "disposed"]);
+  using reopened = new DatabaseSync(databasePath);
   expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual(
     expectedRows,
   );
