@@ -64,6 +64,19 @@ function registeredCleanup(sessionId: string) {
   return cleanup;
 }
 
+type SteeringHarness = ReturnType<typeof createStartedThreadHarness>;
+const steeringRequests = (harness: SteeringHarness) =>
+  harness.requests.filter(({ method }) => method === "turn/steer");
+const complete = (harness: SteeringHarness) =>
+  harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+function assistantDelta(itemId: string, delta: string) {
+  return {
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId, delta },
+  };
+}
+
 function expectSingleSteer(requests: Array<{ method: string; params?: unknown }>, text: string) {
   expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
     {
@@ -424,22 +437,11 @@ it.each([
   );
   for (const id of ["answer-a", "answer-b"]) {
     await notify(assistantItem("item/started", id, ""));
-    await notify({
-      method: "item/agentMessage/delta",
-      params: { threadId: "thread-1", turnId: "turn-1", itemId: id, delta: id },
-    });
+    await notify(assistantDelta(id, id));
     await notify(assistantItem("item/completed", id, id));
   }
   await notify(assistantItem("item/started", "unfinished-answer", ""));
-  await notify({
-    method: "item/agentMessage/delta",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "unfinished-answer",
-      delta: "PRE-STEER-INCOMPLETE",
-    },
-  });
+  await notify(assistantDelta("unfinished-answer", "PRE-STEER-INCOMPLETE"));
   await preSteerVisible.promise;
   expect(onPartialReply).toHaveBeenCalledWith({
     text: "PRE-STEER-INCOMPLETE",
@@ -574,33 +576,6 @@ it.each([
   ]);
 });
 
-it("still steers an image when gateway question cancellation fails", async () => {
-  const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
-  const params = createSteeringParams();
-  const run = runCodexAppServerAttempt(params, {
-    pluginConfig: { appServer: { mode: "yolo" } },
-  });
-  await waitForMethod("turn/start");
-  const handle = await waitForRegisteredRun(params.sessionId);
-
-  activeRunRegistrationMocks.cancelQuestionError = new Error("gateway unavailable");
-  const delivered = handle!.queueMessage("inspect this", {
-    debounceMs: 0,
-    images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    isInboundUserMessage: true,
-  });
-  await vi.waitFor(
-    () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
-    fastWait,
-  );
-  const steer = requests.findLast((entry) => entry.method === "turn/steer");
-  const clientUserMessageId = steerClientId(steer);
-  await notify(consumedUser(clientUserMessageId));
-  await delivered;
-  await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-  await run;
-});
-
 it("steers during native automatic compaction through session-file registration", async () => {
   const { requests, completeTurn, notify, waitForMethod } = createStartedThreadHarness();
   const params = createSteeringParams();
@@ -722,39 +697,41 @@ it("seals unsent steering without erasing an earlier consumed dispatch", async (
   expect(onLateAccepted).toHaveBeenCalledWith(false);
 });
 
-it("steers a human image control without cancelling the pending Codex question", async () => {
-  const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
-  const params = createSteeringParams();
-  const run = runCodexAppServerAttempt(params, {
-    pluginConfig: { appServer: { mode: "yolo" } },
-  });
-  await run.waitForTurnAccepted();
-  const handle = registeredRun(params.sessionId);
-  if (!handle) {
-    throw new Error("Expected the actual published Codex backend");
-  }
-  const cancellations =
-    activeRunRegistrationMocks.cancelPendingAgentQuestionForSession.mock.calls.length;
-  const accepted = vi.fn();
-  const delivery = handle.queueMessage("inspect this without answering the question", {
-    debounceMs: 0,
-    images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    isInboundUserMessage: true,
-    allowPendingUserInputAnswer: false,
-    onQueueAccepted: accepted,
-  });
-  try {
-    await waitForMethod("turn/steer");
-    const steer = requests.findLast((entry) => entry.method === "turn/steer");
-    await notify(consumedUser(steerClientId(steer)));
-    await delivery;
-    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
-    expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledTimes(
-      cancellations,
-    );
-    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
-  } finally {
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  }
-});
+it.each(["cancellation fails", "keep pending question"] as const)(
+  "steers a human image when %s",
+  async (mode) => {
+    const harness = createStartedThreadHarness();
+    const params = createSteeringParams();
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await run.waitForTurnAccepted();
+    const handle = await waitForRegisteredRun(params.sessionId);
+    const cancelQuestion = activeRunRegistrationMocks.cancelPendingAgentQuestionForSession;
+    const cancellations = cancelQuestion.mock.calls.length;
+    if (mode === "cancellation fails") {
+      activeRunRegistrationMocks.cancelQuestionError = new Error("gateway unavailable");
+    }
+    const accepted = vi.fn();
+    const delivery = handle.queueMessage("inspect this", {
+      debounceMs: 0,
+      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+      isInboundUserMessage: true,
+      ...(mode === "keep pending question" ? { allowPendingUserInputAnswer: false } : {}),
+      onQueueAccepted: accepted,
+    });
+    try {
+      await harness.waitForMethod("turn/steer");
+      await harness.notify(consumedUser(steerClientId(steeringRequests(harness).at(-1))));
+      await delivery;
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      if (mode === "keep pending question") {
+        expect(cancelQuestion).toHaveBeenCalledTimes(cancellations);
+      }
+      expect(steeringRequests(harness)).toHaveLength(1);
+    } finally {
+      await complete(harness);
+      await run;
+    }
+  },
+);
