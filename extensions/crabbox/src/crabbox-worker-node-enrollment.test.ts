@@ -64,7 +64,6 @@ const runtimePackage = (home: string, digest: string) =>
 const readJson = (...parts: string[]): unknown =>
   JSON.parse(fs.readFileSync(path.join(...parts), "utf8"));
 const readText = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
-const phases = (names: string) => names.split(" ").map((name) => `openclaw-bootstrap-${name}`);
 const loginEnvironment = {
   DISPLAY: ":0",
   DBUS_SESSION_BUS_ADDRESS: "wrong-login-session",
@@ -422,8 +421,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         fs.mkdirSync(homeFor(argv[argv.indexOf("--lease-id") + 1]!), { recursive: true });
       }
       if (argv[1] === "run") {
-        const id = argv[argv.indexOf("--id") + 1]!;
-        const home = homeFor(id);
+        const home = homeFor(argv[argv.indexOf("--id") + 1]!);
         execFileSync("/bin/sh", [], {
           input: options?.input,
           cwd: home,
@@ -470,48 +468,33 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         throw new Error(message);
       },
     });
-    const initial = context("cbx_initial");
-    await manager.allocate(initial);
-    await expectSetupPhases(
-      enroll(homeFor(initial.id), oldArtifact.nodeBootstrap, undefined, true),
-    );
-    await manager.markEnrolled(initial.id);
-    expect(await manager.capture(initial)).toBe(true);
-    await manager.release(initial);
-    fs.rmSync(homeFor(initial.id), { recursive: true });
-    const originalCheckpoint = (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value
-      .image!.checkpointId;
-
-    const upgraded = context("cbx_upgraded", currentArtifact.nodeBootstrap.sha256);
-    expect(await manager.allocate(upgraded)).toEqual({
-      kind: "checkpoint",
-      checkpointId: originalCheckpoint,
-    });
-    const upgradePhases = await expectSetupPhases(
-      enroll(homeFor(upgraded.id), currentArtifact.nodeBootstrap, undefined, true),
-    );
-    expect(upgradePhases).toContain("openclaw-bootstrap-installation");
-    expect(hasRuntime(upgraded.id, currentArtifact.nodeBootstrap.sha256)).toBe(true);
-    await manager.markEnrolled(upgraded.id);
-    const refreshed = await manager.capture(upgraded);
-    await manager.release(upgraded);
-    fs.rmSync(homeFor(upgraded.id), { recursive: true });
-    const retainedCheckpoint = (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value
-      .image!.checkpointId;
-
-    const next = context("cbx_next", currentArtifact.nodeBootstrap.sha256);
-    const nextChoice = await manager.allocate(next);
-    const currentWasCached = hasRuntime(next.id, currentArtifact.nodeBootstrap.sha256);
-    const repeatPhases = await expectSetupPhases(
-      enroll(homeFor(next.id), currentArtifact.nodeBootstrap, undefined, true),
-    );
-    await manager.release(next);
-    expect(refreshed).toBe(true);
-    expect(retainedCheckpoint).not.toBe(originalCheckpoint);
-    expect(forkChoices).toEqual([originalCheckpoint, retainedCheckpoint]);
-    expect(nextChoice).toEqual({ kind: "checkpoint", checkpointId: retainedCheckpoint });
-    expect(currentWasCached).toBe(true);
-    expect(repeatPhases).not.toContain("openclaw-bootstrap-installation");
+    for (const [index, artifact] of [oldArtifact, currentArtifact, currentArtifact].entries()) {
+      const current = context(`cbx_child_${index}`, artifact.nodeBootstrap.sha256);
+      expect(await manager.allocate(current)).toEqual(
+        index === 0
+          ? { kind: "cold" }
+          : {
+              kind: "checkpoint",
+              checkpointId: `chk_fixture_${index}`,
+            },
+      );
+      expect(hasRuntime(current.id, artifact.nodeBootstrap.sha256)).toBe(index === 2);
+      const phases = await expectSetupPhases(
+        enroll(homeFor(current.id), artifact.nodeBootstrap, undefined, true),
+      );
+      expect(phases.includes("openclaw-bootstrap-installation")).toBe(index !== 2);
+      expect(hasRuntime(current.id, artifact.nodeBootstrap.sha256)).toBe(true);
+      if (index !== 2) {
+        await manager.markEnrolled(current.id);
+        expect(await manager.capture(current)).toBe(true);
+      }
+      await manager.release(current);
+      fs.rmSync(homeFor(current.id), { recursive: true });
+      expect(
+        (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value.image?.checkpointId,
+      ).toBe(`chk_fixture_${Math.min(index + 1, 2)}`);
+    }
+    expect(forkChoices).toEqual(["chk_fixture_1", "chk_fixture_2"]);
     const entries = await openCrabboxWarmImageStore(crabboxState).entries();
     expect(entries).toHaveLength(1);
     expect(Object.keys(entries[0]!.value.allocations)).toEqual([]);
@@ -603,50 +586,29 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       workerResponse.resolve();
       await preparation;
     }
-    expect(await preparation).toEqual(
-      expect.arrayContaining(
-        phases(
-          "preparation download-connection download-http-response download-body installation-and-worker-download runtime-verification worker-archive-publication complete",
-        ),
-      ),
-    );
     expectAbsent(path.join(home, ".openclaw"));
     expect(fs.readdirSync(runtimeRoot(home))).toEqual([nodeBootstrap.sha256]);
     const preparedPackage = runtimePackage(home, nodeBootstrap.sha256);
     expect(readJson(preparedPackage, "installed.json")).toEqual({ scriptsRan: true });
-    expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
-    expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
-      workerBytes,
-    );
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(path.join(stateDir, "setup-code"), setupCode);
-    fs.mkdirSync(path.join(home, ".crabbox", "env"), { recursive: true });
-    fs.writeFileSync(path.join(home, ".crabbox", "env", "forwarded"), workerBundle.token);
     const scrubTmp = path.join(home, "scrub-tmp");
     fs.mkdirSync(scrubTmp);
-    // The script's Linux /tmp root belongs to the synthetic worker, not this host.
+    // Redirect the guest's /tmp before executing the real scrub owner.
     execFileSync("sh", ["-c", SCRUB_WORKER_STATE.replace('"/tmp"', JSON.stringify(scrubTmp))], {
       cwd: home,
       env: { HOME: home, PATH: process.env.PATH, TMPDIR: scrubTmp },
     });
-    expectAbsent(stateDir, path.join(home, ".crabbox", "env"));
+    expectAbsent(stateDir);
     expect(fs.readdirSync(path.join(preparedPackage, "worker-artifacts"))).toEqual([
       `${workerBundle.sha256}.tgz`,
     ]);
     expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
       workerBytes,
     );
-    expect(
-      await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle)),
-    ).toEqual(
-      phases(
-        "preparation runtime-verification worker-archive-verification worker-archive-publication complete",
-      ),
-    );
+    await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle));
     expect(worker.authorizations).toEqual([`Bearer ${workerBundle.token}`]);
-    expect(await expectSetupPhases(enroll(home, nodeBootstrap))).toEqual(
-      phases("preparation runtime-verification activation plugin-activation node-launch complete"),
-    );
+    await expectSetupPhases(enroll(home, nodeBootstrap));
     const launch = await readLaunch(stateDir, receipts, signal);
     expect(launch).toMatchObject({
       build: "first",

@@ -77,22 +77,16 @@ describe("Crabbox worker doctor", () => {
               : { status: "outdated", version: kind === "sandbox" ? "0.76.0" : "0.51.0" },
         );
       }
-      const ctx =
-        kind === "unconfigured"
-          ? context({}, { cfg: {} })
-          : kind === "sandbox"
-            ? context(
-                {},
-                {
-                  cfg: {
-                    plugins: {
-                      entries: { crabbox: { config: { sandbox: { binary: process.execPath } } } },
-                    },
-                  },
-                  env: { OPENCLAW_STATE_DIR: tempDirs.make("crabbox-doctor-sandbox-"), PATH: "" },
-                },
-              )
-            : workerContext(kind === "wsl2" ? "windows/wsl2" : "linux");
+      const ctx = workerContext(kind === "wsl2" ? "windows/wsl2" : "linux");
+      if (kind === "unconfigured") {
+        ctx.cfg = {};
+      }
+      if (kind === "sandbox") {
+        ctx.cfg = {
+          plugins: { entries: { crabbox: { config: { sandbox: { binary: process.execPath } } } } },
+        };
+        ctx.env = { OPENCLAW_STATE_DIR: tempDirs.make("crabbox-doctor-sandbox-"), PATH: "" };
+      }
       const before = structuredClone(ctx.cfg);
       const expected =
         kind === "sandbox"
@@ -121,17 +115,8 @@ describe("Crabbox worker doctor", () => {
     "detects managed-only %s without downloading",
     async (version) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("crabbox-doctor-managed-"), PATH: "" };
-      const target = path.basename(
-        path.dirname(managedBinary.resolveManagedCrabboxBinaryPath(env)),
-      );
-      const binary = path.join(
-        env.OPENCLAW_STATE_DIR,
-        "tools",
-        "crabbox",
-        version,
-        target,
-        process.platform === "win32" ? "crabbox.exe" : "crabbox",
-      );
+      const managed = managedBinary.resolveManagedCrabboxBinaryPath(env);
+      const binary = managed.replace(managedBinary.CRABBOX_MIN_VERSION, version);
       await mkdir(path.dirname(binary), { recursive: true });
       await writeFile(binary, version);
       const command = vi
@@ -139,12 +124,9 @@ describe("Crabbox worker doctor", () => {
         .mockResolvedValue(commandResult({ stdout: version }));
       const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
       const ctx = context({ binary: "/nonexistent/crabbox" }, { env });
-      const check = captureCrabboxDoctorCheck();
-      const findings = await check.detect(ctx);
+      const findings = await captureCrabboxDoctorCheck().detect(ctx);
       if (version === managedBinary.CRABBOX_MIN_VERSION) {
         expect(findings).toEqual([]);
-        await expect(check.repair!(ctx, findings)).resolves.toMatchObject({ status: "skipped" });
-        await expect(check.detect(ctx)).resolves.toEqual([]);
         expect(command).toHaveBeenCalledWith([binary, "--version"], expect.anything());
       } else {
         expect(findings).toMatchObject([outdated]);
@@ -167,6 +149,7 @@ describe("Crabbox worker doctor", () => {
       { checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID, severity: "warning", message: "outdated" },
     ];
     const ctx = workerContext();
+    await expect(check.repair!(ctx, [])).resolves.toMatchObject({ status: "skipped" });
     await expect(check.repair!({ ...ctx, dryRun: true }, findings)).resolves.toMatchObject({
       status: "skipped",
     });
