@@ -9,7 +9,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const harness = createScriptTestHarness();
 
 describe("docker E2E watchdog entrypoint", () => {
-  it("dispatches once through a path alias and stays inert when imported", () => {
+  it("dispatches once through a path alias in both Node symlink modes and stays inert when imported", () => {
     const root = harness.createTempDir("openclaw-watchdog-entrypoint-");
     const physicalRoot = path.join(root, "physical");
     const logicalRoot = path.join(root, "logical");
@@ -28,27 +28,31 @@ describe("docker E2E watchdog entrypoint", () => {
     `;
     const env = testRunnerFixtureEnv();
 
-    for (const expectedStatus of [0, 23]) {
-      const marker = path.join(root, `child-${expectedStatus}.log`);
-      const result = spawnSync(
-        process.execPath,
-        [
-          watchdogPath,
-          "e2e",
-          "5s",
+    for (const preserveSymlinksMain of [false, true]) {
+      for (const expectedStatus of [0, 23]) {
+        const mode = preserveSymlinksMain ? "preserved" : "resolved";
+        const marker = path.join(root, `child-${mode}-${expectedStatus}.log`);
+        const result = spawnSync(
           process.execPath,
-          "--input-type=module",
-          "-e",
-          childSource,
-          marker,
-          String(expectedStatus),
-        ],
-        { encoding: "utf8", env, timeout: 5_000 },
-      );
+          [
+            ...(preserveSymlinksMain ? ["--preserve-symlinks-main"] : []),
+            watchdogPath,
+            "e2e",
+            "5s",
+            process.execPath,
+            "--input-type=module",
+            "-e",
+            childSource,
+            marker,
+            String(expectedStatus),
+          ],
+          { encoding: "utf8", env, timeout: 5_000 },
+        );
 
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(expectedStatus);
-      expect(fs.readFileSync(marker, "utf8")).toBe("ran\n");
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(expectedStatus);
+        expect(fs.readFileSync(marker, "utf8")).toBe("ran\n");
+      }
     }
 
     const importResult = spawnSync(

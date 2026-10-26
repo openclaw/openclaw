@@ -113,15 +113,18 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
 }
 
 function isDirectInvocation(directPath) {
+  if (isDirectRunUrl(directPath, import.meta.url)) {
+    return true;
+  }
   if (!directPath) {
     return false;
   }
-  let resolvedDirectPath = directPath;
   try {
     // Node resolves the entry module through path aliases while argv retains the caller's spelling.
-    resolvedDirectPath = realpathSync(directPath);
-  } catch {}
-  return isDirectRunUrl(resolvedDirectPath, import.meta.url);
+    return isDirectRunUrl(realpathSync(directPath), import.meta.url);
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectInvocation(process.argv[1])) {
