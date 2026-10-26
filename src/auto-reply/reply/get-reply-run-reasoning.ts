@@ -1,8 +1,5 @@
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
-import {
-  canUseReasoningState,
-  type createReplyReasoningVisibility,
-} from "./reasoning-visibility.js";
+import { canUseReasoningState, createReplyReasoningVisibility } from "./reasoning-visibility.js";
 
 export function buildReplyRunReasoningParams(
   { context: { params }, preparedSessionState }: PreparedReplyRunAdmission,
@@ -18,4 +15,14 @@ export function buildReplyRunReasoningParams(
     override: params.directives.reasoningLevel,
     abortSignal: params.opts?.abortSignal,
   };
+}
+
+export function prepareReplyRunReasoningVisibility(
+  state: PreparedReplyRunAdmission,
+  sessionKey: string | undefined,
+  opts: PreparedReplyRunAdmission["context"]["params"]["opts"],
+) {
+  return opts?.reasoningVisibilityEnabled && opts.registerReasoningVisibilityCleanup && sessionKey
+    ? createReplyReasoningVisibility(buildReplyRunReasoningParams(state, sessionKey))
+    : undefined;
 }

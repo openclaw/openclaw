@@ -54,11 +54,10 @@ import {
   suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
-import { buildReplyRunReasoningParams } from "./get-reply-run-reasoning.js";
+import { prepareReplyRunReasoningVisibility } from "./get-reply-run-reasoning.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { createReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -433,10 +432,8 @@ export async function executePreparedReplyRun(
             { isCurrent: isCurrentOwner, ...cronOwner },
           )
       : undefined;
-  const reasoningVisibility =
-    opts?.reasoningVisibilityEnabled && opts.registerReasoningVisibilityCleanup && sessionKey
-      ? await createReplyReasoningVisibility(buildReplyRunReasoningParams(state, sessionKey))
-      : undefined;
+  const pendingReasoning = prepareReplyRunReasoningVisibility(state, sessionKey, opts);
+  const reasoningVisibility = pendingReasoning ? await pendingReasoning : undefined;
   if (reasoningVisibility) {
     opts?.registerReasoningVisibilityCleanup?.(reasoningVisibility.releaseDispatch);
   }
