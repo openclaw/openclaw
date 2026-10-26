@@ -34,6 +34,7 @@ import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
   personalSidebarZone,
   personalSidebarGroupRows,
+  personalGroupSessionReferences,
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
@@ -84,6 +85,7 @@ import {
   storeSidebarSessionSortMode,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
+  type SidebarPinZone,
   type SidebarToolActivity,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -514,8 +516,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.invalidate();
   }
 
-  personalGroupSessionRows = (group: PersonalSessionGroup): SidebarRecentSession[] =>
-    personalSidebarGroupRows(this, group);
+  personalGroupSessionReferences = () => personalGroupSessionReferences(this);
+
+  personalGroupSessionRows = (
+    group: PersonalSessionGroup,
+    zone?: SidebarPinZone,
+  ): SidebarRecentSession[] => personalSidebarGroupRows(this, group, zone);
 
   /** Explicit personal unpins remove a reference, never shared session metadata. */
   pruneSidebarSessionEntry(key: string) {

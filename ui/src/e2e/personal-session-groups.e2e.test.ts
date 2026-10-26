@@ -152,6 +152,8 @@ suite.define(() => {
           ).toBe(1);
           for (const method of [
             "sessions.patch",
+            "sessions.delete",
+            "sessions.deleteMany",
             "sessions.groups.put",
             "sessions.groups.rename",
             "sessions.groups.delete",

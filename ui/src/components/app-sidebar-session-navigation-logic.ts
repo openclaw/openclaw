@@ -613,24 +613,31 @@ export function findSidebarSessionInTree(
   return undefined;
 }
 
-export function findProjectedSidebarSession(input: {
+export function findSidebarSessionRow(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
   sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-}): SidebarRecentSession | undefined {
+}): GatewaySessionRow | undefined {
   const active = input.navigationState.visibleSessionRows.find(
     (candidate) => candidate.key === input.sessionKey,
   );
   if (active) {
-    return input.navigationState.toSidebarSession(active);
+    return active;
   }
   for (const result of Object.values(input.sessionResultsByAgent)) {
     const row = result.sessions.find((candidate) => candidate.key === input.sessionKey);
     if (row) {
-      return input.navigationState.toSidebarSession(row);
+      return row;
     }
   }
   return undefined;
+}
+
+export function findProjectedSidebarSession(
+  input: Parameters<typeof findSidebarSessionRow>[0],
+): SidebarRecentSession | undefined {
+  const row = findSidebarSessionRow(input);
+  return row ? input.navigationState.toSidebarSession(row) : undefined;
 }
 
 /** Live canonical requests outlive a paginated row, but never supply its old private metadata. */

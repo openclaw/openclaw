@@ -105,12 +105,26 @@ async function mountParent() {
   return { harness, sidebar, data, publishChildChanged, expand, retry };
 }
 
-it.each(["loaded", "unloaded"] as const)(
-  "retains child rendering and observations when grouped with %s children",
+it.each(["loaded", "unloaded", "off-page"] as const)(
+  "retains child rendering and observations when grouped (%s)",
   async (initial) => {
     let currentChild = { ...child, sessionId: "child-session" };
     const childList = vi.fn(() => result([currentChild]));
-    const mounted = await mountChildren({ ...parentRow, sessionId: "parent-session" }, childList);
+    const parent = { ...parentRow, sessionId: "parent-session" };
+    const request = childRequest(parent, childList);
+    const mounted = await mountRoster((...args) => {
+      const [method, params] = args;
+      if (initial === "off-page") {
+        if (method === "sessions.list" && !(params as { spawnedBy?: string }).spawnedBy) {
+          return result([]);
+        }
+        if (method === "sessions.describe") {
+          return { session: (params as { key: string }).key === parentKey ? parent : null };
+        }
+      }
+      return request(...args);
+    });
+    const appearances = initial === "off-page" ? 1 : 2;
     const { sidebar, context, harness } = mounted;
     const renderedChildren = () => sidebar.querySelectorAll(`[data-session-key="${childKey}"]`);
     try {
@@ -122,11 +136,14 @@ it.each(["loaded", "unloaded"] as const)(
         personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: [parentKey] }],
       });
       await settleLitElement(sidebar);
-      if (initial === "unloaded") {
+      if (initial !== "loaded") {
         const group = sidebar.querySelector('[data-personal-session-group="focus"]')!;
+        await waitForFast(() =>
+          expect(group.querySelector("[data-child-session-toggle]")).not.toBeNull(),
+        );
         group.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
       }
-      await waitForFast(() => expect(renderedChildren()).toHaveLength(2));
+      await waitForFast(() => expect(renderedChildren()).toHaveLength(appearances));
       expect(childList).toHaveBeenCalledTimes(1);
 
       vi.useFakeTimers();
@@ -140,10 +157,9 @@ it.each(["loaded", "unloaded"] as const)(
       await vi.advanceTimersByTimeAsync(5_000);
       await settleLitElement(sidebar);
       expect(childList).toHaveBeenCalledTimes(2);
-      expect([...renderedChildren()].map((row) => row.textContent)).toEqual([
-        expect.stringContaining("Updated grouped child"),
-        expect.stringContaining("Updated grouped child"),
-      ]);
+      expect([...renderedChildren()].map((row) => row.textContent)).toEqual(
+        Array.from({ length: appearances }, () => expect.stringContaining("Updated grouped child")),
+      );
       vi.useRealTimers();
 
       sidebar
@@ -152,10 +168,10 @@ it.each(["loaded", "unloaded"] as const)(
         )!
         .click();
       await settleLitElement(sidebar);
-      expect(renderedChildren()).toHaveLength(1);
+      expect(renderedChildren()).toHaveLength(appearances - 1);
       context.navigation.update({ personalSessionGroups: [] });
       await settleLitElement(sidebar);
-      expect(renderedChildren()).toHaveLength(1);
+      expect(renderedChildren()).toHaveLength(appearances - 1);
       expect(childList).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();

@@ -48,7 +48,7 @@ function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Pr
 }
 
 suite.define(() => {
-  it("preserves children and profile-owned groups with only session permissions", async (test) => {
+  it("preserves children and browser-local groups with only session permissions", async (test) => {
     let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
     let gateway: GatewayServer | undefined;
     const proxies: ViteDevServer[] = [];
@@ -80,8 +80,23 @@ suite.define(() => {
         await state.writeConfig({
           agents: {
             ownership: "explicit",
-            defaults: { workspace: state.workspaceDir },
+            defaults: {
+              workspace: state.workspaceDir,
+              model: "fixture/echo",
+              modelPolicy: { allow: ["fixture/echo"] },
+            },
             entries: { main: {} },
+          },
+          models: {
+            catalogRefresh: { enabled: false },
+            providers: {
+              fixture: {
+                api: "openai-responses",
+                baseUrl: "http://127.0.0.1:9/v1",
+                apiKey: "synthetic-fixture-key",
+                models: [{ id: "echo", name: "Fixture model" }],
+              },
+            },
           },
           gateway: {
             port,
@@ -103,8 +118,9 @@ suite.define(() => {
         });
         const urls: string[] = [];
         for (const [index, email] of people.entries()) {
+          const route = gatewayProxyRoute(port, email, `192.0.2.${10 + index}`);
           const proxy = await createGatewayProxy(state.workspaceDir, {
-            "/": gatewayProxyRoute(port, email, `192.0.2.${10 + index}`),
+            "/": { ...route, headers: { ...route.headers, "x-openclaw-scopes": scopes.join(",") } },
           });
           proxies.push(proxy);
           await proxy.listen();
@@ -239,37 +255,24 @@ suite.define(() => {
             await page.reload();
             await waitForControlUiGatewayReady(page);
             await expect.poll(order).toEqual(["Later", "This week"]);
-            await expect
-              .poll(async () =>
-                rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
-              )
-              .toMatchObject({
-                status: "ok",
-                entries: {
-                  "ui.personalSessionGroups": [
-                    { label: "Later", sessionKeys: [otherKey] },
-                    { label: "This week", sessionKeys: [parentKey] },
-                  ],
-                },
-              });
+            expect(
+              await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
+            ).toMatchObject({ status: "ok", entries: {} });
             const freshContext = await suite.newBrowserContext({ storageState: initialStorage });
             const fresh = await freshContext.newPage();
             await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(fresh);
-            await expect
-              .poll(() =>
-                fresh
-                  .locator("[data-personal-session-group] .sidebar-session-group-toggle")
-                  .allTextContents(),
-              )
-              .toEqual(["Later", "This week"]);
+            expect(await fresh.locator("[data-personal-session-group]").count()).toBe(0);
             await suite.closeBrowserContext(freshContext);
             await menu("This week", "Remove personal group");
             await expect.poll(order).toEqual(["Later"]);
             expect(await sidebar.locator(`[data-session-key="${parentKey}"]`).count()).toBe(1);
             const forbidden = new Set([
+              "users.prefs.set",
               "sessions.patch",
               "sessions.patchMany",
+              "sessions.delete",
+              "sessions.deleteMany",
               "sessions.groups.put",
               "sessions.groups.rename",
               "sessions.groups.update",
@@ -297,9 +300,9 @@ suite.define(() => {
         const otherContext = await suite.newBrowserContext({});
         const other = await otherContext.newPage();
         await connect(other, 1);
-        expect(await rpc(other, "sessions.describe", { key: parentKey })).toEqual({
-          session: null,
-        });
+        await expect(rpc(other, "sessions.describe", { key: parentKey })).rejects.toThrow(
+          `Session "${parentKey}" was not found.`,
+        );
         expect(
           await rpc(other, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
         ).toMatchObject({ status: "ok", entries: {} });

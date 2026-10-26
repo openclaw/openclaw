@@ -358,9 +358,9 @@ it never deletes sessions. Pins and shared groups are independent.
 
 Personal groups do not grant access. Unavailable saved sessions remain hidden,
 and members outside the loaded session list resolve through the normal access-checked
-session lookup. Groups are scoped to your profile and Gateway. Writable profiles
-sync them through personal preferences; read-only connections keep their edits in
-that browser, like personal pins.
+session lookup. Groups are scoped to your profile and Gateway. Connections with
+general Gateway write access sync them through personal preferences. Session-only,
+read-only, and profileless connections keep their edits in that browser, like personal pins.
 
 Dragging a session between shared sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
