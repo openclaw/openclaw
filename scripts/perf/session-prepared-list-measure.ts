@@ -38,6 +38,7 @@ const { values } = parseArgs({
     "sort-rows": { type: "string" },
     "sort-workload": { type: "boolean", default: false },
     "collector-presentation": { type: "boolean", default: false },
+    "search-workload": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -93,6 +94,13 @@ const [
   import("../../src/state/openclaw-state-db.js"),
   import("../../src/infra/gateway-work-metrics.js"),
 ]);
+const { filterSessionEntries } = await import("../../src/gateway/session-list-filters.js");
+if (values["search-workload"]) {
+  const main = cfg.agents?.entries?.main;
+  assert(main);
+  main.identity = { name: "Synthetic Explorer" };
+  main.model = "openai/gpt-4.1";
+}
 config.setRuntimeConfigSnapshot(cfg);
 plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
 const releaseForeground = foreground.retainSessionListForegroundWork();
@@ -185,6 +193,20 @@ if (values["running-candidates"]) {
     includeOwnerSessionCounts: true,
     excludeSubagents: true,
   });
+}
+
+if (values["search-workload"]) {
+  cases.length = 0;
+  for (const search of [
+    "investigation 123",
+    "Explorer",
+    "gpt-4.1",
+    "running",
+    "idle",
+    "zz-no-match",
+  ]) {
+    cases.push({ source: "agent-roster", rowMode: "sidebar", archived: "all", limit: 50, search });
+  }
 }
 
 if (values.mode === "verify") {
@@ -405,6 +427,16 @@ try {
   let collectorChildren = 0;
   const eventResponses =
     values.mode === "verify" && values["collector-presentation"] ? createHash("sha256") : undefined;
+  const bySearch = new Map<
+    string,
+    {
+      calls: number;
+      cpuMicros: number;
+      maxCpuMicros: number;
+      filterCpuMicros: number;
+      maxFilterCpuMicros: number;
+    }
+  >();
   const responses = values.mode === "verify" ? createHash("sha256") : undefined;
   const run = async (count: number, measured: boolean) => {
     for (let index = 0; index < count; index++) {
@@ -481,6 +513,7 @@ try {
         });
       }
       before = process.threadCpuUsage();
+      const query = cases[sequence % cases.length]!;
       const result = await read(sequence++);
       used = process.threadCpuUsage(before);
       if (
@@ -505,6 +538,31 @@ try {
       if (measured) {
         listCpuMicros += used.user + used.system;
         returnedRows += result.count;
+        if (values["search-workload"]) {
+          const sample = bySearch.get(query.search!) ?? {
+            calls: 0,
+            cpuMicros: 0,
+            maxCpuMicros: 0,
+            filterCpuMicros: 0,
+            maxFilterCpuMicros: 0,
+          };
+          sample.calls++;
+          sample.cpuMicros += used.user + used.system;
+          sample.maxCpuMicros = Math.max(sample.maxCpuMicros, used.user + used.system);
+          const prepared = lists.prepareSessionRowSelection(projection!, query, {
+            now: clock,
+            metadataPrepared: true,
+          });
+          const filterBefore = process.threadCpuUsage();
+          filterSessionEntries(prepared);
+          const filterUsed = process.threadCpuUsage(filterBefore);
+          sample.filterCpuMicros += filterUsed.user + filterUsed.system;
+          sample.maxFilterCpuMicros = Math.max(
+            sample.maxFilterCpuMicros,
+            filterUsed.user + filterUsed.system,
+          );
+          bySearch.set(query.search!, sample);
+        }
       }
     }
   };
@@ -598,6 +656,7 @@ try {
       bytes &&
       Object.fromEntries(Object.entries(bytes).map(([key, value]) => [key, value / iterations])),
     targetSelfCpuMicros: cpu ? sampledCpu(cpu) : undefined,
+    bySearch: Object.fromEntries(bySearch),
     golden,
     cases,
     host: { node: process.version, load: loadavg() },
