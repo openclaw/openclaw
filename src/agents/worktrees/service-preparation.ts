@@ -4,16 +4,14 @@ import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import {
-  PROJECT_CHECKOUT_WAIT_MS,
-  ProjectCheckoutBusyError,
-} from "../../projects/project-checkout.js";
+import { ProjectCheckoutBusyError } from "../../projects/project-checkout.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import {
   withWorktreeAllocationLease,
   withWorktreeMutationLease,
   waitForWorktreeCapacity,
+  startWorktreeWait,
   WORKTREE_CREATE_LEASE_WAIT_MS,
   type WorktreeAllocationGuard,
 } from "./allocation.js";
@@ -113,7 +111,6 @@ export async function createWithWorktreeAllocation(
     ...input,
     waitBudget: { remainingMs: WORKTREE_CREATE_LEASE_WAIT_MS },
   };
-  let sourceWaitRemainingMs = PROJECT_CHECKOUT_WAIT_MS;
   for (;;) {
     const publication: WorktreeCreationPublication = { id: randomUUID() };
     try {
@@ -196,21 +193,19 @@ export async function createWithWorktreeAllocation(
         // repeat reservation checks; never hold source access while acquiring allocation.
         params.signal?.throwIfAborted();
         params.commitGuard?.();
-        const startedAt = performance.now();
+        const waiting = startWorktreeWait(params.waitBudget);
         try {
           await params.withSource(
             (source) => {
+              waiting.end();
               params.signal?.throwIfAborted();
               params.commitGuard?.();
               source.assertCurrent();
             },
-            { waitMs: Math.max(0, Math.floor(sourceWaitRemainingMs)) },
+            { waitMs: waiting.waitMs },
           );
         } finally {
-          sourceWaitRemainingMs = Math.max(
-            0,
-            sourceWaitRemainingMs - (performance.now() - startedAt),
-          );
+          waiting.end();
         }
         continue;
       }
@@ -369,34 +364,48 @@ export async function withWorktreeSource<T>(
   if (!withSource) {
     return await run(operation);
   }
-  return await withSource((source) => {
-    const commitGuard = () => {
-      params.commitGuard?.();
-      source.assertCurrent();
-    };
-    commitGuard();
-    const signal =
-      params.signal && source.signal
-        ? AbortSignal.any([params.signal, source.signal])
-        : (source.signal ?? params.signal);
-    const rollbackGuard = () => {
-      params.rollbackGuard();
-      source.assertCheckoutCurrent?.();
-    };
-    const workerAuthority = {
-      ...params.workerAuthority,
-      assertCurrent: () => {
-        signal?.throwIfAborted();
-        (params.workerAuthority ? params.workerAuthority.assertCurrent : params.commitGuard)?.();
-        (source.workerAuthority ? source.workerAuthority.assertCurrent : source.assertCurrent)?.();
+  const waiting =
+    acquisition?.waitMs === undefined ? startWorktreeWait(params.waitBudget) : undefined;
+  try {
+    return await withSource(
+      (source) => {
+        waiting?.end();
+        const commitGuard = () => {
+          params.commitGuard?.();
+          source.assertCurrent();
+        };
+        commitGuard();
+        const signal =
+          params.signal && source.signal
+            ? AbortSignal.any([params.signal, source.signal])
+            : (source.signal ?? params.signal);
+        const rollbackGuard = () => {
+          params.rollbackGuard();
+          source.assertCheckoutCurrent?.();
+        };
+        const workerAuthority = {
+          ...params.workerAuthority,
+          assertCurrent: () => {
+            signal?.throwIfAborted();
+            (params.workerAuthority
+              ? params.workerAuthority.assertCurrent
+              : params.commitGuard)?.();
+            (source.workerAuthority
+              ? source.workerAuthority.assertCurrent
+              : source.assertCurrent)?.();
+          },
+          predicates: [
+            ...(params.workerAuthority?.predicates ?? []),
+            ...(source.workerAuthority?.predicates ?? []),
+          ],
+        };
+        return run({ ...operation, signal, commitGuard, rollbackGuard, workerAuthority });
       },
-      predicates: [
-        ...(params.workerAuthority?.predicates ?? []),
-        ...(source.workerAuthority?.predicates ?? []),
-      ],
-    };
-    return run({ ...operation, signal, commitGuard, rollbackGuard, workerAuthority });
-  }, acquisition);
+      { waitMs: acquisition?.waitMs ?? waiting?.waitMs },
+    );
+  } finally {
+    waiting?.end();
+  }
 }
 
 export async function findWorktreeByName(
