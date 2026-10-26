@@ -13,7 +13,7 @@ import {
   replaceSessionEntrySync,
   updateSessionProfileInvolvementAsync,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -71,13 +71,14 @@ it("selects canonical participant involvement without reading display fields", (
     ["alias", "ada"],
     ["ada", "ada"],
     ["bob", "bob"],
-  ]) {
-    context.userProfileIdentityById.set(id!, {
+  ] as const) {
+    context.userProfileIdentityById.set(id, {
       kind: "resolved",
-      profileId: profileId!,
+      profileId,
       get label() {
         return label();
       },
+      avatarUrl: "/synthetic/avatar",
       hasUploadedAvatar: false,
     });
   }
@@ -113,7 +114,10 @@ it("selects canonical participant involvement without reading display fields", (
       { identity: { type: "agent", id: "main" } },
       { identity: { type: "legacy", actorType: "human", source: null, id: "bob" } },
     ],
-    profileInvolvement: { profiles: { ada: { hidden: true }, bob: { hidden: false } } },
+    profileInvolvement: {
+      key,
+      profiles: { ada: { hidden: true, updatedAt: 1 }, bob: { hidden: false, updatedAt: 1 } },
+    },
   };
   put(entry);
   const keys = (id: string, personal: boolean) => [
@@ -128,6 +132,7 @@ it("selects canonical participant involvement without reading display fields", (
   context.userProfileIdentityById.set("alias", {
     kind: "resolved",
     profileId: "bob",
+    avatarUrl: "/synthetic/avatar",
     hasUploadedAvatar: false,
   });
   context.identityProjection.invalidate();

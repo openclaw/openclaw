@@ -14,7 +14,7 @@ import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentSessionListReadView } from "../../src/agents/subagents/registry/subagent-registry-state.js";
-import type { SessionEntry } from "../../src/config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../src/config/sessions/types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -94,7 +94,8 @@ const rows = Array.from({ length: 10_000 }, (_, index) => {
       identity: { type: "profile" as const, id: `profile-${(index + offset) % 50}` },
     })),
     profileInvolvement: {
-      profiles: { [`profile-${(index + 3) % 50}`]: { hidden: index % 2 === 0 } },
+      key,
+      profiles: { [`profile-${(index + 3) % 50}`]: { hidden: index % 2 === 0, updatedAt: 1 } },
     },
     ...(index % 5 === 0 ? { archivedAt: 1 } : {}),
   };
