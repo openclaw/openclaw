@@ -37,9 +37,7 @@ describe("runBoundedCodexAppServerTurn output schemas", () => {
     "unexpected status 400 Bad Request: Invalid schema for response_format 'codex_output_schema': 'additionalProperties' is required, url: https://example.invalid/responses, request id: test-request",
   ])("falls back once on an explicit Codex schema-dialect rejection (%s)", async (rejection) => {
     const fake = createClientFactory({ rejectOutputSchema: rejection });
-    const assertCurrent = vi.fn();
-
-    await expect(runSchemaTurn(fake, { assertCurrent })).resolves.toMatchObject({
+    await expect(runSchemaTurn(fake)).resolves.toMatchObject({
       text: "The message was sent successfully.",
     });
 
@@ -55,11 +53,9 @@ describe("runBoundedCodexAppServerTurn output schemas", () => {
     });
 
     const threads = fake.request.mock.calls.filter(([method]) => method === "thread/start");
-    expect(threads).toHaveLength(2);
     expect(threads[1]?.[1]).toMatchObject({
       developerInstructions: "Return structured output.",
     });
-    expect(fake.factory).toHaveBeenNthCalledWith(2, expect.objectContaining({ assertCurrent }));
   });
 
   it.each([

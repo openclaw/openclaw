@@ -17,32 +17,30 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 /** Reuses the shared-client suite's auth fixtures and lifecycle cleanup. */
 export function registerSharedClientUsageTests() {
   it.each([
-    "fresh",
-    "configured",
-    "stale",
-    "disabled",
-    "account",
-    "profile",
-    "agent",
-    "config",
-    "retired",
+    ["fresh", 0, 60_000],
+    ["configured", 90_000, 120_000],
+    ["stale", 60_000, 60_000],
+    ["disabled", 0, 0],
+    ["account", 0, 60_000],
+    ["profile", 0, 60_000],
+    ["agent", 0, 60_000],
+    ["config", 0, 60_000],
+    ["retired", 0, 60_000],
   ] as const)(
     "reads usage from a matching live subscription only when its cache is fresh: %s",
-    async (scenario) => {
+    async (scenario, age, cacheTtlMs) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
       const live = createInitializingClientHarness();
       const isolated = createClientHarness({
         onWrite: (line, send) => {
           const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "initialize") {
-            send({
-              id: request.id,
-              result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
-            });
-          } else if (request.method === "account/rateLimits/read") {
-            send({ id: request.id, result: { rateLimits: { primary: { usedPercent: 80 } } } });
-          } else if (request.method === "account/read") {
-            send({ id: request.id, result: { account: null } });
+          const responses: Record<string, unknown> = {
+            initialize: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
+            "account/rateLimits/read": { rateLimits: { primary: { usedPercent: 80 } } },
+            "account/read": { account: null },
+          };
+          if (Object.hasOwn(responses, request.method)) {
+            send({ id: request.id, result: responses[request.method] });
           }
         },
       });
@@ -88,12 +86,7 @@ export function registerSharedClientUsageTests() {
         params: { rateLimits: { primary: { usedPercent: 25 } } },
       });
       await observed;
-      if (scenario === "stale") {
-        now.mockReturnValue(160_000);
-      }
-      if (scenario === "configured") {
-        now.mockReturnValue(190_000);
-      }
+      now.mockReturnValue(100_000 + age);
       if (scenario === "account") {
         credential.accountId = "another-account";
       }
@@ -108,14 +101,7 @@ export function registerSharedClientUsageTests() {
           scenario === "config"
             ? { ...startOptions, args: ["app-server", "-c", "different=true"] }
             : startOptions,
-        config: {
-          models: {
-            usage: {
-              cacheTtlMs:
-                scenario === "disabled" ? 0 : scenario === "configured" ? 120_000 : 60_000,
-            },
-          },
-        },
+        config: { models: { usage: { cacheTtlMs } } },
       });
       const cacheHit = scenario === "fresh" || scenario === "configured";
       expect(result.rateLimits).toMatchObject({
