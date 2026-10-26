@@ -193,11 +193,15 @@ export async function openChatPublication(page: Page | Locator): Promise<Locator
           entry.defaultPrevented = event.defaultPrevented;
         });
       };
-      for (const type of types) root.ownerDocument.addEventListener(type, record, true);
+      for (const type of types) {
+        root.ownerDocument.addEventListener(type, record, true);
+      }
       return {
         read: () => ({ before, events, after: read() }),
         dispose: () => {
-          for (const type of types) root.ownerDocument.removeEventListener(type, record, true);
+          for (const type of types) {
+            root.ownerDocument.removeEventListener(type, record, true);
+          }
         },
       };
     });
