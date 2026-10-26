@@ -73,7 +73,7 @@ export function createXGitHubService(
               const message =
                 error instanceof XGitHubError || error instanceof XBudgetExceededError
                   ? error.message
-                  : "GitHub verification failed; check the configured credentials and Gateway logs. The last verified set is unchanged.";
+                  : "GitHub verification failed; check the configured credentials and Gateway logs. If X token refresh failed, reauthorize the X account. The last verified set is unchanged.";
               if (!failed) {
                 context.logger.warn(`X GitHub verification (${accountId}): ${message}`);
                 failed = true;

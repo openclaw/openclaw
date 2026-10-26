@@ -265,6 +265,24 @@ describe("X GitHub verification sync", () => {
 });
 
 describe("X GitHub verification service", () => {
+  it("names reauthorization when the X refresh token is rejected", async () => {
+    const test = githubFixture();
+    setXTestFetch("api.x.com", async () =>
+      Response.json(
+        { error: "invalid_grant", error_description: "private provider details" },
+        { status: 400 },
+      ),
+    );
+    await withService(test, test.cfg, async (clock) => {
+      await clock.wake();
+      expect(await test.status()).toMatchObject({
+        stale: true,
+        message: expect.stringContaining("reauthorize the X account"),
+      });
+      expect(test.logger.warn.mock.calls[0]?.[0]).not.toContain("private provider details");
+    });
+  });
+
   it("schedules no work when the feature is absent", async () => {
     const host = fixture({ posts: [] });
     await withService(host, config, async (clock) => {
