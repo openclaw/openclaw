@@ -43,6 +43,11 @@ const verdict = ({ slug, ownerHandle, version }: Target, overrides = {}) => ({
   publisherHandle: ownerHandle,
   ...overrides,
 });
+const batch = (items: ReturnType<typeof verdict>[]) =>
+  mocks.fetchClawHubSkillSecurityVerdicts.mockResolvedValue({
+    schema: "clawhub.skill.security-verdicts.v1",
+    items,
+  });
 function missingSkills({ items }: { items: Array<{ slug: string; version: string }> }) {
   return Promise.resolve({
     schema: "clawhub.skill.security-verdicts.v1",
@@ -130,13 +135,10 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
   });
 
   it("correlates reordered batches and fails closed on publisher mismatches", async () => {
-    mocks.fetchClawHubSkillSecurityVerdicts.mockResolvedValue({
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [
-        verdict(target("calendar", "bob", "2.0.0"), { publisherHandle: "mallory" }),
-        verdict(target()),
-      ],
-    });
+    batch([
+      verdict(target("calendar", "bob", "2.0.0"), { publisherHandle: "mallory" }),
+      verdict(target()),
+    ]);
 
     const items = await fetchExactClawHubSkillSecurityVerdicts({
       items: [target(), target("calendar", "bob", "2.0.0")],
@@ -157,14 +159,9 @@ describe("fetchExactClawHubSkillSecurityVerdicts", () => {
   });
 
   it("fails closed when a successful verdict returns a different exact version", async () => {
-    mocks.fetchClawHubSkillSecurityVerdicts.mockResolvedValue({
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [verdict(target(), { version: "1.2.4" })],
-    });
+    batch([verdict(target(), { version: "1.2.4" })]);
 
-    const [item] = await fetchExactClawHubSkillSecurityVerdicts({
-      items: [target()],
-    });
+    const [item] = await fetchExactClawHubSkillSecurityVerdicts({ items: [target()] });
 
     expect(item).toMatchObject({
       ok: false,

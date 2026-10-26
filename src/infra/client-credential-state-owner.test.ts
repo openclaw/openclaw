@@ -34,6 +34,13 @@ function fixture(label: string) {
     env,
     sharedPath: path.join(root, "state", "openclaw.sqlite"),
     localPath: resolveClientCredentialStorePath(env),
+    read: () => runClientCredentialOperation(env, { kind: "socket.read" }, { readOnly: true }),
+    socket: (): ClientSocketRecord => ({
+      socket_key: "current",
+      socket_path: path.join(root, "exec.sock"),
+      socket_token: "synthetic-retained-socket",
+      updated_at_ms: 7,
+    }),
   };
 }
 
@@ -51,32 +58,20 @@ it.each([false, true])(
     const ambient = fixture("ambient");
     const selected = fixture("selected");
     openOpenClawStateDatabase({ env: ambient.env });
-    const socket: ClientSocketRecord = {
-      socket_key: "current",
-      socket_path: path.join(ambient.root, "exec.sock"),
-      socket_token: "synthetic-retained-socket",
-      updated_at_ms: 7,
-    };
+    const socket = ambient.socket();
     if (material) {
       runClientCredentialOperation(ambient.env, { kind: "socket.ensure", fallback: socket });
     }
     const previous = receipt(ambient.env);
     const before = digest(ambient.localPath);
-    const shared = openOpenClawStateDatabase({
-      path: selected.sharedPath,
-      env: ambient.env,
-    });
+    const shared = openOpenClawStateDatabase({ path: selected.sharedPath, env: ambient.env });
     expect(receipt(selected.env)?.receipt.sharedFile).toEqual(
       readClientCredentialFileIdentity(selected.sharedPath),
     );
     // Doctor recovery uses the same selected shared source, even with ambient caller env.
     recoverClientCredentialStore(shared.db, { path: shared.path, env: ambient.env });
-    expect(
-      runClientCredentialOperation(selected.env, { kind: "socket.read" }, { readOnly: true }),
-    ).toEqual({ kind: "socket", socket: null });
-    expect(
-      runClientCredentialOperation(ambient.env, { kind: "socket.read" }, { readOnly: true }),
-    ).toEqual({ kind: "socket", socket: material ? socket : null });
+    expect(selected.read()).toEqual({ kind: "socket", socket: null });
+    expect(ambient.read()).toEqual({ kind: "socket", socket: material ? socket : null });
     expect(receipt(ambient.env)).toEqual(previous);
     expect(digest(ambient.localPath)).toBe(before);
   },
@@ -103,9 +98,7 @@ it.each([false, true])(
     expect(fs.existsSync(ambient.localPath)).toBe(existing);
     if (existing) {
       expect(digest(ambient.localPath)).toBe(before);
-      expect(
-        runClientCredentialOperation(ambient.env, { kind: "socket.read" }, { readOnly: true }),
-      ).toEqual({ kind: "socket", socket: null });
+      expect(ambient.read()).toEqual({ kind: "socket", socket: null });
     }
   },
 );
@@ -156,12 +149,7 @@ it("still refuses an actual shared generation replacement without changing retai
   openOpenClawStateDatabase({ env: donor.env });
   runClientCredentialOperation(selected.env, {
     kind: "socket.ensure",
-    fallback: {
-      socket_key: "current",
-      socket_path: path.join(selected.root, "exec.sock"),
-      socket_token: "synthetic-retained-token",
-      updated_at_ms: 7,
-    },
+    fallback: selected.socket(),
   });
   const before = digest(selected.localPath);
   const original = readClientCredentialFileIdentity(selected.sharedPath)!;
@@ -170,8 +158,6 @@ it("still refuses an actual shared generation replacement without changing retai
   fs.copyFileSync(donor.sharedPath, replacement);
   fs.renameSync(replacement, selected.sharedPath);
   expect(readClientCredentialFileIdentity(selected.sharedPath)?.ino).not.toBe(original.ino);
-  expect(() =>
-    runClientCredentialOperation(selected.env, { kind: "socket.read" }, { readOnly: true }),
-  ).toThrow("migration is incomplete or stale");
+  expect(selected.read).toThrow("migration is incomplete or stale");
   expect(digest(selected.localPath)).toBe(before);
 });
