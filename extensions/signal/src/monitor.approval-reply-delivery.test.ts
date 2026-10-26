@@ -6,22 +6,17 @@ import { resolveSignalApprovalReactionTargetWithPersistence } from "./approval-r
 
 const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 
-const sendMocks = vi.hoisted(() => ({
-  sendMessageSignal: vi.fn(),
+const sendMessage = vi.hoisted(() => vi.fn());
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  sendMessageSignal: sendMessage,
 }));
-
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
-  return {
-    ...actual,
-    sendMessageSignal: sendMocks.sendMessageSignal,
-  };
-});
 
 const { deliverReplies } = await import("./monitor.js");
 
 const botAccount = "+15550009999";
 const approver = "+15551230000";
+const sessionKey = `agent:main:signal:direct:${approver}`;
 const cfg = {
   channels: { signal: { account: botAccount, allowFrom: [approver] } },
   approvals: {
@@ -35,24 +30,20 @@ const cfg = {
 
 async function deliverReplyPayload(
   payload: ReplyPayload,
-  options: {
-    config?: OpenClawConfig;
-    account?: string;
-    accountUuid?: string;
-  } = {},
+  overrides: Partial<Parameters<typeof deliverReplies>[0]> = {},
 ) {
   await deliverReplies({
-    cfg: options.config ?? cfg,
+    cfg,
     replies: [payload],
     target: approver,
     baseUrl: "http://127.0.0.1:8080",
-    account: Object.hasOwn(options, "account") ? options.account : botAccount,
-    accountUuid: options.accountUuid,
+    account: botAccount,
     accountId: "default",
     runtime: { log: vi.fn() } as never,
     maxBytes: 8 * 1024 * 1024,
     textLimit: 4000,
     chunkMode: "length",
+    ...overrides,
   });
 }
 
@@ -66,12 +57,12 @@ function resolveReaction(author: { targetAuthor?: string; targetAuthorUuid?: str
   });
 }
 
-const sentText = () => String(sendMocks.sendMessageSignal.mock.calls[0]?.[1] ?? "");
+const sentText = () => String(sendMessage.mock.calls[0]?.[1] ?? "");
 
 describe("Signal monitor reply delivery", () => {
   beforeEach(() => {
     reactionStores.clearSignalApprovalReactionStoresForTest();
-    sendMocks.sendMessageSignal.mockReset().mockResolvedValue({
+    sendMessage.mockReset().mockResolvedValue({
       messageId: "1700000000200",
     });
   });
@@ -93,7 +84,7 @@ describe("Signal monitor reply delivery", () => {
       },
     });
 
-    expect(sendMocks.sendMessageSignal).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sentText()).toBe("- Retry: `/retry`\n\nChoose:\n- Later");
   });
 
@@ -105,7 +96,7 @@ describe("Signal monitor reply delivery", () => {
       command: "printf mixed",
       host: "gateway",
       agentId: "main",
-      sessionKey: "agent:main:signal:direct:+15551230000",
+      sessionKey,
     });
     payload.presentation = {
       ...payload.presentation!,
@@ -126,7 +117,7 @@ describe("Signal monitor reply delivery", () => {
 
     const accountUuid = "123e4567-e89b-12d3-a456-426614174000";
     await deliverReplyPayload(payload, {
-      config: {
+      cfg: {
         channels: { signal: { accounts: { default: { accountUuid, allowFrom: [approver] } } } },
         approvals: cfg.approvals,
       },
@@ -152,7 +143,7 @@ describe("Signal monitor reply delivery", () => {
         to: approver,
         accountId: "default",
         agentId: "main",
-        sessionKey: "agent:main:signal:direct:+15551230000",
+        sessionKey,
       },
     });
   });
