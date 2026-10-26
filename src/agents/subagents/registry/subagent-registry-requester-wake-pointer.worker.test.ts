@@ -61,10 +61,6 @@ it("publishes a selected requester wake before an overlapping row mutation plans
       onCommitted: () => {},
       onPublished: () => {},
     });
-    const wakeResult = wake.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
     let successor: Promise<void> | undefined;
     const successorPlanned = vi.fn();
     try {
@@ -82,7 +78,7 @@ it("publishes a selected requester wake before an overlapping row mutation plans
       );
       expect(successorPlanned).not.toHaveBeenCalled();
       wakeGate.release();
-      expect(await wakeResult).toEqual({ value: { applied: true, publication: "published" } });
+      await expect(wake).resolves.toEqual({ applied: true, publication: "published" });
       await Promise.race([ackGate.entered, successor]);
       expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.status).toBe("dispatching");
       expect(selected.requesterSettleWake?.status).toBe("pending");

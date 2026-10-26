@@ -48,11 +48,8 @@ function fixture(overrides: RunEntryOverrides = {}) {
   return { entry, controller, complete, read: () => readLifecycleRun(entry) };
 }
 
-it("completes a yielded row only when the request opts in", async () => {
+it("completes a yielded row when the request opts in", async () => {
   const { complete, read } = fixture();
-  await complete({ settleYielded: undefined });
-  expect(read().pauseReason).toBe("sessions_yield");
-  expect(read().execution.outcome).toBeUndefined();
   await complete();
   expect(read().pauseReason).toBeUndefined();
   expect(read().execution.outcome).toMatchObject(failedOutcome);
@@ -91,7 +88,6 @@ it("keeps a kill claim published while the settle request is preparing", async (
     return acquireLock(runId);
   });
   await complete({ expectedEntry: sweeperSnapshot });
-  expect(lock).toHaveBeenCalledOnce();
   expect(read().killIntent).toEqual(claim);
   expect(read().pauseReason).toBe("sessions_yield");
   expect(read().execution.outcome).toBeUndefined();

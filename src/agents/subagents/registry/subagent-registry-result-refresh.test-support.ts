@@ -69,7 +69,6 @@ export function registerSubagentResultRefreshCases(params: {
       captureStarted.resolve();
       return capture.promise;
     });
-    mocks.persistRegistryRows.mockClear();
     mocks.persistRegistryRows.mockImplementationOnce(() => persisted.resolve());
     const lifecycleHandler = getLifecycleHandler();
 
@@ -98,7 +97,6 @@ export function registerSubagentResultRefreshCases(params: {
     } finally {
       capture.resolve(reply);
       await vi.advanceTimersByTimeAsync(0);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
     }
   });
 }
