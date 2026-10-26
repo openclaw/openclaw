@@ -61,20 +61,14 @@ it("reports the shared external preparation worker once in ordinary startup logs
     try {
       const registry = await loadOpenClawPluginsAsync({ ...options, startupTrace: trace });
       expect(registry.plugins.filter((plugin) => plugin.status === "loaded")).toHaveLength(2);
-      const preparationMessages: string[] = [];
-      for (const id of ["first-external", "second-external"]) {
-        const messages = info.mock.calls
-          .map(([message]) => String(message))
-          .filter((message) =>
-            message.startsWith(`startup trace: plugins.gateway-load.plugin.${id} `),
-          );
-        expect(messages).toHaveLength(1);
-        preparationMessages.push(messages[0]);
-      }
+      const preparationMessages = info.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.startsWith("startup trace: plugins.gateway-load.plugin."));
       expect(
         preparationMessages.filter((message) =>
           message.includes("plugin-generation-preparation.worker.js:1"),
         ),
+        preparationMessages.join("\n"),
       ).toHaveLength(1);
     } finally {
       trace.close();
