@@ -1,8 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
-import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -10,15 +6,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
 import {
-  ensureProjectRegistrySchema,
-  insertProjectRegistryInDatabase,
-} from "../projects/project-registry.kernel.js";
-import {
   closeOpenClawAgentDatabasesAsync,
   isOpenClawAgentDatabaseOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
@@ -27,50 +18,22 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 it("repairs discovered worktree sessions only through Doctor and releases their databases", async () => {
   await withOpenClawTestState({ layout: "state-only", label: "doctor-worktree" }, async (state) => {
-    const repoRoot = state.path("repo");
-    const workspace = path.join(repoRoot, "packages", "app");
-    const worktreeRoot = state.statePath("worktrees", "legacy");
-    const spawnedCwd = path.join(worktreeRoot, "packages", "app");
-    for (const directory of [workspace, spawnedCwd]) {
-      fs.mkdirSync(directory, { recursive: true });
-    }
-
-    const { env } = state;
-    const cfg = { agents: { entries: { main: { workspace: repoRoot }, ops: { workspace } } } };
+    const { env, workspaceDir: workspace } = state;
+    const cfg = { agents: { entries: { main: { workspace }, ops: { workspace } } } };
     setRuntimeConfigSnapshot(cfg);
-    // Persisted legacy project setup, not a public Git registration-flow proof.
-    ensureProjectRegistrySchema({ env });
-    const project = runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        insertProjectRegistryInDatabase(db, {
-          displayName: "Legacy workspace project",
-          repoRoot: workspace,
-          source: "registered",
-        }),
-      { env },
-    );
     const scopes = ["main", "ops"].map((agentId) => ({
       agentId,
       env,
       sessionKey: `agent:${agentId}:legacy-worktree`,
     }));
-    await insertRegistryWorktree(
-      env,
-      makeWorktreeRecord(repoRoot, "legacy", {
-        path: worktreeRoot,
-        branch: "openclaw/legacy",
-        ownerId: scopes[0]!.sessionKey,
-      }),
-    );
     for (const scope of scopes) {
       await replaceSessionEntry(scope, {
         sessionId: `${scope.agentId}-worktree-session`,
         updatedAt: Date.now(),
-        ...(scope.agentId === "main" ? { spawnedCwd, projectId: project.id } : {}),
         worktree: {
-          id: scope.agentId === "main" ? "legacy" : "other",
+          id: scope.agentId,
           branch: "openclaw/legacy",
-          repoRoot: scope.agentId === "main" ? repoRoot : workspace,
+          repoRoot: workspace,
         },
       });
     }

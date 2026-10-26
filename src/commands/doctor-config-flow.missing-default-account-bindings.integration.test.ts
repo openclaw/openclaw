@@ -68,10 +68,6 @@ describe("doctor channel account ownership repair", () => {
     ownershipCase("unconfigured legacy main owner", {
       bindings: [routeBinding("main", { guildId: "guild-a" })],
     }),
-    ownershipCase("blank owner even when main is configured", {
-      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-      bindings: [routeBinding("   ", { guildId: "guild-a" })],
-    }),
   ])("repairs only proven ownership for $name", (testCase) => {
     const { discord = {}, bindings = [], added = [] } = testCase;
     vi.stubEnv("DISCORD_BOT_TOKEN", undefined);

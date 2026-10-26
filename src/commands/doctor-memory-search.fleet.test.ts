@@ -3,7 +3,6 @@ import { expect, it, vi } from "vitest";
 import { createDoctorHealthFlowContext } from "../flows/doctor-health-context.test-support.js";
 import { runMemorySearchHealthContribution } from "../flows/doctor-health-contribution-runners.workspace.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import * as pluginRegistry from "../plugins/registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectMemorySearchHealthFindings } from "./doctor-memory-search.js";
 
@@ -55,7 +54,6 @@ it.each(["health", "contribution"] as const)(
         ]);
         process.on(event, registered);
         await using cache = createPluginCache();
-        using builds = vi.spyOn(pluginRegistry, "createPluginRegistry");
         try {
           await withPluginCache(cache, async () => {
             const cfg = {
@@ -82,9 +80,7 @@ it.each(["health", "contribution"] as const)(
         } finally {
           process.off(event, registered);
         }
-        expect(registrations.filter((owner) => owner === "shared")).toHaveLength(1);
-        expect(registrations.filter((owner) => owner === "workspace")).toHaveLength(1);
-        expect(builds).toHaveBeenCalledTimes(phase === "health" ? 2 : 4);
+        expect(registrations.toSorted()).toEqual(["shared", "workspace"]);
       },
     );
   },

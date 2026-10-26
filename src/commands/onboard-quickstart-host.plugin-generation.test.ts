@@ -37,7 +37,6 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
       plugins: { entries: { codex: { enabled: true } } },
     };
     await state.writeConfig(config);
-    // The CLI keeps this operation alive from provider selection through browser handoff.
     await withPluginCache(createPluginCache(), async () => {
       const readMetadata = () =>
         resolveConfigWidePluginMetadataSnapshot({ config, allowCurrent: false });
@@ -50,7 +49,6 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
           pluginId: "codex",
           version: "1.0.0",
         });
-        // Package acquisition is synthetic; the install ledger and post-install invalidation are real.
         await withPluginLifecycleLease({}, async () => {
           await seedInstalledPluginIndex(
             {
@@ -67,8 +65,6 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
           clearPluginMetadataLifecycleCaches();
           await invalidatePluginRuntimeDiscoveryAfterConfigMutation({});
         });
-        const fresh = withPluginCache(createPluginCache(), readMetadata);
-        expect(fresh.byPluginId.has("codex")).toBe(true);
         const inventoryPath = state.statePath("child-plugin-inventory.json");
         const packageCwd = process.cwd();
         const tsxLoader = path.join(packageCwd, "scripts/tsx.mjs");

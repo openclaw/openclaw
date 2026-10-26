@@ -31,6 +31,12 @@ type SessionRow = {
   agentRuntime: { id: string; source: string };
 };
 afterEach(clearRuntimeConfigSnapshot);
+const acpRow = (agentId: string) => ({
+  model: `${agentId}-acp`,
+  modelProvider: "acpx",
+  acpRuntime: true,
+  agentRuntime: { id: agentId, source: "session-key" },
+});
 
 it("keeps each selected owner's metadata and rejects a replaced lifecycle", async () => {
   await withOpenClawTestState({ label: "acp-sessions", layout: "state-only" }, async (state) => {
@@ -47,12 +53,10 @@ it("keeps each selected owner's metadata and rejects a replaced lifecycle", asyn
     };
     const readSessions = async () => {
       const { runtime, logs } = createCapturingTestRuntime();
-      runtime.error = (message) => {
-        throw new Error(String(message));
+      const fail = (value: unknown) => {
+        throw new Error(`Unexpected runtime failure: ${value}`);
       };
-      runtime.exit = (code) => {
-        throw new Error(`Unexpected exit ${code}`);
-      };
+      runtime.error = runtime.exit = fail;
       await sessionsCommand({ json: true, allAgents: true }, runtime);
       return (JSON.parse(logs.join("\n")) as { sessions: SessionRow[] }).sessions;
     };
@@ -75,19 +79,11 @@ it("keeps each selected owner's metadata and rejects a replaced lifecycle", asyn
       }
       const before = await readSessions();
       for (const agentId of ["copilot", "reviewer"]) {
-        expect(before.find((row) => row.agentId === agentId)).toMatchObject({
-          model: `${agentId}-acp`,
-          modelProvider: "acpx",
-          acpRuntime: true,
-          agentRuntime: { id: agentId, source: "session-key" },
-        });
+        expect(before.find((row) => row.agentId === agentId)).toMatchObject(acpRow(agentId));
       }
       writeSession("reviewer", "reviewer-replacement");
       const after = await readSessions();
-      expect(after.find((row) => row.agentId === "copilot")).toMatchObject({
-        acpRuntime: true,
-        agentRuntime: { id: "copilot", source: "session-key" },
-      });
+      expect(after.find((row) => row.agentId === "copilot")).toMatchObject(acpRow("copilot"));
       expect(after.find((row) => row.agentId === "reviewer")).toMatchObject({
         model,
         modelProvider,
