@@ -84,8 +84,6 @@
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  /* One backing avoids row repaint traversal and recreation on every focus. */
-  will-change: transform;
 }
 
 .cron-search-box__icon {
