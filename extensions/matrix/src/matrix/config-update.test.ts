@@ -14,7 +14,7 @@ function withAccount(
 ): CoreConfig {
   return { channels: { matrix: { ...defaults, accounts: { [id]: account } } } };
 }
-const update = (account: MatrixConfig, patch: Parameters<typeof updateMatrixAccountConfig>[2]) =>
+const update = (account: MatrixConfig, patch: MatrixAccountPatch) =>
   updateMatrixAccountConfig(withAccount(account), "default", patch).channels?.matrix?.accounts
     ?.default;
 
@@ -24,44 +24,40 @@ describe("updateMatrixAccountConfig", () => {
       "channels.matrix.dm.policy",
     );
 
-    const cfg = withAccount({}, "ops");
-
-    expect(resolveMatrixConfigFieldPath(cfg, "ops", ".dm.allowFrom")).toBe(
+    expect(resolveMatrixConfigFieldPath(withAccount({}, "ops"), "ops", ".dm.allowFrom")).toBe(
       "channels.matrix.accounts.ops.dm.allowFrom",
     );
   });
 
   it.each([
-    {
-      name: "explicit null clears and boolean false values",
-      initial: {
+    [
+      "explicit null clears and boolean false values",
+      {
         homeserver,
         userId: "@bot:example.org",
         accessToken: "old-token", // pragma: allowlist secret
         password: "old-password", // pragma: allowlist secret
         encryption: true,
       },
-      patch: { accessToken: "new-token", password: null, userId: null, encryption: false },
-      expected: { homeserver, accessToken: "new-token", encryption: false },
-    },
-    {
-      name: "allowBots updates and private-network/proxy clears",
-      initial: {
+      { accessToken: "new-token", password: null, userId: null, encryption: false },
+      { homeserver, accessToken: "new-token", encryption: false },
+    ],
+    [
+      "allowBots updates and private-network/proxy clears",
+      {
         allowBots: true,
         network: { dangerouslyAllowPrivateNetwork: true },
         proxy: "http://127.0.0.1:7890",
       },
-      patch: { allowBots: "mentions", allowPrivateNetwork: null, proxy: null },
-      expected: { allowBots: "mentions" },
+      { allowBots: "mentions", allowPrivateNetwork: null, proxy: null },
+      { allowBots: "mentions" },
+    ],
+  ] satisfies [string, MatrixConfig, MatrixAccountPatch, MatrixConfig][])(
+    "supports %s",
+    (_name, initial, patch, expected) => {
+      expect(update(initial, patch)).toEqual({ ...expected, enabled: true });
     },
-  ] satisfies {
-    name: string;
-    initial: MatrixConfig;
-    patch: MatrixAccountPatch;
-    expected: MatrixConfig;
-  }[])("supports $name", ({ initial, patch, expected }) => {
-    expect(update(initial, patch)).toEqual({ ...expected, enabled: true });
-  });
+  );
 
   it("does not store non-finite initial sync limits", () => {
     const updated = updateMatrixAccountConfig(withAccount({ initialSyncLimit: 20 }), "default", {
@@ -99,13 +95,8 @@ describe("updateMatrixAccountConfig", () => {
   );
 
   it("normalizes account id and defaults account enabled=true", () => {
-    const updated = updateMatrixAccountConfig({}, "Main Bot", {
-      name: "Main Bot",
-      homeserver,
-    });
-
-    const account = updated.channels?.["matrix"]?.accounts?.["main-bot"];
-    expect(account).toMatchObject({
+    const updated = updateMatrixAccountConfig({}, "Main Bot", { name: "Main Bot", homeserver });
+    expect(updated.channels?.matrix?.accounts?.["main-bot"]).toEqual({
       name: "Main Bot",
       homeserver,
       enabled: true,
@@ -124,28 +115,22 @@ describe("updateMatrixAccountConfig", () => {
     );
 
     const updated = updateMatrixAccountConfig(cfg, "ops", {
-      dm: {
-        policy: "allowlist",
-        allowFrom: ["@alice:example.org"],
-      },
+      dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
       groupPolicy: "allowlist",
-      groups: {
-        "!ops-room:example.org": { enabled: true },
-      },
+      groups: { "!ops-room:example.org": { enabled: true } },
       rooms: null,
     });
 
-    expect(updated.channels?.matrix?.dm?.policy).toBe("pairing");
-    expect(updated.channels?.matrix?.groups).toEqual({ "!default:example.org": { enabled: true } });
-    const account = updated.channels?.["matrix"]?.accounts?.ops;
-    expect(account?.dm).toEqual({
+    expect(updated.channels?.matrix?.dm).toEqual(cfg.channels?.matrix?.dm);
+    expect(updated.channels?.matrix?.groups).toEqual(cfg.channels?.matrix?.groups);
+    expect(updated.channels?.matrix?.accounts?.ops).toEqual({
+      homeserver: "https://matrix.ops.example.org",
+      accessToken: "ops-token",
       enabled: true,
-      policy: "allowlist",
-      allowFrom: ["@alice:example.org"],
+      dm: { enabled: true, policy: "allowlist", allowFrom: ["@alice:example.org"] },
+      groupPolicy: "allowlist",
+      groups: { "!ops-room:example.org": { enabled: true } },
     });
-    expect(account?.groupPolicy).toBe("allowlist");
-    expect(account?.groups).toEqual({ "!ops-room:example.org": { enabled: true } });
-    expect(account?.rooms).toBeUndefined();
   });
 
   it("reuses and canonicalizes non-normalized account entries when updating", () => {
@@ -154,13 +139,9 @@ describe("updateMatrixAccountConfig", () => {
       "Ops",
     );
 
-    const updated = updateMatrixAccountConfig(cfg, "ops", {
-      deviceName: "Ops Bot",
-    });
-
+    const updated = updateMatrixAccountConfig(cfg, "ops", { deviceName: "Ops Bot" });
     expect(updated.channels?.["matrix"]?.accounts?.Ops).toBeUndefined();
-    const account = updated.channels?.["matrix"]?.accounts?.ops;
-    expect(account).toMatchObject({
+    expect(updated.channels?.matrix?.accounts?.ops).toMatchObject({
       homeserver: "https://matrix.ops.example.org",
       accessToken: "ops-token",
       deviceName: "Ops Bot",

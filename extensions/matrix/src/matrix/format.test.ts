@@ -51,43 +51,31 @@ describe("Matrix formatting migration goldens", () => {
   it.each([
     ["escaped closing brackets", "\\](||secret||)"],
     ["image fallback labels", "![||secret||](https://example.test/image.png)"],
+    ["unfinished links in a previous block", "[unfinished\n \n](||secret||)"],
+    ["unresolved references", "[x][missing||secret||]"],
+    ["invalid definitions", "[id]: <broken destination> ||secret||"],
   ])("keeps spoilers in %s", (_label, markdown) => {
     expect(markdownToMatrixHtml(markdown)).toContain("<span data-mx-spoiler>secret</span>");
     expect(markdownToMatrixBody(markdown)).not.toContain("secret");
   });
 
-  it("excludes spoiler-looking pipes in valid link titles", () => {
-    const markdown = '[x](https://example.test "note ) ||literal||") ||secret||';
+  it.each([
+    '[x](https://example.test "note ) ||literal||") ||secret||',
+    "<ftp://example.test/a||literal||> ||secret||",
+  ])("excludes link metadata from spoilers in %s", (markdown) => {
     expect(markdownToMatrixHtml(markdown)).not.toContain("secret");
     expect(markdownToMatrixBody(markdown)).not.toContain("secret");
   });
 
-  it("scopes link metadata to blocks and preserves reference identifiers", () => {
-    const stale = "[unfinished\n \n](||secret||)";
-    expect(markdownToMatrixHtml(stale)).toContain("<span data-mx-spoiler>secret</span>");
-    expect(markdownToMatrixBody(stale)).not.toContain("secret");
-
+  it("preserves reference identifiers", () => {
     const reference = "[visible][id||x||]\n\n[id||x||]: https://example.test";
-    expect(markdownToMatrixHtml(reference)).not.toContain("secret");
+    expect(markdownToMatrixHtml(reference)).toContain('<a href="https://example.test">visible</a>');
   });
 
   it("keeps spoiler spans nested when they cross bold formatting", () => {
     const markdown = "**||secret** more||";
     expect(markdownToMatrixHtml(markdown)).not.toContain("</strong> more</span>");
     expect(markdownToMatrixBody(markdown)).not.toContain("secret");
-  });
-
-  it("follows parsed autolink and resolved-reference metadata", () => {
-    const autolink = "<ftp://example.test/a||literal||> ||secret||";
-    expect(markdownToMatrixHtml(autolink)).not.toContain("secret");
-
-    const unresolved = "[x][missing||secret||]";
-    expect(markdownToMatrixHtml(unresolved)).toContain("<span data-mx-spoiler>secret</span>");
-
-    const invalidDefinition = "[id]: <broken destination> ||secret||";
-    expect(markdownToMatrixHtml(invalidDefinition)).toContain(
-      "<span data-mx-spoiler>secret</span>",
-    );
   });
 
   it("leaves compact empty-cell pipes to native table grammar", () => {
