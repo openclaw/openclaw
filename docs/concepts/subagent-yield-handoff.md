@@ -70,8 +70,11 @@ cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
 
-Restart restores pending completion reservations in requester FIFO order. When a
-restored wave needs no further delivery, the registry releases its unclaimed
+Restart restores ready completion reservations in requester FIFO order. A cohort
+still waiting for a child or descendant stays with the registry without reserving
+the requester's mailbox, so ordinary user input can run in FIFO order while it
+waits. The existing settlement events make its continuation eligible when ready.
+When a restored wave needs no further delivery, the registry releases its unclaimed
 mailbox reservations after its settlement commits. Already delivered waves must
 not hold later yielded cohorts behind an unprepared input. Claimed turns keep
 their existing execution owner.
