@@ -21,6 +21,7 @@ import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -163,6 +164,7 @@ describe("ClawRouter cold prepared catalog", () => {
     });
     const result = await pool.run(
       {
+        context: prepareModelCatalogWorkerContext(value),
         value,
         request: {
           kind: "catalog",
