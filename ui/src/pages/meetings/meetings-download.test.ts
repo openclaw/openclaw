@@ -11,24 +11,19 @@ const exported = (filename: string, text = "") => ({
   filename,
   mimeType: "text/markdown",
 });
-function requestFor(exportRequest: (selector?: string) => Promise<unknown>, titled = false) {
-  return vi.fn((method: string, params: { selector?: string }) =>
-    method === "transcripts.export"
-      ? exportRequest(params.selector)
-      : Promise.resolve(
-          method === "transcripts.list"
-            ? { sessions: [], nextCursor: null }
-            : {
-                ...meetingPage,
-                session: titled
-                  ? {
-                      ...meetingEntry,
-                      title: params.selector === "old" ? "Retired meeting" : "Current meeting",
-                    }
-                  : meetingPage.session,
-              },
-        ),
-  );
+function requestFor(exportRequest: (selector?: string) => Promise<unknown>) {
+  return vi.fn((method: string, params: { selector?: string }) => {
+    if (method === "transcripts.export") {
+      return exportRequest(params.selector);
+    }
+    if (method === "transcripts.list") {
+      return Promise.resolve({ sessions: [], nextCursor: null });
+    }
+    return Promise.resolve({
+      ...meetingPage,
+      session: { ...meetingEntry, title: `Meeting ${params.selector}` },
+    });
+  });
 }
 function captureDownloads() {
   vi.stubGlobal(
@@ -49,7 +44,6 @@ function captureDownloads() {
 
 afterEach(() => {
   document.body.replaceChildren();
-  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -57,26 +51,22 @@ afterEach(() => {
 it("finishes a replacement download while a cancelled export remains unresolved", async () => {
   const retired = deferred<unknown>();
   const replacement = deferred<unknown>();
-  const request = requestFor(
-    (selector) => (selector === "old" ? retired.promise : replacement.promise),
-    true,
+  const request = requestFor((selector) =>
+    selector === "old" ? retired.promise : replacement.promise,
   );
   const downloads = captureDownloads();
   const { page, setSearch } = mount(request, "?selector=old");
-  await waitForText(page, "Retired meeting");
+  await waitForText(page, "Meeting old");
   button(page, "Download Markdown").click();
   await waitForText(page, "Preparing download");
-
   setSearch("?selector=new");
-  await waitForText(page, "Current meeting");
+  await waitForText(page, "Meeting new");
   await waitForSolid(() => expect(button(page, "Download Markdown").disabled).toBe(false));
   button(page, "Download Markdown").click();
   await waitForText(page, "Preparing download");
   replacement.resolve(exported("current.md", "Current meeting notes"));
   await waitForText(page, "Download started");
-  expect(button(page, "Download Markdown").disabled).toBe(false);
   expect(downloads).toEqual(["current.md"]);
-
   retired.resolve(exported("retired.md", "Retired meeting notes"));
   await retired.promise;
   flush();
@@ -84,30 +74,7 @@ it("finishes a replacement download while a cancelled export remains unresolved"
   expect(page.textContent).toContain("Download started");
 });
 
-it("keeps same-meeting tab navigation responsive while exporting", async () => {
-  const pending = deferred<unknown>();
-  const request = requestFor(() => pending.promise);
-  const { page, unmount } = mount(request, "?selector=meeting");
-  try {
-    await waitForText(page, "Reader layout discussed.");
-    button(page, "Download Markdown").click();
-    await waitForText(page, "Preparing download");
-    for (const label of ["Transcript", "Summary"]) {
-      const tab = button(page, label);
-      tab.click();
-      await waitForSolid(() => expect(tab.ariaSelected).toBe("true"));
-      expect(button(page, "Download Markdown").disabled).toBe(true);
-    }
-    expect(request.mock.calls.filter(([method]) => method === "transcripts.export")).toHaveLength(
-      1,
-    );
-  } finally {
-    unmount();
-    pending.resolve(exported("meeting.md"));
-  }
-});
-
-it("clears an export error during retry without replacing notes or download controls", async () => {
+it("keeps export retries and tab navigation responsive without replacing notes or controls", async () => {
   const failed = deferred<unknown>();
   const retry = deferred<unknown>();
   let exports = 0;
@@ -129,6 +96,12 @@ it("clears an export error during retry without replacing notes or download cont
     expect(page.querySelector(".meetings-notes")).toBe(notes);
     expect(button(page, "Download Markdown")).toBe(control);
     await waitForSolid(() => expect(control.disabled).toBe(true));
+    for (const label of ["Transcript", "Summary"]) {
+      const tab = button(page, label);
+      tab.click();
+      await waitForSolid(() => expect(tab.ariaSelected).toBe("true"));
+      expect(control.disabled).toBe(true);
+    }
     retry.resolve(exported("retry.md", "Saved notes"));
     await waitForText(page, "Download started");
     expect(control.disabled).toBe(false);

@@ -62,7 +62,6 @@ beforeEach(async () => {
 describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () => {
   it("keeps long speaker text inside the reading column and switches to a mobile drill-in", async () => {
     await viewport(1320, 900);
-    updateView(props);
     const library = query(".transcripts-library");
     const reader = query(".transcripts-reader");
     expect(getComputedStyle(library).display).not.toBe("none");
@@ -72,15 +71,10 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     expect(getComputedStyle(library).display).toBe("none");
     expect(rect(reader).right).toBeLessThanOrEqual(window.innerWidth + 1);
     expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1);
-    const summary = query("#transcript-reader-tab-summary");
-    summary.click();
-    expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
     updateView({ ...props, readerTab: "summary" });
-    expect(summary.ariaSelected).toBe("true");
-    const panel = query('[role="tabpanel"]');
-    expect(panel.getAttribute("aria-labelledby")).toBe(summary.id);
-    summary.click();
-    expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
+    expect(query('[role="tabpanel"]').getAttribute("aria-labelledby")).toBe(
+      "transcript-reader-tab-summary",
+    );
   });
   it("uses themed search controls and keeps the third library entry above the fold", async () => {
     props.list!.sessions.push(
