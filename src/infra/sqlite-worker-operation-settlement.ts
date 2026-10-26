@@ -114,7 +114,7 @@ export function captureSqliteWorkerCommitReceipt(
   return { kind: "inline", facts: structuredClone(facts), payloadBytes };
 }
 
-export function deferSqliteWorkerNativeCommitReceipt(
+function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
   database: DatabaseSync | PostgresSqlConnection,
   captured: CapturedSqliteWorkerCommitReceipt,

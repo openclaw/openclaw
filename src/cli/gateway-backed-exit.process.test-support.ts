@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
+import { storeOriginDeviceToken as seedOriginDeviceToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -32,11 +32,11 @@ export async function prepareGatewayCliFixture(
   return { root, stateDir, configPath };
 }
 
-export function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
+export async function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
   const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
   openOpenClawStateDatabase({ env });
   const identity = loadOrCreateDeviceIdentity({ env });
-  seedOriginDeviceToken({
+  await seedOriginDeviceToken({
     gatewayScope: gatewayOriginScope(url),
     deviceId: identity.deviceId,
     role: "operator",
@@ -104,7 +104,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
     remote: { url: UNREACHABLE_GATEWAY_URL },
   });
   if (params.seeded) {
-    seedDeviceAuth(root, stateDir, UNREACHABLE_GATEWAY_URL, "stored-device-token");
+    await seedDeviceAuth(root, stateDir, UNREACHABLE_GATEWAY_URL, "stored-device-token");
   }
   return { root, stateDir, configPath };
 }

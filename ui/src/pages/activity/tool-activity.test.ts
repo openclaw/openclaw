@@ -15,9 +15,6 @@ function buildResultPreview(result: unknown) {
   const payload = activity({ toolCallId: "tool-1", name: "bash", phase: "result", result });
   return updateToolActivity([], payload)[0]?.outputPreview;
 }
-function parseItem(data: ActivityEvent["data"], receivedAt = 10) {
-  return parseActivityEvent(activity(data, { stream: "item", ts: 10 }), receivedAt);
-}
 
 it.each([
   ["a surrogate pair at the cap", "a".repeat(1_999) + "🦞tail", "a".repeat(1_999)],
@@ -27,14 +24,12 @@ it.each([
 });
 
 it("preserves dotted API keys in object-shaped tool results", () => {
+  const secret = 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"';
   const preview = buildResultPreview({
-    "app.api.key": 'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
+    "app.api.key": secret,
     "server.port": 8080,
   });
-
-  expect(JSON.parse(preview ?? "")["app.api.key"]).toBe(
-    'visible secret with spaces, apostrophe: don\'t, quote: "keep hidden"',
-  );
+  expect(JSON.parse(preview ?? "")["app.api.key"]).toBe(secret);
   expect(preview).toContain('"server.port": 8080');
 });
 it("releases large tool payloads while retaining their previews", () => {
@@ -124,11 +119,7 @@ it("replaces candidate text when the same item becomes authoritative", () => {
   const candidate = (status: "candidate" | "selected", progressText: string, receivedAt: number) =>
     activity(
       { kind: "answer_candidate", itemId: "answer-1", status, progressText },
-      {
-        stream: "item",
-        ts: 10,
-        receivedAt,
-      },
+      { stream: "item", ts: 10, receivedAt },
     );
   const entries = updateToolActivity(
     updateToolActivity([], candidate("candidate", "First draft", 10)),
@@ -147,5 +138,7 @@ it("replaces candidate text when the same item becomes authoritative", () => {
 });
 
 it("ignores unrelated item events", () => {
-  expect(parseItem({ kind: "preamble", itemId: "note-1" })).toBeNull();
+  expect(
+    parseActivityEvent(activity({ kind: "preamble", itemId: "note-1" }, { stream: "item" }), 10),
+  ).toBeNull();
 });

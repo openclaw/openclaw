@@ -101,6 +101,7 @@ import {
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
+import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -258,6 +259,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
+    "pane-chrome-probe": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -331,6 +333,9 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["pane-chrome-probe"] && !values["warm-reload"]) {
+  throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
+}
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
 }
@@ -1240,8 +1245,11 @@ try {
           : "chip",
     },
   );
+  const paneChromeScript = values["pane-chrome-probe"]
+    ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
+    : "";
   const warmProbes = values["warm-reload"]
-    ? `\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })});`
+    ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
     : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
@@ -2004,6 +2012,21 @@ try {
     }
     const warmReload = values["warm-reload"]
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+      : undefined;
+    const paneChrome = values["pane-chrome-probe"]
+      ? {
+          ...(await page.evaluate(
+            (firstPaint) => Reflect.get(window, "__paneChrome").read(firstPaint),
+            warmReload?.milestones.firstTranscriptPaint ?? null,
+          )),
+          snapshotBytes: Buffer.byteLength(
+            JSON.stringify(
+              reloadStorage!.records.snapshots.find((record) =>
+                record.sessionKey.endsWith(`\u0000${fixture.selectedSessionKey}`),
+              )!.snapshot,
+            ),
+          ),
+        }
       : undefined;
     if (cpuProfile) {
       await writeFile(
@@ -2917,6 +2940,7 @@ try {
       sessionSwitch,
       criticalPath,
       warmReload,
+      paneChrome,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],
       overlays,

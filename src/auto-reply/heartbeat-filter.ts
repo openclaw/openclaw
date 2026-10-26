@@ -33,7 +33,7 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
   `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-type HeartbeatTranscriptMessage = { role: string; content?: unknown };
+type HeartbeatTranscriptMessage = { role: string; content?: unknown; __openclaw?: unknown };
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;
@@ -124,7 +124,7 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
 export function isHeartbeatUserMessage(
   message: HeartbeatTranscriptMessage,
   heartbeatPrompt?: string,
-  options: { heartbeatOnly?: boolean } = {},
+  options: { heartbeatOnly?: boolean; claudeImport?: boolean } = {},
 ): boolean {
   if (message.role !== "user") {
     return false;
@@ -133,6 +133,23 @@ export function isHeartbeatUserMessage(
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
+  }
+  // Canonical human rows can inherit importedFrom during native-history deduplication;
+  // require the catalog's origin or the native reader's explicit import context instead.
+  const meta = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
+  const wakeText = trimmed.replace(
+    /^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u,
+    "",
+  );
+  if (
+    !options.heartbeatOnly &&
+    (options.claudeImport || meta?.mirrorOrigin === "claude-catalog-import") &&
+    wakeText.startsWith(
+      "An async command completion event was triggered, but user delivery is disabled for this run. ",
+    ) &&
+    wakeText.includes(" Do not mention, summarize, or reuse command output.")
+  ) {
+    return true;
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
   const transcriptPrompts = options.heartbeatOnly

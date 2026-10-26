@@ -7,6 +7,7 @@ import type {
   SessionsListResult,
 } from "../../../api/types.ts";
 import type {
+  ChatFastModePresentation,
   ChatFastModeSelectValue,
   ChatFastModeTarget,
 } from "../../../lib/chat/model-select-state.ts";
@@ -43,6 +44,7 @@ export type ChatModelControlsProps = {
   effortMutationDisabledReason?: string;
   contextWindowMutationDisabledReason?: string;
   fastModeTarget?: ChatFastModeTarget;
+  fastModeDisplay?: ChatFastModePresentation;
   accessProgramMutationDisabledReason?: string;
   requestedAccessProgram?: CyberAccessProgram;
   onAccessProgramSelect?: (value: CyberAccessProgram | null, sessionKey: string) => unknown;

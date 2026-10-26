@@ -95,14 +95,15 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
 
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
-  const prepared = new WeakMap<T, { facts: [string, Partial<T>][]; bytes: number }>();
+  type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
+  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number }>();
   const share = (sessions: T[]) => {
     // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
     if (sessions.length < 2) {
       return { sessions, sharedFacts: [] };
     }
     type SharedFact = { fact: Partial<T>; rows: number[] };
-    const candidates = new Map<string, { fact: Partial<T>; rows: number | number[] }>();
+    const candidates = new Map<string, Fact>();
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
@@ -123,13 +124,13 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           const fact: Partial<T> = {};
           fact[field] = value;
           const encoded = JSON.stringify(fact);
-          facts.push([encoded, fact]);
+          facts.push({ encoded, fact, rows: 0 });
           bytes += encoded.length * 2;
         }
         prepared.set(row, { facts, bytes });
       }
-      for (const [encoded, fact] of facts) {
-        const candidate = candidates.get(encoded);
+      for (const fact of facts) {
+        const candidate = candidates.get(fact.encoded);
         if (candidate) {
           if (typeof candidate.rows === "number") {
             candidate.rows = [candidate.rows, index];
@@ -137,23 +138,27 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
             candidate.rows.push(index);
           }
         } else {
-          candidates.set(encoded, { fact, rows: index });
+          fact.rows = index;
+          candidates.set(fact.encoded, fact);
         }
       }
     });
     // Facts with the same recipients share one reference, including common scalar defaults.
     const groups = new Map<string, SharedFact>();
     for (const candidate of candidates.values()) {
-      if (typeof candidate.rows === "number") {
-        Object.assign(rows[candidate.rows]!, candidate.fact);
+      const recipients = candidate.rows;
+      // Recipient scratch belongs to this response, never to the retained row facts.
+      candidate.rows = 0;
+      if (typeof recipients === "number") {
+        Object.assign(rows[recipients]!, candidate.fact);
         continue;
       }
-      const key = candidate.rows.join(",");
+      const key = recipients.join(",");
       const group = groups.get(key);
       if (group) {
         Object.assign(group.fact, candidate.fact);
       } else {
-        groups.set(key, { fact: { ...candidate.fact }, rows: candidate.rows });
+        groups.set(key, { fact: { ...candidate.fact }, rows: recipients });
       }
     }
     const sharedFacts: Partial<T>[] = [];

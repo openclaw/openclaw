@@ -491,9 +491,13 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     });
     // Reasoning/fast state still describes the previous model until the refreshed
     // session row lands. Lock both so stale levels cannot be committed mid-switch.
+    const currentFastMode = resolvedFastMode();
+    const presentedFastMode = props.fastModeDisplay
+      ? { ...currentFastMode, ...props.fastModeDisplay }
+      : currentFastMode;
     const fastMode = props.modelSwitching
-      ? { ...resolvedFastMode(), disabled: true }
-      : resolvedFastMode();
+      ? { ...presentedFastMode, disabled: true }
+      : presentedFastMode;
     const catalogLoadingWithoutSnapshot =
       !catalogState.hasSnapshot && ["idle", "loading"].includes(catalogState.status);
     // The session owns the selected model; its account-scoped catalog only owns

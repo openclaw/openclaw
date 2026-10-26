@@ -15,6 +15,7 @@ export function ChatPaneModelControl(props: {
       ? {
           catalog: [saved],
           catalogState: { hasSnapshot: true, status: "offline" } as const,
+          thinkingSession: { ...saved, model: saved.id, modelProvider: saved.provider },
           session: {
             key: sessionKey(),
             kind: "direct" as const,
@@ -37,6 +38,8 @@ export function ChatPaneModelControl(props: {
         connected={props.model.snapshot ? false : props.model.connected}
         modelCatalog={savedModel()?.catalog ?? props.model.modelCatalog}
         modelCatalogState={savedModel()?.catalogState ?? props.model.modelCatalogState}
+        thinkingSession={savedModel()?.thinkingSession ?? props.model.thinkingSession}
+        fastModeDisplay={snapshot()?.speed}
         selectedSession={savedModel()?.session ?? props.model.selectedSession}
       />
     </div>

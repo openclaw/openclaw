@@ -31,6 +31,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const headlineMetrics = new Set([
   "mainThreadCpuPercent",
   "allocationMiBPerSecond",
+  "sampledSurvivorMiBPerSecond",
   "gcSecondsPerMinute",
   "eventLoopP99Ms",
   "sessionsListP99Ms",
@@ -50,6 +51,7 @@ export function parseStressOptions(args: string[]) {
       output: { type: "string" },
       minutes: { type: "string", default: "10" },
       pairs: { type: "string", default: "2" },
+      "aa-pairs": { type: "string", default: "0" },
       clients: { type: "string", default: "65" },
       runs: { type: "string", default: "4" },
       sessions: { type: "string", default: "10800" },
@@ -81,10 +83,15 @@ export function parseStressOptions(args: string[]) {
   if (!values.help && !values.output) {
     throw new Error("--output must name a new directory");
   }
-  if (!["timing", "allocation", "both"].includes(values.mode)) {
-    throw new Error("--mode must be timing, allocation, or both");
+  if (!["timing", "allocation", "retention", "both"].includes(values.mode)) {
+    throw new Error("--mode must be timing, allocation, retention, or both");
   }
   const minutes = integer("minutes", 10);
+  const pairs = integer("pairs", 1);
+  const aaPairs = integer("aa-pairs", 0);
+  if (aaPairs > pairs || (aaPairs > 0 && !values.base)) {
+    throw new Error("--aa-pairs requires --base and must not exceed --pairs");
+  }
   const smokeSeconds = values["smoke-seconds"] ? integer("smoke-seconds", 1) : undefined;
   const port = integer("port", 40000);
   const plugins = integer("plugins", 4);
@@ -104,7 +111,8 @@ export function parseStressOptions(args: string[]) {
     output: path.resolve(values.output ?? "."),
     durationMs: smokeSeconds ? smokeSeconds * 1000 : minutes * 60_000,
     smoke: smokeSeconds !== undefined,
-    pairs: integer("pairs", 1),
+    pairs,
+    aaPairs,
     clients: integer("clients", 4),
     runs: integer("runs", 1),
     sessions: integer("sessions", 100),
@@ -175,8 +183,9 @@ async function main() {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts
   --base <built-repo> --candidate <built-repo> --output <new-dir>
   [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --plugins 40]
-  [--mode both|timing|allocation --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
+  [--mode both|timing|allocation|retention --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
+  [--aa-pairs 0: insert a baseline/baseline control after each of the first N pairs]
   [--operator-model-policy]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
@@ -223,14 +232,18 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
   writeFileSync(path.join(options.output, "campaign.json"), JSON.stringify(manifest, null, 2));
   const modes = options.mode === "both" ? ["timing", "allocation"] : [options.mode];
   for (const mode of modes) {
-    for (let pair = 0; pair < (options.base ? options.pairs : 1); pair++) {
+    const schedule = Array.from({ length: options.base ? options.pairs : 1 }, (_, pair) => [
+      { pair, control: false },
+      ...(pair < options.aaPairs ? [{ pair, control: true }] : []),
+    ]).flat();
+    for (const { pair, control } of schedule) {
       const order: Array<"base" | "candidate"> = options.base
         ? pair % 2
           ? ["candidate", "base"]
           : ["base", "candidate"]
         : ["candidate"];
       for (const side of order) {
-        const runName = `${mode}-${pair + 1}-${side}`;
+        const runName = `${mode}-${control ? "aa-" : ""}${pair + 1}-${side}`;
         const state = path.join(options.output, runName);
         const ports = new Set<number>();
         const port = await freePort(ports);
@@ -267,7 +280,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--state-dir",
             state,
             "--entry",
-            builds[side]!.entry,
+            builds[control ? "base" : side]!.entry,
             "--port",
             String(port),
             "--mock-port",
@@ -316,7 +329,8 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "8",
             "--worker-memory",
             "--diagnostics",
-            ...(mode === "allocation" ? ["--team-stress-allocation-sampling"] : []),
+            ...(mode !== "timing" ? ["--team-stress-allocation-sampling"] : []),
+            ...(mode === "retention" ? ["--team-stress-retention-sampling"] : []),
           ],
           path.join(options.output, `${runName}.log`),
         );
@@ -326,7 +340,14 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
         }
         const resultDir = path.join(state, outputs[0]!);
         runs.push(
-          summarizeStressRun({ resultDir, side, pair: pair + 1, mode, smoke: options.smoke }),
+          summarizeStressRun({
+            resultDir,
+            side,
+            pair: pair + 1,
+            mode,
+            control,
+            smoke: options.smoke,
+          }),
         );
         writeFileSync(
           path.join(options.output, "campaign.json"),
@@ -348,6 +369,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
       .map((row) => ({
         metric: row.metric,
         mode: row.mode,
+        control: row.control,
         base: rounded(row.base),
         candidate: rounded(row.candidate),
         delta: rounded(row.absolute),
