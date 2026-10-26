@@ -628,9 +628,8 @@ describe("archive confirmation for bound automations", () => {
           compact: true,
         }),
       );
-      expect(document.body.textContent).toContain(
-        'Archiving "Batch 1" pauses its automations. Restoring it does not resume them; re-enable each with: openclaw automations enable <id>',
-      );
+      expect(document.body.textContent).toContain('Archiving "Batch 1" pauses its automations.');
+      expect(document.body.textContent).not.toContain("openclaw automations");
       expect(document.body.textContent).toContain("Nightly digest (job-1)");
       expect(actions.textContent).toContain("Archive anyway");
       answerConfirmDialog(actions, decision);

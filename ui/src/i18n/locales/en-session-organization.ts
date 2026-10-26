@@ -303,10 +303,9 @@ const enSessionOrganization = {
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
     automationPauseTitle: "Pause automations?",
-    automationPauseArchiveOne:
-      'Archiving "{session}" pauses its automations. Restoring it does not resume them; re-enable each with: openclaw automations enable <id>',
+    automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
     automationPauseArchiveOther:
-      "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations, and restoring it does not resume them; re-enable each with: openclaw automations enable <id>",
+      "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
     automationPauseDeleteOne: 'Deleting "{session}" pauses its automations.',
     automationPauseDeleteOther:
       "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
