@@ -37,7 +37,7 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
     await gate.release.promise;
     return value;
   };
-  const forwarded = vi.fn(gate.reached.resolve);
+  const forwarded = vi.fn(() => gate.reached.resolve());
   const pairing = { identity: "identity", generation: "generation" };
   const nodeRegistry = new NodeRegistry({
     resolveCurrentPairingState: async () => (boundary === "pairing" ? hold(pairing) : pairing),

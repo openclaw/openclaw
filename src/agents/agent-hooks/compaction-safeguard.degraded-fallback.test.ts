@@ -55,13 +55,22 @@ it.each(["branch read", "context projection"] as const)(
       if (stage === "branch read") {
         throw failure;
       }
-      const unreadable = createMessageEntry(userMessage("Unreadable", 0), 0);
-      Object.defineProperty(unreadable, "message", {
-        get(): never {
-          throw failure;
+      const kept = createMessageEntry(userMessage("Kept user request", 1), 1);
+      if (kept.type !== "message") {
+        throw new Error("Expected a message fixture");
+      }
+      return [
+        {
+          ...kept,
+          id: "entry-0",
+          parentId: null,
+          timestamp: "1970-01-01T00:00:00.000Z",
+          get message(): never {
+            throw failure;
+          },
         },
-      });
-      return [unreadable, createMessageEntry(userMessage("Kept user request", 1), 1)];
+        kept,
+      ];
     };
     const { result, getApiKeyAndHeadersMock } = await runCompaction(
       sessionManager,
