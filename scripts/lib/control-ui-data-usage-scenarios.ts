@@ -140,9 +140,15 @@ async function ready(page: Page) {
 
 async function months(page: Page) {
   await ready(page);
-  const start = new Date(Date.now() - (dayCount - 1) * dayMs).toISOString().slice(0, 10);
-  await page.locator(".usage-date-range input").first().fill(start);
-  await page.locator(".usage-date-range input").first().press("Tab");
+  const now = Date.now();
+  const start = new Date(now - (dayCount - 1) * dayMs).toISOString().slice(0, 10);
+  const end = new Date(now).toISOString().slice(0, 10);
+  const dates = page.locator(".usage-date-range input");
+  // The fixture uses UTC days; the page's default end date uses the browser's local day.
+  await dates.last().fill(end);
+  await dates.last().press("Tab");
+  await dates.first().fill(start);
+  await dates.first().press("Tab");
   await page
     .locator(".usage-query-count")
     .getByText(/12[,.]?000/)
