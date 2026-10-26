@@ -61,15 +61,22 @@ it.each([
 
 it("claims a matching path-mounted v1 endpoint without credentials using pinned loopback DNS", async () => {
   const received = vi.fn();
-  const server = createServer(async (request, response) => {
-    received(
-      request.method,
-      request.headers["content-type"],
-      request.headers.authorization,
-      await text(request),
+  const server = createServer((request, response) => {
+    void text(request).then(
+      (body) => {
+        received(
+          request.method,
+          request.headers["content-type"],
+          request.headers.authorization,
+          body,
+        );
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify(metadata({ api_base_url: baseUrl })));
+      },
+      (error: Error) => {
+        response.destroy(error);
+      },
     );
-    response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify(metadata({ api_base_url: baseUrl })));
   });
   const baseUrl = `http://localhost:${await listenOnLoopback(server)}/services/clickclack`;
   onTestFinished(() => server[Symbol.asyncDispose]());

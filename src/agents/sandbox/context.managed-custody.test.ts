@@ -19,6 +19,7 @@ import {
 } from "./shared.js";
 
 const prepare = vi.hoisted(() => vi.fn<typeof prepareLocalSandboxWorkspace>());
+// mock-isolation: prevent real workspace provisioning while exercising custody revocation.
 vi.mock("./local-workspace.js", () => ({ prepareLocalSandboxWorkspace: prepare }));
 
 const state = useSandboxRegistryState("sandbox-managed-custody-");
