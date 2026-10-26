@@ -21,7 +21,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, PerformanceObserver, type PerformanceNodeEntry } from "node:perf_hooks";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -152,6 +152,9 @@ try {
   await fs.writeFile(callsFile, "");
   global.gc();
   await setImmediate();
+  const barrierStarted = performance.now();
+  await setTimeout(100);
+  const postWarmBarrierElapsedMs = performance.now() - barrierStarted;
   gc.observe({ entryTypes: ["gc"] });
   if (values.allocations) {
     inspector.connect();
@@ -164,6 +167,7 @@ try {
   const loadBefore = loadavg();
   const memoryBefore = process.memoryUsage();
   const cpu = process.threadCpuUsage();
+  const measurementStartedAt = new Date().toISOString();
   measuredStart = performance.now();
   const durations: number[] = [];
   for (let index = 0; index < iterations; index++) {
@@ -199,6 +203,7 @@ try {
     JSON.stringify({
       owner: path.resolve(values.owner),
       ownerArtifactSha256: hash("sha256", await fs.readFile(path.resolve(values.owner))),
+      harnessSha256: hash("sha256", await fs.readFile(new URL(import.meta.url))),
       configFactorySha256: hash(
         "sha256",
         await fs.readFile(new URL("../../src/agents/sandbox/config.ts", import.meta.url)),
@@ -207,6 +212,10 @@ try {
       resourceMounts: readOnlyResourceMounts.length,
       allocations: values.allocations,
       timingAndGcDiagnosticOnly: values.allocations,
+      postWarmBarrierMs: 100,
+      postWarmBarrierElapsedMs,
+      measurementStartedAt,
+      processAgeAtMeasurementStartMs: measuredStart,
       inspectCallsPerTurn: calls.length / iterations,
       elapsedMs,
       cpuUsPerTurn: (used.user + used.system) / iterations,
