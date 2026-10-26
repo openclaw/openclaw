@@ -39,7 +39,8 @@ same diagnostic appears at info level:
   and, for a legacy provider, `config.toolsAllow`.
 - `not-private-destination`: trigger recall requires a direct or explicit
   private conversation.
-- `chat-id-not-allowed`: the conversation is outside `config.allowedChatIds`.
+- `chat-id-not-allowed`: the conversation is excluded by `config.allowedChatIds`
+  or matches `config.deniedChatIds`.
 - `missing-agent` or `missing-session-key`: the turn lacks the agent or session
   identity required for recall.
 
