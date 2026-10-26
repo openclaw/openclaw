@@ -7,42 +7,26 @@ import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError } from "./tunnel-contract.js";
-import {
-  attachedEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
-  createWorkerTurnTunnel,
-  credential,
-  placements,
-  reconcileUnchangedLocalWorkspace,
-  root,
-  seedActivePlacement,
-  sessionTarget,
-  setupWorkerTurnLauncherTest,
-  turn,
-  unusedEnvironments,
-} from "./worker-turn-launcher.test-support.js";
+import * as worker from "./worker-turn-launcher.test-support.js";
 
-beforeEach(setupWorkerTurnLauncherTest);
+beforeEach(worker.setupWorkerTurnLauncherTest);
 afterEach(async () => {
-  await cleanupWorkerTurnLauncherTest();
+  await worker.cleanupWorkerTurnLauncherTest();
   vi.unstubAllEnvs();
 });
 
 it("searches and reads installed skills from a worker RPC outside the launching turn context", async () => {
-  const bin = path.join(root, "bin");
+  const bin = path.join(worker.root, "bin");
   await mkdir(bin);
   await writeFile(path.join(bin, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
-  await seedActivePlacement();
+  await worker.seedActivePlacement();
   const rpc = new AsyncResource("worker-skill-rpc");
-  const input = turn("worker-skills");
+  const input = worker.turn("worker-skills");
   const body = "# Plain text\nWrite plain text files with the write tool.\n";
-  const skillPath = path.join(root, "plain-text", "SKILL.md");
-  await mkdir(path.dirname(skillPath));
-  await writeFile(skillPath, body);
-  const tunnel = createWorkerTurnTunnel({
-    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+  const skillPath = path.join(worker.root, "plain-text", "SKILL.md");
+  const tunnel = worker.createWorkerTurnTunnel({
+    reconcileWorkspace: worker.reconcileUnchangedLocalWorkspace,
     launchTurn: async ({ turnClaim }) => {
       const identity = createWorkerConnectionIdentity(turnClaim, {
         protocolFeatures: ["worker-gateway-tools-v1"],
@@ -74,12 +58,11 @@ it("searches and reads installed skills from a worker RPC outside the launching 
       throw new WorkerRunnerCapacityError();
     },
   });
-  const provider = createWorkerSessionTurnPlacementProvider({
-    placements,
-    environments: {
-      ...unusedEnvironments(),
+  const provider = worker.createWorkerSessionTurnPlacementProvider({
+    placements: worker.placements,
+    environments: worker.workerTurnEnvironments(tunnel, {
       get: () => {
-        const environment = attachedEnvironment();
+        const environment = worker.attachedEnvironment();
         environment.bootstrapReceipt = {
           ...environment.bootstrapReceipt!,
           protocolFeatures: [
@@ -89,14 +72,12 @@ it("searches and reads installed skills from a worker RPC outside the launching 
         };
         return environment;
       },
-      acquireTurnCredential: async () => credential(),
-      startTunnel: async () => tunnel,
-    },
+    }),
   });
   try {
     await expect(
       provider.executeTurn(
-        { ...sessionTarget, runId: input.runId },
+        { ...worker.sessionTarget, runId: input.runId },
         {
           ...input,
           config: { ...input.config, tools: { codeMode: true } },
