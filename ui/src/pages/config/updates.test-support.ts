@@ -1,63 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRouter, definePage } from "@openclaw/uirouter";
 import { createComponent, createSignal, merge, Show } from "solid-js";
 import { vi } from "vitest";
-import type { SolidRouteProps } from "../../app-route-types.tsx";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import type { ApplicationUpdateOverlaySnapshot } from "../../app/overlays-types.ts";
-import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { completeConfigContext } from "./config-page.test-support.ts";
-import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
-import { pages } from "./route.ts";
 import type { UpdatesViewProps } from "./updates-types.ts";
 import { Updates } from "./updates.tsx";
-
-export async function mountConfigCommandRoutes(
-  initialContext: ApplicationContext,
-  pageId: ConfigPageId,
-  destination: ConfigPageId | "usage",
-) {
-  const context = completeConfigContext(initialContext);
-  const route = (id: ConfigPageId) =>
-    pages.find(
-      (page): page is Extract<(typeof pages)[number], { id: ConfigPageId }> => page.id === id,
-    )!;
-  const source = route(pageId);
-  const production = await source.component();
-  const Provider = createSolidApplicationContextProvider(context).wrapper;
-  const module = {
-    ...production,
-    renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
-      createComponent(Provider, {
-        get children() {
-          return createComponent(production.renderSolid, props);
-        },
-      }),
-  };
-  const router = createRouter<
-    ConfigPageId | "usage",
-    ApplicationContext,
-    Pick<typeof module, "renderSolid">,
-    ConfigPageRouteData
-  >({
-    routes: [
-      { ...source, component: () => module },
-      destination === "usage"
-        ? definePage({
-            id: "usage",
-            path: "/usage",
-            component: () => ({ renderSolid: () => "Usage destination" }),
-          })
-        : { ...route(destination), component: () => module },
-    ],
-  });
-  Object.assign(context, { router });
-  return { router, view: mountRouterOutlet({ router, retryContext: context }) };
-}
 
 export type UpdatesViewOverrides = Partial<Omit<UpdatesViewProps, "update">> & {
   update?: Partial<ApplicationUpdateOverlaySnapshot>;

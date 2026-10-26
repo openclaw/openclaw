@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
+import { createRouter } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createNativeDeviceSettingsCapability,
@@ -8,12 +10,15 @@ import {
 } from "../../app/native-device-settings.ts";
 import { client, type RequestFn } from "../../app/overlays-access.test-support.ts";
 import { createApplicationOverlays } from "../../app/overlays.ts";
+import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { updateRunHarness } from "../../app/update-run.test-support.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { completeConfigContext } from "./config-page.test-support.ts";
-import { mountConfigCommandRoutes } from "./updates.test-support.ts";
+import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
+import { pages } from "./route.ts";
 
 it.each([
   { command: "report", replacement: "route" },
@@ -53,19 +58,48 @@ it.each([
       overlays,
       nativeDeviceSettings,
     };
-    const { router, view } = await mountConfigCommandRoutes(context, "updates", "advanced");
-    const reportButton = () => {
-      const button = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === "Report update failure",
-      );
-      expect(button!.disabled).toBe(false);
-      return button!;
+    const provider = createSolidApplicationContextProvider(context);
+    type SettingsRoute = Extract<(typeof pages)[number], { id: ConfigPageId }>;
+    const routes = pages.filter(
+      (page): page is SettingsRoute => page.id === "updates" || page.id === "advanced",
+    );
+    const production = await routes[0]!.component();
+    const Page = production.renderSolid;
+    const module = {
+      ...production,
+      renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) => (
+        <provider.wrapper>
+          <Page {...props} />
+        </provider.wrapper>
+      ),
     };
+    const router = createRouter<
+      ConfigPageId,
+      ApplicationContext,
+      typeof module,
+      ConfigPageRouteData
+    >({
+      routes: routes.map((route) => Object.assign({}, route, { component: () => module })),
+    });
+    Object.assign(context, { router });
+    const view = mountRouterOutlet({ router, retryContext: context });
     try {
       await router.navigate("updates", context);
       if (command === "report") {
-        (await waitForSolid(reportButton)).click();
-        await waitForSolid(() => expect(overlays.snapshot.updateFailureReportBusy).toBe(true));
+        const report = await waitForSolid(() => {
+          const button = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
+            (candidate) => candidate.textContent?.trim() === "Report update failure",
+          );
+          expect(button).toBeDefined();
+          expect(button!.disabled).toBe(false);
+          return button!;
+        });
+        report.click();
+        await vi.dynamicImportSettled();
+        await waitForSolid(() =>
+          expect(request.mock.calls.some(([method]) => method === "update.report")).toBe(true),
+        );
+        expect(overlays.snapshot.updateFailureReportBusy).toBe(true);
       } else {
         const input = await waitForSolid(() => {
           const row = [...view.querySelectorAll(".settings-row")].find((candidate) =>
@@ -85,9 +119,11 @@ it.each([
       if (replacement === "route") {
         await router.navigate("advanced", context);
         const advanced = await waitForSolid(() => {
-          expect(view.querySelector(".page-title")?.textContent).toBe("Advanced");
+          expect(view.querySelector(".content-header--settings .page-title")?.textContent).toBe(
+            "Advanced",
+          );
           const content = view.querySelector(".config-content");
-          expect(content).not.toBeNull();
+          expect(content?.textContent).toContain("Unsupported schema. Use Raw.");
           expect(view.querySelector("#config-section-update")).toBeNull();
           return content;
         });
@@ -111,7 +147,12 @@ it.each([
         harness.update({
           client: client(vi.fn<RequestFn>(() => Promise.resolve({ lastRun: run }))),
         });
-        await waitForSolid(reportButton);
+        await waitForSolid(() => {
+          const report = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
+            (button) => button.textContent?.trim() === "Report update failure",
+          );
+          expect(report?.disabled).toBe(false);
+        });
         preview.reject(new Error("Retired report preview failed"));
         await vi.dynamicImportSettled();
         expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
