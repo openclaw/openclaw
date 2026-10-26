@@ -52,23 +52,14 @@ function pluginMemberDescriptor(object: object, key: PropertyKey) {
   return undefined;
 }
 
-function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
+function pluginMemberNeedsAdmission(object: object, key?: PropertyKey, getters = true): boolean {
   for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
     if (types.isProxy(source)) {
       return true;
     }
-    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    const descriptor = key !== undefined && Object.getOwnPropertyDescriptor(source, key);
     if (descriptor) {
       return getters && descriptor.get !== undefined;
-    }
-  }
-  return false;
-}
-
-function hasProxyPrototype(object: object): boolean {
-  for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
-    if (types.isProxy(source)) {
-      return true;
     }
   }
   return false;
@@ -395,7 +386,7 @@ function createPluginBindings(
         return bound;
       }
       const classify = () => getPluginMethodArgumentKind(object, key);
-      const kind = hasProxyPrototype(object) ? invoke(classify) : classify();
+      const kind = pluginMemberNeedsAdmission(object) ? invoke(classify) : classify();
       if (
         kind === "function" &&
         !prototypeReceivers.has(object) &&
@@ -580,7 +571,9 @@ function createPluginBindings(
     return result as T;
   };
 
-  const admitIterator = (iterator: object): PluginIteratorAdmission => {
+  const admitIterator = (value: object): PluginIteratorAdmission => {
+    // Only this binding's views share a lease; other consumers retain their own fencing.
+    const iterator = PluginFactoryBinding.belongsTo(value, factory) ? originalValue(value)! : value;
     const current = iterators.get(iterator);
     if (current?.active || current?.done) {
       return current;
@@ -663,30 +656,36 @@ function createPluginBindings(
     };
     const call = async (key: PropertyKey, method: Function | undefined, args: unknown[]) => {
       pending += 1;
+      let next: unknown;
       try {
         if (!method) {
-          if (key === "return") {
-            state = "done";
-            return { done: true, value: await args[0] };
+          if (key !== "return") {
+            throw new TypeError("Plugin iterator method must be callable");
           }
-          throw new TypeError("Plugin iterator method must be callable");
+          state = "done";
+          next = { done: true, value: await args[0] };
+        } else {
+          next = await Reflect.apply(method, iterator, args);
+          if (next === null || (typeof next !== "object" && typeof next !== "function")) {
+            throw new TypeError("Plugin async iterator result must be an object");
+          }
+          assertActive();
+          state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
         }
-        const next: unknown = await Reflect.apply(method, iterator, args);
-        if (next === null || (typeof next !== "object" && typeof next !== "function")) {
-          throw new TypeError("Plugin async iterator result must be an object");
-        }
-        assertActive();
-        state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
-        return next;
       } catch (error) {
         state = "done";
-        throw error;
-      } finally {
         const completion = releaseOperation();
         if (completion) {
           await completion;
         }
+        throw error;
       }
+      // Keep release outside the catch: a cleanup failure must not release twice.
+      const completion = releaseOperation();
+      if (completion) {
+        await completion;
+      }
+      return next;
     };
     const admission: PluginIteratorAdmission = {
       origin: invocation.origin,

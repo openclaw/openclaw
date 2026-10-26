@@ -69,6 +69,25 @@ it("reuses the scoped protocol callback across overlapping stream operations", a
   }
 });
 
+it.each(["next", "return"] as const)(
+  "shares admission when an iterable returns its own already-bound iterator (%s)",
+  async (terminal) => {
+    const instance = owner();
+    const iterator = instance.wrap(chunks("first"));
+    const source = instance.wrap(iterable(iterator));
+    const acquired = source[Symbol.asyncIterator]();
+    expect(acquired).toBe(iterator);
+    try {
+      expect(instance.ordinaryCallCount).toBe(1);
+      await expect(acquired.next()).resolves.toEqual({ done: false, value: "first" });
+      await expect(acquired[terminal]()).resolves.toEqual({ done: true, value: undefined });
+      expect(instance.ordinaryCallCount).toBe(0);
+    } finally {
+      await acquired.return();
+    }
+  },
+);
+
 it.each(["promise", "thenable"] as const)(
   "awaits a next() %s with native assimilation and live admission",
   async (kind) => {

@@ -201,23 +201,23 @@ function queuePendingEvent(pending: PendingState, record: Record<string, unknown
   if (!pending.entries) {
     return;
   }
-  const event = { ...record };
   pending.entryBytes = Math.min(
     MAX_PAYLOAD_BYTES + 1,
-    pending.entryBytes + pendingEventBytes(event),
+    pending.entryBytes + pendingEventBytes(record),
   );
   const previous = pending.entries.at(-1);
   if (
     typeof previous?.delta === "string" &&
-    typeof event.delta === "string" &&
-    previous.type === event.type &&
-    eventContentIndex(previous) === eventContentIndex(event)
+    typeof record.delta === "string" &&
+    previous.type === record.type &&
+    eventContentIndex(previous) === eventContentIndex(record)
   ) {
-    previous.delta += event.delta;
-    if (Object.hasOwn(event, "partial")) {
-      previous.partial = event.partial;
+    previous.delta += record.delta;
+    if (Object.hasOwn(record, "partial")) {
+      previous.partial = record.partial;
     }
   } else {
+    const event = { ...record };
     pending.entries.push(event);
     if (pending.kind === "candidate") {
       rememberPendingEntryOffsets(pending, [event], pending.buffer.length);
