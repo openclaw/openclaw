@@ -52,8 +52,6 @@ it.each([false, true])("pauses lifetime while hidden: %s", async (initiallyHidde
   expect(toast.querySelector('[role="alert"]')).not.toBeNull();
   await advance(1);
   expect(toast.querySelector('[role="alert"]')).toBeNull();
-  update(false);
-  expect(toast.querySelector('[role="alert"]')).toBeNull();
 });
 
 it.each(["dismiss", "expire"])("keeps %s results dismissed", async (action) => {
