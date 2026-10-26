@@ -10,24 +10,24 @@ import { MusePool, openMuseSession } from "./runtime.js";
 import { MuseCatalogReader } from "./verify-setup.js";
 
 const binaryPath = fileURLToPath(new URL("./test-support/fake-muse.mjs", import.meta.url));
+const catalogPath = fileURLToPath(
+  new URL("../../../test/fixtures/model-catalog/muse-meta-account.json", import.meta.url),
+);
 let workspace: string;
 let reader: MuseCatalogReader;
+let pool: MusePool;
 
 beforeEach(async () => {
   workspace = await mkdtemp(join(tmpdir(), "muse-catalog-"));
   reader = new MuseCatalogReader();
+  pool = new MusePool(binaryPath, true);
   vi.stubEnv("OPENCLAW_STATE_DIR", workspace);
-  vi.stubEnv(
-    "MUSE_FIXTURE_CATALOG_PATH",
-    fileURLToPath(
-      new URL("../../../test/fixtures/model-catalog/muse-meta-account.json", import.meta.url),
-    ),
-  );
+  vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", catalogPath);
 });
 
 afterEach(async () => {
   try {
-    await reader.dispose();
+    await Promise.all([reader.dispose(), pool.dispose()]);
   } finally {
     vi.unstubAllEnvs();
     await rm(workspace, { recursive: true, force: true });
@@ -80,30 +80,25 @@ it("keeps meaningful provider labels and unknown future IDs without guessing an 
   await catalog({ source: "providerCatalog", providerId: "meta", models });
   const log = join(workspace, "requests.jsonl");
   vi.stubEnv("MUSE_REQUEST_LOG", log);
-  const pool = new MusePool(binaryPath, true);
+  const rows = await reader.read(context());
+  expect(rows.map((row) => [row.id, row.name])).toEqual(
+    models.map((model) => [model.modelId, model.displayLabel]),
+  );
+  const lease = await pool.acquire(workspace, undefined, true);
   try {
-    const rows = await reader.read(context());
-    expect(rows.map((row) => [row.id, row.name])).toEqual(
-      models.map((model) => [model.modelId, model.displayLabel]),
-    );
-    const lease = await pool.acquire(workspace, undefined, true);
-    try {
-      for (const modelId of modelIds) {
-        await openMuseSession(lease.runtime, { workspace, modelId, approvalMode: "denyUnmatched" });
-      }
-    } finally {
-      lease.release();
+    for (const modelId of modelIds) {
+      await openMuseSession(lease.runtime, { workspace, modelId, approvalMode: "denyUnmatched" });
     }
-    const requests = (await readFile(log, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(
-      requests.filter((row) => row.method === "session/start").map((row) => row.params.modelId),
-    ).toEqual(modelIds);
   } finally {
-    await pool.dispose();
+    lease.release();
   }
+  const requests = (await readFile(log, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(
+    requests.filter((row) => row.method === "session/start").map((row) => row.params.modelId),
+  ).toEqual(modelIds);
 });
 
 it.runIf(process.platform !== "win32")(
@@ -124,10 +119,7 @@ it.runIf(process.platform !== "win32")(
     vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", gatePath);
     const controller = new AbortController();
     try {
-      const verification = reader.verify({
-        ...context(controller.signal),
-        modelId: "muse-spark-1.3",
-      });
+      const verification = reader.verify(context(controller.signal));
       const rejected = expect(verification).rejects.toThrow();
       const child = await initialized;
       controller.abort();
