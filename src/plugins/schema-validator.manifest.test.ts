@@ -178,32 +178,27 @@ it("uses the same local format policy when choosing conditional defaults", () =>
 });
 
 it("admits equivalent immutable schemas once while detecting mutable descendants", () => {
-  const readSchema = Object.freeze({
-    type: "object",
-    properties: Object.freeze({ action: Object.freeze({ const: "read" }) }),
-  });
-  const sameReadSchema = Object.freeze({
-    type: "object",
-    properties: Object.freeze({ action: Object.freeze({ const: "read" }) }),
-  });
+  const frozenReadSchema = () =>
+    Object.freeze({
+      type: "object",
+      properties: Object.freeze({ action: Object.freeze({ const: "read" }) }),
+    });
+  const readSchema = frozenReadSchema();
+  const sameReadSchema = frozenReadSchema();
   const mutableSchema = Object.freeze({
     type: "object",
     properties: { value: { type: "string" } },
   });
   const stringify = vi.spyOn(JSON, "stringify");
   const admitSchema = vi.spyOn(schemaDefaults, "findJsonSchemaShapeError");
+  const validate = (schema: JsonSchemaValue, value: unknown, cache = true) =>
+    validateJsonSchemaValue({ schema, value, cache }).ok;
   try {
     for (const type of ["string", "number"]) {
-      expect(validateJsonSchemaValue({ schema: readSchema, value: { action: "read" } }).ok).toBe(
-        true,
-      );
+      expect(validate(readSchema, { action: "read" })).toBe(true);
       mutableSchema.properties.value.type = type;
-      expect(validateJsonSchemaValue({ schema: mutableSchema, value: { value: "text" } }).ok).toBe(
-        type === "string",
-      );
-      expect(
-        validateJsonSchemaValue({ schema: sameReadSchema, value: { action: "read" } }).ok,
-      ).toBe(true);
+      expect(validate(mutableSchema, { value: "text" })).toBe(type === "string");
+      expect(validate(sameReadSchema, { action: "read" })).toBe(true);
     }
     for (const work of [stringify, admitSchema]) {
       expect(
@@ -214,9 +209,7 @@ it("admits equivalent immutable schemas once while detecting mutable descendants
     }
 
     for (let index = 0; index < 2; index++) {
-      expect(
-        validateJsonSchemaValue({ schema: readSchema, value: { action: "read" }, cache: false }).ok,
-      ).toBe(true);
+      expect(validate(readSchema, { action: "read" }, false)).toBe(true);
     }
     expect(stringify.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
     expect(admitSchema.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);

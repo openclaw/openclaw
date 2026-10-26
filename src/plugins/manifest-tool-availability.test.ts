@@ -1,4 +1,3 @@
-// Manifest tool-availability tests cover config, auth, environment, and base-URL gates.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
@@ -12,9 +11,6 @@ import { createPluginManifestRecordFixture } from "./plugin-metadata.test-suppor
 function makePlugin(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
   return createPluginManifestRecordFixture({
     id: "demo",
-    rootDir: "/tmp/demo",
-    source: "/tmp/demo/index.js",
-    manifestPath: "/tmp/demo/openclaw.plugin.json",
     ...overrides,
   });
 }
@@ -108,9 +104,8 @@ describe("manifestConfigSignalPasses", () => {
 });
 
 describe("hasManifestToolAvailability", () => {
-  it.each([
+  it.each<readonly [SecretRef, OpenClawConfig["secrets"], boolean]>([
     [
-      "selected store default shadowing exec",
       secretRef("store"),
       {
         defaults: { store: "shared" },
@@ -118,39 +113,25 @@ describe("hasManifestToolAvailability", () => {
       },
       true,
     ],
+    [secretRef("store"), { providers: { shared: { source: "store" } } }, true],
+    [secretRef("store"), undefined, false],
     [
-      "explicit matching store provider",
-      secretRef("store"),
-      { providers: { shared: { source: "store" } } },
-      true,
-    ],
-    ["missing non-default store provider", secretRef("store"), undefined, false],
-    [
-      "mismatched non-default store provider",
       secretRef("store"),
       { providers: { shared: { source: "file", path: "/tmp/unused.json" } } },
       false,
     ],
-    [
-      "old store default after selecting another alias",
-      secretRef("store", "default"),
-      { defaults: { store: "shared" } },
-      false,
-    ],
-    ["undeclared file default", secretRef("file", "default"), undefined, false],
-  ] satisfies Array<readonly [string, SecretRef, OpenClawConfig["secrets"], boolean]>)(
-    "checks %s through config-only metadata",
-    (_name, ref, secrets, expected) => {
-      const plugin = makePlugin({
-        toolMetadata: { x_search: { configSignals: [webSearchSignal] } },
-      });
-      const config: OpenClawConfig = {
-        ...xaiConfig({ webSearch: { apiKey: ref } }),
-        secrets,
-      };
-      expect(available(plugin, { config })).toBe(expected);
-    },
-  );
+    [secretRef("store", "default"), { defaults: { store: "shared" } }, false],
+    [secretRef("file", "default"), undefined, false],
+  ])("checks %j with providers %j through config-only metadata: %s", (ref, secrets, expected) => {
+    const plugin = makePlugin({
+      toolMetadata: { x_search: { configSignals: [webSearchSignal] } },
+    });
+    const config: OpenClawConfig = {
+      ...xaiConfig({ webSearch: { apiKey: ref } }),
+      secrets,
+    };
+    expect(available(plugin, { config })).toBe(expected);
+  });
 
   it("fails open for tools without availability signals", () => {
     const xaiPlugin = makePlugin({

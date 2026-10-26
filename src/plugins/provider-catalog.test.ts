@@ -10,11 +10,12 @@ import {
   findCatalogTemplate,
 } from "./provider-catalog.js";
 
-describe("manifest model size projection", () => {
-  const providerId = "local-models";
+describe("manifest model projection", () => {
+  const providerId = "family-host";
   const catalog: ModelCatalogProvider = {
     baseUrl: "http://127.0.0.1:1234/v1",
     api: "openai-completions",
+    family: "meta",
     models: [
       {
         id: "compact-chat",
@@ -22,6 +23,7 @@ describe("manifest model size projection", () => {
         maxTokens: 8192,
         parameterCount: 4_000_000_000,
       },
+      { id: "declares", family: "zai", contextWindow: 32_768, maxTokens: 8192 },
     ],
   };
 
@@ -42,54 +44,18 @@ describe("manifest model size projection", () => {
       "family augmentation",
       () =>
         buildManifestProviderCatalogFamily({
-          surfaces: [{ id: providerId, label: "Local models", catalog }],
-        }).augmentModelCatalog(),
-    ],
-  ])("keeps total parameters through %s", (_name, project) => {
-    expect(project()).toEqual([
-      expect.objectContaining({ id: "compact-chat", parameterCount: 4_000_000_000 }),
-    ]);
-  });
-});
-
-describe("manifest model family projection", () => {
-  const providerId = "family-host";
-  const row = { contextWindow: 32_768, maxTokens: 8192 };
-  const catalog: ModelCatalogProvider = {
-    baseUrl: "https://family.example/v1",
-    api: "openai-completions",
-    family: "meta",
-    models: [
-      { id: "inherits", ...row },
-      { id: "declares", family: "zai", ...row },
-    ],
-  };
-
-  it.each([
-    ["raw manifest", () => buildManifestModelProviderConfig({ providerId, catalog }).models],
-    [
-      "effective manifest",
-      () =>
-        buildEffectiveManifestProviderConfig(
-          normalizeModelCatalogProviderRows({
-            provider: providerId,
-            providerCatalog: catalog,
-            source: "manifest",
-          }),
-        )?.models,
-    ],
-    [
-      "catalog augmentation",
-      () =>
-        buildManifestProviderCatalogFamily({
           surfaces: [{ id: providerId, label: "Family host", catalog }],
         }).augmentModelCatalog(),
     ],
-  ])("gives rows their declared or provider family through %s", (_name, project) => {
-    expect(Object.fromEntries((project() ?? []).map((model) => [model.id, model.family]))).toEqual({
-      inherits: "meta",
-      declares: "zai",
-    });
+  ])("keeps parameters and declared or inherited families through %s", (_name, project) => {
+    expect(project()).toEqual([
+      expect.objectContaining({
+        id: "compact-chat",
+        parameterCount: 4_000_000_000,
+        family: "meta",
+      }),
+      expect.objectContaining({ id: "declares", family: "zai" }),
+    ]);
   });
 });
 
