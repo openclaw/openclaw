@@ -2233,7 +2233,15 @@ html[dir="rtl"] .chat-attachment-loading > span {
   max-height: min(400px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
+/* The outer surface owns elevation so scrolling never clips the shadow to a square. */
+.chat-controls__effort-picker > .chat-picker-overlay {
+  border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
+  corner-shape: superellipse(1.5);
+  box-shadow: var(--overlay-shadow);
+}
+
 .chat-controls__effort-menu {
+  box-shadow: none;
   width: min(330px, calc(100vw - 24px));
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
 }
@@ -2887,9 +2895,9 @@ html[dir="rtl"] .chat-attachment-loading > span {
   flex: 0 0 auto;
   width: auto;
   max-height: none;
-  padding: 12px 12px 11px;
+  padding: 12px 14px 8px;
   border: 0;
-  background: color-mix(in srgb, var(--card) 78%, transparent);
+  background: transparent;
   overflow: visible;
 }
 
@@ -2899,7 +2907,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  margin-bottom: 10px;
+  margin-bottom: 4px;
 }
 
 .chat-controls__account-heading {
@@ -2983,9 +2991,9 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__effort-heading,
 .chat-controls__fast-mode-title {
-  color: var(--text);
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .chat-controls__effort-value {
@@ -2997,98 +3005,98 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
-/* Discrete effort slider: native range input for keyboard/a11y, decorative
-   stop dots layered underneath. */
+.chat-controls__effort-value[data-inherited="true"] {
+  color: var(--muted);
+}
+
+/* The native range owns input and keyboard behavior; its track only paints
+   a fixed accent ramp, revealed through the current stop. */
 .chat-controls__reasoning-slider {
+  --reasoning-ramp-start: color-mix(in oklab, var(--accent) 72%, white);
+  --reasoning-ramp-end: oklch(from var(--accent) calc(l * 0.88) calc(c * 1.2) h);
+  --reasoning-glow-color: color-mix(in srgb, var(--reasoning-ramp-end) 28%, transparent);
   position: relative;
   display: flex;
   align-items: center;
-  height: 26px;
-  margin: 0 6px;
+  height: 28px;
+}
+
+.chat-controls__reasoning-track,
+.chat-controls__reasoning-glow {
+  position: absolute;
+  inset: 4px 0;
+  border-radius: var(--radius-full);
+  pointer-events: none;
+}
+
+.chat-controls__reasoning-track {
+  background: color-mix(in srgb, var(--text) 8%, var(--card));
+  overflow: hidden;
+}
+
+.chat-controls__reasoning-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--reasoning-ramp-start), var(--reasoning-ramp-end));
+  clip-path: inset(0 calc(12px + (100% - 24px) * (1 - var(--reasoning-fill, 0))) 0 0);
+}
+
+.chat-controls__reasoning-sweep {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 50%;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, color-mix(in srgb, var(--accent) 8%, white) 45%, transparent),
+    transparent
+  );
+}
+
+:root[data-theme-mode="light"] .chat-controls__reasoning-sweep {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, white 60%, transparent),
+    transparent
+  );
+}
+
+.chat-controls__reasoning-glow {
+  opacity: 0;
+  box-shadow: 0 0 0 var(--reasoning-glow-color);
 }
 
 .chat-controls__reasoning-dots {
   position: absolute;
-  inset: 0;
+  inset: 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
   pointer-events: none;
 }
 
 .chat-controls__reasoning-dot {
-  width: 4px;
-  height: 4px;
+  width: 3px;
+  height: 3px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 28%, transparent);
+  background: color-mix(in srgb, var(--text) 24%, var(--card));
+}
+
+.chat-controls__reasoning-dot[data-filled] {
+  background: rgb(255 255 255 / 60%);
 }
 
 .chat-controls__reasoning-range {
   appearance: none;
   position: relative;
-  z-index: 1;
   width: 100%;
-  height: 26px;
+  height: 28px;
   margin: 0;
   padding: 0;
   border-radius: var(--radius-full);
   background: transparent;
-}
-
-.chat-controls__reasoning-slider:has([data-effort-boost="max"], [data-effort-boost="ultra"]) {
-  --reasoning-track-background: transparent;
-  --reasoning-boost-highlight: color-mix(in srgb, var(--accent) 60%, white);
-  border-radius: var(--radius-full);
-  background-image: linear-gradient(
-    105deg,
-    color-mix(in srgb, var(--accent) 70%, var(--card)) 0%,
-    var(--accent) 25%,
-    var(--reasoning-boost-highlight) 50%,
-    var(--accent) 75%,
-    color-mix(in srgb, var(--accent) 70%, var(--card)) 100%
-  );
-  background-position: 50% 50%;
-  background-size: 220% 100%;
-}
-
-.chat-controls__reasoning-range[data-effort-boost="max"] {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
-    0 0 12px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-.chat-controls__reasoning-slider:has([data-effort-boost="ultra"]) {
-  --reasoning-boost-highlight: color-mix(in srgb, var(--accent-2) 70%, white);
-}
-
-.chat-controls__reasoning-range[data-effort-boost="ultra"] {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 75%, transparent),
-    0 0 18px color-mix(in srgb, var(--accent) 48%, transparent),
-    inset 0 0 12px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-@keyframes chat-effort-flow {
-  from {
-    background-position: 0% 50%;
-  }
-  to {
-    background-position: 100% 50%;
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__reasoning-slider:has(
-    [data-effort-boost="max"]:not(:disabled),
-    [data-effort-boost="ultra"]:not(:disabled)
-  ) {
-    animation: chat-effort-flow 6s ease-in-out infinite alternate;
-  }
-
-  .chat-controls__reasoning-slider:has([data-effort-boost="ultra"]:not(:disabled)) {
-    animation-duration: 4s;
-  }
 }
 
 .chat-controls__reasoning-range:disabled {
@@ -3104,27 +3112,19 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__reasoning-range::-webkit-slider-runnable-track {
-  height: 26px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-full);
-  background: var(
-    --reasoning-track-background,
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--text) 18%, transparent) var(--reasoning-fill, 0%),
-      color-mix(in srgb, var(--text) 7%, transparent) var(--reasoning-fill, 0%)
-    )
-  );
+  height: 20px;
+  border: 0;
+  background: transparent;
 }
 
 .chat-controls__reasoning-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 28px;
-  height: 20px;
-  margin-top: 3px;
-  border: none;
+  width: 24px;
+  height: 24px;
+  margin-top: -2px;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, white);
   border-radius: var(--radius-full);
-  background: var(--text-strong);
+  background: white;
   box-shadow: var(--shadow-sm);
 }
 
@@ -3132,42 +3132,42 @@ html[dir="rtl"] .chat-attachment-loading > span {
   box-shadow: var(--focus-ring);
 }
 
-.chat-controls__reasoning-range--inherit::-webkit-slider-thumb {
-  background: var(--muted);
-}
-
 .chat-controls__reasoning-range--unanchored::-webkit-slider-thumb {
-  opacity: 0.35;
+  opacity: 0.5;
 }
 
 .chat-controls__reasoning-range::-moz-range-track {
-  height: 26px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-full);
-  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 7%, transparent));
+  height: 20px;
+  border: 0;
+  background: transparent;
 }
 
 .chat-controls__reasoning-range::-moz-range-progress {
-  height: 24px;
-  border-radius: var(--radius-full);
-  background: var(--reasoning-track-background, color-mix(in srgb, var(--text) 18%, transparent));
+  background: transparent;
 }
 
 .chat-controls__reasoning-range::-moz-range-thumb {
-  width: 28px;
-  height: 20px;
-  border: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, white);
   border-radius: var(--radius-full);
-  background: var(--text-strong);
+  background: white;
   box-shadow: var(--shadow-sm);
 }
 
-.chat-controls__reasoning-range--inherit::-moz-range-thumb {
-  background: var(--muted);
+.chat-controls__reasoning-range:focus-visible::-moz-range-thumb {
+  box-shadow: var(--focus-ring);
 }
 
 .chat-controls__reasoning-range--unanchored::-moz-range-thumb {
-  opacity: 0.35;
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-controls__reasoning-sweep,
+  .chat-controls__reasoning-glow {
+    display: none;
+  }
 }
 
 .chat-controls__speed-panel,
@@ -3176,10 +3176,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   padding: 11px 12px;
 }
 
-/* Qualify siblings so unrelated DOM removal cannot invalidate the whole document. */
-.chat-controls__effort-menu
-  > :where(.chat-controls__reasoning-panel, .chat-controls__speed-panel)
-  + :where(.chat-controls__reasoning-panel, .chat-controls__speed-panel),
+/* Access keeps its existing section boundary; Effort and Speed form one group. */
+.chat-controls__effort-menu > .chat-controls__reasoning-panel:not(:first-child),
 .chat-controls__fast-mode-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
@@ -3215,12 +3213,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border-color: var(--border);
   background: var(--card);
   color: var(--text-strong);
-}
-
-.chat-controls__speed-option[data-chat-speed-option="ultrafast"][aria-checked="true"] {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  color: var(--accent);
 }
 
 .chat-controls__speed-option:disabled {
@@ -3853,5 +3845,83 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
   .agent-chat__suggestion {
     min-height: 44px;
+  }
+}
+
+/* Speed is a text row. Only the selected option paints its background. */
+.chat-controls__speed-panel--inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 14px 12px;
+}
+
+.chat-controls__speed-options--plain {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.chat-controls__speed-options--plain .chat-controls__speed-option {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  color: var(--text);
+  font-weight: 450;
+  white-space: nowrap;
+}
+
+.chat-controls__speed-options--plain .chat-controls__speed-option[aria-checked="true"] {
+  corner-shape: superellipse(1.5);
+  background: color-mix(in srgb, var(--text) 6%, var(--card));
+  color: var(--text-strong);
+}
+
+.chat-controls__speed-option-icon {
+  --icon-primary: currentColor;
+  --icon-secondary: color-mix(in srgb, currentColor 70%, var(--card));
+  display: inline-flex;
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+  color: var(--muted);
+}
+
+.chat-controls__speed-options--plain .chat-controls__speed-option-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.chat-controls__speed-option[aria-checked="true"] .chat-controls__speed-option-icon {
+  --icon-secondary: color-mix(in oklab, var(--accent) 75%, white);
+  color: var(--accent);
+}
+
+.chat-controls__speed-options--plain .chat-controls__speed-option:disabled {
+  opacity: 1;
+  color: color-mix(in srgb, var(--muted) 55%, var(--card));
+}
+
+.chat-controls__speed-option:disabled .chat-controls__speed-option-icon {
+  color: color-mix(in srgb, var(--muted) 45%, var(--card));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__speed-options--plain .chat-controls__speed-option {
+    transition:
+      color var(--duration-normal) var(--ease-out),
+      background var(--duration-normal) var(--ease-out);
   }
 }

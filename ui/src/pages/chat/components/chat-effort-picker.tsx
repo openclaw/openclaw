@@ -54,20 +54,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     const hasThinkingOverride = selection.source === "override";
     const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
     const sliderUnanchored = selection.kind === "unanchored";
-    // A narrowed catalog's first stop must not paint a full maximum-effort track.
-    // Binary providers can use a ranked wire value with the display label "On".
-    const maximumIndex = sliderStops.findLastIndex(
-      (stop) =>
-        stop.label !== "On" &&
-        ["minimal", "low", "medium", "high", "xhigh", "max"].includes(stop.value),
-    );
-    const sliderBoost = (index: number) =>
-      sliderStops[index]?.value === "ultra"
-        ? "ultra"
-        : maximumIndex > 0 && index === maximumIndex
-          ? "max"
-          : "";
-    const committedBoost = sliderUnanchored ? "" : sliderBoost(sliderIndex);
     const defaultLevelLabel = formatEffortLabel(props.thinking.inherited.displayLabel);
     const reasoningValueText = formatEffortLabel(selection.displayLabel);
     const reasoningValueLabel = hasThinkingOverride
@@ -127,8 +113,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       selectedThinkingValue: hasThinkingOverride ? selection.value : "",
       sliderIndex,
       sliderUnanchored,
-      sliderBoost,
-      committedBoost,
       reasoningValueText,
       reasoningValueLabel,
       ultrafast,

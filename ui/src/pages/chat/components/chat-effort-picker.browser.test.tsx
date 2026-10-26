@@ -8,6 +8,7 @@ import {
 } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { emulateOverlayMedia } from "../../../test-helpers/overlay-browser-media.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -20,7 +21,6 @@ let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | un
 const speed = (value: string) =>
   host!.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
 const summary = () => host!.querySelector("summary")!;
-const noBoost = { fill: "none", glow: "none" };
 
 function speedState(
   mode: boolean | "ultrafast",
@@ -140,14 +140,7 @@ async function fixture(
   };
 }
 
-function appearance(input: HTMLInputElement) {
-  return {
-    fill: getComputedStyle(input.parentElement!).backgroundImage,
-    glow: getComputedStyle(input).boxShadow,
-  };
-}
-
-describe("effort bar colour and flow", () => {
+describe("effort selection", () => {
   it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
     await fixture(["low", "medium", "high"], "high", false, undefined, false);
     const composer = host!;
@@ -235,82 +228,124 @@ describe("effort bar colour and flow", () => {
     expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
   });
 
-  it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {
-    document.documentElement.dataset.themeMode = theme;
-    for (const maximum of ["high", "xhigh", "max"]) {
-      const levels = ["off", "low", maximum, "adaptive", "ultra"];
-      const { input } = await fixture(levels, maximum);
-      const maximumStyle = appearance(input);
-      expect(maximumStyle.fill).toContain("linear-gradient");
-      expect(maximumStyle.glow).not.toBe("none");
-      expect(appearance((await fixture(levels, maximum, true)).input)).toEqual(maximumStyle);
-      const ultraStyle = appearance((await fixture(levels, "ultra")).input);
-      expect(ultraStyle.fill).toContain("linear-gradient");
-      expect(ultraStyle.fill).not.toBe(maximumStyle.fill);
-      expect(ultraStyle.glow).not.toBe(maximumStyle.glow);
-      for (const value of ["off", "low", "adaptive", "unsupported"]) {
-        expect(appearance((await fixture(levels, value)).input)).toEqual(noBoost);
-      }
-    }
-    expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual(noBoost);
-    for (const id of ["low", "high"]) {
-      const { input } = await fixture(["off", { id, label: "on" }, "ultra"], id);
-      expect(appearance(input)).toEqual(noBoost);
-    }
-  });
-
-  it("previews colour without committing and restores the committed level on cancel or blur", async () => {
+  it("previews effort without committing and restores the committed level on cancel or blur", async () => {
     const { input, onThinkingSelect } = await fixture(["low", "max", "ultra"], "max", true);
-    const maximumStyle = appearance(input);
     for (const resetEvent of ["pointercancel", "blur"]) {
-      input.value = "2";
+      input.value = "1.72";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
+      expect(input.value).toBe("1.72");
       expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
-      expect(appearance(input)).not.toEqual(maximumStyle);
+      expect(summary().textContent?.trim()).toBe("Maximum");
       expect(onThinkingSelect).not.toHaveBeenCalled();
       input.dispatchEvent(new Event(resetEvent));
       flush();
       expect(input.value).toBe("1");
       expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
-      expect(appearance(input)).toEqual(maximumStyle);
     }
-    input.value = "0";
+    input.value = "0.28";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    expect(appearance(input)).toEqual(noBoost);
+    expect(input.getAttribute("aria-valuetext")).toBe("Low");
     input.dispatchEvent(new Event("change"));
     flush();
+    expect(input.value).toBe("0");
     expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
-    expect(appearance(input)).toEqual(maximumStyle);
+    expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
+
+    const unanchored = await fixture(["low", "ultra"], "off");
+    unanchored.input.dispatchEvent(new PointerEvent("pointerdown"));
+    unanchored.input.value = "0.2";
+    unanchored.input.dispatchEvent(new Event("input", { bubbles: true }));
+    unanchored.input.dispatchEvent(new Event("change"));
+    unanchored.input.dispatchEvent(new MouseEvent("click"));
+    expect(unanchored.onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
   });
 });
 
-it("maps effort fill to actual supported stops without boosting a narrowed minimum", async () => {
-  for (const [level, index, fill] of [
-    ["low", 0, "0%"],
-    ["medium", 1, "50%"],
-    ["high", 2, "100%"],
+it("maps actual supported stops and handles a single available effort", async () => {
+  for (const [level, index] of [
+    ["low", 0],
+    ["medium", 1],
+    ["high", 2],
   ] as const) {
     const { input } = await fixture(["low", "medium", "high"], level);
     expect(input.value).toBe(String(index));
-    expect(input.style.getPropertyValue("--reasoning-fill")).toBe(fill);
-    expect(input.dataset.effortBoost).toBe(level === "high" ? "max" : "");
+    expect(input.getAttribute("aria-valuetext")?.toLowerCase()).toBe(level);
   }
   for (const minimum of ["low", "medium", "high"]) {
     const { input } = await fixture([minimum, "ultra"], minimum);
     expect(input.value).toBe("0");
-    expect(input.style.getPropertyValue("--reasoning-fill")).toBe("0%");
-    expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+    expect(input.getAttribute("aria-valuetext")?.toLowerCase()).toBe(minimum);
   }
   const { input } = await fixture(["medium", "ultra"], "ultra");
   expect(input.value).toBe("1");
-  expect(input.dataset.effortBoost).toBe("ultra");
+  expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
   await fixture(["medium"], "medium");
   expect(host!.querySelector("input[type=range]")).toBeNull();
   expect(
     host!.querySelector('[data-chat-thinking-option="medium"]')?.getAttribute("aria-pressed"),
   ).toBe("true");
+});
+
+it("plays Ultra feedback only when entering Ultra, including an uncommitted drag", async () => {
+  const { input, onThinkingSelect } = await fixture(["low", "high", "ultra"], "ultra");
+  const feedback = () => host!.querySelector(".chat-controls__reasoning-glow")!.getAnimations()[0];
+  expect(feedback()).toBeUndefined();
+  const preview = (value: string) => {
+    const currentInput = host!.querySelector<HTMLInputElement>("input[type=range]")!;
+    currentInput.value = value;
+    currentInput.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  preview("1");
+  expect(feedback()).toBeUndefined();
+  input.dispatchEvent(new PointerEvent("pointermove", { buttons: 1 }));
+  preview("2");
+  const first = feedback();
+  expect(first).toBeDefined();
+  expect(onThinkingSelect).not.toHaveBeenCalled();
+  preview("2");
+  expect(feedback()).toBe(first);
+  first.pause();
+  first.currentTime = 150;
+  preview("1");
+  expect(first.playState).toBe("idle");
+  const fading = feedback();
+  expect(fading).toBeDefined();
+  expect(fading).not.toBe(first);
+  preview("2");
+  expect(fading.playState).toBe("idle");
+  expect(feedback()).not.toBe(first);
+  input.dispatchEvent(new Event("pointercancel"));
+  expect(feedback()).toBeUndefined();
+  expect(summary().textContent?.trim()).toBe("Ultra");
+  await fixture(["low", "medium", "high"], "medium");
+  preview("2");
+  expect(feedback()).toBeUndefined();
+  await emulateOverlayMedia({ reducedMotion: "reduce" });
+  onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
+  await fixture(["low", "high", "ultra"], "high");
+  preview("2");
+  expect(feedback()).toBeUndefined();
+  expect(host!.querySelector(".chat-controls__effort-value")!.getAnimations()).toHaveLength(0);
+});
+
+it("keeps keyboard changes on real effort levels when pointer input is continuous", async () => {
+  const levels = ["low", "high", "ultra"];
+  let committed = "high";
+  for (const [key, expected] of [
+    ["ArrowRight", "ultra"],
+    ["ArrowLeft", "high"],
+    ["Home", "low"],
+    ["End", "ultra"],
+  ]) {
+    const { input, onThinkingSelect } = await fixture(levels, committed);
+    input.focus();
+    await userEvent.keyboard(`{${key}}`);
+    expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith(expected, "effort-preview");
+    expect(input.value).toBe(String(levels.indexOf(expected)));
+    committed = expected;
+  }
 });
 
 it("uses entitled Access segments with shared keyboard behavior and a separate default reset", async () => {

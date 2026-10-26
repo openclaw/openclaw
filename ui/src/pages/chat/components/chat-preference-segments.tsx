@@ -1,5 +1,7 @@
 import { For, createMemo } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 
 type PreferenceOption<T extends string> = { value: T; label: string; disabled?: boolean };
 
@@ -45,7 +47,10 @@ export function ChatPreferenceSegments<T extends string>(props: {
   };
   return (
     <div
-      class="chat-controls__speed-options"
+      class={[
+        "chat-controls__speed-options",
+        { "chat-controls__speed-options--plain": props.kind === "speed" },
+      ]}
       data-chat-access-program={props.kind === "access" ? "true" : undefined}
       role="radiogroup"
       aria-label={props.label}
@@ -67,6 +72,11 @@ export function ChatPreferenceSegments<T extends string>(props: {
               aria-checked={option().value === props.selected ? "true" : "false"}
               tabindex={index() === tabbableIndex() ? 0 : -1}
               disabled={props.disabled || option().disabled}
+              title={
+                props.kind === "speed" && option().value === "ultrafast" && option().disabled
+                  ? t("chat.modelControls.ultrafastUnavailable")
+                  : undefined
+              }
               onClick={(event: MouseEvent) => {
                 event.stopPropagation();
                 if (!props.disabled && !option().disabled) {
@@ -74,6 +84,11 @@ export function ChatPreferenceSegments<T extends string>(props: {
                 }
               }}
             >
+              {props.kind === "speed" && ["on", "ultrafast"].includes(option().value) && (
+                <span class="chat-controls__speed-option-icon" aria-hidden="true">
+                  <Icon name={option().value === "ultrafast" ? "zapDouble" : "zap"} />
+                </span>
+              )}
               {option().label}
             </button>
           );
