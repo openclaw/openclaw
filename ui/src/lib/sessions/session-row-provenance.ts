@@ -94,10 +94,17 @@ export function createSessionRowProvenance() {
       return current;
     }
     // A patch ACK advances updatedAt while retaining the row's earlier sampling time.
-    const currentAt = Math.max(current.snapshotAt ?? -Infinity, current.updatedAt ?? -Infinity);
-    const offeredAt = Math.max(offered.snapshotAt ?? -Infinity, offered.updatedAt ?? -Infinity);
+    // Unsampled rows still use the durable-write and read-revision ordering below.
+    const currentAt =
+      current.snapshotAt === undefined
+        ? undefined
+        : Math.max(current.snapshotAt, current.updatedAt ?? -Infinity);
+    const offeredAt =
+      offered.snapshotAt === undefined
+        ? undefined
+        : Math.max(offered.snapshotAt, offered.updatedAt ?? -Infinity);
     const newer =
-      offeredAt !== -Infinity && currentAt !== -Infinity && offeredAt !== currentAt
+      offeredAt !== undefined && currentAt !== undefined && offeredAt !== currentAt
         ? offeredAt > currentAt
           ? offered
           : current
