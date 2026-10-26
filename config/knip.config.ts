@@ -396,6 +396,7 @@ const repositoryScriptEntries = [
   "scripts/perf/lease-main-thread-renewal.mjs!",
   "scripts/perf/media-selection-measure.ts!",
   "scripts/perf/model-catalog-runtime-measure.ts!",
+  "scripts/perf/models-list-read-measure.ts!",
   "scripts/perf/model-suppression-resolver.ts!",
   "scripts/perf/node-event-session-source-measure.mjs!",
   "scripts/perf/onboarding-readback-measure.ts!",
