@@ -1,77 +1,47 @@
-/**
- * Contract tests for system-run approval binding behavior across fixtures.
- */
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
-import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  type SystemRunApprovalMatchResult,
+} from "../infra/system-run-approval-binding.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 
+type BindingInput = Pick<ExecApprovalRequestPayload, "cwd" | "agentId" | "sessionKey"> & {
+  argv: string[];
+  env?: Record<string, string>;
+};
 type FixtureCase = {
   name: string;
-  request: {
-    host: string;
-    command: string;
-    commandArgv?: string[];
-    cwd?: string | null;
-    agentId?: string | null;
-    sessionKey?: string | null;
-    binding?: {
-      argv: string[];
-      cwd?: string | null;
-      agentId?: string | null;
-      sessionKey?: string | null;
-      env?: Record<string, string>;
-    };
-  };
+  request: Pick<
+    ExecApprovalRequestPayload,
+    "command" | "commandArgv" | "cwd" | "agentId" | "sessionKey"
+  > & { host: string; binding?: BindingInput };
   invoke: {
     argv: string[];
-    binding: {
-      cwd: string | null;
-      agentId: string | null;
-      sessionKey: string | null;
-      env?: Record<string, string>;
-    };
+    binding: Required<Pick<BindingInput, "cwd" | "agentId" | "sessionKey">> &
+      Pick<BindingInput, "env">;
   };
-  expected: {
-    ok: boolean;
-    code?: "APPROVAL_REQUEST_MISMATCH" | "APPROVAL_ENV_BINDING_MISSING" | "APPROVAL_ENV_MISMATCH";
-  };
+  expected: { ok: boolean; code?: Extract<SystemRunApprovalMatchResult, { ok: false }>["code"] };
 };
-
-type Fixture = {
-  cases: FixtureCase[];
-};
-
-const fixturePath = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../test/fixtures/system-run-approval-binding-contract.json",
+const fixture: { cases: FixtureCase[] } = JSON.parse(
+  fs.readFileSync(
+    new URL("../../test/fixtures/system-run-approval-binding-contract.json", import.meta.url),
+    "utf8",
+  ),
 );
-const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Fixture;
 
 function buildRequestPayload(entry: FixtureCase): ExecApprovalRequestPayload {
-  const payload: ExecApprovalRequestPayload = {
-    host: entry.request.host,
+  const { binding, ...request } = entry.request;
+  return {
+    ...request,
     nodeId: "node-1",
-    command: entry.request.command,
-    commandArgv: entry.request.commandArgv,
     cwd: entry.request.cwd ?? null,
     agentId: entry.request.agentId ?? null,
     sessionKey: entry.request.sessionKey ?? null,
+    ...(binding ? { systemRunBinding: buildSystemRunApprovalBinding(binding).binding } : {}),
   };
-  if (entry.request.binding) {
-    payload.systemRunBinding = buildSystemRunApprovalBinding({
-      argv: entry.request.binding.argv,
-      cwd: entry.request.binding.cwd,
-      agentId: entry.request.binding.agentId,
-      sessionKey: entry.request.binding.sessionKey,
-      env: entry.request.binding.env,
-    }).binding;
-  }
-  return payload;
 }
 
 const nonNodeHostCase: FixtureCase = {
