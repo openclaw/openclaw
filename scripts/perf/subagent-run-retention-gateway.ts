@@ -20,6 +20,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { buildGatewayBenchChildArgs } from "../lib/gateway-bench-runtime.ts";
@@ -84,14 +85,14 @@ async function durablePayloads(env: NodeJS.ProcessEnv) {
       );
       const digest = createHash("sha256");
       let undelivered = 0;
-      for (const entry of rows.values()) {
+      for (const entry of [...rows.values()].toSorted((a, b) => a.runId.localeCompare(b.runId))) {
         if (entry.delivery?.status === "suspended") {
           undelivered++;
           assert.equal(entry.completion?.resultText?.length, 32_768);
           assert.equal(entry.completion?.terminalReply?.disposition, "visible");
         }
         digest.update(
-          JSON.stringify([
+          stableStringify([
             entry.runId,
             entry.completion,
             entry.delivery?.status,
