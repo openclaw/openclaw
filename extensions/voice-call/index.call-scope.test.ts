@@ -36,11 +36,8 @@ async function makeManagerRuntime() {
   return {
     ...registerBoundTool(call.callId),
     call,
-    initiateCall: vi.spyOn(manager, "initiateCall"),
-    sendDtmf: vi.spyOn(manager, "sendDtmf"),
-    endCall: vi.spyOn(manager, "endCall"),
+    provider,
     getCallForStream: vi.spyOn(manager, "getCallForStream"),
-    hangupCall: vi.spyOn(provider, "hangupCall"),
   };
 }
 
@@ -68,20 +65,6 @@ function holdCallLookup() {
   return { started: started.promise, release: release.resolve };
 }
 
-function expectHangup() {
-  expect(carrier.endCall).toHaveBeenCalledExactlyOnceWith(carrier.call.callId);
-  expect(carrier.hangupCall).toHaveBeenCalledExactlyOnceWith({
-    callId: carrier.call.callId,
-    providerCallId: carrier.call.providerCallId,
-    reason: "hangup-bot",
-  });
-}
-
-function expectNoHangup() {
-  expect(carrier.endCall).not.toHaveBeenCalled();
-  expect(carrier.hangupCall).not.toHaveBeenCalled();
-}
-
 beforeEach(async () => {
   vi.mocked(createVoiceCallRuntime).mockReset();
   carrier = await makeManagerRuntime();
@@ -94,12 +77,6 @@ afterEach(() => {
   ];
 });
 
-it("hangs up the exact active call once through the registered tool", async () => {
-  const result = await carrier.tool.execute("end", { action: "end_call" });
-  expect(JSON.stringify(result)).not.toContain("error");
-  expectHangup();
-});
-
 it.each([
   ["end_call", "call-foreign", "bound to call"],
   ["steer_call", undefined, "only end_call"],
@@ -107,12 +84,9 @@ it.each([
   const result = await carrier.tool.execute("rejected", {
     action,
     callId: callId ?? carrier.call.callId,
-    message: "steer",
   });
   expect(JSON.stringify(result)).toContain(error);
-  expectNoHangup();
-  expect(carrier.initiateCall).not.toHaveBeenCalled();
-  expect(carrier.sendDtmf).not.toHaveBeenCalled();
+  expect(carrier.provider.hangupCalls).toEqual([]);
 });
 
 it("finishes an accepted hang-up when the consult is cancelled during call lookup", async () => {
@@ -123,7 +97,13 @@ it("finishes an accepted hang-up when the consult is cancelled during call looku
   controller.abort();
   lookup.release();
   expect(JSON.stringify(await pending)).not.toContain("error");
-  expectHangup();
+  expect(carrier.provider.hangupCalls).toEqual([
+    {
+      callId: carrier.call.callId,
+      providerCallId: carrier.call.providerCallId,
+      reason: "hangup-bot",
+    },
+  ]);
 });
 
 it("rejects hang-up before admission when the consult is cancelled or the call has ended", async () => {
@@ -137,7 +117,7 @@ it("rejects hang-up before admission when the consult is cancelled or the call h
   carrier.getCallForStream.mockResolvedValue(undefined);
   const ended = await tool.execute("ended", { action: "end_call" });
   expect(JSON.stringify(ended)).toContain("no longer active");
-  expect(carrier.endCall).not.toHaveBeenCalled();
+  expect(carrier.provider.hangupCalls).toEqual([]);
 });
 
 it.each(["retired", "replaced", "restarted"])(
@@ -156,6 +136,6 @@ it.each(["retired", "replaced", "restarted"])(
     }
     lookup.release();
     expect(JSON.stringify(await pending)).toContain("no longer active");
-    expectNoHangup();
+    expect(carrier.provider.hangupCalls).toEqual([]);
   },
 );

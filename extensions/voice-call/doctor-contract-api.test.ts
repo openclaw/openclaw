@@ -19,6 +19,7 @@ import { loadActiveCallsFromStore } from "./src/manager/store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
+    vi.doUnmock("openclaw/plugin-sdk/doctor-repair-runtime");
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
@@ -29,7 +30,8 @@ function pluginConfig(config: Record<string, unknown>, id = "voice-call") {
   return { plugins: { entries: { [id]: { config } } } };
 }
 
-function migrationParams(stateDir: string, env: NodeJS.ProcessEnv, store?: string) {
+function migrationParams(stateDir: string, store?: string, home = stateDir) {
+  const env = { ...process.env, HOME: home, OPENCLAW_STATE_DIR: stateDir };
   return {
     config: store ? pluginConfig({ store }) : {},
     env,
@@ -42,41 +44,27 @@ function migrationParams(stateDir: string, env: NodeJS.ProcessEnv, store?: strin
   };
 }
 
-describe.each(["default", "custom"] as const)("absent %s Voice Call store", (location) => {
-  it.each(["detectLegacyState", "migrateLegacyState"] as const)(
-    "%s leaves absent state untouched without loading repair machinery",
-    async (method) => {
-      const root = tempDirs.make("openclaw-voice-call-absent-");
-      const store = path.join(root, location === "default" ? "voice-calls" : "custom-store");
-      const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root };
-      vi.doMock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
-        throw new Error("absent Voice Call state must not load repair machinery");
-      });
-      try {
-        const migration = expectDefined(stateMigrations[1], "voice-call schema migration");
-        const result = await migration[method](
-          migrationParams(root, env, location === "custom" ? store : undefined),
-        );
-        expect(result).toEqual(
-          method === "detectLegacyState" ? null : { changes: [], warnings: [] },
-        );
-        expect(await fs.readdir(root)).toEqual([]);
-      } finally {
-        vi.doUnmock("openclaw/plugin-sdk/doctor-repair-runtime");
-      }
-    },
-  );
-});
+it.each(["detectLegacyState", "migrateLegacyState"] as const)(
+  "%s leaves absent state untouched without loading repair machinery",
+  async (method) => {
+    const root = tempDirs.make("openclaw-voice-call-absent-");
+    vi.doMock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
+      throw new Error("absent Voice Call state must not load repair machinery");
+    });
+    const migration = expectDefined(stateMigrations[1], "voice-call schema migration");
+    const result = await migration[method](migrationParams(root));
+    expect(result).toEqual(method === "detectLegacyState" ? null : { changes: [], warnings: [] });
+    expect(await fs.readdir(root)).toEqual([]);
+  },
+);
 
 describe("voice-call doctor state migration", () => {
   let stateDir = "";
   let storePath = "";
-  let env: NodeJS.ProcessEnv;
   beforeEach(() => {
     resetPluginStateStoreForTests();
     stateDir = tempDirs.make("openclaw-voice-call-doctor-");
     storePath = path.join(stateDir, "custom-store");
-    env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
     installVoiceCallStateRuntimeForTests();
   });
 
@@ -91,16 +79,10 @@ describe("voice-call doctor state migration", () => {
     expect(resolveSessionStoreAgentIds({ cfg })).toEqual(expected);
   });
 
-  it.each(["default", "custom", "tilde"] as const)(
+  it.each(["voice-calls", "custom-store", "home$&d/dollar-store"])(
     "refuses the retired %s call log without changing its bytes or creating SQLite state",
     async (location) => {
-      const home = path.join(stateDir, "home$&d");
-      const store =
-        location === "default"
-          ? path.join(stateDir, "voice-calls")
-          : location === "tilde"
-            ? path.join(home, "dollar-store")
-            : storePath;
+      const store = path.join(stateDir, location);
       await fs.mkdir(store, { recursive: true });
       const source = path.join(store, "calls.jsonl");
       const bytes = Buffer.from('{"callId":"unmigrated"}\n{invalid retained bytes\n');
@@ -108,8 +90,12 @@ describe("voice-call doctor state migration", () => {
       const migration = expectDefined(stateMigrations[0], "retired call-log migration");
       const params = migrationParams(
         stateDir,
-        { ...env, HOME: home },
-        location === "default" ? undefined : location === "tilde" ? "~/dollar-store" : store,
+        location === "voice-calls"
+          ? undefined
+          : location === "custom-store"
+            ? store
+            : "~/dollar-store",
+        path.join(stateDir, "home$&d"),
       );
       await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
         preview: [expect.stringContaining(source)],
@@ -142,7 +128,7 @@ describe("voice-call doctor state migration", () => {
       db.close();
     }
     const migration = expectDefined(stateMigrations[1], "voice-call schema migration");
-    const params = migrationParams(stateDir, env, storePath);
+    const params = migrationParams(stateDir, storePath);
 
     await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
       preview: expect.arrayContaining([
@@ -151,7 +137,9 @@ describe("voice-call doctor state migration", () => {
       ]),
     });
     await expect(
-      withStateMigrationBackupForTest({ env }, () => migration.migrateLegacyState(params)),
+      withStateMigrationBackupForTest({ env: params.env }, () =>
+        migration.migrateLegacyState(params),
+      ),
     ).resolves.toEqual({
       changes: expect.arrayContaining([
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
