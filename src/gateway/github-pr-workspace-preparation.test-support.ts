@@ -32,7 +32,10 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
-import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
+import {
+  createPublicationRepositories,
+  createRequesterPublicationFixture,
+} from "./github-publication-requester.test-support.js";
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -133,23 +136,7 @@ export async function fixture(
     });
   }
   const git = (...args: string[]) => local.git("-C", cwd, ...args);
-  const baseRepo = {
-    id: 10,
-    full_name: "openclaw/openclaw",
-    private: false,
-    archived: false,
-    owner: { type: "Organization" },
-    permissions: { push: true },
-  };
-  const headRepo = options.fork
-    ? {
-        ...baseRepo,
-        id: 20,
-        full_name: "contributor/openclaw",
-        owner: { type: "User" },
-        permissions: { push: false },
-      }
-    : baseRepo;
+  const { baseRepo, headRepo } = createPublicationRepositories(options.fork);
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",
