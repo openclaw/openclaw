@@ -80,22 +80,19 @@ it("shows input waiting behind retained cleanup instead of resurrecting processi
   }
 });
 
-it.each([0, 1])(
-  "reconciles ownerless processing without discarding %i queued inputs",
-  async (queued) => {
-    const ref = { sessionKey: "agent:main:orphan", sessionId: "orphan-session" };
-    if (queued) {
-      logMessageQueuedWithBacklogPolicy({ ...ref, source: "dispatch" }, true);
-    }
-    logSessionStateChange({ ...ref, state: "processing" });
-    const state = getDiagnosticSessionState(ref);
-    await recoverStuckDiagnosticSession({
-      ...ref,
-      ageMs: 600_000,
-      expectedState: "processing",
-      stateGeneration: state.generation,
-      queueDepth: queued,
-    });
-    expect(state).toMatchObject({ state: queued ? "waiting" : "idle", queueDepth: queued });
-  },
-);
+it.each([0, 1])("reconciles ownerless processing with %i queued inputs", async (queued) => {
+  const ref = { sessionKey: "agent:main:orphan", sessionId: "orphan-session" };
+  if (queued) {
+    logMessageQueuedWithBacklogPolicy({ ...ref, source: "dispatch" }, true);
+  }
+  logSessionStateChange({ ...ref, state: "processing" });
+  const state = getDiagnosticSessionState(ref);
+  await recoverStuckDiagnosticSession({
+    ...ref,
+    ageMs: 600_000,
+    expectedState: "processing",
+    stateGeneration: state.generation,
+    queueDepth: queued,
+  });
+  expect(state).toMatchObject({ state: queued ? "waiting" : "idle", queueDepth: queued });
+});
