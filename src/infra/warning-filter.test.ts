@@ -78,9 +78,8 @@ describe("warning filter", () => {
 
   it("installs once and suppresses known warnings at emit time", async () => {
     const seenWarnings: Array<{ code?: string; name: string; message: string }> = [];
-    const onWarning = ({ code, name, message }: Error & { code?: string }) => {
+    const onWarning = ({ code, name, message }: Error & { code?: string }) =>
       seenWarnings.push({ code, name, message });
-    };
     const makeWarning = (name: string, message: string, code?: string) => ({ name, message, code });
     const punycode = makeWarning(
       "DeprecationWarning",
@@ -97,8 +96,7 @@ describe("warning filter", () => {
       installProcessWarningFilter();
       installProcessWarningFilter();
       installProcessWarningFilter();
-      const emitWarning = (...args: unknown[]) =>
-        (process.emitWarning as unknown as (...warningArgs: unknown[]) => void)(...args);
+      const emitWarning = (...args: unknown[]) => Reflect.apply(process.emitWarning, process, args);
 
       emitWarning(extendMessage, "DeprecationWarning", "DEP0060");
       emitWarning(extendMessage, { type: "DeprecationWarning", code: "DEP0060" });
@@ -106,9 +104,6 @@ describe("warning filter", () => {
       emitWarning(new Error("SQLite is an experimental feature and might change at any time"), {
         type: "ExperimentalWarning",
       });
-      await setImmediate();
-      expect(seenWarnings).toEqual([]);
-
       const visible = makeWarning("Warning", "Visible warning", "OPENCLAW_TEST_WARNING");
       emitWarning(visible.message, { type: visible.name, code: visible.code });
       emitWarning(warningError(punycode), { type: "Warning", code: "OPENCLAW_VISIBLE_OVERRIDE" });
@@ -121,11 +116,11 @@ describe("warning filter", () => {
         process.emitWarning(warningError(warning));
       }
       await setImmediate();
-      for (const expected of [visible, punycode, ...visibleWarnings]) {
-        expect(seenWarnings.find((seen) => seen.message === expected.message)).toStrictEqual(
-          expected,
-        );
-      }
+      const byMessage = (a: { message: string }, b: { message: string }) =>
+        a.message.localeCompare(b.message);
+      expect(seenWarnings.toSorted(byMessage)).toStrictEqual(
+        [visible, punycode, ...visibleWarnings].toSorted(byMessage),
+      );
     } finally {
       process.off("warning", onWarning);
     }

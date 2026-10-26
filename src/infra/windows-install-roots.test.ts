@@ -27,7 +27,7 @@ afterEach(() => {
   execFileSyncMock.mockReset();
 });
 
-describe("getWindowsInstallRoots", () => {
+describe("Windows install roots and executables", () => {
   it("prefers HKLM registry roots over process environment values", () => {
     vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
     execFileSyncMock.mockImplementation((_file, args: string[]) => {
@@ -95,9 +95,6 @@ describe("getWindowsInstallRoots", () => {
       programW6432: null,
     });
   });
-});
-
-describe("getWindowsProgramFilesRoots", () => {
   it("prefers ProgramW6432 and dedupes roots case-insensitively", () => {
     expect(
       getWindowsProgramFilesRoots({
@@ -107,9 +104,6 @@ describe("getWindowsProgramFilesRoots", () => {
       }),
     ).toEqual(["D:\\Programs", "E:\\Programs (x86)"]);
   });
-});
-
-describe("Windows system executable helpers", () => {
   it("resolves trusted Windows process-inspection tools", () => {
     const env = { SystemRoot: "D:\\Windows" };
 
@@ -123,11 +117,10 @@ describe("Windows system executable helpers", () => {
   });
 
   it("rejects unsafe System32 executable names", () => {
-    expect(() => getWindowsSystem32ExePath("..\\netstat.exe")).toThrow(
-      /Invalid Windows System32 executable name/u,
-    );
-    expect(() => getWindowsSystem32ExePath("netstat")).toThrow(
-      /Invalid Windows System32 executable name/u,
-    );
+    for (const name of ["..\\netstat.exe", "netstat"]) {
+      expect(() => getWindowsSystem32ExePath(name)).toThrow(
+        /Invalid Windows System32 executable name/u,
+      );
+    }
   });
 });

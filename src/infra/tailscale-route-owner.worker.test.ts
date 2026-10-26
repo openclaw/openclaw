@@ -32,29 +32,19 @@ function spawnRouteOwnerFixture(waitForReady: boolean, abortSignal: AbortSignal)
   worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
   const ready = waitForReady
     ? (async () => {
-        const observers = new AbortController();
-        const signal = AbortSignal.any([abortSignal, observers.signal]);
-        const incoming = on(worker, "message", { signal });
-        try {
-          await Promise.race([
-            (async () => {
-              for await (const args of incoming) {
-                const message: TailscaleRouteOwnerMessage = args[0];
-                if (message.type === "ready") {
-                  return;
-                }
-                if (message.type === "failed") {
-                  throw new Error(`route owner failed: ${JSON.stringify(message)}`);
-                }
-              }
-            })(),
-            once(worker, "exit", { signal }).then((exit) => {
-              throw new Error(`route owner exited before readiness: ${JSON.stringify(exit)}`);
-            }),
-          ]);
-        } finally {
-          observers.abort();
+        for await (const [message] of on(worker, "message", {
+          signal: abortSignal,
+          close: ["exit"],
+        })) {
+          const report: TailscaleRouteOwnerMessage = message;
+          if (report.type === "ready") {
+            return;
+          }
+          if (report.type === "failed") {
+            throw new Error(`route owner failed: ${JSON.stringify(report)}`);
+          }
         }
+        throw new Error("route owner exited before readiness");
       })()
     : undefined;
   return { messages, ready, worker };
