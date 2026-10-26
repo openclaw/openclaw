@@ -1,5 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import type { FaceTimeHelperPeer } from "../src/helper-rpc.js";
 import { terminateExactCarrierProcesses } from "../src/runtime-carrier-process.js";
 
@@ -20,48 +21,41 @@ const peers = new Map([
 type RunCommand = PluginRuntime["system"]["runCommandWithTimeout"];
 type CommandResult = Awaited<ReturnType<RunCommand>>;
 function result(code: number, stdout = "", stderr = ""): CommandResult {
-  return { code, stdout, stderr, signal: null, killed: false, termination: "exit" };
+  return commandResult({ code, stdout, stderr });
 }
 
 function processFixture(terminating = [...peers.keys()]) {
   const alive = new Set(peers.keys());
   const terminates = new Set(terminating);
   const signals: Array<{ signal: string; pid: number }> = [];
+  const inspections = new Map<string, (argv: string[], response: CommandResult) => CommandResult>();
   const runCommand = vi.fn<RunCommand>(async (argv) => {
     const pid = Number(argv[2]);
+    let response: CommandResult;
     if (argv[0] === "/bin/ps") {
-      return alive.has(pid)
+      response = alive.has(pid)
         ? result(
             0,
             argv[4] === "comm=" ? (pid === 1001 ? "FaceTime" : "FTConversationService") : startedAt,
           )
         : result(1);
-    }
-    if (argv[0] !== "/bin/kill" || !argv[1]) {
+    } else if (argv[0] !== "/bin/kill" || !argv[1]) {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
+    } else {
+      signals.push({ signal: argv[1], pid });
+      if (terminates.has(pid)) {
+        alive.delete(pid);
+      }
+      response = result(0);
     }
-    signals.push({ signal: argv[1], pid });
-    if (terminates.has(pid)) {
-      alive.delete(pid);
-    }
-    return result(0);
+    const inspect = inspections.get((argv[0] === "/bin/ps" ? argv[4] : argv[1]) ?? "");
+    return inspect ? inspect(argv, response) : response;
   });
   return {
     alive,
     terminates,
     signals,
-    intercept: (
-      field: string,
-      inspect: (argv: string[], response: CommandResult) => CommandResult,
-    ) => {
-      const command = runCommand.getMockImplementation()!;
-      runCommand.mockImplementation(async (argv, options) => {
-        const response = await command(argv, options);
-        return (argv[0] === "/bin/ps" ? argv[4] : argv[1]) === field
-          ? inspect(argv, response)
-          : response;
-      });
-    },
+    intercept: inspections.set.bind(inspections),
     shutdown: (assertCurrent = () => {}) =>
       terminateExactCarrierProcesses({
         runtime: { system: { runCommandWithTimeout: runCommand } },

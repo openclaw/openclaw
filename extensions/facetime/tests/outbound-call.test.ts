@@ -65,23 +65,15 @@ it("retains Apple's exact proxy identity before delayed dial acceptance", () => 
 it("rejects identity events without an exact carrier identity", () => {
   expect(identify({ dial_id: "dial-1" })).toBeUndefined();
 });
-const event = {
-  event: "ft-call-status-changed" as const,
-  data: {
-    call_uuid: "call-3",
-    call_status: 3,
-    is_outgoing: true,
-    handle: "reformatted@example.com",
-  },
-};
-const pending = pendingDial({
-  dialID: "dial-1",
-  mode: "video",
-  requestedAt: "2026-07-20T17:52:00.000Z",
+const event = incomingCall(3, {
+  call_uuid: "call-3",
+  is_outgoing: true,
+  handle: "reformatted@example.com",
 });
+const pending = pendingDial({ dialID: "dial-1" });
 const matches = (data: Partial<FaceTimeCallStatusEvent["data"]>, dial: PendingFaceTimeDial) =>
   doesFaceTimeCallMatchPendingDial({
-    event: { ...event, data: { ...event.data, ...data } },
+    event: { ...event, event: "ft-call-status-changed", data: { ...event.data, ...data } },
     pending: dial,
   });
 

@@ -36,7 +36,7 @@ function createTool() {
   const ensureRuntime = vi.fn(async () => runtime);
   const tool = createFaceTimeCallTool({
     ensureRuntime,
-    getStatus: async () => await runtime.status(),
+    getStatus: runtime.status,
   });
   return {
     runtime,

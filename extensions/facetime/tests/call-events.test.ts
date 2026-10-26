@@ -15,10 +15,7 @@ const verifiedFaceTimeTransport = incomingCall().data.transport;
 const telephony = { service: 1, provider_is_facetime: false, provider_is_telephony: true };
 
 function call(data: Record<string, unknown>) {
-  return normalizeFaceTimeCallEvent({
-    event: "ft-call-status-changed",
-    data: { call_uuid: "call-1", call_status: 4, is_outgoing: false, ...data },
-  })!;
+  return normalizeFaceTimeCallEvent(incomingCall(4, data))!;
 }
 
 const owner = (event: ReturnType<typeof call>, handle = "owner@example.com") =>
@@ -84,15 +81,7 @@ describe("FaceTime call events", () => {
   });
 
   it.each([
-    [
-      "cellular",
-      {
-        ...telephony,
-        kind: "cellular",
-        facetime_transport_type: 0,
-        is_wifi_call: true,
-      },
-    ],
+    ["cellular", { kind: "cellular" }],
     ["telephony provider", telephony],
     ["baseband", { is_using_baseband: true }],
     ["Wi-Fi calling", { is_wifi_call: true }],
@@ -107,7 +96,6 @@ describe("FaceTime call events", () => {
 
   it.each([0, 3])("keeps an outbound status-%i call pending", (call_status) => {
     const event = call({ call_status, is_outgoing: true });
-    expect(event).toBeDefined();
     expect(isOutgoingRingingCall(event)).toBe(true);
     expect(isEndedCall(event)).toBe(false);
   });

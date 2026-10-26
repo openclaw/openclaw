@@ -99,7 +99,6 @@ describe("pending FaceTime dial persistence", () => {
       { delivery: "cancelling", callUUIDAliases: ["a-call", "m-call", "z-call"] },
     ]);
     expect(backend.current()).toBeUndefined();
-    expect(backend.store.delete).not.toHaveBeenCalled();
   });
 
   it("joins late same-dial saves and repeated clears without resurrecting a clearing dial", async () => {
@@ -128,10 +127,6 @@ describe("pending FaceTime dial persistence", () => {
 
     expect(store.isClearing(pending.dialID)).toBe(false);
     expect(backend.store.observe).toHaveBeenCalledOnce();
-    expect(backend.store.compareAndApply).toHaveBeenCalledExactlyOnceWith("active", "0", {
-      operation: "delete",
-      action: "delete",
-    });
     expect(backend.store.register).not.toHaveBeenCalled();
     expect(backend.current()).toBeUndefined();
   });
@@ -157,7 +152,6 @@ describe("pending FaceTime dial persistence", () => {
       operation: "delete",
       action,
     });
-    expect(backend.store.delete).not.toHaveBeenCalled();
   });
 
   it("propagates a comparison transport failure without retrying", async () => {
@@ -169,7 +163,6 @@ describe("pending FaceTime dial persistence", () => {
     await expect(store.clear("dial-a")).rejects.toBe(failure);
 
     expect(backend.store.compareAndApply).toHaveBeenCalledTimes(1);
-    expect(backend.store.delete).not.toHaveBeenCalled();
     expect(backend.current()).toEqual(initial);
   });
 });

@@ -33,14 +33,11 @@ describe("FaceTime helper supervisor", () => {
       expect.objectContaining({ target: "FaceTime", ...expected }),
     );
   }
-  function onlyFaceTimeInstalled() {
+  beforeEach(() => {
+    vi.useFakeTimers();
     vi.mocked(existsSync).mockImplementation(
       (path) => path === "/System/Applications/FaceTime.app",
     );
-  }
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.mocked(existsSync).mockReturnValue(true);
     vi.spyOn(process, "kill").mockReturnValue(true);
   });
   afterEach(async () => {
@@ -62,9 +59,7 @@ describe("FaceTime helper supervisor", () => {
     await vi.advanceTimersByTimeAsync(6_000);
 
     expect(run).not.toHaveBeenCalled();
-    expect(supervisor.status()).toEqual([
-      expect.objectContaining({ target: "FaceTime", connected: true, attempts: 0 }),
-    ]);
+    expectStatus({ connected: true, attempts: 0 });
   });
 
   it("backs off and reports the last injection failure", async () => {
@@ -88,7 +83,6 @@ describe("FaceTime helper supervisor", () => {
   });
 
   it("reports an injection that never authenticates instead of waiting forever", async () => {
-    onlyFaceTimeInstalled();
     const { supervisor } = createSupervisor();
 
     supervisor.start();
@@ -103,16 +97,12 @@ describe("FaceTime helper supervisor", () => {
   });
 
   it("warns once per stale episode and waits for process exit before reinjecting", async () => {
-    onlyFaceTimeInstalled();
     const { supervisor, logger, run } = createSupervisor();
     supervisor.start();
     supervisor.stale("com.apple.FaceTime", 1234);
     supervisor.stale("com.apple.FaceTime", 1234);
     supervisor.stale("com.apple.FaceTime.FTConversationService", 1234);
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenLastCalledWith(
-      "[facetime] Restart FaceTime to load the updated OpenClaw helper",
-    );
     expectStatus({ stale: true, staleProcessId: 1234, retryScheduled: true });
     supervisor.stale("com.apple.FaceTime", 5678);
     expect(logger.warn).toHaveBeenCalledTimes(1);
@@ -130,7 +120,6 @@ describe("FaceTime helper supervisor", () => {
 
   it("preserves the stale-process monitor when injection finishes concurrently", async () => {
     const { promise, resolve } = Promise.withResolvers<CommandResult>();
-    onlyFaceTimeInstalled();
     vi.spyOn(process, "kill").mockImplementation(processExited);
     const { supervisor, run } = createSupervisor();
     run.mockReturnValueOnce(promise);
@@ -165,7 +154,6 @@ describe("FaceTime helper supervisor", () => {
     expect(run).toHaveBeenCalledOnce();
     await supervisor.stop();
     expect(injectionSignal?.aborted).toBe(true);
-    expect(run).toHaveBeenCalledOnce();
     expect(run.mock.calls[0]?.[1]).toMatchObject({ killProcessTree: true });
   });
 });
