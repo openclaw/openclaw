@@ -103,7 +103,7 @@ export function buildMemoryReadResult(params: {
   maxChars?: number;
   suggestReadFallback?: boolean;
 }): MemoryReadResult {
-  const fileLines = params.content.split("\n");
+  const fileLines = params.content.split(/\r\n?|\n/u);
   // A terminal newline closes the preceding line; its split sentinel is not a
   // readable blank line or a reason to offer another memory page.
   if (fileLines.at(-1) === "") {
