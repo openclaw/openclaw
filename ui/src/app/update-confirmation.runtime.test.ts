@@ -25,15 +25,9 @@ function makeProgress(overrides: Partial<UpdateProgress> = {}): UpdateProgress {
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
 function createProgressStream(initial: Partial<UpdateProgress> = {}) {
   let emit: ((progress: UpdateProgress) => void) | null = null;
-  let stopped = false;
-  const stopWatching = vi.fn(() => {
-    stopped = true;
-  });
+  const stopWatching = vi.fn();
   return {
     stopWatching,
-    get stopped() {
-      return stopped;
-    },
     watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
       emit = listener;
       listener(makeProgress(initial));
@@ -351,7 +345,7 @@ it.each([
   expect(onReviewUpdate).not.toHaveBeenCalled();
   findButton(action).click();
   await settled;
-  expect(stream.stopped).toBe(true);
+  expect(stream.stopWatching).toHaveBeenCalledOnce();
   expect(onReviewUpdate).toHaveBeenCalledTimes(action === "Review update" ? 1 : 0);
 });
 
@@ -445,7 +439,6 @@ it.each(["existing", "started", "initial"] as const)(
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(document.body.classList.contains("update-dialog-open")).toBe(false);
-    expect(stream.stopped).toBe(true);
     expect(onAcknowledge).not.toHaveBeenCalled();
     await settled;
   },
@@ -504,7 +497,7 @@ it.each([
     ).toEqual([recovery, recovery, recovery]);
     await dismiss(settled, "Close");
     expect(onAcknowledge).toHaveBeenCalledOnce();
-    expect(stream.stopped).toBe(watch);
+    expect(stream.stopWatching).toHaveBeenCalledTimes(watch ? 1 : 0);
   },
 );
 
