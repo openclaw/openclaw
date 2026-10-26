@@ -244,11 +244,39 @@ async function sendSubagentAnnounceDirectlyBound(
       // requester turn here would replay the original fanout during handoff.
       return completionHandoffPendingResult();
     }
+    const resolveRecovery = async (
+      entry: typeof requesterEntry,
+      replaySafeTranscriptConflict = false,
+    ) => {
+      const recovery = resolveRequesterRecoveryDelivery(
+        entry,
+        params.directIdempotencyKey,
+        replaySafeTranscriptConflict,
+      );
+      if (
+        parentOnly &&
+        recovery?.kind === "delivery" &&
+        recovery.delivery.reason === "requester_turn_pending"
+      ) {
+        const { resolvePrivateRequesterSettleRecoveryOwner } =
+          await import("../registry/subagent-registry-restart-recovery.js");
+        // This private owner must finish its own interrupted input, not wait for itself.
+        if (
+          resolvePrivateRequesterSettleRecoveryOwner(
+            { ...requester, entry },
+            params.directIdempotencyKey,
+          ) === "owned"
+        ) {
+          return undefined;
+        }
+      }
+      return recovery;
+    };
     // A recovered requester already owns this admitted input. Reuse its final
     // receipt through the normal delivery checks; never execute the old wake again.
     const recovery =
       sourceToolId === "subagent_settle" || isSubagentCompletion
-        ? resolveRequesterRecoveryDelivery(requesterEntry, params.directIdempotencyKey)
+        ? await resolveRecovery(requesterEntry)
         : undefined;
     if (recovery?.kind === "delivery") {
       return recovery.delivery;
@@ -677,11 +705,7 @@ async function sendSubagentAnnounceDirectlyBound(
     ) {
       return delivery;
     }
-    const settledRecovery = resolveRequesterRecoveryDelivery(
-      currentEntry,
-      params.directIdempotencyKey,
-      replaySafeTranscriptConflict,
-    );
+    const settledRecovery = await resolveRecovery(currentEntry, replaySafeTranscriptConflict);
     if (!settledRecovery) {
       return delivery;
     }
