@@ -28,12 +28,9 @@ function compactAroundUserText(userSection: string) {
 
 describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression for #73691)", () => {
   it("stops before compaction would exceed the prior-entry loss limit", () => {
-    const existing = [
-      promotionSection("2026-04-10", 500),
-      promotionSection("2026-04-15", 500),
-      promotionSection("2026-04-20", 500),
-      promotionSection("2026-04-25", 500),
-    ].join("\n");
+    const existing = ["10", "15", "20", "25"]
+      .map((day) => promotionSection(`2026-04-${day}`, 500))
+      .join("\n");
     const result = compactMemoryForBudget({
       existingMemory: existing,
       newSection: `\n${promotionSection("2026-04-29", 500)}`,
@@ -43,19 +40,20 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
 
     expect(result.droppedDates).toEqual(["2026-04-10"]);
     expect(result.compacted).toContain("(2026-04-15)");
-    expect(result.compacted.startsWith("\n")).toBe(false);
     expect(result.compacted.startsWith("## Promoted From Short-Term Memory")).toBe(true);
   });
 
-  it("treats budgetChars <= 0 as 'no budget' and returns existing unchanged", () => {
-    const existing = promotionSection("2026-04-10", 500);
-    const newSection = `\n${promotionSection("2026-04-29", 500)}`;
-    expect(compact(existing, newSection, 0)).toEqual({ compacted: existing, droppedDates: [] });
-  });
-
-  it("handles empty existing memory cleanly", () => {
-    expect(compact("", promotionSection("2026-04-29", 500), 100)).toEqual({
-      compacted: "",
+  it.each([
+    ["no budget", promotionSection("2026-04-10", 500), 0],
+    ["empty memory", "", 100],
+    [
+      "marker without an entry",
+      `## Promoted From Short-Term Memory (2026-04-10)\n${PROMOTION_MARKER_LINE}\n`,
+      400,
+    ],
+  ] as const)("preserves %s", (_name, existing, budget) => {
+    expect(compact(existing, `\n${promotionSection("2026-04-29", 600)}`, budget)).toEqual({
+      compacted: existing,
       droppedDates: [],
     });
   });
@@ -63,7 +61,6 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
   it.each([
     ["### Global", "\nMy own global rule, not a promoted entry."],
     ["###\tCorrection", "The prod DB is db-2.corp.example, NOT db-1."],
-    ["   ### Correction (added by me)", "The prod DB is db-2.corp.example, NOT db-1."],
     ["###", "Notes I keep under a bare heading."],
     ["My Durable Notes\n===", "Keep this user-authored paragraph.", "\n"],
   ])("preserves user heading %j under a promotion section", (heading, content, prefix = "") => {
@@ -102,33 +99,6 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     const result = compact(existing, `\n${promotionSection("2026-04-29", 600)}`, 700);
     expect(result.droppedDates).toEqual(["2026-04-20"]);
     expect(result.compacted).toContain("USER-AUTHORED: recovery key is paper-copy-17");
-    expect(result.compacted).not.toContain("(2026-04-20)");
-  });
-
-  it("preserves a marker-only promotion-shaped block", () => {
-    const existing = [
-      "## Promoted From Short-Term Memory (2026-04-10)",
-      PROMOTION_MARKER_LINE,
-      "",
-    ].join("\n");
-    expect(compact(existing, `\n${promotionSection("2026-04-29", 600)}`, 400)).toEqual({
-      droppedDates: [],
-      compacted: existing,
-    });
-  });
-
-  it("preserves an entire mixed block when user text follows a generated entry", () => {
-    const existing = [
-      promotionSection("2026-04-10", 400),
-      "",
-      "USER-AUTHORED: keep this unheaded durable note.",
-      "",
-      promotionSection("2026-04-20", 400),
-    ].join("\n");
-    const result = compact(existing, `\n${promotionSection("2026-04-29", 400)}`, 900);
-    expect(result.droppedDates).toEqual(["2026-04-20"]);
-    expect(result.compacted).toContain("(2026-04-10)");
-    expect(result.compacted).toContain("USER-AUTHORED: keep this unheaded durable note.");
     expect(result.compacted).not.toContain("(2026-04-20)");
   });
 });

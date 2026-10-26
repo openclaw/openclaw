@@ -62,55 +62,29 @@ function prepareCase(memory: MemoryCase, wiki: WikiCase) {
 }
 
 describe("memory_get corpus outcomes", () => {
+  const memoryError = new Error("memory unavailable");
+  const wikiError = new Error("wiki unavailable");
+  const memoryFailed = {
+    ...memoryMiss,
+    corpora: [unavailable("memory"), available("wiki")],
+    warning: "Memory corpus unavailable: memory unavailable",
+    error: "memory unavailable",
+  };
+  const bothFailed = {
+    ...memoryMiss,
+    status: "error",
+    corpora: [unavailable("memory"), unavailable("wiki")],
+    warning:
+      "Memory corpus unavailable: memory unavailable Wiki corpus unavailable: wiki unavailable",
+    error: "memory unavailable; wiki unavailable",
+  };
+  const wikiFailed = { path: lookup, text: "", ...wikiUnavailable("wiki unavailable") };
   it.each([
-    [
-      "keeps a memory hit while reporting a successful wiki lookup",
-      "all",
-      memoryHit,
-      wikiHit,
-      { ...memoryHit, ...bothAvailable },
-    ],
-    [
-      "falls through from a memory miss to wiki content",
-      "all",
-      memoryMiss,
-      wikiHit,
-      { ...wikiPayload, ...bothAvailable },
-    ],
-    [
-      "memory unavailable, wiki miss",
-      "all",
-      new Error("memory unavailable"),
-      null,
-      {
-        ...memoryMiss,
-        corpora: [unavailable("memory"), available("wiki")],
-        warning: "Memory corpus unavailable: memory unavailable",
-        error: "memory unavailable",
-      },
-    ],
-    [
-      "both corpora unavailable",
-      "all",
-      new Error("memory unavailable"),
-      new Error("wiki unavailable"),
-      {
-        path: lookup,
-        text: "",
-        status: "error",
-        corpora: [unavailable("memory"), unavailable("wiki")],
-        warning:
-          "Memory corpus unavailable: memory unavailable Wiki corpus unavailable: wiki unavailable",
-        error: "memory unavailable; wiki unavailable",
-      },
-    ],
-    [
-      "wiki-only unavailable",
-      "wiki",
-      memoryMiss,
-      new Error("wiki unavailable"),
-      { path: lookup, text: "", ...wikiUnavailable("wiki unavailable") },
-    ],
+    ["memory hit", "all", memoryHit, wikiHit, { ...memoryHit, ...bothAvailable }],
+    ["wiki fallback", "all", memoryMiss, wikiHit, { ...wikiPayload, ...bothAvailable }],
+    ["memory unavailable, wiki miss", "all", memoryError, null, memoryFailed],
+    ["both unavailable", "all", memoryError, wikiError, bothFailed],
+    ["wiki unavailable", "wiki", memoryMiss, wikiError, wikiFailed],
   ] as const)("%s", async (_name, corpus, memory, wiki, expected) => {
     prepareCase(memory, wiki);
     expect((await read(corpus)).details).toEqual(expected);
