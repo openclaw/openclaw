@@ -217,6 +217,33 @@ it("preserves restrictive DREAMS.md permissions across atomic replace", async ()
   }
 });
 
+it("keeps a shared workspace's directory mode when writing DREAMS.md", async () => {
+  if (process.platform !== "win32") {
+    await fs.chmod(workspaceDir, 0o770);
+  }
+
+  await writeBackfill();
+
+  expect(await readDiary()).toContain("The archive remembered a durable fact.");
+  if (process.platform !== "win32") {
+    expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(0o770);
+  }
+});
+
+it("keeps a workspace directory created for DREAMS.md private", async () => {
+  const freshWorkspace = path.join(workspaceDir, "fresh");
+
+  await writeBackfillDiaryEntries({
+    workspaceDir: freshWorkspace,
+    entries: [{ isoDay: "2026-04-05", bodyLines: ["The archive remembered a durable fact."] }],
+    timezone: "UTC",
+  });
+
+  if (process.platform !== "win32") {
+    expect((await fs.stat(freshWorkspace)).mode & 0o7777).toBe(0o700);
+  }
+});
+
 it("serializes concurrent writes and deduplication", async () => {
   const entry = "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.";
   await fs.writeFile(dreamsPath, renderDiary(entry, entry));

@@ -95,11 +95,17 @@ export async function writeDreamsFileAtomic(
   if (files) {
     return await files.writeDreams(dreamsPath, content, assertCurrent);
   }
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  const directoryPath = path.dirname(dreamsPath);
+  const createdDirectory = await fs.mkdir(directoryPath, { recursive: true });
+  // fs-safe's 0o700 default would chmod an existing workspace, which fails with
+  // EPERM for a gateway user that can write it but not own it. A directory
+  // created here keeps that private default.
+  const dirMode = createdDirectory ? 0o700 : (await fs.stat(directoryPath)).mode & 0o7777;
   await assertSafeDreamsPath(dreamsPath);
   await replaceFileAtomic({
     filePath: dreamsPath,
     content,
+    dirMode,
     mode: 0o600,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
