@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import Module, { createRequire, isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
@@ -21,6 +21,10 @@ import {
   type PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import {
+  registerPluginInstanceModuleResolver,
+  retainedNativeEsmOwners,
+} from "./plugin-instance-module-resolver.js";
 import { getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
@@ -51,7 +55,6 @@ type RetainedNativeEsm = {
   modules: Map<string, unknown>;
   loaded: boolean;
   owners: Set<PluginInstanceModuleLoaderParams["instance"]>;
-  knownOwners: WeakSet<PluginInstanceModuleLoaderParams["instance"]>;
 };
 
 const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsm>(
@@ -158,7 +161,6 @@ function retainedNativeEsmFor(
       modules: new Map(),
       loaded: false,
       owners: new Set(),
-      knownOwners: new WeakSet(),
     };
     entries.set(key, retained);
   }
@@ -211,7 +213,7 @@ function ownsNativeEsmResolution(
   if (!requested) {
     return true;
   }
-  if (!retained.knownOwners.has(requested)) {
+  if (retainedNativeEsmOwners.get(requested) !== retained) {
     return false;
   }
   if (!retained.owners.has(requested)) {
@@ -271,7 +273,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const sourceBuilds: SourceBuilds = retained?.builds ?? new Map();
   const { sourceForOutput, moduleSource } = createSourceOutputLookup(sourceBuilds);
   retained?.owners.add(params.instance);
-  retained?.knownOwners.add(params.instance);
+  if (retained) {
+    retainedNativeEsmOwners.set(params.instance, retained);
+  }
   const reusedArtifact = retained?.artifact;
   let artifact: PluginGenerationArtifact;
   try {
@@ -450,7 +454,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   };
   // Captured sources and compiled outputs share this instance's private namespace.
   const boundaryUrl = pathToFileURL(artifact.boundaryRoot + path.sep).href;
-  const hooks = Module.registerHooks({
+  const unregister = registerPluginInstanceModuleResolver(boundaryUrl, {
+    instance: params.instance,
     resolve(specifier, context, nextResolve) {
       if (retained && !ownsNativeEsmResolution(retained, params.instance)) {
         return nextResolve(specifier, context);
@@ -675,7 +680,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return resolved;
     },
   });
-  params.instance.onModuleDispose(() => hooks.deregister());
+  params.instance.onModuleDispose(unregister);
   const results = new Map<string, { value: unknown } | { error: unknown }>();
   bindModuleLoader(
     (source) =>

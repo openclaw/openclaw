@@ -371,19 +371,20 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   getSessionNavigationState(): SidebarSessionNavigationState {
     const data = this.sessionData;
     const currentResult = this.rosterSessionSource?.result ?? data.sessionsResult;
-    this.sessionProjection.observeRows([
-      ...(currentResult ? [currentResult] : []),
-      ...Object.values(data.sessionResultsByAgent),
-    ]);
     return this.navigationMemo.read(
       () => sidebarNavigationInputs(this, currentResult),
-      () =>
-        projectSidebarNavigation(
+      () => {
+        this.sessionProjection.observeRows([
+          ...(currentResult ? [currentResult] : []),
+          ...Object.values(data.sessionResultsByAgent),
+        ]);
+        return projectSidebarNavigation(
           this,
           createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
           this.rowProjection,
           (row) => this.attention.resolveSessionAgentStatus(row)?.note,
-        ),
+        );
+      },
     );
   }
 
@@ -610,10 +611,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+  findSidebarSessionByKey(
+    sessionKey: string,
+    navigationState = this.getSessionNavigationState(),
+  ): SidebarRecentSession | undefined {
     return findProjectedSidebarSession({
       sessionKey,
-      navigationState: this.getSessionNavigationState(),
+      navigationState,
       sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
     });
   }

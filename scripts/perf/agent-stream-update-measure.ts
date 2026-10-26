@@ -17,6 +17,9 @@
  * slope between 32 and --events reads; see agent-stream-update-measure.md.
  * --profile /path/profile.json saves allocation stacks. Use --no-turbo-inlining
  * for attribution only, and normal optimization for the paired measurements.
+ * --dispatch session includes Agent state and AgentSession listener dispatch with
+ * an in-memory transcript. Compare to --dispatch loop (the default) to attribute
+ * listener promises. Session runs reset agent history before each prompt.
  * Accept lower allocation/update with stable CPU and identical delivery counts;
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
@@ -36,6 +39,7 @@ import {
   makeTool,
   user,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { Agent } from "../../packages/agent-core/src/agent.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
 import { wrapStreamObjectEvents } from "../../src/agents/embedded-agent-runner/run/stream-wrapper.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
@@ -52,6 +56,7 @@ const { values } = parseArgs({
     "async-fragments": { type: "string", default: "false" },
     transforms: { type: "string", default: "0" },
     layer: { type: "string" },
+    dispatch: { type: "string", default: "loop" },
   },
 });
 const events = Number(values.events);
@@ -63,6 +68,8 @@ assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
+assert(values.dispatch === "loop" || values.dispatch === "session");
+assert(values.dispatch === "loop" || (!values.layer && values.mode !== "verify"));
 if (values.layer) {
   const { measureStreamLayers } = await import("./agent-stream-update-layers.js");
   await measureStreamLayers({
@@ -132,39 +139,81 @@ function decorate(stream: MutableAssistantMessageEventStream) {
   }
   return stream;
 }
+const onEvent = (event: { type: string }) => {
+  if (event.type === "message_update") {
+    deliveries++;
+  }
+};
+const session = values.dispatch === "session" ? await createSession() : undefined;
+async function createSession() {
+  const agent = new Agent({
+    initialState: { model: config.model, tools },
+    streamFn: () => {
+      throw new Error("Probe stream not installed");
+    },
+  });
+  const { AgentSession } = await import("../../src/agents/sessions/agent-session.js");
+  const { AuthStorage } = await import("../../src/agents/sessions/auth-storage.js");
+  const { ModelRegistry } = await import("../../src/agents/sessions/model-registry.js");
+  const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
+  const { SettingsManager } = await import("../../src/agents/sessions/settings-manager.js");
+  const { createResourceLoader } =
+    await import("../../src/agents/sessions/agent-session-loop-resource-loader.test-support.js");
+  const manager = SessionManager.inMemory();
+  const result = new AgentSession({
+    agent,
+    systemPrompt: "synthetic probe",
+    sessionManager: manager,
+    settingsManager: SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: false },
+    }),
+    cwd: manager.getCwd(),
+    resourceLoader: await createResourceLoader(),
+    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    allowedToolNames: [],
+    cleanupProviderSessionResourcesOnDispose: false,
+  });
+  agent.state.tools = tools;
+  result.subscribe(onEvent);
+  return result;
+}
 async function run() {
   let responseCount = 0;
+  const streamFn: NonNullable<Parameters<typeof runAgentLoop>[5]> = () => {
+    const toolResponse = asyncFragments && responseCount === 0;
+    const updates = responseCount++ === 0 ? events : 0;
+    const result = toolResponse ? fragmentTail : finalMessage;
+    return decorate({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: message } as const;
+        if (toolResponse) {
+          for (const fragment of fragments) {
+            yield fragment;
+          }
+        } else {
+          for (let index = 0; index < updates; index++) {
+            yield update;
+          }
+        }
+        yield { type: "done", reason: "stop", message: result } as const;
+      },
+      result: async () => result,
+    });
+  };
+  if (session) {
+    session.agent.state.messages = history;
+    session.agent.streamFn = streamFn;
+    await session.agent.prompt(user());
+    return;
+  }
   await runAgentLoop(
     [user()],
     { systemPrompt: "synthetic probe", messages: history, tools },
     config,
-    (event) => {
-      if (event.type === "message_update") {
-        deliveries++;
-      }
-    },
+    onEvent,
     undefined,
-    () => {
-      const toolResponse = asyncFragments && responseCount === 0;
-      const updates = responseCount++ === 0 ? events : 0;
-      const result = toolResponse ? fragmentTail : finalMessage;
-      return decorate({
-        async *[Symbol.asyncIterator]() {
-          yield { type: "start", partial: message } as const;
-          if (toolResponse) {
-            for (const fragment of fragments) {
-              yield fragment;
-            }
-          } else {
-            for (let index = 0; index < updates; index++) {
-              yield update;
-            }
-          }
-          yield { type: "done", reason: "stop", message: result } as const;
-        },
-        result: async () => result,
-      });
-    },
+    streamFn,
   );
 }
 // Record checkpoints before replay so provider fixture allocation is not confused
@@ -290,12 +339,14 @@ if (values.mode === "promises") {
   hook.enable();
 }
 const cpu = process.cpuUsage();
+const threadCpu = process.threadCpuUsage();
 const start = performance.now();
 for (let turn = 0; turn < turns; turn++) {
   await run();
 }
 const elapsedMs = performance.now() - start;
 const used = process.cpuUsage(cpu);
+const threadUsed = process.threadCpuUsage(threadCpu);
 hook.disable();
 let allocatedBytes: number | undefined;
 if (allocation) {
@@ -315,6 +366,7 @@ if (!asyncFragments && snapshots) {
 console.log(
   JSON.stringify({
     mode: values.mode,
+    dispatch: values.dispatch,
     eventType: values["event-type"],
     snapshots,
     asyncFragments,
@@ -328,6 +380,8 @@ console.log(
     hostLoad,
     elapsedMs,
     cpuNsPerUpdate: ((used.user + used.system) * 1000) / deliveries,
+    mainThreadCpuNsPerUpdate: ((threadUsed.user + threadUsed.system) * 1000) / deliveries,
     allocatedBytesPerUpdate: allocatedBytes === undefined ? undefined : allocatedBytes / deliveries,
   }),
 );
+session?.dispose();

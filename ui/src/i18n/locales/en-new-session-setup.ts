@@ -78,10 +78,8 @@ const enNewSessionSetup = {
     followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
     createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
-    preferenceSaveUnconfirmed:
-      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
-    worktreeNameClearUnconfirmed:
-      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+    preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,
+    worktreeNameClearUnconfirmed: runtime.worktreeNameClearUnconfirmed,
     agent: "Agent",
     agents: "Agents",
     where: "Where",

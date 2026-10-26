@@ -256,6 +256,7 @@ const { values } = parseArgs({
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "no-owner-probes": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
@@ -477,7 +478,7 @@ if (
 }
 const navigationRoutes: CriticalPathRoute[] = [];
 // Cold New has no Chat owner to complete registration, so omit the unused WeakMap shim.
-const captureOwnerRegistration = !firstLoad || bootRoute !== "new";
+const captureOwnerRegistration = !values["no-owner-probes"] && (!firstLoad || bootRoute !== "new");
 const ownerProbes =
   captureOwnerRegistration && !cpuProfile && !allocations && !values["session-event-churn"];
 const sidebarCounters = captureOwnerRegistration && !cpuProfile;
@@ -2014,6 +2015,7 @@ try {
           rowKeys: rows?.map((row) => row.getAttribute("data-virtual-row-key")) ?? null,
           sessionKey: pane ? Reflect.get(pane, "sessionKey") : null,
           ready: pane ? Reflect.get(pane, "transcriptReady") === true : false,
+          historyErrorPresent: pane ? pane.querySelector(".chat-history-error") !== null : null,
           reactionRows: pane
             ? [...pane.querySelectorAll<HTMLElement>(".chat-message-reactions")].map((element) => ({
                 messageId: element.dataset.messageId,
