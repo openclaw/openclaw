@@ -9,6 +9,7 @@ import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispat
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/text-projection.js";
 import {
   parseInlineDirectives,
   sanitizeReplyDirectiveId,

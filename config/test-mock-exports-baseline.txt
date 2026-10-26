@@ -3650,7 +3650,6 @@
 ["src/auto-reply/reply/dispatch-acp-delivery.test.ts","../../infra/outbound/message-action-runner.js","53c2911eb4a3bce62d83f3f08ffb5c3461c8d106cea5e7a9c4d4d2c4b579b03b",1]
 ["src/auto-reply/reply/dispatch-acp-delivery.test.ts","../../tts/tts.runtime.js","b5aec34671a1ed8dc2c3c8c07c8f66e329fff7694fa077f0a66830a689ec4ad3",1]
 ["src/auto-reply/reply/dispatch-acp.test.ts","../../acp/policy.js","3852430cef32a19a83a3259a0baca54ceff22384f2086dc2971f874e7240c9c7",1]
-["src/auto-reply/reply/dispatch-acp.test.ts","../../agents/command/acp-lifecycle.js","d775611b239cd55928ab4e69852ee43a65a0d73a4475bbb053bf259e5d007878",1]
 ["src/auto-reply/reply/dispatch-acp.test.ts","../../channels/plugins/index.js","e7c22e17f56a3e9e9a520fcb74a63efd88997b243cd75799d10dd55c9e488da6",1]
 ["src/auto-reply/reply/dispatch-acp.test.ts","../../infra/outbound/message-action-runner.js","23961d0305aefc1b9a825568ca36830d2a424a140f1463aac1c4dd19ca8d1fd2",1]
 ["src/auto-reply/reply/dispatch-acp.test.ts","../../infra/outbound/session-binding-service.js","199f898b843eeef737818138566957c628ed51a6e71260c1cac5ad86f90068bd",1]
