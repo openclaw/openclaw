@@ -50,7 +50,17 @@ const config = freezeJsonSnapshot({
 });
 const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins });
 for (const record of metadataSnapshot.index.plugins) {
-  record.contributions = { providers: [record.pluginId] };
+  record.contributions = {
+    channels: [],
+    channelConfigs: [],
+    providers: [record.pluginId],
+    modelCatalogProviders: [],
+    modelSupportPrefixes: [],
+    modelSupportPatterns: [],
+    autoEnableProviderIds: [],
+    commandAliases: [],
+    contracts: {},
+  };
 }
 const capturedEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
 function run(count: number) {
