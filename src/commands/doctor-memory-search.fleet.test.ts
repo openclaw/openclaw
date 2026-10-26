@@ -20,16 +20,7 @@ it.each(["health", "contribution"] as const)(
       async (state) => {
         const event = `doctor-memory-registration:${state.root}`;
         const registrations: string[] = [];
-        let peakHeap = process.memoryUsage().heapUsed;
-        let peakRss = process.memoryUsage().rss;
-        const registered = (owner: string, registration = true) => {
-          if (registration) {
-            registrations.push(owner);
-          }
-          const memory = process.memoryUsage();
-          peakHeap = Math.max(peakHeap, memory.heapUsed);
-          peakRss = Math.max(peakRss, memory.rss);
-        };
+        const registered = (owner: string) => registrations.push(owner);
         for (const [directory, owner] of [
           [state.statePath("extensions/fleet-memory"), "shared"],
           [state.path("workspace-special/.openclaw/extensions/fleet-memory"), "workspace"],
@@ -47,7 +38,6 @@ it.each(["health", "contribution"] as const)(
             api.registerMemoryCapability({ runtime: {
               getMemorySearchManager: async () => ({ manager: null }),
               resolveMemoryBackendConfig: () => {
-                process.emit(${JSON.stringify(event)}, ${JSON.stringify(owner)}, false);
                 return { backend: "builtin" };
               }
             } });
@@ -65,9 +55,7 @@ it.each(["health", "contribution"] as const)(
         ]);
         process.on(event, registered);
         await using cache = createPluginCache();
-        const builds = vi.spyOn(pluginRegistry, "createPluginRegistry");
-        let registryBuilds: number;
-        const started = performance.now();
+        using builds = vi.spyOn(pluginRegistry, "createPluginRegistry");
         try {
           await withPluginCache(cache, async () => {
             const cfg = {
@@ -93,23 +81,10 @@ it.each(["health", "contribution"] as const)(
           });
         } finally {
           process.off(event, registered);
-          registered("", false);
-          registryBuilds = builds.mock.calls.length;
-          builds.mockRestore();
         }
-        console.log(
-          JSON.stringify({
-            registrations: registrations.length,
-            phase,
-            registryBuilds,
-            peakHeapMiB: peakHeap / 2 ** 20,
-            peakRssMiB: peakRss / 2 ** 20,
-            elapsedMs: performance.now() - started,
-          }),
-        );
         expect(registrations.filter((owner) => owner === "shared")).toHaveLength(1);
         expect(registrations.filter((owner) => owner === "workspace")).toHaveLength(1);
-        expect(registryBuilds).toBe(phase === "health" ? 2 : 4);
+        expect(builds).toHaveBeenCalledTimes(phase === "health" ? 2 : 4);
       },
     );
   },

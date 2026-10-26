@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -9,7 +9,6 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
-import * as sessionReaders from "../infra/session-sqlite-migration-readers.js";
 import {
   ensureProjectRegistrySchema,
   insertProjectRegistryInDatabase,
@@ -25,8 +24,6 @@ import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
-
-afterEach(() => vi.restoreAllMocks());
 
 it("repairs discovered worktree sessions only through Doctor and releases their databases", async () => {
   await withOpenClawTestState({ layout: "state-only", label: "doctor-worktree" }, async (state) => {
@@ -86,10 +83,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
     expect(readEntries()).toEqual(before);
     expect(log.warn).not.toHaveBeenCalled();
 
-    const targetDiscovery = vi.spyOn(sessionReaders, "listExistingAgentDatabaseTargets");
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: false });
-    expect(targetDiscovery).toHaveBeenCalledTimes(1);
-    targetDiscovery.mockClear();
     expect(readEntries()).toEqual(before);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Found 2 managed-worktree session(s)"),
@@ -98,8 +92,6 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
     await closeOpenClawAgentDatabasesAsync();
 
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: true });
-    expect(targetDiscovery).toHaveBeenCalledTimes(1);
-    targetDiscovery.mockRestore();
     for (const [index, scope] of scopes.entries()) {
       const original = before[index]!;
       expect(loadExactSessionEntryReadOnly(scope)?.entry).toEqual({

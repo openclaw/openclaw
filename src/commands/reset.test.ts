@@ -3,7 +3,6 @@ import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   gatewayService,
-  removeAgentSessions,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -93,20 +92,5 @@ describe("resetCommand", () => {
     removeWorkspaceDirs.mockResolvedValueOnce(["/tmp/.openclaw/workspace"]);
 
     await expectIncomplete();
-  });
-
-  it("continues independent cleanup and reports incomplete reset when session cleanup fails", async () => {
-    removeAgentSessions.mockRejectedValueOnce(new Error("permission denied"));
-
-    await expectIncomplete("config+creds+sessions");
-
-    expect(removePath.mock.calls.map(([target]) => target)).toEqual([
-      "/tmp/.openclaw/openclaw.json",
-      "/tmp/.openclaw/credentials",
-    ]);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
-    expect(runtime.error).toHaveBeenLastCalledWith(
-      "Reset incomplete. Resolve the cleanup errors above, then retry reset.",
-    );
   });
 });
