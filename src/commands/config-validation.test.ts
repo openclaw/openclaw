@@ -8,6 +8,7 @@ const reads = vi.hoisted(() => ({
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
 
+// mock-isolation: Validate synthetic config snapshots without reading operator config files.
 vi.mock("../config/config.js", () => reads);
 
 const writeSnapshot = {
