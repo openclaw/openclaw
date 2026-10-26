@@ -569,10 +569,11 @@ suite.define(() => {
             key.startsWith("openclaw.control.bootRecord.v1:"),
           ),
         );
-        const warmState = await page.evaluate(persistColdLoadWarmState, {
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
           sessionKey: selectedKey,
           sidebarView: "sessions",
-        });
+        };
+        const warmState = await page.evaluate(persistColdLoadWarmState, warmInput);
         const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
           record.sessionKey.endsWith(`\u0000${selectedKey}`),
         )?.snapshot;

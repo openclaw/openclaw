@@ -21,6 +21,13 @@ export let prewarmedHistoryStateValidator:
   | typeof import("../../lib/protocol-validators.generated/history-state.js").isChatHistoryState
   | undefined;
 
+export async function loadChatHistoryStateValidator() {
+  const { isChatHistoryState } =
+    await import("../../lib/protocol-validators.generated/history-state.js");
+  prewarmedHistoryStateValidator = isChatHistoryState;
+  return isChatHistoryState;
+}
+
 export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
   return pending;
 }
@@ -50,11 +57,7 @@ export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   try {
     const [{ readPrewarmedChatSnapshot }] = await Promise.all([
       import("./session-snapshot-store.ts"),
-      import("../../lib/protocol-validators.generated/history-state.js").then(
-        ({ isChatHistoryState }) => {
-          prewarmedHistoryStateValidator = isChatHistoryState;
-        },
-      ),
+      loadChatHistoryStateValidator(),
     ]);
     if (pending === entry) {
       await readPrewarmedChatSnapshot(cacheKey);

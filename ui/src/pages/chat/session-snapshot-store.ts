@@ -46,6 +46,7 @@ import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
+  loadChatHistoryStateValidator,
   peekPrewarmedChatSnapshot,
   prewarmedHistoryStateValidator,
 } from "./session-snapshot-prewarm.ts";
@@ -193,8 +194,7 @@ async function parseSnapshotRecord(
     onBoard?.(parsed.snapshot.board);
     // A repeated dynamic import can yield past dispatch even after prewarm evaluated it.
     const isChatHistoryState =
-      prewarmedHistoryStateValidator ??
-      (await import("../../lib/protocol-validators.generated/history-state.js")).isChatHistoryState;
+      prewarmedHistoryStateValidator ?? (await loadChatHistoryStateValidator());
     if (!isChatHistoryState(historyState)) {
       return null;
     }

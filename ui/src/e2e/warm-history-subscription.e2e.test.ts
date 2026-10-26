@@ -139,11 +139,12 @@ suite.define(() => {
       await page.waitForFunction(() =>
         Object.keys(localStorage).some((key) => key.startsWith("openclaw.control.bootRecord.v1:")),
       );
-      const persisted = await page.evaluate(persistColdLoadWarmState, {
+      const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey,
         sidebarView: "sessions",
         offRosterSession: true,
-      });
+      };
+      const persisted = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(persisted.rosterContainsSession).toBe(false);
       expect(persisted.messages).toBe(2);
 
