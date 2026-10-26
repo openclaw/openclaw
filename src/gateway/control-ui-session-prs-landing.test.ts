@@ -92,15 +92,14 @@ describe("resolveBranchLanding", () => {
     async (count) => {
       const suffix = process.platform === "win32" ? ".txt" : "\n.txt";
       const names = Array.from({ length: count }, (_, index) => ` file-${index}${suffix}`);
+      const inventory = names.length ? `${names.join("\0")}\0` : "";
       for (const name of names.slice(0, 100)) {
         await fs.writeFile(path.join(root, name), "one\ntwo");
       }
       const runGit = worktreeGit.runGit;
       vi.spyOn(worktreeGit, "runGit").mockImplementation(async (...args) => {
         const result = await runGit(...args);
-        return args[1][0] === "ls-files"
-          ? { ...result, stdout: names.length ? `${names.join("\0")}\0` : "" }
-          : result;
+        return args[1][0] === "ls-files" ? { ...result, stdout: inventory } : result;
       });
       const split = vi.spyOn(String.prototype, "split");
       const result = await readPullRequestBranchFacts({
@@ -114,9 +113,8 @@ describe("resolveBranchLanding", () => {
           equalPushedTips: false,
         },
       });
-      const materialized = split.mock.calls.reduce((total, [separator], index) => {
-        const call = split.mock.results[index];
-        return separator === "\0" && call?.type === "return"
+      const materialized = split.mock.results.reduce((total, call, index) => {
+        return split.mock.contexts[index] === inventory && call.type === "return"
           ? Math.max(total, call.value.length)
           : total;
       }, 0);
