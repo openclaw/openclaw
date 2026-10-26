@@ -56,6 +56,7 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "sessions.create",
+            "sessions.patch",
             ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
           ],
           sessions: [],
@@ -169,6 +170,9 @@ suite.define(() => {
             daybreakAccessProgram: "daybreak_red",
           });
           expectedAccess = "daybreak_red";
+          const savedSession = await gateway.getSessionRow("agent:main:fast-mode-proof");
+          expect(savedSession.cyberAccessProgram).toBe("daybreak_red");
+          await gateway.setSessionsListResponse({ sessions: [savedSession] });
           await page.reload();
           await openEffort();
           await pollAttribute(

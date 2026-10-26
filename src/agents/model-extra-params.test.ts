@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { AgentDefaultsConfig, AgentModelEntryConfig } from "../config/types.agent-defaults.js";
+import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAuthoredProviderRequestParams,
@@ -72,12 +74,11 @@ describe("native context management tuning", () => {
 });
 
 it("resolves inherited access configuration without merging objects or inventing defaults", () => {
-  const config: OpenClawConfig = {
-    agents: {
-      defaults: { models: { [modelKey]: {} } },
-      entries: { fixture: { models: { [modelKey]: {} } } },
-    },
-  };
+  const defaultModel: AgentModelEntryConfig = {};
+  const agentModel: AgentModelEntryConfig = {};
+  const defaults: AgentDefaultsConfig = { models: { [modelKey]: defaultModel } };
+  const agent: AgentEntryConfig = { models: { [modelKey]: agentModel } };
+  const config: OpenClawConfig = { agents: { defaults, entries: { fixture: agent } } };
   const read = (fallback?: "standard") =>
     resolveConfiguredCyberAccessProgram(
       {
@@ -90,15 +91,15 @@ it("resolves inherited access configuration without merging objects or inventing
     );
   expect(read()).toBeUndefined();
   expect(read("standard")).toBe("standard");
-  config.agents!.defaults!.params = { accessPrograms: { cyber: "daybreak_blue" } };
+  defaults.params = { accessPrograms: { cyber: "daybreak_blue" } };
   expect(read()).toBe("daybreak_blue");
-  config.agents!.defaults!.models![modelKey].params = { accessPrograms: { cyber: "daybreak_red" } };
+  defaultModel.params = { accessPrograms: { cyber: "daybreak_red" } };
   expect(read()).toBe("daybreak_red");
-  config.agents!.entries!.fixture.models![modelKey].params = {
+  agentModel.params = {
     accessPrograms: { cyber: "standard" },
   };
   expect(read()).toBe("standard");
-  config.agents!.entries!.fixture.params = { accessPrograms: { cyber: "daybreak_blue" } };
+  agent.params = { accessPrograms: { cyber: "daybreak_blue" } };
   expect(read()).toBe("daybreak_blue");
   for (const accessPrograms of [
     {},
@@ -107,7 +108,7 @@ it("resolves inherited access configuration without merging objects or inventing
     { cyber: "future" },
     { cyber: "daybreak_blue", extra: true },
   ]) {
-    config.agents!.entries!.fixture.params = { accessPrograms };
+    agent.params = { accessPrograms };
     expect(read()).toBeUndefined();
     expect(read("standard")).toBeUndefined();
   }
