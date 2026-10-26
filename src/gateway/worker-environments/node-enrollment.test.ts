@@ -49,6 +49,10 @@ const PLUGIN_PUBLIC_URL = "wss://pairing.example.test";
 const LOCAL_TLS_FINGERPRINT = "c".repeat(64);
 const REMOTE_TLS_FINGERPRINT = "d".repeat(64);
 
+function downloadRequest(descriptor: { token: string; sha256: string }) {
+  return { token: descriptor.token, artifactKey: descriptor.sha256 };
+}
+
 function createConfig(pluginPublicUrl?: string): OpenClawConfig {
   return {
     gateway: {
@@ -101,11 +105,11 @@ describe("worker node enrollment", () => {
     managers.push(manager);
     return manager;
   };
-  const createRequested = async () =>
+  const createRequested = async (profileId = "test-profile") =>
     await store.createIntent({
       environmentId: "worker-enrollment",
       providerId: "fake-provider",
-      profileId: "test-profile",
+      profileId,
       profileSnapshot: { settings: {} },
       provisionOperationId: "provision:worker-enrollment",
     });
@@ -122,39 +126,36 @@ describe("worker node enrollment", () => {
   const createArtifactProvider = async () => {
     const packageRoot = path.join(root, "gateway");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await Promise.all([
-      fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
+    const files = {
+      "package.json": JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
+      "openclaw.mjs": 'import "./dist/entry.js";',
+      "node-version.mjs": "export const supported = true;",
+      "node-sqlite.mjs": "export const probe = true;",
+      "node-host-launcher.mjs": "export const launcher = true;",
+      "node-runtime-update.mjs": "export const update = true;",
+      "node-runtime-recovery.mjs": "export const recovery = true;",
+      ...Object.fromEntries(
+        [
+          "cli-parent-lifetime",
+          "cli-root-options",
+          "cli-invocation",
+          "node-runtime-env",
+          "node-compile-cache",
+          "gateway-run-argv",
+          "gateway-shutdown-budget",
+        ].map((name) => [name + ".mjs", "export {};"]),
       ),
-      fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
-      fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
-      fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "node-host-launcher.mjs"),
-        "export const launcher = true;",
+      "dist/entry.js": "export const ready = true;",
+      "dist/build-info.json": JSON.stringify({
+        version: "2026.8.1",
+        buildId: "gateway-source-build",
+      }),
+    };
+    await Promise.all(
+      Object.entries(files).map(([name, content]) =>
+        fs.writeFile(path.join(packageRoot, name), content),
       ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-update.mjs"),
-        "export const update = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-recovery.mjs"),
-        "export const recovery = true;",
-      ),
-      fs.writeFile(path.join(packageRoot, "cli-parent-lifetime.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "cli-invocation.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "2026.8.1", buildId: "gateway-source-build" }),
-      ),
-    ]);
+    );
     const provider = createNodeBootstrapArtifactProvider({
       packageRoot,
       runningBuildId: "gateway-source-build",
@@ -300,7 +301,7 @@ describe("worker node enrollment", () => {
     });
     const runtime = await manager.prepareRuntime(record, bundle());
     const lock = runtime.nodeBootstrap.installLock!;
-    const request = { token: lock.token, artifactKey: lock.sha256 };
+    const request = downloadRequest(lock);
     expect(lock.sha256).toBe(bundle().tarballSha256);
     expect(lock.token).not.toBe(runtime.nodeBootstrap.token);
     const authorization = transfer.authorize(request)!;
@@ -333,9 +334,7 @@ describe("worker node enrollment", () => {
       expect(runtime.bootstrapTimeoutMs).toBe(runtimeMs);
       transferNow += runtimeMs - 1;
       for (const download of [runtime.nodeBootstrap, runtime.workerBundle]) {
-        expect(
-          transfer.authorize({ token: download.token, artifactKey: download.sha256 }),
-        ).toBeDefined();
+        expect(transfer.authorize(downloadRequest(download))).toBeDefined();
       }
       const enrollment = await manager.begin(record);
       expect(enrollment.bootstrapTimeoutMs).toBe(enrollmentMs);
@@ -349,10 +348,7 @@ describe("worker node enrollment", () => {
       const manager = createManager();
       const operation = new AbortController();
       const runtime = await manager.prepareRuntime(record, bundle(), operation.signal);
-      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map((descriptor) => ({
-        token: descriptor.token,
-        artifactKey: descriptor.sha256,
-      }));
+      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map(downloadRequest);
       const authorizations = requests.map((request) => transfer.authorize(request)!);
       if (reason === "shutdown") {
         manager.stop();
@@ -464,10 +460,7 @@ describe("worker node enrollment", () => {
       });
       // Client body completion precedes the server releasing its transfer authorization.
       await Promise.all(handledRequests);
-      const authorization = transfer.authorize({
-        token: current.workerBundle.token,
-        artifactKey: current.workerBundle.sha256,
-      })!;
+      const authorization = transfer.authorize(downloadRequest(current.workerBundle))!;
       const enrollment = await manager.begin(record);
       expect(enrollment).not.toHaveProperty("workerBundle");
       expect(current.signal?.aborted).toBe(true);
@@ -475,12 +468,7 @@ describe("worker node enrollment", () => {
       manager.closeRuntime(current);
       manager.close({ ...enrollment });
       expect(enrollment.signal?.aborted).toBe(false);
-      expect(
-        transfer.authorize({
-          token: enrollment.nodeBootstrap.token,
-          artifactKey: enrollment.nodeBootstrap.sha256,
-        }),
-      ).toBeDefined();
+      expect(transfer.authorize(downloadRequest(enrollment.nodeBootstrap))).toBeDefined();
     } finally {
       resumeEof.resolve();
       await dispatcher.destroy();
@@ -522,12 +510,7 @@ describe("worker node enrollment", () => {
       await rejected;
       if (enrollment) {
         expect(enrollment.signal?.aborted).toBe(false);
-        expect(
-          transfer.authorize({
-            token: enrollment.nodeBootstrap.token,
-            artifactKey: enrollment.nodeBootstrap.sha256,
-          }),
-        ).toBeDefined();
+        expect(transfer.authorize(downloadRequest(enrollment.nodeBootstrap))).toBeDefined();
       }
     },
   );
@@ -612,10 +595,7 @@ describe("worker node enrollment", () => {
       enabledPluginIds: ["runtime-plugin"],
     });
     expect(enrollment.nodeBootstrap.tlsFingerprint).toBe(expectedFingerprint);
-    const authorization = transfer.authorize({
-      token: enrollment.nodeBootstrap.token,
-      artifactKey: enrollment.nodeBootstrap.sha256,
-    });
+    const authorization = transfer.authorize(downloadRequest(enrollment.nodeBootstrap));
     expect(authorization).toBeDefined();
     const opened = await transfer.openFile(authorization!);
     expect(await opened?.handle.readFile("utf8")).toBe("x");
@@ -624,15 +604,8 @@ describe("worker node enrollment", () => {
 
   it("does not split surrogate pairs when bounding the enrollment display name", async () => {
     const profileId = `${"x".repeat(50)}😀tail`;
-    const requested = await store.createIntent({
-      environmentId: "worker-enrollment-display-name",
-      providerId: "fake-provider",
-      profileId,
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-display-name",
-    });
     const record = await store.transition({
-      environmentId: requested.environmentId,
+      environmentId: (await createRequested(profileId)).environmentId,
       from: "requested",
       to: "provisioning",
     });
@@ -703,19 +676,7 @@ describe("worker node enrollment", () => {
   });
 
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {
-    const intent = await store.createIntent({
-      environmentId: "worker-enrollment-stop",
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-stop",
-    });
-    const record = await store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-      patch: { nodeDeviceId: "device-pending" },
-    });
+    const record = await createProvisioning("device-pending");
     const manager = createManager();
     const enrollment = await manager.begin(record);
     const waiting = enrollment.waitForDeviceId();
@@ -737,10 +698,7 @@ describe("worker node enrollment", () => {
       const record = await createProvisioning();
       const manager = createManager();
       const enrollment = await manager.begin(record);
-      const request = {
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      };
+      const request = downloadRequest(enrollment.nodeBootstrap);
       const authorization = transfer.authorize(request)!;
       expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
@@ -765,22 +723,14 @@ describe("worker node enrollment", () => {
     const previous = await manager.begin(record);
     const replacement = await manager.begin(record);
     expect(previous.signal?.aborted).toBe(true);
-    expect(
-      transfer.authorize({
-        token: previous.nodeBootstrap.token,
-        artifactKey: previous.nodeBootstrap.sha256,
-      }),
-    ).toBeUndefined();
+    expect(transfer.authorize(downloadRequest(previous.nodeBootstrap))).toBeUndefined();
 
     manager.close(previous);
     manager.close({ ...replacement });
     await expect(
       manager.begin({ ...record, provisionOperationId: "retired-provision" }),
     ).rejects.toThrow("no longer provisioning");
-    const authorization = transfer.authorize({
-      token: replacement.nodeBootstrap.token,
-      artifactKey: replacement.nodeBootstrap.sha256,
-    })!;
+    const authorization = transfer.authorize(downloadRequest(replacement.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
     manager.close(replacement);
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
@@ -805,10 +755,7 @@ describe("worker node enrollment", () => {
     const rejected = expect(pending).rejects.toThrow();
     await entered.promise;
     const current = await manager.begin(record);
-    const authorization = transfer.authorize({
-      token: current.nodeBootstrap.token,
-      artifactKey: current.nodeBootstrap.sha256,
-    })!;
+    const authorization = transfer.authorize(downloadRequest(current.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
     resume.resolve();

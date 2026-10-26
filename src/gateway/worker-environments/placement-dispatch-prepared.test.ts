@@ -62,6 +62,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 const PREPARATION_KEY = "c".repeat(64);
 const FEATURES = [...WORKER_PROTOCOL_FEATURES];
 
+function expectBefore(log: string[], before: string, after: string) {
+  expect(log.indexOf(before)).toBeLessThan(log.indexOf(after));
+}
+
 async function preparedHarness(
   options: {
     reserve?: boolean;
@@ -373,7 +377,7 @@ describe("prepared worker dispatch", () => {
   it.each([true, false])(
     "runs first-binding lifecycle after session sync and before activation (reserve=%s)",
     async (reserve) => {
-      const { harness, request, ready } = await preparedHarness({
+      const { harness, request, ready, store, intent } = await preparedHarness({
         reserve,
         recipe: lifecycleRecipe,
       });
@@ -407,7 +411,27 @@ describe("prepared worker dispatch", () => {
 
       const active = await harness.service.dispatch(request);
 
+      const phases = [
+        "workspace:bind-prepared",
+        "sync",
+        "lifecycle:post-create",
+        "lifecycle:post-start",
+        "placement:starting",
+        "activation",
+      ];
       expect(active.state).toBe("active");
+      if (!reserve) {
+        expect(active.environmentId).toBe(ready.environmentId);
+        expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+          profileId: request.profileId,
+          idempotencyKey: expect.any(String),
+          executionMode: request.executionMode,
+          projectPath: "/gateway/workspace",
+          admittedIntent: intent,
+        });
+        expect(store.get(ready.environmentId)?.preparation).toBeNull();
+        expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
+      }
       expect(warn).toHaveBeenCalledExactlyOnceWith("slow placement dispatch", {
         operation: "sessions.dispatch",
         elapsedMs: reserve ? 1_200 : 1_800,
@@ -425,25 +449,7 @@ describe("prepared worker dispatch", () => {
           cleanup: 0,
         },
       });
-      expect(
-        harness.log.filter((phase) =>
-          [
-            "workspace:bind-prepared",
-            "sync",
-            "lifecycle:post-create",
-            "lifecycle:post-start",
-            "placement:starting",
-            "activation",
-          ].includes(phase),
-        ),
-      ).toEqual([
-        "workspace:bind-prepared",
-        "sync",
-        "lifecycle:post-create",
-        "lifecycle:post-start",
-        "placement:starting",
-        "activation",
-      ]);
+      expect(harness.log.filter((phase) => phases.includes(phase))).toEqual(phases);
       const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]!.value;
       expect(tunnel.launchTurn).not.toHaveBeenCalled();
     },
@@ -529,9 +535,7 @@ describe("prepared worker dispatch", () => {
       if (emptyWorkspace) {
         expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
       } else {
-        expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
-          harness.log.indexOf("sync"),
-        );
+        expectBefore(harness.log, "workspace:bind-prepared", "sync");
       }
       expect(harness.environments.schedulePreparedRefill).toHaveBeenCalledWith(ready.environmentId);
       const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]?.value;
@@ -547,26 +551,6 @@ describe("prepared worker dispatch", () => {
       );
     },
   );
-
-  it("binds a freshly prepared cold workspace without turning its ordinary row into a reserve", async () => {
-    const { harness, store, ready, intent, request } = await preparedHarness({ reserve: false });
-
-    const active = await harness.service.dispatch(request);
-
-    expect(active.environmentId).toBe(ready.environmentId);
-    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
-      profileId: request.profileId,
-      idempotencyKey: expect.any(String),
-      executionMode: request.executionMode,
-      projectPath: "/gateway/workspace",
-      admittedIntent: intent,
-    });
-    expect(store.get(ready.environmentId)?.preparation).toBeNull();
-    expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
-    expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
-      harness.log.indexOf("sync"),
-    );
-  });
 
   it.each(["build", "node", "exec-authority"] as const)(
     "uses the cold path when a candidate's %s proof is stale",
@@ -867,17 +851,11 @@ describe("prepared worker dispatch", () => {
       });
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
-      expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
-        harness.log.indexOf("sync"),
-      );
+      expectBefore(harness.log, "workspace:bind-prepared", "sync");
       expect(await repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
       if (runSetupScript) {
-        expect(harness.log.indexOf("sync")).toBeLessThan(
-          harness.log.indexOf("lifecycle:post-create"),
-        );
-        expect(harness.log.indexOf("lifecycle:post-start")).toBeLessThan(
-          harness.log.indexOf("placement:starting"),
-        );
+        expectBefore(harness.log, "sync", "lifecycle:post-create");
+        expectBefore(harness.log, "lifecycle:post-start", "placement:starting");
       }
       const checkpoint = await readSessionRepositoryArtifacts({
         workspaceId: accepted.workspaceId,

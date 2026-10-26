@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
@@ -48,9 +48,7 @@ describe("worker placement restart recovery", () => {
           workspacePath: support.testState.root,
         });
         const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
-        if (active.state !== "active") {
-          throw new Error("retirement fixture did not produce an active placement");
-        }
+        assert(active.state === "active", "retirement fixture did not produce an active placement");
         const error =
           scenario === "provider loss" ? "provider lost worker" : STALE_WORKER_BUILD_REASON;
         vi.mocked(harness.environments.get).mockReturnValue({
@@ -401,9 +399,7 @@ describe("worker placement restart recovery", () => {
     const placements = createPlacementStore();
     const harness = await createHarness(support.testState.stateDb, placements);
     const provisioning = await harness.placements.seedProvisioning();
-    if (provisioning.state !== "provisioning") {
-      throw new Error("recovery fixture did not produce a provisioning placement");
-    }
+    assert(provisioning.state === "provisioning", "expected provisioning fixture");
     harness.log.length = 0;
 
     await harness.service.resumeProvisioning(provisioning, async () => {
@@ -431,9 +427,7 @@ describe("worker placement restart recovery", () => {
     const placements = createPlacementStore();
     const harness = await createHarness(support.testState.stateDb, placements);
     const provisioning = await harness.placements.seedProvisioning("remote-exec");
-    if (provisioning.state !== "provisioning") {
-      throw new Error("recovery fixture did not produce a provisioning placement");
-    }
+    assert(provisioning.state === "provisioning", "expected provisioning fixture");
     const environment = {
       ...harness.ready,
       profileSnapshot: { ...harness.ready.profileSnapshot, executionMode: "worker-turn" as const },
@@ -562,9 +556,7 @@ describe("worker placement restart recovery", () => {
       recoveryBarrierError: new Error(message),
     });
     const provisioning = await harness.placements.seedProvisioning();
-    if (provisioning.state !== "provisioning") {
-      throw new Error("recovery fixture did not produce a provisioning placement");
-    }
+    assert(provisioning.state === "provisioning", "expected provisioning fixture");
 
     await harness.service.resumeProvisioning(provisioning, async () => {});
 
@@ -697,9 +689,7 @@ describe("worker placement restart recovery", () => {
       const placements = createPlacementStore();
       const harness = await createHarness(support.testState.stateDb, placements, { failAt });
       const provisioning = await harness.placements.seedProvisioning();
-      if (provisioning.state !== "provisioning") {
-        throw new Error("recovery fixture did not produce a provisioning placement");
-      }
+      assert(provisioning.state === "provisioning", "expected provisioning fixture");
 
       await harness.service.resumeProvisioning(provisioning, async () => {});
 
@@ -716,21 +706,10 @@ describe("worker placement restart recovery", () => {
     const placements = createPlacementStore();
     const originalHarness = await createHarness(support.testState.stateDb, placements);
     const active = await originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = await placements.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "legacy-worker-claim",
-      runId: "legacy-worker-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    assert(active.state === "active", "active placement fixture was not active");
+    const claim = await placements.claimTurn(
+      makeClaimInput(active, "legacy-worker-claim", "legacy-worker-run"),
+    );
     await placements.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({
@@ -827,21 +806,10 @@ describe("worker placement restart recovery", () => {
         environmentId,
         ownerEpoch: attached.ownerEpoch,
       });
-      if (active.state !== "active") {
-        throw new Error("active placement fixture was not active");
-      }
-      const claim = await placements.claimTurn({
-        sessionId: active.sessionId,
-        sessionKey: active.sessionKey,
-        agentId: active.agentId,
-        claimId: "claim-stale-recovery",
-        runId: "run-stale-recovery",
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
+      assert(active.state === "active", "active placement fixture was not active");
+      const claim = await placements.claimTurn(
+        makeClaimInput(active, "claim-stale-recovery", "run-stale-recovery"),
+      );
       await placements.markWorkspaceResultPending(claim);
       await placements.handoffWorkspaceResultRecovery(claim);
       currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
@@ -876,9 +844,7 @@ describe("worker placement restart recovery", () => {
       const priorConflict = { paths: ["result.txt"], stagedResultRef: priorConflictRef };
       const original = await createHarness(database, placementStore, { workspacePath });
       const active = await original.placements.seedActive(2);
-      if (active.state !== "active") {
-        throw new Error("expected an active placement");
-      }
+      assert(active.state === "active", "expected an active placement");
       if (reclaim) {
         await placementStore.startDrain({
           sessionId: active.sessionId,

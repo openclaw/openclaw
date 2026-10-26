@@ -53,7 +53,6 @@ import {
   reconcileUnchangedLocalWorkspace,
   credential,
   SESSION_ID,
-  SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
@@ -70,6 +69,38 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
+
+function unusedTunnel<T extends Partial<WorkerTunnelHandle>>(overrides: T) {
+  return createWorkerTurnTunnel({
+    runWorkspaceCommand: vi.fn(),
+    quiesceWorkspace: vi.fn(),
+    syncWorkspace: vi.fn(),
+    reconcileWorkspace: vi.fn(),
+    stop: vi.fn(),
+    launchTurn: vi.fn(),
+    ...overrides,
+  });
+}
+
+function turnProvider(
+  environments: Partial<WorkerTurnEnvironmentService>,
+  options: Omit<
+    Parameters<typeof createWorkerSessionTurnPlacementProvider>[0],
+    "placements" | "environments"
+  > = {},
+) {
+  return createWorkerSessionTurnPlacementProvider({
+    placements,
+    environments: { ...unusedEnvironments(), get: attachedEnvironment, ...environments },
+    ...options,
+  });
+}
+
+function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 
 describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
@@ -163,10 +194,12 @@ describe("worker turn execution", () => {
           expect(sql?.queries).toEqual([]);
           sql?.restore();
           expect((await openSessionManager()).getEntries()).toEqual([]);
-          expect(onUserMessagePersisted).not.toHaveBeenCalled();
-          expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-          expect(environments.startTunnel).not.toHaveBeenCalled();
-          expect(runLocal).not.toHaveBeenCalled();
+          expectNoCalls(
+            onUserMessagePersisted,
+            environments.acquireTurnCredential,
+            environments.startTunnel,
+            runLocal,
+          );
           return;
         }
         const result = await execution;
@@ -178,9 +211,7 @@ describe("worker turn execution", () => {
         if (recorderOwned) {
           expect(resolveTarget).toHaveBeenCalledOnce();
         }
-        expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-        expect(environments.startTunnel).not.toHaveBeenCalled();
-        expect(runLocal).not.toHaveBeenCalled();
+        expectNoCalls(environments.acquireTurnCredential, environments.startTunnel, runLocal);
         const messages = (await openSessionManager()).buildSessionContext().messages;
         expect(messages).toEqual([
           expect.objectContaining({
@@ -292,22 +323,12 @@ describe("worker turn execution", () => {
         }
       });
       const runLocal = vi.fn();
-      const tunnel = createWorkerTurnTunnel({
+      const tunnel = unusedTunnel({
         launchTurn,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
       });
-      const provider = createWorkerSessionTurnPlacementProvider({
-        placements,
-        environments: {
-          ...unusedEnvironments(),
-          get: attachedEnvironment,
-          acquireTurnCredential: async () => credential(),
-          startTunnel: async () => tunnel,
-        },
+      const provider = turnProvider({
+        acquireTurnCredential: async () => credential(),
+        startTunnel: async () => tunnel,
       });
       try {
         const outcome = await provider
@@ -338,8 +359,7 @@ describe("worker turn execution", () => {
         expect(entries).toHaveLength(1);
         expect(entries[0]).toMatchObject({ id: committedMessageId, message: { role: "user" } });
         expect(onUserMessagePersisted).toHaveBeenCalledTimes(failure === "authority" ? 0 : 1);
-        expect(launchTurn).not.toHaveBeenCalled();
-        expect(runLocal).not.toHaveBeenCalled();
+        expectNoCalls(launchTurn, runLocal);
       } finally {
         opened.mockRestore();
         input.preparedRunAdmission.close();
@@ -371,23 +391,13 @@ describe("worker turn execution", () => {
         expect(runtime?.getAdditionalInheritedToolNames()).toEqual([]);
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel = createWorkerTurnTunnel({
+      const tunnel = unusedTunnel({
         launchTurn,
         readLaunchToolNames: async () => launchToolNames,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
       });
-      const provider = createWorkerSessionTurnPlacementProvider({
-        placements,
-        environments: {
-          ...unusedEnvironments(),
-          get: attachedEnvironment,
-          acquireTurnCredential: async () => credential(),
-          startTunnel: async () => tunnel,
-        },
+      const provider = turnProvider({
+        acquireTurnCredential: async () => credential(),
+        startTunnel: async () => tunnel,
       });
       const input = turn("launch-tool-negotiation");
       const agentWorkspace = path.join(root, "agent-bootstrap");
@@ -514,9 +524,7 @@ describe("worker turn execution", () => {
         expect(await Promise.race([entered.promise.then(() => "entered"), operation])).toBe(
           "entered",
         );
-        expect(hydration).not.toHaveBeenCalled();
-        expect(acquireTurnCredential).not.toHaveBeenCalled();
-        expect(startTunnel).not.toHaveBeenCalled();
+        expectNoCalls(hydration, acquireTurnCredential, startTunnel);
         if (change === "cancel") {
           abort.abort(new Error("cancel during execution-start settlement"));
         }
@@ -528,11 +536,9 @@ describe("worker turn execution", () => {
           expect(acquireTurnCredential).toHaveBeenCalledOnce();
         } else {
           expect(outcome).toBeInstanceOf(Error);
-          expect(hydration).not.toHaveBeenCalled();
-          expect(acquireTurnCredential).not.toHaveBeenCalled();
+          expectNoCalls(hydration, acquireTurnCredential);
         }
-        expect(startTunnel).not.toHaveBeenCalled();
-        expect(runLocal).not.toHaveBeenCalled();
+        expectNoCalls(startTunnel, runLocal);
       } finally {
         release.resolve();
         await operation;
@@ -709,15 +715,10 @@ describe("worker turn execution", () => {
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: reconcileUnchangedLocalWorkspace,
     });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      environments: {
-        ...unusedEnvironments(),
-        get: attachedEnvironment,
-        acquireTurnCredential: async () => credential(),
-        acknowledgeCredentialDelivery: async () => true,
-        startTunnel: async () => tunnel,
-      },
+    const provider = turnProvider({
+      acquireTurnCredential: async () => credential(),
+      acknowledgeCredentialDelivery: async () => true,
+      startTunnel: async () => tunnel,
     });
     const runLocal = vi.fn();
     const operation = provider.executeTurn(
@@ -768,14 +769,9 @@ describe("worker turn execution", () => {
       });
       const launchTurn = vi.fn();
       const runLocal = vi.fn();
-      const tunnel = createWorkerTurnTunnel({
+      const tunnel = unusedTunnel({
         launchTurn,
         measureLaunchTurn: measure,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
       });
       setActiveNodeContexts([
         {
@@ -786,16 +782,13 @@ describe("worker turn execution", () => {
           },
         },
       ]);
-      const provider = createWorkerSessionTurnPlacementProvider({
-        placements,
-        environments: {
-          ...unusedEnvironments(),
-          get: attachedEnvironment,
+      const provider = turnProvider(
+        {
           acquireTurnCredential: async () => credential(),
           startTunnel: async () => tunnel,
         },
-        reconcileActivePlacement: async () => {},
-      });
+        { reconcileActivePlacement: async () => {} },
+      );
       const operation = provider
         .executeTurn(
           { ...sessionTarget, runId: input.runId },
@@ -830,8 +823,7 @@ describe("worker turn execution", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(measure).not.toHaveBeenCalled();
         }
-        expect(launchTurn).not.toHaveBeenCalled();
-        expect(runLocal).not.toHaveBeenCalled();
+        expectNoCalls(launchTurn, runLocal);
       } finally {
         release.resolve();
         await operation;
@@ -860,12 +852,8 @@ describe("worker turn execution", () => {
         );
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel = createWorkerTurnTunnel({
+      const tunnel = unusedTunnel({
         launchTurn,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
         stop: vi.fn(async () => {}),
       });
       const environments = {
@@ -878,12 +866,7 @@ describe("worker turn execution", () => {
       const runLocal = vi.fn();
       await expect(
         provider.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "run-scheduled",
-          },
+          { ...sessionTarget, runId: "run-scheduled" },
           {
             ...turn("run-scheduled"),
             thinkLevel: "ultra",
@@ -960,12 +943,7 @@ describe("worker turn execution", () => {
 
       await expect(
         provider.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "run-old-worker",
-          },
+          { ...sessionTarget, runId: "run-old-worker" },
           turn("run-old-worker"),
           runLocal,
         ),
@@ -973,20 +951,13 @@ describe("worker turn execution", () => {
         "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
       );
 
-      expect(runLocal).not.toHaveBeenCalled();
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(environments.startTunnel).not.toHaveBeenCalled();
+      expectNoCalls(runLocal, environments.acquireTurnCredential, environments.startTunnel);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
 
       oldEnvironment.bootstrapReceipt = currentReceipt;
       await expect(
         provider.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "run-current-worker",
-          },
+          { ...sessionTarget, runId: "run-current-worker" },
           turn("run-current-worker"),
           runLocal,
         ),
