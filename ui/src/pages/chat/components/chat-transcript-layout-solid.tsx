@@ -43,21 +43,25 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   );
 }
 
-function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  // Equal dependency vectors preserve the accepted row across unrelated stream updates.
-  const current = createMemo(() => props.value, {
-    equals: (before, next) => transcriptArraysEqual(before.dependencies, next.dependencies),
-  });
-  return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
-}
-
 function RowContent(props: { value: TranscriptContent }): JSX.Element {
+  // Cut off unchanged rows before the content-kind branch and its child bindings.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) =>
+      before instanceof GuardedTranscriptItem && next instanceof GuardedTranscriptItem
+        ? transcriptArraysEqual(before.dependencies, next.dependencies)
+        : Object.is(before, next),
+  });
+  const native = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? value.native : undefined;
+  };
+  const fallback = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? null : value;
+  };
   return (
-    <Show
-      when={props.value instanceof GuardedTranscriptItem ? props.value : undefined}
-      fallback={props.value instanceof GuardedTranscriptItem ? null : props.value}
-    >
-      {(item) => <GuardedRow value={item()} />}
+    <Show when={native()} fallback={fallback()}>
+      {(view) => <NativeRow value={view()} />}
     </Show>
   );
 }

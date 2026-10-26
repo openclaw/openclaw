@@ -2,7 +2,7 @@ import "../styles/sidebar-attention-floating.css";
 import "../styles/session-title-placeholder.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createProjection, onCleanup, onSettled } from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -198,6 +198,18 @@ function AppSidebarContent(
     ],
   );
   const observed = new WeakMap<object, object>();
+  // Stable primitive preferences need one comparison, not one rerun per visible row.
+  const preferences = createProjection(() => {
+    presentationRevision();
+    return {
+      sidebarAgentsMode: owner.sidebarAgentsMode,
+      sessionsGrouping: owner.sessionsGrouping,
+      sessionsShowPreview: owner.sessionsShowPreview,
+      sidebarLiveActivity: owner.sidebarLiveActivity,
+      sessionInvolvingMeFilterActive: owner.sessionInvolvingMeFilterActive,
+      sessionOwnerFilterId: owner.sessionOwnerFilterId,
+    };
+  });
   const mutationInputs = createMemo(
     () => {
       presentationRevision();
@@ -228,6 +240,9 @@ function AppSidebarContent(
           return readSessionMutationAccess;
         }
         if (getObserver()) {
+          if (current === owner && Object.hasOwn(preferences, key)) {
+            return Reflect.get(preferences, key);
+          }
           presentationRevision();
         }
         const value = Reflect.get(current, key, receiver);
