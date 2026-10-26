@@ -29,25 +29,20 @@ import {
 function startOrResumeThread(
   input: Pick<LifecycleInput, "client" | "params"> & Partial<LifecycleInput>,
 ) {
-  const cwd = input.cwd ?? input.params?.workspaceDir ?? path.join(tempDir, "workspace");
   return startOrResumeAttemptThread({
     signal: new AbortController().signal,
     dynamicTools: [],
     appServer: { ...createAppServerOptions(), connectionClass: "local-loopback" },
     ...input,
-    cwd,
+    cwd: input.params.workspaceDir,
   });
 }
 
-function createParams(sessionFile: string, workspaceDir: string) {
-  const params = createRunAttemptParams(sessionFile, workspaceDir);
-  params.disableTools = false;
-  params.config = undefined;
-  return params;
-}
-
-const workspaceDir = () => path.join(tempDir, "workspace");
-const fixtureParams = (name: string) => createParams(path.join(tempDir, name), workspaceDir());
+const fixtureParams = (name: string) => ({
+  ...createRunAttemptParams(path.join(tempDir, name), path.join(tempDir, "workspace")),
+  disableTools: false,
+  config: undefined,
+});
 const createFixture = (respond: Parameters<typeof createLifecycleRequest>[0]) =>
   createLeasedCodexLifecycleHarness({
     agentDir: path.join(tempDir, "agent"),
@@ -101,24 +96,21 @@ describe("Codex warm subscription cleanup", () => {
         failedPublication.mockRestore();
         expect(isCodexAppServerLiveThreadClaimed(fixture.client, threadId)).toBe(false);
 
-        await expect(
-          startOrResumeThread(
-            backgroundWork
-              ? common
-              : {
-                  ...common,
-                  developerInstructions: "updated policy",
-                  dynamicTools: [
-                    {
-                      type: "function",
-                      name: "updated_tool",
-                      description: "updated_tool test tool",
-                      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                    },
-                  ],
+        const retry: Parameters<typeof startOrResumeThread>[0] = backgroundWork
+          ? common
+          : {
+              ...common,
+              developerInstructions: "updated policy",
+              dynamicTools: [
+                {
+                  type: "function",
+                  name: "updated_tool",
+                  description: "updated_tool test tool",
+                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
                 },
-          ),
-        ).resolves.toMatchObject({
+              ],
+            };
+        await expect(startOrResumeThread(retry)).resolves.toMatchObject({
           threadId: backgroundWork ? threadId : "updated-policy-thread",
           lifecycle: { action: backgroundWork ? "resumed" : "started" },
         });
@@ -134,7 +126,7 @@ describe("Codex warm subscription cleanup", () => {
 
   it("keeps the original warm policy usable after rejecting rotation during native background work", async () => {
     const sessionFile = path.join(tempDir, "warm-background-policy-session.jsonl");
-    const params = createParams(sessionFile, workspaceDir());
+    const params = fixtureParams("warm-background-policy-session.jsonl");
     const threadId = "warm-background-policy-thread";
     let pluginFingerprint = "original-plugin-policy";
     const fixture = await createFixture(async (method) => {

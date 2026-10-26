@@ -8,7 +8,7 @@ import {
   readCodexAppServerClientDesktopGeneration,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const desktopCommand = "/Applications/ChatGPT.app/Contents/Resources/codex";
@@ -44,25 +44,8 @@ export function registerSharedClientInferenceTests(
       false,
     ],
   ])("preserves inference ownership for %s", async (_label, overrides, ownsInference) => {
-    // Native profile compatibility is covered separately; this probes physical startup ownership.
-    for (const key of [
-      "CODEX_CA_CERTIFICATE",
-      "SSL_CERT_FILE",
-      "REQUEST_METHOD",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "NO_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "no_proxy",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
-    onTestFinished(() => {
-      vi.unstubAllEnvs();
-    });
+    stubCodexInferenceTransportEnv();
+    onTestFinished(() => vi.unstubAllEnvs());
     const generation = { epoch: 1, fingerprint: "desktop-inference" };
     const options = {
       ...startOptions,
