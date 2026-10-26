@@ -4219,7 +4219,7 @@ ${step.run}`,
     );
     const install = requiredWorkflowStep(steps, "Install actionlint");
 
-    expect(setupGo.with).toEqual({ "go-version": "1.27.2", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.3", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expectIncludes(install.run, [
       `ACTIONLINT_REVISION="${revision}"`,
