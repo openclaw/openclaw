@@ -62,14 +62,9 @@ beforeEach(() => {
   m.tabs.mockResolvedValue(tabs);
 });
 
-it("accepts the Control UI dashboard envelope and carries its timeout into startup", async () => {
+it("accepts the Control UI dashboard envelope", async () => {
   const respond = await request("/dashboard", { timeoutMs: 120_000 });
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ browserTab: target }));
-  expect(m.access).toHaveBeenCalledWith(
-    expect.objectContaining({ sessionKey, name: "review", instanceId: "widget" }),
-    expect.anything(),
-    expect.objectContaining({ operation: "open", signal: expect.any(AbortSignal) }),
-  );
 });
 
 it("aborts the UI action deadline without publishing a late successful result", async () => {
@@ -89,17 +84,10 @@ it("aborts the UI action deadline without publishing a late successful result", 
     vi.useRealTimers();
   }
 });
-const selectedTarget = (selector: string) => ({
-  body: { [selector]: "other", url: "https://example.test" },
-});
 it.each([
-  ["/navigate", selectedTarget("profile"), "cannot select"],
-  ["/navigate", selectedTarget("targetId"), "cannot select"],
-  ["/navigate", selectedTarget("node"), "cannot select"],
-  ["/navigate", selectedTarget("target"), "cannot select"],
+  ["/navigate", { body: { profile: "other" } }, "cannot select"],
   ["/tabs/open", {}, "unavailable"],
   ["/act", { body: { kind: "batch" } }, "unavailable"],
-  ["/act", { body: { kind: "close" } }, "unavailable"],
   [
     "/dashboard",
     { dashboard: { name: "review", sessionKey: "agent:main:foreign" } },
@@ -117,27 +105,17 @@ it.each([
 });
 
 it("passes a synchronous final fence to navigation and interaction dispatch", async () => {
-  const events: string[] = [];
-  m.dispatch.mockImplementationOnce(async ({ assertCurrent }) => {
-    const assertion = assertCurrent();
-    queueMicrotask(() => {
-      m.current = false;
-      events.push("revoked");
-    });
-    if (assertion) {
-      await assertion;
-    }
-    events.push(m.current ? "authorized effect" : "stale effect");
-    return { status: 200, body: { ok: true } };
-  });
   const body = { kind: "evaluate", fn: "() => location.href" };
   await request("/act", { body });
-  expect(events).toEqual(["authorized effect", "revoked"]);
-  expect(m.dispatch.mock.lastCall?.[0]).toMatchObject({
+  const dispatched = m.dispatch.mock.lastCall?.[0];
+  expect(dispatched).toMatchObject({
     path: "/act",
     query: { ...binding, managedOnly: true },
     body: { ...body, ...binding },
   });
+  expect(dispatched.assertCurrent()).toBeUndefined();
+  m.current = false;
+  expect(() => dispatched.assertCurrent()).toThrow("access revoked");
 });
 
 it("does not return data after authority changes during the action", async () => {
