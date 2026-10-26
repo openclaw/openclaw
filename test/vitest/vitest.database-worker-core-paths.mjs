@@ -1407,7 +1407,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
   "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
-  "src/node-host/node-worker-launch-claim.test.ts",
   "src/infra/database-engine/session-participant-capacity.conformance.test.ts",
 ];
 

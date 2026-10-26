@@ -5987,7 +5987,6 @@
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-launch-transport.js","6d7effa5246b611f22aa4e31864d405bda459e4ab005c78ed1b9bb6599d35a8c",1]
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-tree-control.js","ad28feee21a96928749b4af206391422196c646915406d6ec9afdc10aa47f364",1]
 ["src/node-host/node-worker-supervisor.mock.test-support.ts","./node-worker-turn-store.js","957b79797836f5faa1b656cdea76f0198554c332d63cb1d3d6d20f33bcb32f42",1]
-["src/node-host/node-worker-workspace-git.test.ts","../process/exec.js","0cccaa88b24c7a4246d6616606bc284fdc91785b5287b262a3c96ff940f6dd20",1]
 ["src/node-host/runner.auto-update.test.ts","./auto-update-compatibility.js","4aeced2d61bd408baa6145f1987fa88d286b9ffe3f1f0e92d91f85420b741b4e",1]
 ["src/node-host/runner.test-support.ts","../../packages/gateway-client/src/readiness.js","96ade6e963f1966a5958b7ff63e123e6ebf9c3765978fee9e952b34416a11bc9",1]
 ["src/node-host/runner.test-support.ts","../gateway/credentials-secret-inputs.js","00cae395ca795d45f6a17b1aa515ecee763d876ecae752e66521cacb975e0076",1]
