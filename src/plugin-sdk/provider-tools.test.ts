@@ -96,13 +96,13 @@ it("normalizes a frozen schema once across requests while keeping the current to
   expect(first.parameters).toEqual(expected);
   using entries = vi.spyOn(Object, "entries");
   for (let request = 0; request < 10; request++) {
-    const current = Object.assign(tool(parameters, `tool_${request}`), {
-      execute: async () => ({ content: [], details: request }),
-    });
+    const name = `tool_${request}`;
+    const execute = async () => ({ content: [], details: request });
+    const current = Object.assign(tool(parameters, name), { execute });
     const next = normalizeOpenAITools([current])[0]!;
     expect(next.parameters).toBe(first.parameters);
-    expect(next.name).toBe(current.name);
-    expect(next.execute).toBe(current.execute);
+    expect(next.name).toBe(name);
+    expect(next.execute).toBe(execute);
     expect(JSON.stringify(next.parameters)).toBe(JSON.stringify(expected));
     expect(normalizeOpenAITools([current], { baseUrl: "https://proxy.example/v1" })[0]).toBe(
       current,
