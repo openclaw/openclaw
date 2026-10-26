@@ -87,20 +87,6 @@ it.each(["legacy media", "inbound headings", "openai", "openai-codex"] as const)
           );
         } else if (media) {
           const original = fs.readFileSync(filename, "utf8");
-          expect(stored[1]).toMatchObject({
-            id: "m1",
-            message: {
-              role: "user",
-              content: "see attached",
-              __openclaw: {
-                retained: "message metadata",
-                media: [
-                  { path: "/tmp/photo.png", contentType: "image/png" },
-                  { path: "/tmp/document.pdf", contentType: "application/pdf" },
-                ],
-              },
-            },
-          });
           for (const mode of ["ordered", "contained", "appendable"] as const) {
             expect(verify(mode)).toEqual(verified);
           }

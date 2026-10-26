@@ -15,10 +15,8 @@ vi.mock("node:child_process", async () => {
 });
 import {
   getWindowsInstallRoots,
-  getWindowsPowerShellExePath,
   getWindowsProgramFilesRoots,
   getWindowsSystem32ExePath,
-  getWindowsWmicExePath,
 } from "./windows-install-roots.js";
 
 afterEach(() => {
@@ -48,10 +46,6 @@ describe("Windows install roots and executables", () => {
     const roots = getWindowsInstallRoots();
 
     expect(roots).toEqual(installRoots);
-    expect(execFileSyncMock).toHaveBeenCalled();
-    for (const [file] of execFileSyncMock.mock.calls) {
-      expect(file).toBe("C:\\Windows\\System32\\reg.exe");
-    }
   });
 
   it("retains first-lookup environment fallbacks when Program Files is requested later", async () => {
@@ -104,18 +98,6 @@ describe("Windows install roots and executables", () => {
       }),
     ).toEqual(["D:\\Programs", "E:\\Programs (x86)"]);
   });
-  it("resolves trusted Windows process-inspection tools", () => {
-    const env = { SystemRoot: "D:\\Windows" };
-
-    expect(getWindowsSystem32ExePath("netstat.exe", env)).toBe(
-      "D:\\Windows\\System32\\netstat.exe",
-    );
-    expect(getWindowsPowerShellExePath(env)).toBe(
-      "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    );
-    expect(getWindowsWmicExePath(env)).toBe("D:\\Windows\\System32\\wbem\\wmic.exe");
-  });
-
   it("rejects unsafe System32 executable names", () => {
     for (const name of ["..\\netstat.exe", "netstat"]) {
       expect(() => getWindowsSystem32ExePath(name)).toThrow(

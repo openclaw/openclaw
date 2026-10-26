@@ -1,10 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
@@ -53,15 +52,10 @@ describe("warning filter", () => {
     delete childEnv.NODE_OPTIONS;
     delete childEnv.NODE_REDIRECT_WARNINGS;
     delete childEnv.NODE_NO_WARNINGS;
-    const result = spawnSync(
-      resolveTestNodeExecPath(),
-      ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", source],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: childEnv,
-      },
-    );
+    const result = spawnNodeEvalSync(source, {
+      imports: ["./scripts/tsx.mjs"],
+      env: childEnv,
+    });
     expect(result.status, result.stderr).toBe(0);
     const records = fs
       .readFileSync(logFile, "utf8")
