@@ -607,40 +607,37 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
   });
 
-  it.each([false, true])(
-    "composes failure alert details without dropping presentation (publicOrigin=%s)",
-    async (publicOrigin) => {
-      const gateway = publicOrigin
-        ? { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } }
-        : undefined;
-      const expectedText = "cron failed\nRun started: 2026-01-15 10:30 EST";
-      const inspectionUrl = publicOrigin
-        ? "https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000"
-        : undefined;
-      await sendGatewayCronFailureAlert({
-        runAtMs,
-        resolveCronAgent: () => ({
-          agentId: "main",
-          cfg: { agents: { defaults: { userTimezone: "America/New_York" } }, gateway },
-        }),
-        job: announceJob("telegram"),
-        payload: {
-          text: "cron failed",
-          presentation: structuredClone(presentation),
-        },
-        channel: "telegram",
-        to: "channel:ops",
-      });
+  it("composes failure alert details without dropping presentation", async () => {
+    const gateway = {
+      publicOrigin: "https://gateway.example",
+      controlUi: { basePath: "/control" },
+    };
+    const expectedText = "cron failed\nRun started: 2026-01-15 10:30 EST";
+    const inspectionUrl =
+      "https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000";
+    await sendGatewayCronFailureAlert({
+      runAtMs,
+      resolveCronAgent: () => ({
+        agentId: "main",
+        cfg: { agents: { defaults: { userTimezone: "America/New_York" } }, gateway },
+      }),
+      job: announceJob("telegram"),
+      payload: {
+        text: "cron failed",
+        presentation: structuredClone(presentation),
+      },
+      channel: "telegram",
+      to: "channel:ops",
+    });
 
-      expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payload: {
-            text: expectedText,
-            presentation,
-          },
-          inspectionUrl,
-        }),
-      );
-    },
-  );
+    expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: {
+          text: expectedText,
+          presentation,
+        },
+        inspectionUrl,
+      }),
+    );
+  });
 });

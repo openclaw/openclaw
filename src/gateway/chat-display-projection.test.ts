@@ -21,18 +21,28 @@ it("admits display content once before sanitizing a history page", () => {
       providerReplay: { private: "replay" },
     },
     { role: "toolResult", toolCallId: "read-1", content: [text("Tool output")] },
+    {
+      role: "assistant",
+      content: [text("NO_REPLY")],
+      __openclaw: { catalogDisplay: { type: "agentMessage" } },
+    },
   ];
   const original = structuredClone(messages);
   const admission = vi.spyOn(assistantDisplay, "projectAssistantDisplayContent");
   try {
     const projected = projectChatDisplayMessages([null, ...messages, "invalid"]);
-    expect(JSON.stringify(projected)).toBe(
-      JSON.stringify([
-        messages[0],
-        { role: "assistant", content: [text("Visible report")] },
-        messages[2],
-      ]),
-    );
+    const expected = [
+      messages[0],
+      { role: "assistant", content: [text("Visible report")] },
+      messages[2],
+      {
+        role: "assistant",
+        content: [text("NO_REPLY")],
+        display: true,
+        __openclaw: { catalogSource: true },
+      },
+    ];
+    expect(JSON.stringify(projected)).toBe(JSON.stringify(expected));
     expect(messages).toEqual(original);
     expect(admission).toHaveBeenCalledTimes(messages.length);
   } finally {
@@ -55,18 +65,6 @@ it("preserves model-change labels without exposing other custom-message details"
     const projected = projectStable([{ ...message, details }]);
     expect(projected[0]).not.toHaveProperty("details");
   }
-});
-
-it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
-  expect(
-    projectChatDisplayMessages([
-      {
-        role: "assistant",
-        content: [text("NO_REPLY")],
-        __openclaw: { catalogDisplay: { type: "agentMessage" } },
-      },
-    ]),
-  ).toEqual([expect.objectContaining({ content: [text("NO_REPLY")] })]);
 });
 
 const phasedText = (value: string, phase: string) => ({
@@ -306,15 +304,14 @@ it("refreshes cached profile aliases without rewriting non-profile or unresolved
       __openclaw: { senderId: "hostile-tool" },
     },
   ];
+  const display = {
+    kind: "resolved" as const,
+    profileId: "canonical-id",
+    avatarUrl: "/api/users/canonical-id/avatar?v=20",
+    hasUploadedAvatar: false,
+  };
   const resolveCurrentUserProfileDisplay = vi.fn((id: string) =>
-    id === "missing"
-      ? { kind: "unresolved" as const }
-      : {
-          kind: "resolved" as const,
-          profileId: "canonical-id",
-          avatarUrl: "/api/users/canonical-id/avatar?v=20",
-          hasUploadedAvatar: false,
-        },
+    id === "missing" ? { kind: "unresolved" as const } : display,
   );
   const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
   for (const [index, message] of messages.slice(0, 2).entries()) {
@@ -534,6 +531,23 @@ const terminal = (runId = "run-a") => ({
 });
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
+function projectLegacyFailure(fields: Record<string, unknown>) {
+  const messages = projectStable([
+    user,
+    {
+      ...failed,
+      __openclaw: { id: "legacy", seq: 2 },
+      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+      ...fields,
+    },
+  ]);
+  const message = messages.at(-1);
+  const serialized = JSON.stringify(messages);
+  expect(message).toHaveProperty("stopReason", "error");
+  expect(message).not.toHaveProperty("errorBody");
+  expect(serialized).not.toContain("PRIVATE_");
+  return { message, serialized };
+}
 
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([
@@ -548,57 +562,43 @@ it.each([
   ],
 ] as const)("preserves guidance with empty and partial replies (%j)", (error, expected) => {
   for (const content of [[], [text("The first step completed.")]]) {
-    const message = {
-      ...failed,
-      __openclaw: { id: "legacy", seq: 2 },
+    const { message } = projectLegacyFailure({
       content,
-      errorMessage: "PRIVATE_PROVIDER_DETAIL",
       ...error,
       errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
-    };
-    const messages = projectStable([user, message]);
-    expect(messages.at(-1)).toMatchObject({
-      stopReason: "error",
+    });
+    expect(message).toMatchObject({
       content: [text([expected, ...content.map((part) => part.text)].join("\n\n"))],
     });
-    expect(JSON.stringify(messages)).not.toContain("PRIVATE_");
-    expect(messages.at(-1)).not.toHaveProperty("errorBody");
   }
 });
 
 it.each([
-  { content: [tool] },
-  { content: [phasedText("PRIVATE_COMMENTARY", "commentary")] },
-  { content: [phasedText("Partial reply ".repeat(700), "final_answer")] },
-  { content: "Partial reply" },
-  { content: [], text: "Partial reply" },
-])("retains safe incomplete-tool guidance (%j)", (partial) => {
-  const message = {
-    ...failed,
+  [{ content: [tool] }, "partial-call"],
+  [{ content: [phasedText("PRIVATE_COMMENTARY", "commentary")] }, undefined],
+  [{ content: [phasedText("Partial reply ".repeat(700), "final_answer")] }, "Partial reply"],
+  [{ content: "Partial reply" }, "Partial reply"],
+  [{ content: [], text: "Partial reply" }, "Partial reply"],
+] as const)("retains safe incomplete-tool guidance (%j)", (partial, retained) => {
+  const { serialized } = projectLegacyFailure({
     ...partial,
-    __openclaw: { id: "legacy", seq: 2 },
     errorCode: "incomplete_tool_call",
-    errorMessage: "PRIVATE_PROVIDER_DETAIL",
-  };
-  const messages = projectStable([user, message]);
-  expect(messages.at(-1)).toHaveProperty("stopReason", "error");
-  const serialized = JSON.stringify(messages);
+  });
   expect(serialized).toContain(
     "Some actions may have completed; check their results before continuing.",
   );
-  expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
-  expect(serialized).not.toContain("PRIVATE_COMMENTARY");
   expect(serialized.split("The task couldn't finish.")).toHaveLength(2);
-  if (JSON.stringify(partial).includes("Partial reply")) {
-    expect(serialized).toContain("Partial reply");
-  }
-  if (JSON.stringify(partial).includes("partial-call")) {
-    expect(serialized).toContain("partial-call");
+  if (retained) {
+    expect(serialized).toContain(retained);
   }
 });
 
-it("shows one settled notice while preserving each attempt's partial output", () => {
-  const partial = { ...failed, text: "", content: [text("The first step completed.")] };
+it.each([
+  { content: [text("The first step completed.")] },
+  { content: [{ type: "image", url: "/media/proof.png", mimeType: "image/png" }] },
+  { content: [tool] },
+])("shows one settled notice while preserving partial output (%j)", ({ content }) => {
+  const partial = { ...failed, text: "", content };
   const empty = { ...failed, __openclaw: { id: "failed-again", seq: 3, runId: "run-a" } };
   const receipt = {
     role: "custom",
@@ -615,20 +615,10 @@ it("shows one settled notice while preserving each attempt's partial output", ()
   expect(projected.filter((message) => message.role === "assistant")).toEqual([
     { ...partial, stopReason: undefined, errorMessage: undefined },
   ]);
+  expect(projected[1]).not.toHaveProperty("openclawRunError");
+  expect(projected[1]).not.toHaveProperty("stopReason");
   expect(projected.at(-1)).toMatchObject({ role: "custom", content: receipt.content });
   expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROVIDER_ERROR");
-});
-
-it.each([
-  { content: [{ type: "image", url: "/media/proof.png", mimeType: "image/png" }] },
-  { content: [tool] },
-])("keeps structured partial output separate from its final notice: %j", ({ content }) => {
-  const projected = projectChatDisplayMessages([{ ...failed, content }, terminal()]);
-  expect(projected).toHaveLength(2);
-  expect(projected[0]).toMatchObject({ role: "assistant", content });
-  expect(projected[0]).not.toHaveProperty("openclawRunError");
-  expect(projected[0]).not.toHaveProperty("stopReason");
-  expect(readRunFailureNotice(projected[1])?.runId).toBe("run-a");
 });
 
 it("retires repeated non-visible failed attempts after their run answers", () => {
