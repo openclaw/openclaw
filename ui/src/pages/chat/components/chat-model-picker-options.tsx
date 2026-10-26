@@ -35,37 +35,40 @@ export function ChatModelProviderIcon(props: { provider: string }) {
   return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
 }
 
-type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "entry" | "onSelect" | "index">;
+type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
 
-function optionPresentation(
-  entry: ChatModelPickerOptionProps["entry"],
-  options: ModelPresentationProps,
-) {
+function optionNeedsAuth(entry: ModelPresentationProps["entry"]) {
+  return (
+    entry.disabled &&
+    (entry.unavailableReason === "missing-auth" || entry.unavailableReason === "auth-failed")
+  );
+}
+
+function optionPresentation(options: ModelPresentationProps) {
   const selected = isModelPickerOptionSelected(
-    entry,
+    options.entry,
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const modelLabel = formatModelLabel(entry);
-  const runtime = formatModelRuntimeLabel(entry.provider, entry.agentRuntimeId);
+  const modelLabel = formatModelLabel(options.entry);
+  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
-  const chatOnlyHelp = entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
+  const chatOnlyHelp =
+    options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
   // Resetting a recorded pin remains possible even when its default model is unavailable.
-  const resetsPin = entry.isDefault && options.sessionModelPinned;
-  const needsAuth =
-    entry.disabled &&
-    (entry.unavailableReason === "missing-auth" || entry.unavailableReason === "auth-failed");
+  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const needsAuth = optionNeedsAuth(options.entry);
   const onModelSetup = needsAuth ? options.onModelSetup : undefined;
   const modelMeta = needsAuth
     ? runtime?.detail !== undefined
       ? runtimeLabel
       : ""
-    : [formatModelContextMeta(entry), runtimeLabel].filter(Boolean).join(" · ");
+    : [formatModelContextMeta(options.entry), runtimeLabel].filter(Boolean).join(" · ");
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
-    : entry.unavailableReason === "unsupported-runtime"
+    : options.entry.unavailableReason === "unsupported-runtime"
       ? t("chat.modelControls.runtimeUnavailable")
       : "";
   return {
@@ -83,25 +86,33 @@ function optionPresentation(
 }
 
 function createOptionPresentation(props: ChatModelPickerOptionProps) {
-  return createMemo(() => optionPresentation(props.entry, props));
+  return createMemo(() => optionPresentation(props));
 }
 
 export function modelOptionSearchRow(
   entry: ChatModelPickerOptionProps["entry"],
-  options: ModelPresentationProps,
+  options: Omit<ModelPresentationProps, "entry">,
 ): ChatModelSearchRow {
-  const view = optionPresentation(entry, options);
+  const selected = isModelPickerOptionSelected(
+    entry,
+    options.selectedModelValue,
+    options.selectedAgentRuntime,
+  );
+  const runtimeLabel =
+    formatModelRuntimeLabel(entry.provider, entry.agentRuntimeId)?.label ?? "";
+  const resetsPin = entry.isDefault && options.sessionModelPinned;
+  const onModelSetup = optionNeedsAuth(entry) ? options.onModelSetup : undefined;
   return {
     key: modelPickerOptionKey(entry),
-    name: view.modelLabel.toLocaleLowerCase(),
-    keywords: [entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
+    name: formatModelLabel(entry).toLocaleLowerCase(),
+    keywords: [entry.isDefault ? t("chat.modelControls.default") : "", runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
     providerLabel: providerDisplayLabel(entry.provider).toLocaleLowerCase(),
     reference: entry.value,
-    selected: view.selected,
-    hasShortcut: !view.selected,
-    disabled: options.disabled || Boolean(entry.disabled && !view.onModelSetup && !view.resetsPin),
+    selected,
+    hasShortcut: !selected,
+    disabled: options.disabled || Boolean(entry.disabled && !onModelSetup && !resetsPin),
   };
 }
 

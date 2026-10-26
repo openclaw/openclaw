@@ -237,6 +237,10 @@ describe.skipIf(process.platform !== "linux")(
           context.skip(sandboxSkipReason);
         }
         expect(process.platform).toBe("linux");
+        const codexManifest = JSON.parse(
+          await fs.readFile(path.join(REPO_ROOT, "extensions/codex/package.json"), "utf8"),
+        ) as { dependencies: { "@openai/codex": string } };
+        const expectedCodexVersion = `codex-cli ${codexManifest.dependencies["@openai/codex"]}`;
         const root = tempDirs.make("openclaw-native-hook-pressure-");
         const pluginDir = path.join(root, "plugin");
         await fs.mkdir(pluginDir);
@@ -603,7 +607,7 @@ export default {
               ).stdout.trim();
               const current = await readProcess(row.pid);
               expect(current?.startTimeTicks).toBe(row.startTimeTicks);
-              expect(version).toBe("codex-cli 0.162.1");
+              expect(version).toBe(expectedCodexVersion);
               binaryIdentities.push({
                 pid: row.pid,
                 startTimeTicks: row.startTimeTicks,

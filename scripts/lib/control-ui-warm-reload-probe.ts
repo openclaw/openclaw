@@ -1,5 +1,8 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe(input: { rowFacts?: boolean; avatars?: boolean } = {}) {
+export function warmReloadProbe(
+  input: { rowFacts?: boolean; avatars?: boolean } = {},
+  samplePaneChrome?: (at: number) => void,
+) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
@@ -322,7 +325,7 @@ export function warmReloadProbe(input: { rowFacts?: boolean; avatars?: boolean }
     attributeOldValue: input.avatars,
     characterData: true,
   });
-  const sample = () => {
+  const sample = (frameAt: number) => {
     if (stopped) {
       return;
     }
@@ -509,6 +512,7 @@ export function warmReloadProbe(input: { rowFacts?: boolean; avatars?: boolean }
     if (states.at(-1)?.state !== state) {
       states.push({ at: performance.now(), state });
     }
+    samplePaneChrome?.(frameAt);
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);

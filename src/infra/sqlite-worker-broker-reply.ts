@@ -428,7 +428,7 @@ export function receiveSqliteWorkerReply(
   let value: unknown;
   try {
     const continuation = runWithMainThreadTask(
-      "worker:sqlite:reply-decode",
+      "worker:sqlite",
       (): Extract<SqliteWorkerRequest, { type: "result-next" | "execute-frame" }> | undefined => {
         if (reply.input === "next") {
           const transfer = job.inputTransfer;
@@ -499,6 +499,7 @@ export function receiveSqliteWorkerReply(
         }
         return undefined;
       },
+      "reply-decode",
     );
     if (continuation) {
       // Continuations retain the current job and its reserved transport credits through drain.

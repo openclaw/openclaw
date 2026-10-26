@@ -89,6 +89,105 @@ promises plus 16 shared transform continuations, while retaining source result
 identity. Async transforms still suspend before subsequent hooks and delivery;
 `return()` and `throw()` stay with the existing iterator wrapper.
 
+### Real-layer probe
+
+`--layer` selects real production installers instead of the agent-loop workload.
+The companion `agent-stream-update-layers.ts` imports the owners before enabling
+instrumentation. It uses a native promise-returning synthetic source and compares
+32 events with the requested event count, subtracting constant request setup and
+teardown. The reported slope includes the source promise and consuming reaction
+(2/event); subtract 2 to obtain the added forwarding cost. This is a steady serial
+read workload, not a cancellation or concurrent-read correctness test.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer all --mode promises --events 256 --turns 1 --warmup 1
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer responses-observer --mode timing --events 3000 --turns 20 --warmup 5
+# Repeat with --mode allocation, alternating base/candidate for five pairs.
+node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer responses-observer --mode verify --events 256 --turns 1 --warmup 1
+# The other shared observer owner uses the same four modes:
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode timing --events 3000 --turns 20 --warmup 5
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode allocation --events 3000 --turns 20 --warmup 5
+node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode promises --events 3000 --turns 1 --warmup 1
+node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode verify --events 240 --turns 1 --warmup 1
+```
+
+The observer's verification mode cycles a fixed eight-frame synthetic recording:
+response creation, item creation, reasoning and text deltas, split tool arguments,
+completed tool item, and terminal response with model, service tier, and usage.
+It hashes every delivered frame. The original agent-loop verification above still
+covers the assistant-event and blocking/async tool continuation recording.
+
+`model-diagnostics` installs `wrapStreamFnWithDiagnosticModelCallEvents` with the
+real model lifecycle, transport context, and observer; it does not supply a mock
+lifecycle. Its context contains 1,000 synthetic history entries and 40 tools.
+Timing, allocation, and promise modes use ordinary text updates; verification
+cycles a twelve-event assistant recording containing start, thinking, text,
+split tool arguments, a completed tool call, and done. Message timestamps and
+tool identifiers are fixed. The hash includes delivered events and the final
+result, excluding transient diagnostic timestamps and generated child trace IDs.
+Result observation is awaited between requests so one request's diagnostic tail
+cannot leak into the next measurement. This measures the ordinary observer with
+no diagnostic subscribers or plugin hooks; content capture and subscriber sinks
+are separate costs.
+
+The steady-state inventory is below. Other than the two observer owners,
+these rows record remaining work; this change does not rewrite their owners.
+Both observer counts are measured with their real installers. The shared helper
+projects one iterator-result object per delivered event so accessor-backed source
+values are read exactly once.
+
+| Probe layer          | Current forwarding shape                               | Total promises/event |               Added promises/event |
+| -------------------- | ------------------------------------------------------ | -------------------: | ---------------------------------: |
+| `source`             | Native resolved promise                                |                    2 |                                  0 |
+| `responses-observer` | Stable `.then(observe, reject)` continuation           |                    3 |                                  1 |
+| `model-diagnostics`  | Stable continuation inside the real model lifecycle    |                    3 |                                  1 |
+| `response-model`     | `for await` / `yield`                                  |                    6 |                                  4 |
+| `compaction-v2`      | `for await` / `yield`                                  |                    6 |                                  4 |
+| `provider-hook`      | One-time admission, then `yield*`                      |                    4 |                                  2 |
+| `acceptance`         | `for await` / `yield`                                  |                    6 |                                  4 |
+| `first-event`        | Awaited reads / `yield` after first-read race          |                    6 |                                  4 |
+| `scheduling`         | `for await` / `yield`, occasional budget await         |  6 plus budget waits |                4 plus budget waits |
+| `event-queue`        | Async generator yielding buffered entries              |                    4 |                                  2 |
+| `event-waiter`       | Async generator awaiting queue waiter                  |                    6 |                                  4 |
+| `binding`            | Synchronous context-bound forwarding                   |                    2 |                                  0 |
+| `rate-limit`         | Keyed `for await` / `yield` observer                   |                    6 |                                  4 |
+| `promotion`          | Two nested `for await` / `yield` generators            |                   10 |                                  8 |
+| `plugin-text`        | `async next()` awaiting source; replaces result        |                    4 |                                  2 |
+| `idle`               | Async next, waiter promise, source continuation        |                    6 |                                  4 |
+| `responses-sse`      | SDK/body plus terminal drain, attribution and recovery |                   22 | Composition, not an isolated layer |
+
+At 32 versus 256 events the scheduling probe measured 6.054 total promises/event;
+its shared work-budget suspension makes the exact slope depend on event counts.
+Conditional installers are deliberately enabled here. Disabled tracker,
+acceptance, first-event timeout, and unkeyed/inherited rate-limit wrappers return
+their source unchanged. Acceptance awaits receipts only on `response.created`;
+idle startup can additionally race its request deadline. These exceptional events
+and timer races are not represented by the ordinary-event slope.
+
+Three raw SSE owners are private to `createResponsesStreamWithRecovery`:
+`streamWithTerminalDrain` uses `for await` / `yield` (+4), `providerStream` uses
+`yield*` (+2), and replay/recovery uses `for await` / `yield` (+4). Those individual
+figures are source-shape accounting, **not isolated measurements**. The
+`responses-sse` probe exercises all three through the real OpenAI SDK and an
+in-process synthetic fetch, including parsing and body reads. It sends no network
+request. No new production exports are introduced solely to measure internals.
+
+The already-converted assistant layers retain their previous inventory:
+compaction settlement uses `async next()` / await (+2 on ordinary events, with
+additional work when settlement is required); adjacent transforms share one stable
+continuation (+1 for any number of adjacent synchronous transforms); stop-reason
+recovery and uncontended model diagnostics each add one continuation (+1).
+Their exceptional recovery/settlement and concurrent-read paths are not equivalent
+to ordinary forwarding. The reducer and final agent consumer consume events;
+they do not introduce an additional forwarding iterator.
+
+Tool-call promotion's inner generator buffers, suppresses, and replaces events;
+its outer generator records emitted text length. The 8-promise cost is measured
+only for its ordinary one-to-one path. Keeping its buffering implementation intact
+avoids replacing meaningful generator state with a competing manual state machine.
+Plugin text replacement currently uses an async next callback, not a generator,
+and intentionally creates replacement event/result envelopes.
+
 ## Native CLI path
 
 Claude CLI execution bypasses agent-core: JSONL stdout callbacks in
