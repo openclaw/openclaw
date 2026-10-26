@@ -65,19 +65,15 @@ function registerLifecycle(eager = false, path = "/browser/screencast") {
   }
   const scheduler = createTestPluginServiceScheduler();
   const context = { config: {}, stateDir: "/tmp/browser-startup", logger: console, scheduler };
-  const lifecycle = {
-    handleUpgrade: route.handleUpgrade,
-    start: () => service.start(context),
-    stop: () => service.stop?.(context),
-  };
+  const stop = () => service.stop?.(context);
   onTestFinished(async () => {
     try {
-      await lifecycle.stop();
+      await stop();
     } finally {
       await scheduler.stop();
     }
   });
-  return lifecycle;
+  return { handleUpgrade: route.handleUpgrade, start: () => service.start(context), stop };
 }
 
 beforeEach(() => vi.clearAllMocks());

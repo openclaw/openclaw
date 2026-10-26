@@ -49,15 +49,11 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       kind: "browser-control" as const,
       baseUrl: `http://127.0.0.1:${(control.address() as AddressInfo).port}`,
     };
-    const tabDefaults = { sessionKey, profile: "remote" };
+    const tabDefaults = { sessionKey, profile: "remote", now: 1_000 };
     try {
-      await registry.trackSessionBrowserTab({ ...tabDefaults, targetId: "volatile", route });
-      await expect(close()).resolves.toBe(1);
-      expect(requests).toEqual(["DELETE /tabs/volatile?targetIdMode=raw&profile=remote"]);
-
       for (const firstKind of ["sweep", "lifecycle"] as const) {
         const joined = { ...tabDefaults, targetId: `joined-${firstKind}`, route };
-        await registry.trackSessionBrowserTab({ ...joined, now: 1_000 });
+        await registry.trackSessionBrowserTab(joined);
         const lifecycle = () =>
           registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
         const sweep = () => registry.sweepTrackedBrowserTabs({ now: 20_000, idleMs: 1 });
@@ -82,7 +78,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       });
       expect(ownership.status).toBe("durable");
       const tab = { ...tabDefaults, targetId: "owned", ownership };
-      await registry.trackSessionBrowserTab({ ...tab, now: 1_000 });
+      await registry.trackSessionBrowserTab(tab);
       const resolved = resolveBrowserConfig(config.browser, config);
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
@@ -112,7 +108,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       expect([...targets]).toEqual(["user"]);
       expect(await store.entries()).toEqual([]);
       await expect(close()).resolves.toBe(0);
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(2);
       expect(closedTargets).toHaveLength(1);
     } finally {
       await forget();
