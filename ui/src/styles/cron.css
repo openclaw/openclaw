@@ -84,10 +84,7 @@
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-}
-
-/* Keep caret edits off the shared backing of the retained job rows in WebKit. */
-.cron-search-box:focus-within {
+  /* One backing avoids row repaint traversal and recreation on every focus. */
   will-change: transform;
 }
 
