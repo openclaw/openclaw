@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
+import type { RealtimeTalkWebRtcSdpSessionResult } from "./shared.ts";
 import { RealtimeTalkWebRtcOfferExchange } from "./webrtc-support.ts";
 
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
@@ -12,20 +13,18 @@ function stubFetch(response: unknown) {
 }
 
 function readAnswer(
-  exchange: RealtimeTalkWebRtcOfferExchange,
+  session: Partial<RealtimeTalkWebRtcSdpSessionResult> = {},
   isCurrent = () => true,
-  offerResponseMaxBytes: number | null = OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES,
-  provider = "openai",
-  offerUrl = "https://gateway.example.test/realtime/calls",
   gatewayUrl = "wss://gateway.example.test/control",
 ) {
-  return exchange.readAnswer({
+  return new RealtimeTalkWebRtcOfferExchange().readAnswer({
     session: {
-      provider,
+      provider: "openai",
       transport: "webrtc",
       clientSecret: "reservation-token",
-      offerUrl,
-      ...(offerResponseMaxBytes === null ? {} : { offerResponseMaxBytes }),
+      offerUrl: "https://gateway.example.test/realtime/calls",
+      offerResponseMaxBytes: OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES,
+      ...session,
     },
     offer: { type: "offer", sdp: "offer-sdp" },
     gatewayUrl,
@@ -34,20 +33,13 @@ function readAnswer(
 }
 
 describe("RealtimeTalkWebRtcOfferExchange", () => {
-  let exchange: RealtimeTalkWebRtcOfferExchange;
-  beforeEach(() => {
-    exchange = new RealtimeTalkWebRtcOfferExchange();
-  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("resolves relative offer routes against the connected Gateway", async () => {
     const fetchMock = stubFetch(new Response("answer-sdp"));
     await readAnswer(
-      exchange,
+      { offerUrl: "/plugins/codex/realtime/calls", offerResponseMaxBytes: undefined },
       () => true,
-      null,
-      "openai",
-      "/plugins/codex/realtime/calls",
       "wss://gateway.example.test/control?tenant=a",
     );
     expect(fetchMock).toHaveBeenCalledWith(
@@ -61,12 +53,14 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
     );
   });
 
-  it.each([OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES, null])(
+  it.each([OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES, undefined])(
     "accepts an SDP answer with provider limit %s",
     async (limit) => {
-      const answer = "x".repeat(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + (limit === null ? 1 : 0));
+      const answer = "x".repeat(
+        OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES + (limit === undefined ? 1 : 0),
+      );
       stubFetch(new Response(answer));
-      await expect(readAnswer(exchange, () => true, limit)).resolves.toBe(answer);
+      await expect(readAnswer({ offerResponseMaxBytes: limit })).resolves.toBe(answer);
     },
   );
 
@@ -77,9 +71,9 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
       cancel,
     );
     stubFetch({ ok: true, status: 200, headers: new Headers(), body, text: vi.fn() });
-    await expect(
-      readAnswer(exchange, () => true, OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES, "custom-provider"),
-    ).rejects.toThrow("Realtime WebRTC SDP answer: text response exceeds 262144 bytes");
+    await expect(readAnswer({ provider: "custom-provider" })).rejects.toThrow(
+      "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
+    );
     expect(cancel).toHaveBeenCalledOnce();
     expect(body.locked).toBe(false);
   });
@@ -98,7 +92,7 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
         body: { cancel, getReader },
         text: vi.fn(),
       });
-      await expect(readAnswer(exchange)).rejects.toThrow(
+      await expect(readAnswer()).rejects.toThrow(
         "Realtime WebRTC SDP answer: text response exceeds 262144 bytes",
       );
       expect(getReader).not.toHaveBeenCalled();
@@ -109,14 +103,14 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
   it("cancels a non-2xx SDP response body without waiting for cancellation", async () => {
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     stubFetch({ ok: false, status: 502, body: { cancel } });
-    await expect(readAnswer(exchange)).rejects.toThrow("Realtime WebRTC setup failed (502)");
+    await expect(readAnswer()).rejects.toThrow("Realtime WebRTC setup failed (502)");
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("cancels a stale successful SDP response body", async () => {
     const cancel = vi.fn(() => Promise.resolve());
     stubFetch({ ok: true, status: 200, body: { cancel } });
-    await expect(readAnswer(exchange, () => false)).resolves.toBeUndefined();
+    await expect(readAnswer({}, () => false)).resolves.toBeUndefined();
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

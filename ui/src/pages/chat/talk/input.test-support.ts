@@ -2,6 +2,12 @@ import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import { RealtimeTalkInputOwner } from "./input.ts";
 
 export const mockAudioNode = () => ({ connect: vi.fn(), disconnect: vi.fn() });
+const mockAnalyser = (level: number) => ({
+  fftSize: 0,
+  smoothingTimeConstant: 0,
+  disconnect: vi.fn(),
+  getFloatTimeDomainData: (samples: Float32Array) => samples.fill(level),
+});
 export type MockAudioProcessor = ReturnType<typeof mockAudioNode> & {
   onaudioprocess:
     | ((event: { inputBuffer: { getChannelData: (channel: number) => Float32Array } }) => void)
@@ -47,14 +53,7 @@ export function createPcmAudioContext(
       return sink;
     }
 
-    createAnalyser() {
-      return {
-        fftSize: 0,
-        smoothingTimeConstant: 0,
-        disconnect: vi.fn(),
-        getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-      };
-    }
+    createAnalyser = () => mockAnalyser(0.25);
 
     createBuffer(_channels: number, length: number, sampleRate: number) {
       const channel = new Float32Array(length);
@@ -73,12 +72,7 @@ export class MockDictationAudioContext extends MockAudioContextBase {
   readonly sampleRate = 8000;
 
   createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      ...mockAudioNode(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
-    };
+    return { ...mockAnalyser(0), connect: vi.fn() };
   }
 }
 
