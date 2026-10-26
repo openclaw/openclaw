@@ -1,6 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -141,6 +140,8 @@ describe("voice-call CLI status fallback", () => {
     runCli(buildProgram({}, config), args);
   const capture = async (args: string[], config: Record<string, unknown> = {}) =>
     JSON.parse(await captureCli(buildProgram({}, config), args));
+  const briefArgs = (file: string, subcommand = "start") =>
+    commandArgs(subcommand, { to: "+15550001111", "brief-file": file });
   it("reports an ambiguous phone-call owner during setup without starting telephony", async () => {
     const ensureRuntime = vi.fn();
     const program = buildProgram({}, createVoiceCallBaseConfig(), ensureRuntime, {
@@ -407,52 +408,48 @@ describe("voice-call CLI status fallback", () => {
     firstReadBytes: number,
     copyTruncated?: string,
   ): Promise<{ output: string; shortened: boolean }> {
-    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-tail-"));
-    const logFile = path.join(tempDir, "custom.log");
-    const initial = "initial\n";
-    fs.writeFileSync(logFile, initial);
-    const initialByteLength = Buffer.byteLength(initial);
+    return withTempDir("openclaw-voice-call-tail-", async (tempDir) => {
+      const logFile = path.join(tempDir, "custom.log");
+      const initial = "initial\n";
+      fs.writeFileSync(logFile, initial);
+      const initialByteLength = Buffer.byteLength(initial);
 
-    const sentinel = new Error("stop voice-call tail test");
-    const capturer = captureStdout();
-    const originalReadSync = fs.readSync.bind(fs);
-    let shortened = false;
-    const readSyncSpy = vi.spyOn(fs, "readSync");
-    readSyncSpy.mockImplementation(((fd, buffer, offset, length, position) => {
-      if (
-        !shortened &&
-        typeof position === "number" &&
-        position === initialByteLength &&
-        Buffer.isBuffer(buffer)
-      ) {
-        shortened = true;
-        return originalReadSync(fd, buffer, offset, firstReadBytes, position);
-      }
-      return originalReadSync(fd, buffer, offset, length, position);
-    }) as typeof fs.readSync);
-
-    sleepMock
-      .mockImplementationOnce(async () => {
-        fs.appendFileSync(logFile, appended);
-      })
-      .mockImplementationOnce(async () => {
-        if (copyTruncated !== undefined) {
-          fs.writeFileSync(logFile, copyTruncated);
+      const sentinel = new Error("stop voice-call tail test");
+      const capturer = captureStdout();
+      const originalReadSync = fs.readSync.bind(fs);
+      let shortened = false;
+      const readSyncSpy = vi.spyOn(fs, "readSync");
+      readSyncSpy.mockImplementation(((fd, buffer, offset, length, position) => {
+        if (
+          !shortened &&
+          typeof position === "number" &&
+          position === initialByteLength &&
+          Buffer.isBuffer(buffer)
+        ) {
+          shortened = true;
+          return originalReadSync(fd, buffer, offset, firstReadBytes, position);
         }
-      })
-      .mockImplementationOnce(async () => {
-        throw sentinel;
-      });
+        return originalReadSync(fd, buffer, offset, length, position);
+      }) as typeof fs.readSync);
 
-    try {
+      sleepMock
+        .mockImplementationOnce(async () => {
+          fs.appendFileSync(logFile, appended);
+        })
+        .mockImplementationOnce(async () => {
+          if (copyTruncated !== undefined) {
+            fs.writeFileSync(logFile, copyTruncated);
+          }
+        })
+        .mockImplementationOnce(async () => {
+          throw sentinel;
+        });
+
       await expect(run(["tail", "--file", logFile, "--since", "0", "--poll", "50"])).rejects.toBe(
         sentinel,
       );
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-    return { output: capturer(), shortened };
+      return { output: capturer(), shortened };
+    });
   }
 
   const firstRecord = '{"event":"first"}\n';
@@ -507,13 +504,9 @@ describe("voice-call CLI status fallback", () => {
         try {
           await expect(
             captureCli(buildProgram({}, {}, ensureRuntime), [
-              subcommand,
+              ...briefArgs(file, subcommand),
               "--message",
               "Hello",
-              "--to",
-              "+15550001111",
-              "--brief-file",
-              file,
             ]),
           ).rejects.toThrow("must be a regular file");
           expect(callGatewayFromCliMock).not.toHaveBeenCalled();
@@ -538,14 +531,9 @@ describe("voice-call CLI status fallback", () => {
           fs.symlinkSync(file, input);
         }
         callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
-        const output = await captureCli(buildProgram({}, { ringTimeoutMs: 1000 }), [
-          "start",
-          "--to",
-          "+15550001111",
-          "--brief-file",
-          input,
-        ]);
-        expect(JSON.parse(output)).toEqual({ callId: "call-1" });
+        expect(await capture(briefArgs(input), { ringTimeoutMs: 1000 })).toEqual({
+          callId: "call-1",
+        });
         expect(callGatewayFromCliMock.mock.calls[0]?.[2]).toMatchObject({ brief });
       });
     },
@@ -554,9 +542,7 @@ describe("voice-call CLI status fallback", () => {
   it("retains the character limit for brief files", async () => {
     await withBriefPath(async (file) => {
       fs.writeFileSync(file, " ".repeat(16001));
-      await expect(
-        runCli(buildProgram({}), ["start", "--to", "+15550001111", "--brief-file", file]),
-      ).rejects.toThrow("Brief input is too large");
+      await expect(run(briefArgs(file))).rejects.toThrow("Brief input is too large");
       expect(callGatewayFromCliMock).not.toHaveBeenCalled();
     });
   });
