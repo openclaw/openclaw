@@ -198,7 +198,7 @@ function holdRecoveryTurn(
     await finish.promise;
     io.emitFinal([true, { runId, status: "ok" }, undefined]);
   });
-  return async () => {
+  const settle = async () => {
     finish.resolve();
     try {
       await startTurn.mock.results.at(-1)?.value;
@@ -208,6 +208,7 @@ function holdRecoveryTurn(
       await registration?.entry.input.settlement.promise;
     }
   };
+  return Object.assign(settle, { [Symbol.asyncDispose]: settle });
 }
 
 function markRecovery(
@@ -236,8 +237,8 @@ function markRecovery(
 describe("typed restart recovery operator admission", () => {
   it.each([false, true])(
     "retains an internal operator source across repeated restarts (revoked=%s)",
-    async (revoked) => {
-      await withRecovery(async ({ entry, target, stateDir, profileId }) => {
+    (revoked) =>
+      withRecovery(async ({ entry, target, stateDir, profileId }) => {
         const source = entry.restartRecoveryOperatorSource;
         let runId = target.recoveryRunId;
         for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -297,11 +298,10 @@ describe("typed restart recovery operator admission", () => {
             await finish();
           }
         }
-      }, true);
-    },
+      }, true),
   );
-  it("resumes a retained channel requester after its child completion cohort is gone", async () => {
-    await withRecovery(async (fixture) => {
+  it("resumes a retained channel requester after its child completion cohort is gone", () =>
+    withRecovery(async (fixture) => {
       const { context, stateDir } = fixture;
       const target = {
         ...fixture.target,
@@ -339,21 +339,16 @@ describe("typed restart recovery operator admission", () => {
       rotateAgentEventLifecycleGeneration();
       expect(listSubagentRunsForRequester(target.sessionKey)).toEqual([]);
       using runtime = createRuntime(() => context);
-      const finish = holdRecoveryTurn(target);
-      try {
-        expectRecovery(await recover(target, stateDir, runtime), true);
-        expect(startTurn).toHaveBeenCalledOnce();
-        const principal = expectDefined(
-          startTurn.mock.calls[0]?.[0].principal,
-          "recovered principal",
-        );
-        expect(principal.internal?.agentToolCaller?.requesterOrigin).toEqual(requesterOrigin);
-        expect(principal.internal?.operatorRunAuthority).toBeUndefined();
-      } finally {
-        await finish();
-      }
-    }, true);
-  });
+      await using _ = holdRecoveryTurn(target);
+      expectRecovery(await recover(target, stateDir, runtime), true);
+      expect(startTurn).toHaveBeenCalledOnce();
+      const principal = expectDefined(
+        startTurn.mock.calls[0]?.[0].principal,
+        "recovered principal",
+      );
+      expect(principal.internal?.agentToolCaller?.requesterOrigin).toEqual(requesterOrigin);
+      expect(principal.internal?.operatorRunAuthority).toBeUndefined();
+    }, true));
 
   it.each([
     "allowed",
@@ -479,41 +474,37 @@ describe("typed restart recovery operator admission", () => {
         });
         rotateAgentEventLifecycleGeneration();
         using runtime = createRuntime(() => context);
-        const finish = holdRecoveryTurn(target);
-        try {
-          const authorized = parentState === "allowed" || directHuman;
-          expectRecovery(await recover(target, stateDir, runtime, cfg), authorized);
-          expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
-          if (parentState === "allowed") {
-            const recovered = expectDefined(startTurn.mock.calls[0]?.[0], "recovered turn");
-            const assertParent = expectDefined(
-              recovered.principal?.internal?.agentToolCaller?.assertCurrent,
-              "live parent authority",
+        await using _ = holdRecoveryTurn(target);
+        const authorized = parentState === "allowed" || directHuman;
+        expectRecovery(await recover(target, stateDir, runtime, cfg), authorized);
+        expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
+        if (parentState === "allowed") {
+          const recovered = expectDefined(startTurn.mock.calls[0]?.[0], "recovered turn");
+          const assertParent = expectDefined(
+            recovered.principal?.internal?.agentToolCaller?.assertCurrent,
+            "live parent authority",
+          );
+          expect(assertParent).not.toThrow();
+          expect(recovered.executionSource).not.toThrow();
+          const revoked = config([]);
+          fixture.setConfig(revoked);
+          setRuntimeConfigSnapshot(revoked);
+          expect(assertParent).toThrow();
+          expect(recovered.executionSource).toThrow();
+        } else if (!authorized) {
+          expect(loadSessionEntry(target)?.status).toBe("interrupted");
+          expect(loadSessionEntry(target)?.mainRestartRecovery).toBeUndefined();
+          expect(JSON.stringify(await loadTranscriptEvents(target))).toContain(
+            "Send a new authenticated message to continue.",
+          );
+          if (
+            parentState === "policy denied" ||
+            (missingSource && parentState !== "missing lineage")
+          ) {
+            expect(JSON.stringify(await loadTranscriptEvents(parent))).toContain(
+              `Child session ${target.sessionKey} could not resume`,
             );
-            expect(assertParent).not.toThrow();
-            expect(recovered.executionSource).not.toThrow();
-            const revoked = config([]);
-            fixture.setConfig(revoked);
-            setRuntimeConfigSnapshot(revoked);
-            expect(assertParent).toThrow();
-            expect(recovered.executionSource).toThrow();
-          } else if (!authorized) {
-            expect(loadSessionEntry(target)?.status).toBe("interrupted");
-            expect(loadSessionEntry(target)?.mainRestartRecovery).toBeUndefined();
-            expect(JSON.stringify(await loadTranscriptEvents(target))).toContain(
-              "Send a new authenticated message to continue.",
-            );
-            if (
-              parentState === "policy denied" ||
-              (missingSource && parentState !== "missing lineage")
-            ) {
-              expect(JSON.stringify(await loadTranscriptEvents(parent))).toContain(
-                `Child session ${target.sessionKey} could not resume`,
-              );
-            }
           }
-        } finally {
-          await finish();
         }
       }, ingress);
     },
@@ -521,8 +512,8 @@ describe("typed restart recovery operator admission", () => {
 
   it.each(["matching", "missing", "different", "stale requester"] as const)(
     "settles or resumes an interrupted requester (source: %s)",
-    async (source) => {
-      await withRecovery(async ({ context, target, entry, stateDir, profileId }) => {
+    (source) =>
+      withRecovery(async ({ context, target, entry, stateDir, profileId }) => {
         const requesterOrigin = {
           sessionKey: target.sessionKey,
           operatorProfileId: source === "different" ? "another-requester" : profileId,
@@ -543,37 +534,32 @@ describe("typed restart recovery operator admission", () => {
         await markRecovery(target, context, stateDir, target.sourceRunId);
         rotateAgentEventLifecycleGeneration();
         using runtime = createRuntime(() => context);
-        const finish = holdRecoveryTurn(target);
+        await using _ = holdRecoveryTurn(target);
         const recoverAgain = () => recover(target, stateDir, runtime);
-        try {
-          const authorized = source === "matching";
-          expectRecovery(await recoverAgain(), authorized);
-          expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
-          if (!authorized) {
-            const retained = loadSessionEntry(target);
-            expect(retained?.sessionId).toBe(target.sessionId);
-            expect(retained?.status).toBe("interrupted");
-            expect(retained?.mainRestartRecovery).toBeUndefined();
-            expect(retained?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
-            const transcript = await loadTranscriptEvents(target);
-            expect(JSON.stringify(transcript)).toContain(
-              "Send a new authenticated message to continue.",
-            );
-            await recoverAgain();
-            expect(startTurn).not.toHaveBeenCalled();
-            expect(await loadTranscriptEvents(target)).toEqual(transcript);
-          }
-        } finally {
-          await finish();
+        const authorized = source === "matching";
+        expectRecovery(await recoverAgain(), authorized);
+        expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
+        if (!authorized) {
+          const retained = loadSessionEntry(target);
+          expect(retained?.sessionId).toBe(target.sessionId);
+          expect(retained?.status).toBe("interrupted");
+          expect(retained?.mainRestartRecovery).toBeUndefined();
+          expect(retained?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
+          const transcript = await loadTranscriptEvents(target);
+          expect(JSON.stringify(transcript)).toContain(
+            "Send a new authenticated message to continue.",
+          );
+          await recoverAgain();
+          expect(startTurn).not.toHaveBeenCalled();
+          expect(await loadTranscriptEvents(target)).toEqual(transcript);
         }
-      }, true);
-    },
+      }, true),
   );
 
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
-    async (field) => {
-      await withRecovery(async ({ target, context }) => {
+    (field) =>
+      withRecovery(async ({ target, context }) => {
         using runtime = createRuntime(() => context);
         const request = recoveryRequest(target);
         request[field] = "another-claim";
@@ -583,8 +569,7 @@ describe("typed restart recovery operator admission", () => {
           }),
         ).rejects.toThrow("dispatch does not match its source claim");
         expect(startTurn).not.toHaveBeenCalled();
-      });
-    },
+      }),
   );
 
   it.each([
@@ -597,8 +582,8 @@ describe("typed restart recovery operator admission", () => {
     ["requester without operator authority", false, "matching", "identity refusal"],
   ] as const)(
     "applies recovery admission and the actual admin-method fence to %s",
-    async (source, operator, requester, expected) => {
-      await withRecovery(async (fixture) => {
+    (source, operator, requester, expected) =>
+      withRecovery(async (fixture) => {
         const { target, context, entry, profileId } = fixture;
         const queued = source.startsWith("native queued");
         const requesterOrigin = {
@@ -676,8 +661,7 @@ describe("typed restart recovery operator admission", () => {
         } finally {
           retained?.release();
         }
-      });
-    },
+      }),
   );
 
   it.each([
@@ -687,8 +671,8 @@ describe("typed restart recovery operator admission", () => {
     "lifecycle rotated",
     "Gateway closed",
     "Gateway context replaced",
-  ] as const)("refuses retained operator work after its exact %s", async (boundary) => {
-    await withRecovery(async ({ target, context, entry, profileId }) => {
+  ] as const)("refuses retained operator work after its exact %s", (boundary) =>
+    withRecovery(async ({ target, context, entry, profileId }) => {
       let activeContext = context;
       const registration = registerRecovery(target);
       using runtime = createRuntime(() => activeContext);
@@ -815,6 +799,6 @@ describe("typed restart recovery operator admission", () => {
           await registration.entry.input.settlement.promise;
         }
       }
-    });
-  });
+    }),
+  );
 });

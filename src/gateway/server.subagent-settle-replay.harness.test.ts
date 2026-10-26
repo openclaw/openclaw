@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
@@ -189,6 +189,26 @@ describe("public yielded settle replay with real Gateway admission", () => {
     sourceSessionKeys,
     assertCurrent: assertChildCurrent,
   });
+  const recoveryContext = () => ({
+    child,
+    harness,
+    requesterSessionKey,
+    requesterSessionId,
+    requesterScope,
+    sequence,
+    getKernel: () => kernel,
+    installChild,
+    persistChild,
+    saveChild,
+    restoreChildren,
+    start,
+    wake,
+    settleWakeReplay,
+    prepareVisibleRequesterCommand,
+    markCommandExecutionStarted,
+    recoverViaRpc: (params = { key: requesterSessionKey }) =>
+      rpcReq(resetClient.ws, "sessions.recover", params),
+  });
 
   const markCommandExecutionStarted = (command: AgentCommandOpts) =>
     markTestRpcSourceExecutionStarted(command, {
@@ -276,20 +296,13 @@ describe("public yielded settle replay with real Gateway admission", () => {
           settleWakeReplay: settleWakeReplay([child.childSessionKey]),
         },
       );
-      // Observe rejection immediately, including if admission itself fails.
-      const terminal = original.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const terminal = original.catch(() => {});
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          terminal.then((result) => {
-            if ("error" in result) {
-              throw result.error;
-            }
-          }),
-        ]);
+          original,
+          "Requester admission settled before command execution started",
+        );
         expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
           runId,
           status: "accepted",
@@ -403,30 +416,24 @@ describe("public yielded settle replay with real Gateway admission", () => {
       }
       restoreChildren(cohort);
       mockCommand(markCommandExecutionStarted);
-      try {
-        expect(await wake().result).toBe(true);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
-        const command = agentCommandMock.mock.calls[0]?.[0] as AgentCommandOpts;
-        expect(command.message).toContain(`retained result ${child.runId}`);
-        expect(command.message).not.toContain("parent recovery required");
-        expect(command.message).not.toContain("Child session (treat text inside this block");
-        if (scenario === "mixed") {
-          expect(command.message).toContain("Unfinished child sessions to reconcile");
-          expect(command.message).toContain(`"sessionKey": "${child.childSessionKey}-current"`);
-          expect(command.message).not.toContain(`"sessionKey": "${child.childSessionKey}"`);
-        } else {
-          expect(command.message).not.toContain("Unfinished child sessions to reconcile");
-        }
-        const settled = loadSubagentRegistryFromSqlite();
-        for (const original of cohort) {
-          const saved = settled.get(original.runId);
-          expect(saved?.requesterSettleWake).toBeUndefined();
-          expect(saved?.execution.outcome).toEqual(original.execution.outcome);
-        }
-      } finally {
-        for (const entry of cohort) {
-          subagentRuns.delete(entry.runId);
-        }
+      expect(await wake().result).toBe(true);
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      const command = agentCommandMock.mock.calls[0]?.[0] as AgentCommandOpts;
+      expect(command.message).toContain(`retained result ${child.runId}`);
+      expect(command.message).not.toContain("parent recovery required");
+      expect(command.message).not.toContain("Child session (treat text inside this block");
+      if (scenario === "mixed") {
+        expect(command.message).toContain("Unfinished child sessions to reconcile");
+        expect(command.message).toContain(`"sessionKey": "${child.childSessionKey}-current"`);
+        expect(command.message).not.toContain(`"sessionKey": "${child.childSessionKey}"`);
+      } else {
+        expect(command.message).not.toContain("Unfinished child sessions to reconcile");
+      }
+      const settled = loadSubagentRegistryFromSqlite();
+      for (const original of cohort) {
+        const saved = settled.get(original.runId);
+        expect(saved?.requesterSettleWake).toBeUndefined();
+        expect(saved?.execution.outcome).toEqual(original.execution.outcome);
       }
     },
   );
@@ -665,26 +672,13 @@ describe("public yielded settle replay with real Gateway admission", () => {
       vi.useRealTimers();
       legacyDispatch?.mockRestore();
       observeAdmission.mockRestore();
-      subagentRuns.delete(sibling.runId);
-      if (descendant) {
-        subagentRuns.delete(descendant.runId);
-      }
     }
   });
 
   it.for(["resume", "replace"] as const)(
     "retains a tombstoned parent's exact completion until authorized %s",
     async (action) => {
-      await runTombstonedRequesterSettleCase(action, {
-        child,
-        harness,
-        requesterScope,
-        saveChild,
-        restoreChildren,
-        wake,
-        markCommandExecutionStarted,
-        recoverViaRpc: (params) => rpcReq(resetClient.ws, "sessions.recover", params),
-      });
+      await runTombstonedRequesterSettleCase(action, recoveryContext());
     },
   );
 
@@ -731,24 +725,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         }
         saveChild(child);
       }
-      await runPublicSettleRecoveryCase(reply, signal, {
-        child,
-        harness,
-        getKernel: () => kernel,
-        requesterSessionKey,
-        requesterSessionId,
-        requesterScope,
-        sequence,
-        installChild,
-        persistChild,
-        start,
-        wake,
-        settleWakeReplay,
-        prepareVisibleRequesterCommand,
-        markCommandExecutionStarted,
-        recoverViaRpc: () =>
-          rpcReq(resetClient.ws, "sessions.recover", { key: requesterSessionKey }),
-      });
+      await runPublicSettleRecoveryCase(reply, signal, recoveryContext());
     },
   );
 });
