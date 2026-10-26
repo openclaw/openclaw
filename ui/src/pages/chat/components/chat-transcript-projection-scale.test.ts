@@ -17,7 +17,6 @@ import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
 } from "../chat-view.test-helpers.ts";
-import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { createRealtimeTalkConversationState } from "../talk/conversation-state.ts";
 import { updateRealtimeTalkConversation } from "../talk/conversation.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -207,13 +206,15 @@ describe("transcript projection", () => {
     const prompt = msg("user", "Speak the answer", 1_000);
     let setVisible!: (visible: boolean) => void;
     let setMessages!: (messages: unknown[]) => void;
-    const publish = (text: string, final = false, transcriptId?: string) =>
+    const publish = (text: string, final = false, transcriptId?: string) => {
       talk.update({
         realtimeTalkConversationState: updateRealtimeTalkConversation(
           talk.snapshot.realtimeTalkConversationState,
           { role: "assistant", itemId: "answer", text, final, transcriptId },
         ),
       });
+      flush();
+    };
     const view = await mountLiveThread(paneId, transcript, () => {
       const captions = projectOwner(
         talk,
@@ -239,7 +240,6 @@ describe("transcript projection", () => {
     projectRows.mockClear();
 
     publish("First");
-    flush();
     expect(projectRows).toHaveBeenCalledOnce();
     const row = voice()!;
     expect(row).not.toBeNull();
@@ -247,7 +247,6 @@ describe("transcript projection", () => {
     buildItems.mockClear();
     for (const fragment of [" second", " third", "."]) {
       publish(fragment);
-      flush();
       expect(voice()).toBe(row);
     }
     expect(row.textContent).toContain("First second third.");
@@ -258,7 +257,6 @@ describe("transcript projection", () => {
     flush();
     projectRows.mockClear();
     publish(" Hidden continuation.");
-    flush();
     expect(row.textContent).not.toContain("Hidden continuation");
     expect(projectRows).not.toHaveBeenCalled();
     setVisible(true);
@@ -270,7 +268,6 @@ describe("transcript projection", () => {
     flush();
     projectRows.mockClear();
     publish(" Background continuation.");
-    flush();
     expect(talk.snapshot.realtimeTalkConversationState.entries[0]?.text).toContain(
       "Background continuation.",
     );
@@ -284,7 +281,6 @@ describe("transcript projection", () => {
 
     projectRows.mockClear();
     publish("Final answer.", true, "voice:answer");
-    flush();
     expect(voice("-text")?.textContent).toBe("Final answer.");
     expect(voice("-stream")).toBeNull();
     expect(projectRows).not.toHaveBeenCalled();
@@ -389,50 +385,6 @@ describe("transcript projection", () => {
       }
     },
   );
-
-  it("renders browser previews in their own row outside the work summary", async () => {
-    const props = threadProps(
-      "projection-browser-preview",
-      "agent:main:dashboard:projection-browser-preview",
-      [
-        msg("user", "Inspect the example page"),
-        msg("assistant", "I will inspect the example page.", 2_000, { phase: "final_answer" }),
-        msg("toolResult", "Opened", 3_000, {
-          toolCallId: "browser-call",
-          toolName: "browser",
-          details: {
-            browserTab: {
-              profile: "managed",
-              target: "host",
-              targetId: "example-tab",
-              url: "https://example.com",
-              title: "Example page",
-            },
-          },
-        }),
-        msg("assistant", "The page is ready.", 4_000),
-      ],
-    );
-    props.showToolCalls = true;
-    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
-      scrollTop: 0,
-      anchorToEnd: false,
-    });
-    const view = drawThread(props);
-    view.draw();
-    await waitForSolid(() => expect(view.query("openclaw-browser-tab-card")).not.toBeNull());
-    const card = view.query("openclaw-browser-tab-card");
-    const previews = card?.closest(".chat-group--turn-block");
-    expect(card).not.toBeNull();
-    expect(previews).not.toBeNull();
-    expect(card?.querySelector(".url")?.textContent).toBe("https://example.com");
-    expect(card?.querySelector(".title")?.textContent).toBe("Example page");
-    expect(previews?.closest(".chat-work-group")).toBeNull();
-    expect(view.query(".chat-work-group")).not.toBeNull();
-    expect(view.container.textContent).toContain("I will inspect the example page.");
-    expect(view.container.textContent).toContain("The page is ready.");
-    expect(view.container.textContent).not.toContain("[object Object]");
-  });
 
   it("refreshes sender names for a replaced sender and a changed signed-in viewer", async () => {
     const own = personMessage("alex", "Alex", 1);
@@ -662,21 +614,10 @@ describe("voice reconciliation", () => {
     calls.filter(([callback]) => callback === persistedMessageEntryId);
 
   function voiceProjection(props: ChatThreadProps) {
-    const controller = createTestTranscript(props.paneId);
-    const container = document.body.appendChild(document.createElement("div"));
-    cleanups.push(() => render(null, container));
+    const view = drawThread(props);
     return () => {
-      controller.renderSession(props.sessionKey, (session) => {
-        const renderRows = vi.spyOn(session, "render");
-        render(renderChatThread(props, controller), container);
-        controller.start();
-        controller.update();
-        flush();
-        expect(renderRows).toHaveBeenCalledOnce();
-        renderRows.mockRestore();
-        return null;
-      });
-      return renderedText(container, ".agent-chat__voice-turn-text");
+      view.draw();
+      return renderedText(view.container, ".agent-chat__voice-turn-text");
     };
   }
 

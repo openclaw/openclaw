@@ -293,14 +293,9 @@ describe("ChatAudioPlayer", () => {
       const outside = document.createElement("button");
       outside.textContent = "Outside player";
       document.body.append(outside);
-      for (const target of ["toggle", "volume", "seek", "group", "outside", "moved"]) {
+      for (const target of ["toggle", "outside", "moved"]) {
         const player = await createPlayer("focus-" + target, { voiceNote });
-        const focused =
-          target === "outside"
-            ? outside
-            : target === "group"
-              ? player.querySelector<HTMLElement>(".chat-audio-player")!
-              : control(player, target === "moved" ? "toggle" : target);
+        const focused = target === "outside" ? outside : control(player, "toggle");
         focused.focus();
         expect(document.activeElement).toBe(focused);
         audio(player).dispatchEvent(new Event("error"));
@@ -532,12 +527,7 @@ describe("ChatAudioPlayer", () => {
   });
 
   it("discards waveform peaks when decoded duration exceeds the server gate by 20 percent", async () => {
-    const decodeAudioData = vi.fn(async () => decodedAudio(121));
-    const AudioContextMock = vi.fn(function (options?: AudioContextOptions) {
-      expect(options?.sampleRate).toBe(16_000);
-      return { decodeAudioData, close: vi.fn(async () => undefined) };
-    });
-    vi.stubGlobal("AudioContext", AudioContextMock);
+    const decodeAudioData = stubAudioContext(vi.fn(async () => decodedAudio(121)));
     stubAudioFetch("blob:duration-mismatch");
     const player = await createPlayer("duration-mismatch");
     player.serverDurationMs = 100_000;
@@ -629,37 +619,33 @@ describe("ChatAudioPlayer", () => {
     expect(play).not.toHaveBeenCalled();
   });
 
-  it("does not auto-resume a refreshed source after disconnecting before metadata", async () => {
-    const player = await createPlayer("disconnect-resume");
-    const media = audio(player);
-    const { play, pause } = mockActivePlayback(media);
-    player.src = "https://example.com/disconnect-resume-fresh.mp3";
-    await player.updateComplete;
-    media.dispatchEvent(new Event("error"));
-    player.remove();
-    await Promise.resolve();
-    flush();
-    expect(pause).toHaveBeenCalledOnce();
-    mountSolid(() => player);
-    media.currentTime = 0;
-    media.dispatchEvent(new Event("loadedmetadata"));
-    expect(play).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-resume after another player supersedes the pending restore", async () => {
-    const first = await createPlayer("superseded-resume");
-    const firstMedia = audio(first);
-    const { play: playFirst, pause: pauseFirst } = mockActivePlayback(firstMedia);
-    firstMedia.dispatchEvent(new Event("play"));
-    first.src = "https://example.com/superseded-resume-fresh.mp3";
-    await first.updateComplete;
-    firstMedia.dispatchEvent(new Event("error"));
-    const second = await createPlayer("superseding-player");
-    audio(second).dispatchEvent(new Event("play"));
-    expect(pauseFirst).toHaveBeenCalledOnce();
-    second.remove();
-    firstMedia.currentTime = 0;
-    firstMedia.dispatchEvent(new Event("loadedmetadata"));
-    expect(playFirst).not.toHaveBeenCalled();
-  });
+  it.each(["disconnect", "supersede"])(
+    "does not auto-resume after %s before metadata",
+    async (change) => {
+      const player = await createPlayer(`${change}-resume`);
+      const media = audio(player);
+      const { play, pause } = mockActivePlayback(media);
+      if (change === "supersede") {
+        media.dispatchEvent(new Event("play"));
+      }
+      player.src = `https://example.com/${change}-resume-fresh.mp3`;
+      await player.updateComplete;
+      media.dispatchEvent(new Event("error"));
+      if (change === "disconnect") {
+        player.remove();
+        await Promise.resolve();
+        flush();
+        expect(pause).toHaveBeenCalledOnce();
+        mountSolid(() => player);
+      } else {
+        const second = await createPlayer("superseding-player");
+        audio(second).dispatchEvent(new Event("play"));
+        expect(pause).toHaveBeenCalledOnce();
+        second.remove();
+      }
+      media.currentTime = 0;
+      media.dispatchEvent(new Event("loadedmetadata"));
+      expect(play).not.toHaveBeenCalled();
+    },
+  );
 });

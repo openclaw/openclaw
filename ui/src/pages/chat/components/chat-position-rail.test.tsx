@@ -38,6 +38,12 @@ function threadFixture(props: ReturnType<typeof threadProps>) {
     transcript,
     container,
     view,
+    query: <T extends Element = HTMLElement>(selector: string) =>
+      container.querySelector<T>(selector),
+    markers: () => [
+      ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
+    ],
+    preview: () => part(container, "preview-copy")?.textContent,
     rerender: () => {
       view.render(props);
       transcript.update();
@@ -524,19 +530,13 @@ describe("conversation position rail", () => {
     const props = threadProps("rail-interaction", "agent:main:first", messages);
     const historyIntent = vi.fn();
     props.onHistoryIntent = historyIntent;
-    const { transcript, container, view, rerender } = threadFixture(props);
-    const markers = () => [
-      ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
-    ];
-    const preview = () => part(container, "preview-copy")?.textContent;
+    const { transcript, container, view, rerender, markers, preview, query } = threadFixture(props);
     rerender();
     transcript.start();
     expect(markers()).toHaveLength(40);
     // Rail wheel input belongs to its scrollport, never transcript history.
     for (const type of ["wheel", "touchstart", "touchmove"]) {
-      container
-        .querySelector(".chat-position-rail__marks")!
-        .dispatchEvent(new Event(type, { bubbles: true }));
+      part(container, "marks")!.dispatchEvent(new Event(type, { bubbles: true }));
     }
     for (const key of ["PageUp", "PageDown"]) {
       expect(
@@ -546,13 +546,11 @@ describe("conversation position rail", () => {
       ).toBe(true);
     }
     expect(historyIntent).not.toHaveBeenCalled();
-    container
-      .querySelector(".chat-thread")!
-      .dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+    query(".chat-thread")!.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
     expect(historyIntent).toHaveBeenCalledOnce();
-    container
-      .querySelector(".chat-thread")!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+    query(".chat-thread")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }),
+    );
     expect(historyIntent).toHaveBeenCalledTimes(2);
     expect(preview()).toBeUndefined();
     markers()[4]!.focus();
@@ -561,7 +559,7 @@ describe("conversation position rail", () => {
     markers()[2]!.dispatchEvent(new Event("pointerenter"));
     flush();
     expect(preview()).toContain("Checkpoint 2");
-    container.querySelector(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
+    query(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
     flush();
     expect(preview()).toContain("Checkpoint 4");
     pressKey(markers()[4]!, "ArrowDown");
@@ -579,7 +577,7 @@ describe("conversation position rail", () => {
     expect(preview()).toContain("Checkpoint 5");
     pressKey(focused!, "Escape");
     expect(preview()).toBeUndefined();
-    const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+    const thread = query(".chat-thread")!;
     expect(document.activeElement).toBe(thread);
     markers()[2]!.dispatchEvent(new Event("pointerenter"));
     flush();
@@ -626,32 +624,26 @@ describe("conversation position rail", () => {
       if (role === "assistant") {
         props.assistantAvatar = "🦞";
       }
-      const { transcript, container, rerender } = threadFixture(props);
+      const { transcript, container, rerender, markers, query } = threadFixture(props);
       rerender();
       transcript.start();
-      container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
+      markers()[0]!.focus();
       flush();
       const preview = part(container, "preview-copy")!;
       expect(part(container, "preview-label")?.textContent).toBe(label);
-      const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
-      expect(avatar?.getAttribute("aria-label") ?? null).toBe(
+      const avatar = () => query(".chat-position-rail__preview .chat-author-avatar");
+      expect(avatar()?.getAttribute("aria-label") ?? null).toBe(
         role === "user" ? (senderName ?? null) : "Molty",
       );
       if (role === "assistant") {
-        expect(avatar?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
+        expect(avatar()?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
           "🦞",
         );
-        expect(
-          container.querySelector(".chat-position-rail__marker")?.getAttribute("aria-label"),
-        ).toContain("Molty");
+        expect(markers()[0]?.getAttribute("aria-label")).toContain("Molty");
         props.assistantName = "Roboclaw";
         rerender();
         expect(part(container, "preview-label")?.textContent).toBe("Roboclaw");
-        expect(
-          container
-            .querySelector(".chat-position-rail__preview .chat-author-avatar")
-            ?.getAttribute("aria-label"),
-        ).toBe("Roboclaw");
+        expect(avatar()?.getAttribute("aria-label")).toBe("Roboclaw");
       }
       expect(preview.querySelector("strong")?.textContent).toBe("Important");
       expect(preview.querySelector("script")).toBeNull();
@@ -671,33 +663,35 @@ describe("conversation position rail", () => {
       stream: "<thinking>Private planning</thinking>",
       streamStartedAt: 2_000,
     });
-    const { transcript, container, rerender } = threadFixture(props);
+    const { transcript, container, rerender, markers, query, preview } = threadFixture(props);
     const marker = () => markerAt(container, "run:stream-run");
     rerender();
     transcript.start();
-    expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
+    expect(markers()).toHaveLength(1);
     props.stream = "Draft response";
     rerender();
     const provisional = marker();
     provisional.focus();
     flush();
-    expect(part(container, "preview-copy")?.textContent).toContain("Draft response");
+    expect(preview()).toContain("Draft response");
     const streamBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
       (bubble) => bubble.textContent?.includes("Draft response"),
     )!;
-    const root = container.querySelector<HTMLElement>(".chat-thread")!;
+    const root = query(".chat-thread")!;
     const marks = part(container, "marks")!;
     measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);
     await settleFrames();
     expect(observed.has(streamBubble)).toBe(true);
-    const query = vi.spyOn(root, "querySelectorAll");
+    const queryBubbles = vi.spyOn(root, "querySelectorAll");
     props.stream = "Draft **updated** response";
     rerender();
     await settleFrames();
     expect(streamBubble.querySelector("strong")?.textContent).toBe("updated");
     expect(provisional.getAttribute("aria-description")).toContain("Draft updated response");
-    expect(query.mock.calls.filter(([selector]) => selector.includes(".chat-bubble"))).toEqual([]);
+    expect(
+      queryBubbles.mock.calls.filter(([selector]) => selector.includes(".chat-bubble")),
+    ).toEqual([]);
     provisional.click();
     // Reveal settles the committed target's geometry on the render lifecycle's layout phase.
     await settleFrames();
@@ -710,16 +704,14 @@ describe("conversation position rail", () => {
     rerender();
     expect(marker()).toBe(provisional);
     expect(document.activeElement).toBe(provisional);
-    expect(part(container, "preview-copy")?.textContent).toContain("Final response");
-    const persistedBubble = container.querySelector<HTMLElement>(
-      '[data-entry-id="persisted-answer"]',
-    )!;
+    expect(preview()).toContain("Final response");
+    const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
     await settleFrames();
     expect(observed.has(streamBubble)).toBe(false);
     expect(observed.has(persistedBubble)).toBe(true);
     marker().click();
     await settleFrames();
     expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-    expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
+    expect(markers()).toHaveLength(2);
   });
 });

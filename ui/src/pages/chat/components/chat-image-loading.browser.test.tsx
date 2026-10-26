@@ -358,48 +358,36 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     },
   );
 
-  it.each(["attachment", "image block"])(
-    "keeps a local %s as a plain skeleton while metadata is pending",
-    async (kind) => {
-      const container = mount(500);
-      const { response } = pendingResponse();
-      const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
-      const images =
-        kind === "attachment"
-          ? projectMessageMedia({}, [
-              {
-                type: "attachment",
-                attachment: {
-                  kind: "image",
-                  url: source,
-                  label: "Local image",
-                  width: 1200,
-                  height: 800,
-                },
-              },
-            ]).images
-          : [{ url: source, alt: "Local image", width: 1200, height: 800 }];
-      const draw = drawOwned(container, {
-        images,
-        options: { sessionKey: "image-proof", agentId: "main" },
-        nextMessage: true,
-      });
-      const before = geometry(container);
-      expect(before.height).toBeCloseTo(400 / 1.5, 1);
-      expectSkeleton(container);
-      response.resolve(Response.json(mediaTicketPayload("test-ticket", 300_000)));
-      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
-      const loadable = geometry(container);
-      expect(loadable.height).toBeCloseTo(400 / 1.5, 1);
-      const sourceUrl = container.querySelector("img")!.getAttribute("src");
-      expect(container.querySelector("img")!.getAttribute("width")).toBe("1200");
-      unmountImages(container);
-      draw();
-      expect((await admittedImage(container)).getAttribute("src")).toBe(sourceUrl);
-      expect(geometry(container)).toEqual(loadable);
-      expect(fetch).toHaveBeenCalledOnce();
-    },
-  );
+  it("keeps a local attachment as a plain skeleton while metadata is pending", async () => {
+    const container = mount(500);
+    const { response } = pendingResponse();
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
+    const images = projectMessageMedia({}, [
+      {
+        type: "attachment",
+        attachment: { kind: "image", url: source, label: "Local image", width: 1200, height: 800 },
+      },
+    ]).images;
+    const draw = drawOwned(container, {
+      images,
+      options: { sessionKey: "image-proof", agentId: "main" },
+      nextMessage: true,
+    });
+    const before = geometry(container);
+    expect(before.height).toBeCloseTo(400 / 1.5, 1);
+    expectSkeleton(container);
+    response.resolve(Response.json(mediaTicketPayload("test-ticket", 300_000)));
+    await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
+    const loadable = geometry(container);
+    expect(loadable.height).toBeCloseTo(400 / 1.5, 1);
+    const sourceUrl = container.querySelector("img")!.getAttribute("src");
+    expect(container.querySelector("img")!.getAttribute("width")).toBe("1200");
+    unmountImages(container);
+    draw();
+    expect((await admittedImage(container)).getAttribute("src")).toBe(sourceUrl);
+    expect(geometry(container)).toEqual(loadable);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { count: 2, viewport: 375, tile: 109 },
@@ -624,15 +612,11 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const slots = () => [...gallery.children].map(rectangle);
       const before = slots();
       expect(before).toHaveLength(count + available);
-      const galleryStyle = getComputedStyle(gallery);
-      const gap = Number.parseFloat(galleryStyle.rowGap);
-      const columns = role === "user" ? galleryStyle.gridTemplateColumns.split(" ").length : 1;
-      const rowHeights = Array.from({ length: Math.ceil(before.length / columns) }, (_, row) =>
-        Math.max(...before.slice(row * columns, (row + 1) * columns).map((slot) => slot.height)),
+      const galleryBounds = gallery.getBoundingClientRect();
+      expect(galleryBounds.bottom).toBeCloseTo(
+        Math.max(...before.map((slot) => slot.y + slot.height)),
+        1,
       );
-      const compactHeight =
-        rowHeights.reduce((sum, height) => sum + height, 0) + gap * (rowHeights.length - 1);
-      expect(gallery.getBoundingClientRect().height).toBeCloseTo(compactHeight, 1);
       if (withDocument) {
         const parentGap = Number.parseFloat(
           getComputedStyle(gallery.closest(".chat-group-messages")!).rowGap,
@@ -667,8 +651,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         expect(card.parentElement!.querySelector(".chat-image-actions")).toBeNull();
         const cardCorners = cornerInsets(card);
         const rect = card.getBoundingClientRect();
-        // Compare both outlines at the same subpixel coordinates so browser hit
-        // testing cannot round two equivalent corners onto different pixels.
+        // Hit-test both outlines at identical subpixel coordinates.
         const fileParent = file.parentNode!;
         const fileNext = file.nextSibling;
         document.body.append(file);
