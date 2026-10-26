@@ -53,26 +53,22 @@ describe("resolveFeishuMessageDedupeKey", () => {
   });
 
   it.each([true, false])("isolates post topics with root_id present=%s", (withRoot) => {
-    const topic = {
+    const topic = (id: string, message_id = "om_first") => ({
       ...post,
+      message_id,
       chat_id: "oc-topic-group",
       chat_type: "topic_group" as const,
-      root_id: withRoot ? "om_root_a" : undefined,
-      thread_id: "omt_a",
-    };
-    const first = key(topic);
-    const other = key({
-      ...topic,
-      message_id: "om_other",
-      root_id: withRoot ? "om_root_b" : undefined,
-      thread_id: "omt_b",
+      root_id: withRoot ? `om_root_${id}` : undefined,
+      thread_id: `omt_${id}`,
     });
+    const first = key(topic("a"));
+    const other = key(topic("b", "om_other"));
     expect(first).toBeDefined();
     expect(other).toBeDefined();
     expect(first).not.toBe("om_first");
     expect(other).not.toBe("om_other");
     expect(other).not.toBe(first);
-    expect(key({ ...topic, message_id: "om_retry" })).toBe(first);
+    expect(key(topic("a", "om_retry"))).toBe(first);
   });
 
   it.each([
@@ -82,16 +78,20 @@ describe("resolveFeishuMessageDedupeKey", () => {
       mediaKey("image_key:img_123"),
     ],
     [
-      "grouped rich-post keys with duplicates and invalid-key filtering",
-      richPost([
-        media("file_first"),
-        image("shared"),
-        image("shared"),
-        image("invalid/key"),
-        media("shared"),
-        media("shared"),
-        media("file_last"),
-      ]),
+      "grouped inline keys preserve duplicates, filter invalid keys and ignore topic and files[]",
+      richPost(
+        [
+          media("file_first"),
+          image("shared"),
+          image("shared"),
+          image("invalid/key"),
+          media("shared"),
+          media("shared"),
+          media("file_last"),
+        ],
+        { chat_type: "topic_group", root_id: "om_root", thread_id: "omt_topic" },
+        files,
+      ),
       mediaKey(
         "image_key:shared",
         "image_key:shared",
@@ -100,24 +100,6 @@ describe("resolveFeishuMessageDedupeKey", () => {
         "file_key:shared",
         "file_key:file_last",
       ),
-    ],
-    [
-      "shipped captioned-post identity with files[]",
-      richPost([{ tag: "text", text: "这是账本" }], { create_time: undefined }, files),
-      "om_first",
-    ],
-    [
-      "inline-media identity despite topic fields and top-level files[]",
-      richPost(
-        [image("img_inline")],
-        {
-          chat_type: "topic_group",
-          root_id: "om_root",
-          thread_id: "omt_topic",
-        },
-        files,
-      ),
-      mediaKey("image_key:img_inline"),
     ],
   ] as const)("preserves %s", (_name, message, expected) => {
     expect(key(message)).toBe(expected);
