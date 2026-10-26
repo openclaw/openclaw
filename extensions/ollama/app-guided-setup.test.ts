@@ -44,31 +44,33 @@ async function withOllamaServer(
   const inspected: string[] = [];
   const unexpected: string[] = [];
   await withServer(
-    async (request, response) => {
-      try {
-        const body = await text(request);
-        const path = request.url ?? "";
-        let payload: unknown = options.show ?? showInfo;
-        if (path === "/api/ps" || path === "/api/tags") {
-          const models = path === "/api/ps" ? options.loaded : options.models;
-          payload = {
-            models: (models ?? [selected]).map((name) =>
-              typeof name === "string" ? { name } : name,
-            ),
-          };
-        } else if (path === "/api/show") {
-          inspected.push((JSON.parse(body) as { model: string }).model);
-          options.onShow?.();
-        } else {
-          unexpected.push(path);
-          response.writeHead(404).end();
-          return;
+    (request, response) => {
+      void (async () => {
+        try {
+          const body = await text(request);
+          const path = request.url ?? "";
+          let payload: unknown = options.show ?? showInfo;
+          if (path === "/api/ps" || path === "/api/tags") {
+            const models = path === "/api/ps" ? options.loaded : options.models;
+            payload = {
+              models: (models ?? [selected]).map((name) =>
+                typeof name === "string" ? { name } : name,
+              ),
+            };
+          } else if (path === "/api/show") {
+            inspected.push((JSON.parse(body) as { model: string }).model);
+            options.onShow?.();
+          } else {
+            unexpected.push(path);
+            response.writeHead(404).end();
+            return;
+          }
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify(payload));
+        } catch (error) {
+          response.destroy(error instanceof Error ? error : new Error(String(error)));
         }
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify(payload));
-      } catch (error) {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      }
+      })();
     },
     (baseUrl) => run(baseUrl, inspected),
   );

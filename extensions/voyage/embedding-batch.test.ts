@@ -204,6 +204,10 @@ it("clamps polling and avoids status fetch after expiry", async ({ signal }) => 
     );
   } finally {
     nowSpy.mockReturnValue(1_000);
-    await vi.runOnlyPendingTimersAsync().finally(() => settled);
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      await settled;
+    }
   }
 });

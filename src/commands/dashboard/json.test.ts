@@ -25,13 +25,16 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../onboard-helpers.js", async () => ({
+vi.mock("../onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../onboard-helpers.js")>()),
   detectBrowserOpenSupport: vi.fn(),
   formatControlUiSshHint: vi.fn(),
-  resolveControlUiLinks: (await import("../../gateway/control-ui-links.js")).resolveControlUiLinks,
 }));
 
-vi.mock("../../infra/clipboard.js", () => ({ copyToClipboard: mocks.copyToClipboard }));
+vi.mock("../../infra/clipboard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clipboard.js")>()),
+  copyToClipboard: mocks.copyToClipboard,
+}));
 
 vi.mock("../../infra/browser-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/browser-handoff.js")>()),
@@ -42,7 +45,10 @@ vi.mock("../../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
 }));
 
-vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
+vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/ports-inspect.js")>()),
+  inspectPortUsage: mocks.inspectPortUsage,
+}));
 
 vi.mock("../../cli/daemon-cli/status.gather.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cli/daemon-cli/status.gather.js")>()),

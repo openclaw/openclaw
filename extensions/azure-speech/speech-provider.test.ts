@@ -9,7 +9,7 @@ const { maxBytesMock } = vi.hoisted(() => ({
   maxBytesMock: vi.fn<MaxBytes>(),
 }));
 
-// The SDK facade imports host worker declarations that trigger unrelated test-worker compilation.
+// mock-isolation: The SDK facade imports host workers that trigger unrelated test-worker compilation.
 vi.mock("openclaw/plugin-sdk/media-generation-runtime", () => ({
   resolveGeneratedMediaMaxBytes: maxBytesMock,
 }));

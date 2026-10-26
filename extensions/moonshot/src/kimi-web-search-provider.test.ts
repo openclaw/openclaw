@@ -210,7 +210,14 @@ it.each([false, true])("rejects cancellation without caching (%s)", async (after
       return Promise.resolve(searchResponse());
     }
     return new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          const abortReason: unknown = init.signal?.reason;
+          reject(abortReason instanceof Error ? abortReason : new Error("Kimi search aborted"));
+        },
+        { once: true },
+      );
     });
   });
   const search = searchTool().execute({ query }, { signal: controller.signal });
