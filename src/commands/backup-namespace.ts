@@ -1,5 +1,6 @@
 import os from "node:os";
 import { z } from "zod";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseRemoteBackupTimestamp, resolveBackupNamespace } from "../infra/backup-retention.js";
 import type { StorageLocation } from "../storage/locations.js";
 
@@ -47,7 +48,7 @@ function assertOwner(
   }
   if (owner.deviceId !== deviceId) {
     throw new Error(
-      `Backup namespace "${namespace}" in ${name} belongs to another OpenClaw installation (${owner.hostname}, device ${owner.deviceId.slice(0, 12)}). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).`,
+      `Backup namespace "${namespace}" in ${name} belongs to another OpenClaw installation (${sanitizeTerminalText(owner.hostname)}, device ${sanitizeTerminalText(owner.deviceId.slice(0, 12))}). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).`,
     );
   }
 }
