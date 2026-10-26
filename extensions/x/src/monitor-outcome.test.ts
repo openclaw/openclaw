@@ -5,6 +5,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { xPlugin } from "./channel.js";
+import { XConfigSchema } from "./config-schema.js";
 import { completedMonitor } from "./test-support/completed-monitor.js";
 import { client, config, fixture, post } from "./test-support/monitor-fixture.js";
 import { openXWorkOrigins, registerXWorkOriginGuidance } from "./work-origin.js";
@@ -46,6 +47,13 @@ async function runTurn(
 }
 
 describe("X reply outcomes", () => {
+  it("rejects a failure route that targets X", () => {
+    expect(XConfigSchema.safeParse({ failureRoute }).success).toBe(true);
+    expect(XConfigSchema.safeParse({ failureRoute: { channel: "x", to: "x:1" } }).success).toBe(
+      false,
+    );
+  });
+
   it("withholds an untagged failure narrative from X and drops it without a route", async () => {
     const test = await runTurn([{ text: deletedTweet }], { route: false });
     expect(test.api.reply).not.toHaveBeenCalled();

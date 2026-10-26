@@ -58,6 +58,10 @@ describe("public X context", () => {
     });
     const api = createXApiClient({
       spend: createXTestSpend(),
+      clientId: "fixture",
+      clientSecret: "fixture",
+      refreshToken: "fixture",
+      saveRefreshToken: async () => {},
       bearerToken: "app-only-fixture",
       fetch: fetcher,
     });
@@ -80,6 +84,10 @@ describe("public X context", () => {
       });
       const api = createXApiClient({
         spend: createXTestSpend({ dailyUsd }),
+        clientId: "fixture",
+        clientSecret: "fixture",
+        refreshToken: "fixture",
+        saveRefreshToken: async () => {},
         bearerToken,
         fetch: fetcher,
       });
