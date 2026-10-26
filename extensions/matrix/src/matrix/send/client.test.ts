@@ -1,6 +1,5 @@
-// Matrix tests cover client plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   expectOneOffSharedMatrixClient,
@@ -14,7 +13,7 @@ import { captureMatrixSendCurrentness } from "../sdk/send-currentness.js";
 const { getMatrixRuntimeMock, acquireSharedMatrixClientMock, sharedLeaseReleaseMock } =
   matrixClientResolverMocks;
 
-const TEST_CFG = {};
+const BORROWED_OPTIONS = { cfg: {}, accountId: "default" };
 
 // mock-isolation: Lease fixtures replace shared network/crypto client ownership.
 vi.mock("../client.js", () => ({
@@ -34,46 +33,29 @@ describe("matrix send client helpers", () => {
       await import("./client.js"));
   });
 
-  beforeEach(() => {
-    primeMatrixClientResolverMocks();
-  });
+  beforeEach(primeMatrixClientResolverMocks);
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("starts and persists borrowed send clients", async () => {
-    const result = await withResolvedMatrixSendClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async () => "ok",
-    );
-
-    await expectOneOffSharedMatrixClient({
-      prepareForOneOffCalls: 0,
-      startCalls: 1,
-      releaseMode: "persist",
-    });
-    expect(result).toBe("ok");
-  });
-
-  it("forwards the transient retirement signal to send work", async () => {
-    const sharedClient = createMockMatrixClient();
-    const lease = setAcquiredMatrixClient(sharedClient);
-
-    await withResolvedMatrixSendClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async (_client, abortSignal) => {
+  it.each(["send", "control"] as const)(
+    "borrows, forwards retirement and persists a %s client with the required readiness",
+    async (kind) => {
+      const lease = setAcquiredMatrixClient(createMockMatrixClient());
+      const run = kind === "send" ? withResolvedMatrixSendClient : withResolvedMatrixControlClient;
+      const result = await run(BORROWED_OPTIONS, async (_client, abortSignal) => {
         expect(abortSignal).toBe(lease.abortSignal);
-      },
-    );
-  });
+        return "ok";
+      });
+      await expectOneOffSharedMatrixClient({
+        prepareForOneOffCalls: 0,
+        startCalls: kind === "send" ? 1 : 0,
+        releaseMode: "persist",
+      });
+      expect(result).toBe("ok");
+    },
+  );
 
   it("persists borrowed send clients when wrapped sends fail", async () => {
-    const sharedClient = createMockMatrixClient();
-    setAcquiredMatrixClient(sharedClient);
-
     await expect(
-      withResolvedMatrixSendClient({ cfg: TEST_CFG, accountId: "default" }, async () => {
+      withResolvedMatrixSendClient(BORROWED_OPTIONS, async () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
@@ -81,23 +63,8 @@ describe("matrix send client helpers", () => {
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
-  it("keeps borrowed control clients unstarted and requests final persistence", async () => {
-    const result = await withResolvedMatrixControlClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async () => "ok",
-    );
-
-    await expectOneOffSharedMatrixClient({
-      prepareForOneOffCalls: 0,
-      startCalls: 0,
-      releaseMode: "persist",
-    });
-    expect(result).toBe("ok");
-  });
-
   it("does not borrow or stop explicitly injected clients", async () => {
-    const start = vi.fn(async () => undefined);
-    const injected = Object.assign(createMockMatrixClient(), { start });
+    const injected = createMockMatrixClient();
 
     await withResolvedMatrixSendClient({ client: injected }, async (client) => {
       expect(client).toBe(injected);
@@ -106,7 +73,7 @@ describe("matrix send client helpers", () => {
       expect(client).toBe(injected);
     });
 
-    expect(start).not.toHaveBeenCalled();
+    expect(injected.start).not.toHaveBeenCalled();
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
     expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });
