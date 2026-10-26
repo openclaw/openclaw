@@ -42,6 +42,34 @@ async function fixture() {
   };
 }
 
+it("preserves ordered tools and an empty opaque cursor", async () => {
+  await using catalog = await fixture();
+  const cursors: Array<string | undefined> = [];
+  catalog.server.setRequestHandler("tools/list", async ({ params }) => {
+    cursors.push(params?.cursor);
+    return {
+      tools: [
+        {
+          name: params?.cursor === undefined ? "one" : "two",
+          inputSchema: { type: "object" },
+        },
+      ],
+      ...(params?.cursor === undefined ? { nextCursor: "" } : {}),
+    };
+  });
+  expect((await catalog.list("tools")).map((item) => item.name)).toEqual(["one", "two"]);
+  expect(cursors).toEqual([undefined, ""]);
+});
+
+it("rejects repeated and cyclic cursors", async () => {
+  await using catalog = await fixture();
+  catalog.server.setRequestHandler("tools/list", async ({ params }) => ({
+    tools: [],
+    nextCursor: params?.cursor === undefined ? "a" : params.cursor === "a" ? "b" : "a",
+  }));
+  await expect(catalog.list("tools")).rejects.toThrow("repeated pagination cursor");
+});
+
 it.each(["tools", "resources", "prompts"] as const)(
   "rejects malformed %s entries at the SDK boundary",
   async (kind) => {
@@ -85,53 +113,56 @@ it("enforces page, item, and aggregate byte bounds through the SDK", async () =>
   expect(promptPages).toBe(2);
 });
 
-it.each(["tools", "resources"] as const)("owns the absolute deadline for %s", async (kind) => {
+it("uses one absolute deadline across SDK requests", async () => {
+  await using catalog = await fixture();
+  vi.useFakeTimers();
+  let pages = 0;
+  catalog.server.setRequestHandler("tools/list", async () => {
+    pages++;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 30);
+    });
+    return { tools: [], nextCursor: String(pages) };
+  });
+  const rejected = expect(catalog.list("tools", 50)).rejects.toThrow(
+    "MCP tool listing timed out after 50ms",
+  );
+  await vi.advanceTimersByTimeAsync(50);
+  await rejected;
+  expect(pages).toBe(2);
+  await vi.advanceTimersByTimeAsync(10);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("keeps the canonical deadline ahead of the nested SDK timeout", async () => {
   await using catalog = await fixture();
   const release = createDeferred();
-  let pages = 0;
-  if (kind === "tools") {
-    catalog.server.setRequestHandler("tools/list", async () => {
-      pages++;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
-      return { tools: [], nextCursor: String(pages) };
-    });
-  } else {
-    catalog.server.setRequestHandler("resources/list", async () => {
-      await release.promise;
-      return { resources: [] };
-    });
-  }
+  catalog.server.setRequestHandler("resources/list", async () => {
+    await release.promise;
+    return { resources: [] };
+  });
   vi.useFakeTimers();
   try {
-    const rejected = expect(catalog.list(kind, 50)).rejects.toThrow(
-      `MCP ${kind === "tools" ? "tool" : "resource"} listing timed out after 50ms`,
+    const rejected = expect(catalog.list("resources", 50)).rejects.toThrow(
+      "MCP resource listing timed out after 50ms",
     );
     await vi.advanceTimersByTimeAsync(50);
     await rejected;
-    if (kind === "tools") {
-      expect(pages).toBe(2);
-      await vi.advanceTimersByTimeAsync(10);
-      expect(vi.getTimerCount()).toBe(0);
-    }
   } finally {
     release.resolve();
   }
 });
 
-it("preserves ordered pages and opaque cursors across a forward wall-clock jump", async () => {
+it("does not treat a forward wall-clock jump as elapsed time", async () => {
   await using catalog = await fixture();
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   let page = 0;
-  const cursors: Array<string | undefined> = [];
-  catalog.server.setRequestHandler("tools/list", async ({ params }) => {
-    cursors.push(params?.cursor);
+  catalog.server.setRequestHandler("tools/list", async () => {
     vi.setSystemTime(61_000);
     return {
       tools: [{ name: `tool-${++page}`, inputSchema: { type: "object" } }],
-      ...(page < 3 ? { nextCursor: page === 1 ? "" : String(page) } : {}),
+      ...(page < 3 ? { nextCursor: String(page) } : {}),
     };
   });
   expect((await catalog.list("tools", 50)).map((item) => item.name)).toEqual([
@@ -139,7 +170,6 @@ it("preserves ordered pages and opaque cursors across a forward wall-clock jump"
     "tool-2",
     "tool-3",
   ]);
-  expect(cursors).toEqual([undefined, "", "2"]);
   expect(vi.getTimerCount()).toBe(0);
 });
 

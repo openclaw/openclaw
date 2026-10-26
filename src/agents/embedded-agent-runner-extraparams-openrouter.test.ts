@@ -16,17 +16,36 @@ beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
-    wrapProviderStreamFn: ({ provider, context }) => {
-      if (provider !== "openrouter") {
-        return context.streamFn;
+    wrapProviderStreamFn: (params) => {
+      if (params.provider !== "openrouter") {
+        return params.context.streamFn;
       }
-      const thinkingLevel =
-        context.modelId === "auto" || isProxyReasoningUnsupported(context.modelId)
-          ? undefined
-          : context.thinkingLevel;
+
+      const providerRouting =
+        params.context.extraParams?.provider != null &&
+        typeof params.context.extraParams.provider === "object"
+          ? (params.context.extraParams.provider as Record<string, unknown>)
+          : undefined;
+      let streamFn = params.context.streamFn;
+      if (providerRouting) {
+        const underlying = streamFn;
+        streamFn = (model, context, options) =>
+          (underlying as StreamFn)(
+            {
+              ...model,
+              compat: { ...model.compat, openRouterRouting: providerRouting },
+            },
+            context,
+            options,
+          );
+      }
+
+      const skipReasoningInjection =
+        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
+      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(
-        createOpenRouterWrapper(context.streamFn, thinkingLevel, context.extraParams),
-        context.extraParams,
+        createOpenRouterWrapper(streamFn, thinkingLevel, params.context.extraParams),
+        params.context.extraParams,
       );
     },
   });
@@ -36,11 +55,10 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-const runOpenRouter = (params: Omit<Parameters<typeof runExtraParamsPayloadCase>[0], "provider">) =>
-  runExtraParamsPayloadCase({ provider: "openrouter", ...params });
-
 describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
+    // Model-level camelCase config is narrower than broad defaults and should
+    // override snake_case aliases from defaults.
     const calls: Array<{ headers?: NonNullable<Parameters<StreamFn>[2]>["headers"] }> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push({ headers: options?.headers });
@@ -84,28 +102,104 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
       {},
     );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "X-OpenRouter-Cache": "true",
-      "X-OpenRouter-Cache-Clear": "true",
-      "X-OpenRouter-Cache-TTL": "600",
+    const headers = calls[0]?.headers;
+    expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
+  });
+
+  it("forwards Fusion plugin config through extraBody", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [
+                          "google/gemini-3.5-flash",
+                          "moonshotai/kimi-k2.6",
+                          "deepseek/deepseek-v4-pro",
+                        ],
+                        model: "google/gemini-3.5-flash",
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      payload: { model: "openrouter/fusion" },
+    });
+
+    expect(payload).toEqual({
+      model: "openrouter/fusion",
+      plugins: [
+        {
+          id: "fusion",
+          analysis_models: [
+            "google/gemini-3.5-flash",
+            "moonshotai/kimi-k2.6",
+            "deepseek/deepseek-v4-pro",
+          ],
+          model: "google/gemini-3.5-flash",
+        },
+      ],
     });
   });
 
-  it.each([
-    ["enabled", "openrouter/auto", "low", "high", { effort: "low" }],
-    ["thinking off", "openrouter/auto", "off", "high", undefined],
-    ["unsupported x-ai (#32039)", "x-ai/grok-4.1-fast", "medium", "medium", undefined],
-  ] as const)("normalizes reasoning for %s", (_name, modelId, thinkingLevel, effort, reasoning) => {
-    const payload = runOpenRouter({
-      modelId,
-      thinkingLevel,
-      payload: { reasoning_effort: effort },
+  it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      thinkingLevel: "low",
     });
+
+    expect(payload.reasoning).toEqual({ effort: "low" });
+  });
+
+  it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      thinkingLevel: "off",
+      payload: { reasoning_effort: "high" },
+    });
+
     expect(payload).not.toHaveProperty("reasoning_effort");
-    if (reasoning) {
-      expect(payload.reasoning).toEqual(reasoning);
-    } else {
-      expect(payload).not.toHaveProperty("reasoning");
-    }
+    expect(payload).not.toHaveProperty("reasoning");
+  });
+
+  it("does not inject effort when payload already has reasoning.max_tokens", () => {
+    // max_tokens and effort are mutually exclusive in OpenRouter reasoning
+    // payloads; caller-provided max_tokens must stay intact.
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      thinkingLevel: "low",
+      payload: { reasoning: { max_tokens: 256 } },
+    });
+
+    expect(payload).toEqual({ reasoning: { max_tokens: 256 } });
+  });
+
+  it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "x-ai/grok-4.1-fast",
+      thinkingLevel: "medium",
+      payload: { reasoning_effort: "medium" },
+    });
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("reasoning_effort");
   });
 });
