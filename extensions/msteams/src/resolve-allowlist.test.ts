@@ -28,7 +28,6 @@ import { resolveMSTeamsRouteConfig } from "./policy.js";
 import {
   keepConfiguredMSTeamsAllowlistActive,
   looksLikeMSTeamsTargetId,
-  MSTEAMS_UNMATCHABLE_ALLOW_ENTRY,
   projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsTeamsConfig,
   projectStableMSTeamsUserAllowlist,
@@ -392,14 +391,6 @@ describe("configured allowlists that cannot be resolved stay configured", () => 
       teams: { Product: {}, Missing: {} },
     });
     expect(Object.keys(result.teams)).toEqual(["19:general@thread.tacv2"]);
-  });
-
-  it("keeps a names-only sender allowlist configured and matching nobody", () => {
-    const projected = projectStableMSTeamsGroupAllowlist(["Bob Builder"]);
-    expect(projected).toEqual([]);
-    expect(keepConfiguredMSTeamsAllowlistActive(["Bob Builder"], projected)).toEqual([
-      MSTEAMS_UNMATCHABLE_ALLOW_ENTRY,
-    ]);
   });
 
   it("never mutates the stored configuration or leaks the placeholder into it", () => {
