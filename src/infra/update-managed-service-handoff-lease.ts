@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { resolveServiceTmpDir } from "../daemon/service-tmp-dir.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
@@ -58,6 +58,7 @@ import {
   type HandoffProcessIdentity,
 } from "./update-managed-service-handoff-schema.js";
 import { createManagedHandoffScopeReader } from "./update-managed-service-handoff-scope.js";
+import { resolveManagedUpdateLeaseTempRoot } from "./update-managed-service-handoff-temp-root.js";
 
 // Identity is earned by this process's original acquisition, not by decoding a
 // row or copying a grant. Survives the executor pinning/reopening the same DB.
@@ -72,12 +73,26 @@ export type {
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
 
+/** Earlier macOS Gateways kept leases under their state's TMPDIR; repair still reads it. */
+export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | undefined {
+  const uid = process.getuid?.();
+  const legacy = path.join(
+    resolveServiceTmpDir(process.env, "darwin"),
+    uid === undefined ? "openclaw" : `openclaw-${uid}`,
+    "managed-update-handoffs.sqlite",
+  );
+  return process.platform === "darwin" && legacy !== resolveManagedUpdateLeaseDatabasePath()
+    ? legacy
+    : undefined;
+}
+
 export function resolveManagedUpdateLeaseDatabasePath(): string {
   const uid = process.getuid?.();
+  const base = resolveManagedUpdateLeaseTempRoot();
   // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
-  const preferredDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+  const preferredDir = path.join(base, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ preferredDir }),
+    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base }),
     "managed-update-handoffs.sqlite",
   );
 }

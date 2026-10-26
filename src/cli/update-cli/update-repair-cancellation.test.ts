@@ -18,12 +18,13 @@ import {
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as census from "../../infra/openclaw-process-census.js";
+import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
-import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
+import * as handoffLease from "../../infra/update-managed-service-handoff-lease.js";
 import { listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -71,7 +72,7 @@ function createCrashFixture(root: string) {
   const privateTmp = path.join(root, "private-tmp");
   fs.mkdirSync(privateTmp, { mode: 0o700 });
   const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
-  expect(resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
+  expect(handoffLease.resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
   vi.spyOn(os, "tmpdir").mockReturnValue(privateTmp);
   const binding = createManagedHandoffTestBinding(privateTmp);
   const childEnv = writePrivateUpdateHandoffChildGuard(
@@ -84,13 +85,20 @@ function createCrashFixture(root: string) {
   // Host census is the only synthetic observation; process and SQLite custody stay real.
   const censusRuns: string[] = [];
   const censusMatches: number[] = [];
+  const censusScopes: { sharedRoots?: readonly string[]; familyDeadline?: number }[] = [];
   vi.spyOn(census, "inspectOtherOpenClawProcesses").mockImplementation(((references?: {
     runId: string;
+    sharedRoots?: readonly string[];
+    familyDeadline?: number;
   }) => {
     if (typeof references !== "object") {
       return { pids: [] };
     }
     censusRuns.push(references.runId);
+    censusScopes.push({
+      sharedRoots: references.sharedRoots,
+      familyDeadline: references.familyDeadline,
+    });
     return { matchingPids: censusMatches.splice(0), unverifiedPids: [] };
   }) as typeof census.inspectOtherOpenClawProcesses);
   const rows = () =>
@@ -106,9 +114,11 @@ function createCrashFixture(root: string) {
   const fixture = {
     install,
     slot,
+    databasePath,
     candidate: undefined as number | undefined,
     censusRuns,
     censusMatches,
+    censusScopes,
     rows,
     /** The orphan's clock starts in the past so explicit repair's grace has elapsed. */
     crash() {
@@ -243,6 +253,13 @@ unix(
       expect(f.rows()).toEqual(family);
     }
     expect(f.censusRuns).toEqual([runId]);
+    // Only work that may predate the family's 45-minute grace, or that runs from a
+    // candidate lineage rather than the installation and its slot, can block repair.
+    const latestActivity = Math.max(...family.map((row) => row.updated_at));
+    expect(f.censusScopes.at(-1)).toEqual({
+      sharedRoots: [f.install, f.slot],
+      familyDeadline: latestActivity + 45 * 60_000,
+    });
 
     vi.mocked(defaultRuntime.writeJson).mockClear();
     await repair();
@@ -332,5 +349,38 @@ unix.each(["failed", "deferred"] as const)(
       },
     });
     expect(f.rows()).toHaveLength(1);
+  },
+);
+
+unix(
+  "repair settles cancelled custody an earlier macOS Gateway left in its own store",
+  { timeout: 60_000 },
+  async () => {
+    const { family } = f.crash();
+    await f.stopCandidate();
+    // The current per-user store is empty; the Gateway's TMPDIR store holds the family.
+    const current = path.join(path.dirname(path.dirname(f.databasePath)), "current-tmp");
+    fs.mkdirSync(current, { mode: 0o700 });
+    vi.mocked(temporaryRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(current);
+    vi.mocked(handoffLease.resolveManagedUpdateLeaseDatabasePath).mockReturnValue(
+      path.join(current, "managed-update-handoffs.sqlite"),
+    );
+    vi.spyOn(handoffLease, "resolveLegacyGatewayManagedUpdateLeaseDatabasePath").mockReturnValue(
+      f.databasePath,
+    );
+
+    await repair();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(lastJson()).toMatchObject({ status: "ok" });
+    expect(lastJson()).not.toHaveProperty("retainedUpdateCustody");
+    expect(f.rows()).toEqual([]);
+    expect(
+      listUpdateRuns()[0]!.steps.find(({ step }) => step === "finalize:handoff-settlement"),
+    ).toMatchObject({
+      status: "completed",
+      detail: expect.stringContaining(
+        `Settled keys: ${family.map((row) => row.install_root).join(", ")}`,
+      ),
+    });
   },
 );
