@@ -299,13 +299,19 @@ function discard(cell: ReplicaCell): void {
 }
 
 function shareEntrySkills(entry: SessionEntry | undefined): SessionEntry | undefined {
-  const snapshot = entry?.skillsSnapshot;
-  if (!snapshot) {
+  if (!entry?.skillsSnapshot) {
     return entry;
   }
+  const snapshot = entry.skillsSnapshot;
   const shared = internSessionSkillSnapshot(snapshot);
-  // Prepared publications can already be frozen; only replace their entry shell.
-  return shared === snapshot ? entry : { ...entry, skillsSnapshot: shared };
+  if (shared !== snapshot) {
+    // Prepared publications can be frozen; worker-decoded entries remain owned here.
+    if (Object.isFrozen(entry)) {
+      return { ...entry, skillsSnapshot: shared };
+    }
+    entry.skillsSnapshot = shared;
+  }
+  return entry;
 }
 
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {

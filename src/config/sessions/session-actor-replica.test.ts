@@ -178,7 +178,8 @@ it("shares identical stored skills across entries without sharing mutable reads"
     version: 1,
   };
   replaceSessionEntrySync(scope, { ...entry(), skillsSnapshot });
-  const first = hydrate(fixture).entry!.skillsSnapshot!;
+  const firstState = hydrate(fixture);
+  const first = firstState.entry!.skillsSnapshot!;
   const siblingScope = { ...scope, sessionKey: "agent:main:skills-sibling" };
   replaceSessionEntrySync(siblingScope, {
     ...entry("sibling", 1, "skills-sibling"),
@@ -218,6 +219,12 @@ it("shares identical stored skills across entries without sharing mutable reads"
     expect(JSON.stringify(next)).toBe(JSON.stringify(snapshot));
     previous = next;
   }
+
+  replica.invalidate();
+  const decoded = { ...entry(), skillsSnapshot: structuredClone(skillsSnapshot) };
+  retainEntry(firstState, { entry: decoded, snapshots: "full" }, "decoded-entry");
+  expect(decoded.skillsSnapshot).toBe(first);
+  expect(Object.isFrozen(decoded)).toBe(true);
 });
 
 function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
