@@ -92,21 +92,20 @@ describe("plugin retained reference diagnostics", () => {
   it("bounds all references while making unknown owners explicit", () => {
     const instance = new PluginInstance("fixture");
     const releases = Array.from({ length: 70 }, () => instance.retainWork());
-    expect(instance.retentionSnapshot({ limit: Infinity })).toMatchObject({
-      total: 70,
-      omitted: 6,
-    });
-    expect(instance.retentionSnapshot().references).toHaveLength(64);
-    expect(instance.retentionSnapshot({ limit: Number.NaN }).references).toHaveLength(64);
-    expect(instance.retentionSnapshot({ limit: 0.5 }).references).toHaveLength(0);
+    for (const [limit, count] of [
+      [undefined, 64],
+      [Infinity, 64],
+      [Number.NaN, 64],
+      [0.5, 0],
+      [-1, 0],
+    ] as const) {
+      const snapshot = instance.retentionSnapshot({ limit });
+      expect(snapshot).toMatchObject({ total: 70, omitted: 70 - count });
+      expect(snapshot.references).toHaveLength(count);
+    }
     expect(instance.retentionSnapshot().references[0]).toMatchObject({
       owner: "unknown",
       reason: "unknown",
-    });
-    expect(instance.retentionSnapshot({ limit: -1 })).toMatchObject({
-      total: 70,
-      omitted: 70,
-      references: [],
     });
     releases.forEach((release) => release());
   });

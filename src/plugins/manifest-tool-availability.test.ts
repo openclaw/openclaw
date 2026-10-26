@@ -8,13 +8,6 @@ import {
 } from "./manifest-tool-availability.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
-function makePlugin(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {
-  return createPluginManifestRecordFixture({
-    id: "demo",
-    ...overrides,
-  });
-}
-
 function makeConfig(value: Record<string, unknown>): OpenClawConfig {
   return value as OpenClawConfig;
 }
@@ -40,9 +33,11 @@ function secretRef(source: SecretRef["source"], provider = "shared"): SecretRef 
   return { source, provider, id: source === "file" ? "/tool/apiKey" : "TOOL_API_KEY" };
 }
 function available(
-  plugin: PluginManifestRecord,
+  toolMetadata: PluginManifestRecord["toolMetadata"],
   overrides: Partial<Omit<Parameters<typeof hasManifestToolAvailability>[0], "plugin">> = {},
+  setup?: PluginManifestRecord["setup"],
 ) {
+  const plugin = createPluginManifestRecordFixture({ id: "demo", toolMetadata, setup });
   return hasManifestToolAvailability({ plugin, toolNames: ["x_search"], env: {}, ...overrides });
 }
 
@@ -123,25 +118,24 @@ describe("hasManifestToolAvailability", () => {
     [secretRef("store", "default"), { defaults: { store: "shared" } }, false],
     [secretRef("file", "default"), undefined, false],
   ])("checks %j with providers %j through config-only metadata: %s", (ref, secrets, expected) => {
-    const plugin = makePlugin({
-      toolMetadata: { x_search: { configSignals: [webSearchSignal] } },
-    });
     const config: OpenClawConfig = {
       ...xaiConfig({ webSearch: { apiKey: ref } }),
       secrets,
     };
-    expect(available(plugin, { config })).toBe(expected);
+    expect(available({ x_search: { configSignals: [webSearchSignal] } }, { config })).toBe(
+      expected,
+    );
   });
 
   it("fails open for tools without availability signals", () => {
-    const xaiPlugin = makePlugin({
-      toolMetadata: { x_search: { authSignals: [{ provider: "xai" }] } },
-    });
-    expect(available(xaiPlugin, { toolNames: ["unlisted"] })).toBe(true);
-    expect(available(makePlugin({ toolMetadata: { listed: {} } }), { toolNames: ["listed"] })).toBe(
-      true,
-    );
-    expect(available(xaiPlugin, { toolNames: ["x_search", "unlisted"] })).toBe(true);
+    expect(available({}, { toolNames: ["unlisted"] })).toBe(true);
+    expect(available({ x_search: {} })).toBe(true);
+    expect(
+      available(
+        { x_search: { authSignals: [{ provider: "xai" }] } },
+        { toolNames: ["x_search", "unlisted"] },
+      ),
+    ).toBe(true);
   });
 
   it.each([
@@ -152,22 +146,20 @@ describe("hasManifestToolAvailability", () => {
   ] as const)(
     "lets provider base-URL guard %j veto auth at %s",
     (providerBaseUrl, baseUrl, expected) => {
-      const plugin = makePlugin({
-        toolMetadata: { x_search: { authSignals: [{ provider: "xai", providerBaseUrl }] } },
-      });
+      const metadata = { x_search: { authSignals: [{ provider: "xai", providerBaseUrl }] } };
       const config = makeConfig(baseUrl ? { models: { providers: { xai: { baseUrl } } } } : {});
-      expect(available(plugin, { config, hasAuthForProvider: () => true })).toBe(expected);
-      expect(available(plugin)).toBe(false);
+      expect(available(metadata, { config, hasAuthForProvider: () => true })).toBe(expected);
+      expect(available(metadata)).toBe(false);
     },
   );
 
   it("maps legacy provider and alias shorthand into auth signals", () => {
-    const legacyPlugin = makePlugin({
-      setup: { providers: [{ id: "alias", envVars: ["MISSING_KEY", "ALIAS_KEY"] }] },
-      toolMetadata: { legacy_tool: { authProviders: ["primary"], aliases: ["alias"] } },
-    });
     const legacy = (overrides: Parameters<typeof available>[1] = {}) =>
-      available(legacyPlugin, { toolNames: ["legacy_tool"], ...overrides });
+      available(
+        { legacy_tool: { authProviders: ["primary"], aliases: ["alias"] } },
+        { toolNames: ["legacy_tool"], ...overrides },
+        { providers: [{ id: "alias", envVars: ["MISSING_KEY", "ALIAS_KEY"] }] },
+      );
     expect(legacy({ hasAuthForProvider: (providerId) => providerId === "primary" })).toBe(true);
     expect(legacy({ env: { ALIAS_KEY: "token" } })).toBe(true);
     expect(legacy()).toBe(false);

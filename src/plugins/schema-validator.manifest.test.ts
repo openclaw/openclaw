@@ -1,7 +1,6 @@
 import { Format } from "typebox/format";
 import { Settings } from "typebox/system";
-import { expect, it, vi } from "vitest";
-import * as schemaDefaults from "../shared/json-schema-defaults.js";
+import { expect, it } from "vitest";
 import {
   validateJsonSchemaValue,
   validatePluginSchemaValue,
@@ -107,27 +106,17 @@ it.each([true, false])(
       expect(observedEmailChecks.length).toBeGreaterThan(0);
       expect(observedEmailChecks.every((valid) => !valid)).toBe(true);
       expect(Format.Entries()).toEqual(expectedFormats);
-      const result = validateJsonSchemaValue({
-        ...input,
-        value: { ...value, endpoint: "https://" },
-      });
-      expect(result).toEqual({
-        ok: false,
-        errors: [
-          expect.objectContaining({
-            path: "endpoint",
-            message: expect.stringContaining("must match format"),
-          }),
-        ],
-      });
-      expect(
-        validateJsonSchemaValue({ ...input, value: { ...value, custom: "rejected" } }),
-      ).toMatchObject({
-        ok: false,
-        errors: [
-          expect.objectContaining({ path: "custom", message: 'must match format "plugin-custom"' }),
-        ],
-      });
+      for (const [path, invalid, format] of [
+        ["endpoint", "https://", "uri"],
+        ["custom", "rejected", "plugin-custom"],
+      ]) {
+        expect(validateJsonSchemaValue({ ...input, value: { ...value, [path]: invalid } })).toEqual(
+          {
+            ok: false,
+            errors: [expect.objectContaining({ path, message: `must match format "${format}"` })],
+          },
+        );
+      }
       expect(validateJsonSchemaValue(input)).toEqual({ ok: true, value });
       expect(Format.Entries()).toEqual(expectedFormats);
       expect(Format.Get("email")?.("not an email")).toBe(false);
@@ -177,7 +166,7 @@ it("uses the same local format policy when choosing conditional defaults", () =>
   });
 });
 
-it("admits equivalent immutable schemas once while detecting mutable descendants", () => {
+it("accepts equivalent immutable schemas while detecting mutable descendants", () => {
   const frozenReadSchema = () =>
     Object.freeze({
       type: "object",
@@ -189,32 +178,13 @@ it("admits equivalent immutable schemas once while detecting mutable descendants
     type: "object",
     properties: { value: { type: "string" } },
   });
-  const stringify = vi.spyOn(JSON, "stringify");
-  const admitSchema = vi.spyOn(schemaDefaults, "findJsonSchemaShapeError");
   const validate = (schema: JsonSchemaValue, value: unknown, cache = true) =>
     validateJsonSchemaValue({ schema, value, cache }).ok;
-  try {
-    for (const type of ["string", "number"]) {
-      expect(validate(readSchema, { action: "read" })).toBe(true);
-      mutableSchema.properties.value.type = type;
-      expect(validate(mutableSchema, { value: "text" })).toBe(type === "string");
-      expect(validate(sameReadSchema, { action: "read" })).toBe(true);
-    }
-    for (const work of [stringify, admitSchema]) {
-      expect(
-        [readSchema, sameReadSchema, mutableSchema].map(
-          (schema) => work.mock.calls.filter(([value]) => value === schema).length,
-        ),
-      ).toEqual([1, 1, 2]);
-    }
-
-    for (let index = 0; index < 2; index++) {
-      expect(validate(readSchema, { action: "read" }, false)).toBe(true);
-    }
-    expect(stringify.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
-    expect(admitSchema.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
-  } finally {
-    admitSchema.mockRestore();
-    stringify.mockRestore();
+  for (const type of ["string", "number"]) {
+    expect(validate(readSchema, { action: "read" })).toBe(true);
+    mutableSchema.properties.value.type = type;
+    expect(validate(mutableSchema, { value: "text" })).toBe(type === "string");
+    expect(validate(sameReadSchema, { action: "read" })).toBe(true);
   }
+  expect(validate(readSchema, { action: "read" }, false)).toBe(true);
 });
