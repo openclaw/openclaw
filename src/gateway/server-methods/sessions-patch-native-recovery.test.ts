@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import * as modelRuntime from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
 
@@ -40,6 +41,10 @@ const original: SessionEntry = {
   modelOverride: "model",
 };
 const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
+const nodeTools = { exec: { host: "node" } } as const;
+function agentConfig<T extends AgentEntryConfig>(entry: T) {
+  return { ...cfg, agents: { ...cfg.agents, entries: { main: entry } } };
+}
 function unrestricted(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { ...original, permissionMode: "full", sandboxMode: "off", ...overrides };
 }
@@ -64,11 +69,6 @@ async function prepare(
   return result;
 }
 
-function restriction(result: Awaited<ReturnType<typeof prepare>>) {
-  assert(!result.ok, "Expected native refusal");
-  return result.error.details;
-}
-
 it.each([
   { reason: "sandbox", tools: undefined },
   { reason: "workspace-only", tools: { fs: { workspaceOnly: true } } },
@@ -76,17 +76,22 @@ it.each([
 ])("offers chat-bound recovery for optional $reason", async ({ tools, reason }) => {
   const entry = tools ? unrestricted({ agentRuntimeOverride: "native-fixture" }) : { ...original };
   const config = tools ? { tools } : cfg;
-  expect(restriction(await prepare(entry, true, config))).toMatchObject({
-    code: "AGENT_RUNTIME_RESTRICTED",
-    reason,
-    runtimeId: "native-fixture",
-    recovery: {
-      action: "use-native-permissions",
-      sessionId: original.sessionId,
-      lifecycleRevision: original.lifecycleRevision,
-      expectedPermissionMode: "workspace",
-      expectedSandboxMode: null,
-      expectedNativeRuntimeConsent: null,
+  expect(await prepare(entry, true, config)).toMatchObject({
+    ok: false,
+    error: {
+      details: {
+        code: "AGENT_RUNTIME_RESTRICTED",
+        reason,
+        runtimeId: "native-fixture",
+        recovery: {
+          action: "use-native-permissions",
+          sessionId: original.sessionId,
+          lifecycleRevision: original.lifecycleRevision,
+          expectedPermissionMode: "workspace",
+          expectedSandboxMode: null,
+          expectedNativeRuntimeConsent: null,
+        },
+      },
     },
   });
   if (tools) {
@@ -97,6 +102,33 @@ it.each([
     }
   }
 });
+
+it("applies remembered native permissions on selection without creating per-chat consent", async () => {
+  const config = agentConfig({ nativeRuntimeConsent: ["native-fixture"] });
+  const entry = { ...original };
+  expect((await prepare(entry, true, config)).ok).toBe(true);
+  expect(entry).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
+  expect(entry).not.toHaveProperty("nativeRuntimeConsent");
+  expect((await prepare({ ...original, sandbox: "required" }, true, config)).ok).toBe(false);
+  expect((await prepare({ ...original }, false, config)).ok).toBe(false);
+  config.agents.entries.main.nativeRuntimeConsent = [];
+  expect((await prepare({ ...original }, true, config)).ok).toBe(false);
+});
+
+it.each([
+  ["non-admin", {}, false, cfg, "sandbox"],
+  ["mandatory sandbox", { sandbox: "required", sandboxMode: "off" }, true, cfg, "sandbox-required"],
+  ["global node", {}, true, { ...cfg, tools: nodeTools }, "remote-execution"],
+  ["agent node", {}, true, agentConfig({ tools: nodeTools }), "remote-execution"],
+] satisfies [string, Partial<SessionEntry>, boolean, OpenClawConfig, string][])(
+  "does not offer an escape from %s",
+  async (_label, overrides, admin, config, reason) => {
+    const result = await prepare({ ...original, ...overrides }, admin, config);
+    assert(!result.ok, "Expected native refusal");
+    expect(result.error.details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
+    expect(result.error.details).not.toHaveProperty("recovery");
+  },
+);
 
 it.each([
   [{}, {}, true],
@@ -133,22 +165,26 @@ it.each([
   },
 );
 
-it("validates local selection with a dormant node", async () => {
+it.each([false, true])("validates local selection (dormant node=%s)", async (node) => {
   const result = await prepare(
-    unrestricted({ execHost: "gateway", execNode: "dormant-node" }),
+    unrestricted(node ? { execHost: "gateway", execNode: "dormant-node" } : {}),
     true,
-    { tools: { exec: { host: "node" } } },
+    node ? { tools: { exec: { host: "node" } } } : cfg,
   );
   assert(result.ok, "Expected recovery selection");
   expect(result.validate?.()).toBeUndefined();
   validate.mockReturnValue("Runtime owner changed");
   expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
+  expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
 });
 
-it("preserves mandatory sandbox at creation", async () => {
-  const entry = { ...original, sandbox: "required" as const };
-  const details = restriction(await prepare(entry, false, cfg, { expectedEntry: undefined }));
-  expect(details).toMatchObject({ reason: "sandbox-required" });
-  expect(details).not.toHaveProperty("recovery");
+it.each([false, true])("preserves mandatory sandbox=%s at creation", async (mandatory) => {
+  const entry = mandatory ? { ...original, sandbox: "required" as const } : { ...original };
+  const result = await prepare(entry, false, cfg, { expectedEntry: undefined });
+  expect(result.ok).toBe(!mandatory);
   expect(entry.nativeRuntimeConsent).toBeUndefined();
+  if (!result.ok) {
+    expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
+    expect(result.error.details).not.toHaveProperty("recovery");
+  }
 });

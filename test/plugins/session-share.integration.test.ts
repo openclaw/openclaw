@@ -192,11 +192,20 @@ describe("session-share node commands", () => {
     await withCommands(async (source) => {
       expect((await source.list()).sessions).toEqual([]);
       const scope = await writeSession("shared-cache", { label: "Original" });
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "user", content: "Shared question" },
+      });
+      expectSingleItem((await source.read(scope.sessionKey)).items, {
+        type: "userMessage",
+        text: "Shared question",
+      });
       expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
       await upsertSessionEntryCore(scope, { label: "Renamed" });
       expect((await source.list()).sessions).toMatchObject([{ name: "Renamed" }]);
       await upsertSessionEntryCore(scope, { category: "Private" });
       expect((await source.list()).sessions).toEqual([]);
+      await expect(source.read(scope.sessionKey)).rejects.toThrow("not shared");
       await writeSession("shared-cache", { sessionId: "replacement", label: "Original" });
       expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
     });
