@@ -227,6 +227,7 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
     label: "Projected owner",
     identity: { type: "profile", id: "projected" },
   });
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner"),
   );
