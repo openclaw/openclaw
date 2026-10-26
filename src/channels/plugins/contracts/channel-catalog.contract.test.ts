@@ -19,6 +19,24 @@ import {
   describeOfficialFallbackChannelCatalogContract,
 } from "./test-helpers/channel-catalog-contract.js";
 
+async function registerChannels(ids: string) {
+  const channels = await Promise.all(
+    ids.split(" ").map(async (pluginId) => {
+      const plugin = await getBundledChannelPluginAsync(pluginId);
+      if (!plugin) {
+        throw new Error(`Missing bundled channel plugin for ${pluginId}`);
+      }
+      return { pluginId, plugin, source: "test" };
+    }),
+  );
+  setActivePluginRegistry(createTestRegistry(channels));
+}
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
+});
+
 for (const [channelId, npmSpec, alias] of [
   ["msteams", "@openclaw/msteams", "teams"],
   ["wecom", "@wecom/wecom-openclaw-plugin@2026.7.2", "wework"],
@@ -73,23 +91,7 @@ describe("ask_user channel catalogs", () => {
 
   beforeEach(async () => {
     setRuntimeConfigSnapshot(config);
-    const channels = await Promise.all(
-      ["discord", "imessage", "mattermost", "signal", "slack", "telegram", "whatsapp"].map(
-        async (pluginId) => {
-          const plugin = await getBundledChannelPluginAsync(pluginId);
-          if (!plugin) {
-            throw new Error(`Missing bundled channel plugin for ${pluginId}`);
-          }
-          return { pluginId, plugin, source: "test" };
-        },
-      ),
-    );
-    setActivePluginRegistry(createTestRegistry(channels));
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    clearRuntimeConfigSnapshot();
+    await registerChannels("discord imessage mattermost signal slack telegram whatsapp");
   });
 
   it.each([
@@ -125,30 +127,21 @@ describe("ask_user channel catalogs", () => {
 });
 
 describe("Feishu system prompt button guidance", () => {
-  beforeEach(async () => {
-    const plugin = await getBundledChannelPluginAsync("feishu");
-    if (!plugin) {
-      throw new Error("Missing bundled Feishu channel plugin");
-    }
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));
-  });
-
-  afterEach(() => resetPluginRuntimeStateForTest());
+  beforeEach(() => registerChannels("feishu"));
 
   it.each([{ capabilities: undefined }, { capabilities: ["inlineButtons"] }])(
     "does not advertise unsupported callbacks with capabilities $capabilities",
     ({ capabilities }) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "synthetic-secret",
-            ...(capabilities ? { capabilities } : {}),
-          },
-        },
+      const feishu = {
+        enabled: true,
+        appId: "cli_test",
+        appSecret: "synthetic-secret",
+        ...(capabilities ? { capabilities } : {}),
       };
-      const context = resolveRuntimeChannelPromptContext({ cfg, channel: "feishu" });
+      const context = resolveRuntimeChannelPromptContext({
+        cfg: { channels: { feishu } },
+        channel: "feishu",
+      });
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/workspace",
         toolNames: ["message"],
