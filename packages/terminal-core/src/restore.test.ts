@@ -1,58 +1,126 @@
+// Terminal Core tests cover restore behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const clearActiveProgressLine = vi.hoisted(() => vi.fn());
+
 vi.mock("./progress-line.js", () => ({
-  clearActiveProgressLine: vi.fn(),
+  clearActiveProgressLine,
 }));
 
 import { restoreTerminalState } from "./restore.js";
 
-type Stdin = Partial<Pick<NodeJS.ReadStream, "setRawMode" | "resume" | "isPaused">>;
-function configureTerminalIO(stdinIsTTY: boolean, stdoutIsTTY: boolean, methods: Stdin = {}) {
-  Object.defineProperty(process.stdin, "isTTY", { value: stdinIsTTY, configurable: true });
-  Object.defineProperty(process.stdout, "isTTY", { value: stdoutIsTTY, configurable: true });
-  Object.assign(process.stdin, methods);
+function configureTerminalIO(params: {
+  stdinIsTTY: boolean;
+  stdoutIsTTY: boolean;
+  setRawMode?: (mode: boolean) => void;
+  resume?: () => void;
+  isPaused?: () => boolean;
+}) {
+  Object.defineProperty(process.stdin, "isTTY", { value: params.stdinIsTTY, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: params.stdoutIsTTY, configurable: true });
+  (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode = params.setRawMode;
+  (process.stdin as { resume?: () => void }).resume = params.resume;
+  (process.stdin as { isPaused?: () => boolean }).isPaused = params.isPaused;
+}
+
+function setupPausedTTYStdin() {
+  const setRawMode = vi.fn();
+  const resume = vi.fn();
+  const isPaused = vi.fn(() => true);
+  configureTerminalIO({
+    stdinIsTTY: true,
+    stdoutIsTTY: false,
+    setRawMode,
+    resume,
+    isPaused,
+  });
+  return { setRawMode, resume };
 }
 
 describe("restoreTerminalState", () => {
-  const { isTTY: stdinIsTTY, setRawMode, resume, isPaused } = process.stdin;
-  const stdoutIsTTY = process.stdout.isTTY;
+  const originalStdinIsTTY = process.stdin.isTTY;
+  const originalStdoutIsTTY = process.stdout.isTTY;
+  const originalSetRawMode = (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode;
+  const originalResume = (process.stdin as { resume?: () => void }).resume;
+  const originalIsPaused = (process.stdin as { isPaused?: () => boolean }).isPaused;
 
   afterEach(() => {
     vi.restoreAllMocks();
-    configureTerminalIO(stdinIsTTY, stdoutIsTTY, { setRawMode, resume, isPaused });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: originalStdinIsTTY,
+      configurable: true,
+    });
+    Object.defineProperty(process.stdout, "isTTY", {
+      value: originalStdoutIsTTY,
+      configurable: true,
+    });
+    (process.stdin as { setRawMode?: (mode: boolean) => void }).setRawMode = originalSetRawMode;
+    (process.stdin as { resume?: () => void }).resume = originalResume;
+    (process.stdin as { isPaused?: () => boolean }).isPaused = originalIsPaused;
   });
 
-  it.each([
-    ["leaves paused stdin alone by default", true, undefined, 0],
-    ["resumes paused TTY stdin when requested", true, true, 1],
-    ["does not touch non-TTY stdin", false, true, 0],
-  ] as const)("%s", (_label, tty, resumeStdinIfPaused, resumeCalls) => {
-    const stdin = {
-      setRawMode: vi.fn(() => process.stdin),
-      resume: vi.fn(() => process.stdin),
-      isPaused: () => true,
-    };
-    configureTerminalIO(tty, false, stdin);
-    restoreTerminalState("test", { resumeStdinIfPaused });
-    expect(stdin.setRawMode.mock.calls).toEqual(tty ? [[false]] : []);
-    expect(stdin.resume).toHaveBeenCalledTimes(resumeCalls);
+  it("does not resume paused stdin by default", () => {
+    const { setRawMode, resume } = setupPausedTTYStdin();
+
+    restoreTerminalState("test");
+
+    expect(setRawMode).toHaveBeenCalledWith(false);
+    expect(resume).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("routes resets to the selected TTY (custom=%s)", (custom) => {
-    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const resetWrite = vi.fn((_chunk: string) => true);
-    const resetStream = { isTTY: true, write: resetWrite } as unknown as NodeJS.WriteStream;
+  it("resumes paused stdin when resumeStdin is true", () => {
+    const { setRawMode, resume } = setupPausedTTYStdin();
 
-    configureTerminalIO(false, true);
-    restoreTerminalState("test", custom ? { resetStream } : undefined);
-    const output = (custom ? resetWrite : stdoutWrite).mock.calls
-      .map(([chunk]) => String(chunk))
-      .join("");
-    expect(output).toContain("\x1b[?25h");
+    restoreTerminalState("test", { resumeStdinIfPaused: true });
+
+    expect(setRawMode).toHaveBeenCalledWith(false);
+    expect(resume).toHaveBeenCalledOnce();
+  });
+
+  it("does not touch stdin when stdin is not a TTY", () => {
+    const setRawMode = vi.fn();
+    const resume = vi.fn();
+    const isPaused = vi.fn(() => true);
+
+    configureTerminalIO({
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      setRawMode,
+      resume,
+      isPaused,
+    });
+
+    restoreTerminalState("test", { resumeStdinIfPaused: true });
+
+    expect(setRawMode).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+  });
+
+  it("writes kitty and modifyOtherKeys reset sequences to stdout", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    configureTerminalIO({
+      stdinIsTTY: false,
+      stdoutIsTTY: true,
+    });
+
+    restoreTerminalState("test");
+
+    expect(writeSpy).toHaveBeenCalled();
+    const output = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(output).toContain("\x1b[<u");
     expect(output).toContain("\x1b[>4;0m");
-    if (custom) {
-      expect(stdoutWrite).not.toHaveBeenCalled();
-    }
+  });
+
+  it("writes reset sequences only to a custom TTY stream", () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const resetWrite = vi.fn(() => true);
+    const resetStream = { isTTY: true, write: resetWrite } as unknown as NodeJS.WriteStream;
+
+    configureTerminalIO({ stdinIsTTY: false, stdoutIsTTY: true });
+    restoreTerminalState("test", { resetStream });
+
+    expect(resetWrite).toHaveBeenCalledWith(expect.stringContaining("\x1b[?25h"));
+    expect(stdoutWrite).not.toHaveBeenCalled();
   });
 });

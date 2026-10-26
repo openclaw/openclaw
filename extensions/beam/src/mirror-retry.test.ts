@@ -96,30 +96,34 @@ describe("Beam terminal retry policy", () => {
       },
       503,
     );
-    await withServer(handler, async (baseUrl) => {
-      const runner = createBeamTestRunner({
-        endpoint: `${baseUrl}/api/v1/beam/sessions`,
-        listCatalogs: () => [createBeamTestCatalog({ sessions: () => activeSessions })],
+    try {
+      await withServer(handler, async (baseUrl) => {
+        const runner = createBeamTestRunner({
+          endpoint: `${baseUrl}/api/v1/beam/sessions`,
+          listCatalogs: () => [createBeamTestCatalog({ sessions: () => activeSessions })],
+        });
+        for (let offset = 0; offset < BEAM_MAX_SESSIONS; offset += 32) {
+          const count = Math.min(32, BEAM_MAX_SESSIONS - offset);
+          activeSessions = batchSessions("session", count, beamTestNow + offset / 32, offset);
+          await runner.tick();
+        }
+
+        activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
+        await runner.tick();
+        await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
+
+        activeSessions = [];
+        phase = "final";
+        for (let tick = 0; tick < 40; tick += 1) {
+          await runner.tick();
+        }
+
+        expect(rejectedTargetWrites).toBe(1);
+        await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: true });
       });
-      for (let offset = 0; offset < BEAM_MAX_SESSIONS; offset += 32) {
-        const count = Math.min(32, BEAM_MAX_SESSIONS - offset);
-        activeSessions = batchSessions("session", count, beamTestNow + offset / 32, offset);
-        await runner.tick();
-      }
-
-      activeSessions = [{ threadId: "session-500", recencyAt: beamTestNow + 101 }];
-      await runner.tick();
-      await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: false });
-
-      activeSessions = [];
-      phase = "final";
-      for (let tick = 0; tick < 40; tick += 1) {
-        await runner.tick();
-      }
-
-      expect(rejectedTargetWrites).toBe(1);
-      await expect(store.get(targetBeamId)).resolves.toMatchObject({ completed: true });
-    }).finally(close);
+    } finally {
+      await close();
+    }
   });
 });
 
