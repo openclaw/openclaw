@@ -439,7 +439,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     });
 
   const scheduleCronReconcile = (delayMs: number): void => {
-    if (disposed || !scheduler) {
+    if (disposed || !scheduler || scheduler.signal.aborted) {
       return;
     }
     scheduler.schedule({
@@ -512,7 +512,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
     // Cron reconciliation can itself stall; never classify sessions admitted after startup.
     await scrubConfiguredAgents(config, startupStartedAtMs);
-    if (disposed) {
+    if (disposed || scheduler?.signal.aborted) {
       return;
     }
     // Interrupted runs are initially indistinguishable from live runs; revisit once their

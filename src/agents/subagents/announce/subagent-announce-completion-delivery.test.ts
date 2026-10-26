@@ -44,8 +44,8 @@ it("admits a requester continuation on the current generation after its producer
   const invocations = new PluginInvocationScope(previousRegistry, [predecessor, shared], {
     retained: true,
   });
-  const oldCallback = invocations.wrap(predecessor.wrap(() => "previous"));
-  const currentCallback = successor.wrap(() => "current");
+  const oldCallback = invocations.wrap(predecessor.wrap((): string => "previous"));
+  const currentCallback = successor.wrap((): string => "current");
   const sharedCallback = shared.wrap(() => "shared");
   const callbacks = new Map([
     [previousRegistry, oldCallback],

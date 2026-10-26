@@ -398,6 +398,40 @@ describe("dreaming service reconciliation", () => {
     }
   });
 
+  it("does not rearm reconciliation after host scheduler closure before the service stop hook", async () => {
+    vi.useFakeTimers();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const { api, harness, logger } = createDreamingTestContext();
+    const list = vi.spyOn(harness.cron, "list").mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw new Error("startup list failed");
+    });
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await getDreamingService(api).start({
+        config: api.config,
+        stateDir: ".",
+        logger,
+        scheduler: api.scheduler,
+        getCron: () => harness.cron,
+      });
+      await entered.promise;
+      // The host closes every scheduler before invoking service stop hooks in reverse order.
+      api.scheduler.beginClose();
+      release.resolve();
+      await expect(Promise.all(api.backgroundTasks)).resolves.toEqual([undefined]);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+      expect(list).toHaveBeenCalledOnce();
+      expect(harness.addCalls).toEqual([]);
+      expectLogContains(logger.error, "dreaming startup reconciliation failed");
+    } finally {
+      release.resolve();
+      await triggerDreamingServiceStop(api);
+    }
+  });
+
   it("updates the existing job on service replacement and stops the old reconciliation timer", async () => {
     vi.useFakeTimers();
     const { api, harness } = createDreamingTestContext({

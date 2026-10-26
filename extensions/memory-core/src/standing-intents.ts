@@ -30,12 +30,12 @@ type MaintenanceSchedule = (path: string, nextDueAt: number | null) => void;
 // Queue, committed-absence facts, and the selected scheduler share one process owner.
 const maintenance = resolveGlobalSingleton<{
   schedule: MaintenanceSchedule | undefined;
-  owners: Set<MaintenanceSchedule>;
+  owners: Map<MaintenanceSchedule, () => void>;
   lifecycleFacts: Map<string, { empty: boolean }>;
   operationQueues: Map<string, StoreWriterQueue>;
 }>(Symbol.for("openclaw.memoryCore.standingIntents"), () => ({
   schedule: undefined,
-  owners: new Set<MaintenanceSchedule>(),
+  owners: new Map<MaintenanceSchedule, () => void>(),
   lifecycleFacts: new Map<string, { empty: boolean }>(),
   operationQueues: new Map<string, StoreWriterQueue>(),
 }));
@@ -162,7 +162,11 @@ export function startStandingIntentMaintenance(params: {
       }),
     );
   };
-  maintenance.owners.add(schedule);
+  maintenance.owners.set(schedule, () => {
+    for (const path of targets.keys()) {
+      schedule(path, null);
+    }
+  });
   maintenance.schedule = schedule;
   const ownedFacts = new Map<string, { empty: boolean }>();
   // Restart must process overdue expiry/cooldown before trusting a retained deadline.
@@ -175,7 +179,9 @@ export function startStandingIntentMaintenance(params: {
   return () => {
     maintenance.owners.delete(schedule);
     if (maintenance.schedule === schedule) {
-      maintenance.schedule = [...maintenance.owners].at(-1);
+      const predecessor = [...maintenance.owners].at(-1);
+      maintenance.schedule = predecessor?.[0];
+      predecessor?.[1]();
     }
     for (const job of jobs.values()) {
       job.cancel();
