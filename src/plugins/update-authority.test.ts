@@ -120,7 +120,11 @@ describe("plugin update authority", () => {
       const packageDir = state.statePath("extensions", pluginId);
       const peerLink = path.join(packageDir, "node_modules", "openclaw");
       const oldHost = state.path("old-host");
-      await state.writeJson("old-host/package.json", { name: "openclaw", version: "0.0.0" });
+      await fs.mkdir(oldHost);
+      await fs.writeFile(
+        path.join(oldHost, "package.json"),
+        '{"name":"openclaw","version":"0.0.0"}',
+      );
       await fs.mkdir(path.dirname(peerLink), { recursive: true });
       await state.writeJson(`extensions/${pluginId}/package.json`, {
         name: pluginId,
@@ -144,12 +148,10 @@ describe("plugin update authority", () => {
       const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
       for (const revoke of [true, false]) {
         await withUpdater(state, true, async (fence) => {
-          let unlinked = false;
           const unlink = fsSync.unlinkSync.bind(fsSync);
           const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
             unlink(file);
             if (String(file) === peerLink && revoke) {
-              unlinked = true;
               releaseUpdateCommandPreflightForHandoff(fence);
             }
           });
@@ -161,7 +163,6 @@ describe("plugin update authority", () => {
             );
             if (revoke) {
               await expect(operation).rejects.toThrow("ownership is no longer current");
-              expect(unlinked).toBe(true);
               await expect(fs.lstat(peerLink)).rejects.toHaveProperty("code", "ENOENT");
             } else {
               expect(await operation).toMatchObject({

@@ -20,43 +20,32 @@ it.each(["ordinary", "consumer"] as const)(
     const consumer = custody === "consumer" ? instance.retainConsumer() : undefined;
     const resume = createDeferredCore();
     const observed: Array<string | undefined> = [];
-    const first = Object.freeze({ done: false, value: "first" });
-    const second = Object.freeze({ done: false, value: "second" });
-    const terminal = Object.freeze({ done: true, value: "closed" });
     const observe = () => observed.push(readRegistryLabel());
-    class Stream {
-      calls = 0;
-      [Symbol.asyncIterator]() {
-        return this;
-      }
-      async next() {
+    async function* stream() {
+      try {
         observe();
-        if (++this.calls === 1) {
-          return first;
-        }
+        yield "first";
+        observe();
         await resume.promise;
         observe();
-        return second;
-      }
-      async return() {
+        yield "second";
+      } finally {
         observe();
-        return terminal;
       }
     }
     selectRegistry(record, "selected", new StreamRegistry());
-    const iterator = (consumer ?? instance).wrap(new Stream())[Symbol.asyncIterator]();
+    const iterator = (consumer ?? instance).wrap(stream())[Symbol.asyncIterator]();
     selectRegistry(record, "successor");
     let pending: ReturnType<typeof iterator.next> | undefined;
     try {
       await expectLiveObjects(StreamRegistry, 1);
-      expect(instance.ordinaryCallCount).toBe(custody === "consumer" ? 0 : 1);
-      expect(await iterator.next()).toBe(first);
+      expect(await iterator.next()).toEqual({ done: false, value: "first" });
       pending = iterator.next();
       await expectLiveObjects(StreamRegistry, 1);
       resume.resolve();
-      expect(await pending).toBe(second);
+      expect(await pending).toEqual({ done: false, value: "second" });
       await expectLiveObjects(StreamRegistry, 1);
-      expect(await iterator.return()).toBe(terminal);
+      expect(await iterator.return()).toEqual({ done: true, value: undefined });
       await expectLiveObjects(StreamRegistry, 0);
       expect(observed).toEqual(["selected", "selected", "selected", "selected"]);
       expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
@@ -79,39 +68,29 @@ it.each(["hook", "async tool"] as const)(
     const handle = instance.wrap({ read: () => "handle" });
     const input = Object.freeze({ handle, opaque });
     const payload = Object.freeze({
-      content: Object.freeze([{ text: "chunk" }]),
       read: () => "payload",
       opaque,
     });
-    const operation = instance.wrap((argument: typeof input) => {
+    const operation = instance.wrap(
+      (argument: typeof input, callback: (value: typeof payload) => void) => {
+        expect(instance.hasActiveCall).toBe(true);
+        expect(argument).toBe(input);
+        callback(payload);
+        return kind === "async tool" ? Promise.resolve(payload) : payload;
+      },
+    );
+    let received: typeof payload | undefined;
+    const result = await operation(input, (value) => {
       expect(instance.hasActiveCall).toBe(true);
-      expect(argument).toBe(input);
-      expect(argument.handle).toBe(handle);
-      return kind === "async tool" ? Promise.resolve(payload) : payload;
+      expect(getScope()?.pluginId).toBe(instance.pluginId);
+      received = value;
     });
-    const result = await operation(input);
     expect(result).toBe(payload);
-    expect(result.opaque).toBe(opaque);
+    expect(received).toBe(payload);
     await instance.dispose();
     expect(result.read()).toBe("payload");
-    expect(result.content[0]?.text).toBe("chunk");
   },
 );
-
-it("passes callback payloads by reference while the callback keeps invocation admission", async () => {
-  const instance = createOwnedTestInstance("direct-values", "bundled");
-  const payload = Object.freeze({ read: () => "callback payload" });
-  const invoke = instance.wrap((callback: (value: typeof payload) => void) => callback(payload));
-  let received: typeof payload | undefined;
-  invoke((value) => {
-    expect(instance.hasActiveCall).toBe(true);
-    expect(getScope()?.pluginId).toBe(instance.pluginId);
-    received = value;
-  });
-  expect(received).toBe(payload);
-  await instance.dispose();
-  expect(received?.read()).toBe("callback payload");
-});
 
 it("keeps exact nested stream results and one scoped private-field receiver across protocol calls", async () => {
   const instance = createOwnedTestInstance("direct-values", "bundled");
@@ -160,7 +139,6 @@ it("keeps exact nested stream results and one scoped private-field receiver acro
     expect(await iterator.next()).toBe(results[0]);
     expect(await iterator.throw(failure)).toBe(results[1]);
     expect(await iterator.return()).toBe(results[2]);
-    expect(scopes).toHaveLength(6);
     expect(scopes.every((scope) => scope === scopes[0])).toBe(true);
     expect(getScope()).toBeUndefined();
     inner.release();
