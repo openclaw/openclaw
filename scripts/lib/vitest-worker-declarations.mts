@@ -88,8 +88,6 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/openai/realtime-audio-worker-entrypoints.test-support.ts",
   "extensions/code-mode-quickjs/src/worker-entrypoint.test-support":
     "extensions/code-mode-quickjs/src/worker-entrypoint.test-support.ts",
-  "process/spawn-broker/context-runtime.test-support":
-    "src/process/spawn-broker/context-runtime.test-support.ts",
   "commands/sessions-cleanup-runtime.test-support":
     "src/commands/sessions-cleanup-runtime.test-support.ts",
   "test/scripts/tooling-probe-runtime.test-support":

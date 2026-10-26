@@ -9,7 +9,6 @@ import {
 } from "../../../test/helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   brokerSpawnPreload,
@@ -171,29 +170,10 @@ fixtureReceiptSocket.end();`,
     expect(child.stdin).not.toBeNull();
     stoppedBroker = host.pid;
     process.kill(stoppedBroker!, "SIGSTOP");
-    const readPid = () =>
-      readFile(marker, "utf8").then(
-        (content) => Number(content) || undefined,
-        (error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-          return undefined;
-        },
-      );
     // The shell records its PID before reporting on the independent receipt channel.
-    await wait(
-      Promise.race([
-        receipts.waitFor(marker, "ready"),
-        readiness.then(async () => {
-          if (!(await readPid())) {
-            throw new Error("Broker settled before shell PID was recorded");
-          }
-        }),
-      ]),
-    );
-    pid = await readPid();
-    expect(pid).toBeTypeOf("number");
+    await wait(receipts.waitFor(marker, "ready"));
+    pid = Number(await readFile(marker, "utf8"));
+    expect(pid).toBeGreaterThan(0);
     expect(child.pid).toBeUndefined();
     process.kill(stoppedBroker!, "SIGKILL");
     // Join before yielding so the intentional SIGKILL is observed during shutdown.

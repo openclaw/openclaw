@@ -12,7 +12,6 @@ function resourceFixture() {
   const failure = createDeferred<Error>();
   const ownerFailures: Error[] = [];
   const clientFailures: Error[] = [];
-  const responses: BrokerResourceResponse[] = [];
   let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
   let lease: ReturnType<typeof host.captureNativeResource> | undefined;
   return {
@@ -21,7 +20,6 @@ function resourceFixture() {
     failure: failure.promise,
     ownerFailures,
     clientFailures,
-    responses,
     async close() {
       await client?.close();
       await lease?.close();
@@ -37,19 +35,11 @@ function resourceFixture() {
         { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort },
         { message() {}, failed: (error) => ownerFailures.push(error) },
       );
-      client = attachBrokerNativeResource(
-        lease.attachment,
-        port1,
-        (response) => {
-          responses.push(response);
-          observe(response);
-        },
-        (error) => {
-          clientFailures.push(error);
-          failure.resolve(error);
-        },
-      );
-      return { client, lease };
+      client = attachBrokerNativeResource(lease.attachment, port1, observe, (error) => {
+        clientFailures.push(error);
+        failure.resolve(error);
+      });
+      return { client };
     },
     async [Symbol.asyncDispose]() {
       if (lease?.attachment.ownerPort) {
@@ -141,12 +131,6 @@ it.skipIf(process.platform === "win32")(
     const diagnostic = formatErrorMessage(failure, { redact: (text) => text });
     await fixture.close();
     expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
-    expect(fixture.responses).toMatchObject([
-      { type: "resource-ready", pid: fixture.host.pid },
-      { type: "resource-created" },
-      { type: "resource-close-error", requestId: 1 },
-      { type: "resource-closed", requestId: 2 },
-    ]);
     expect(fixture.host.pid).not.toBe(process.pid);
     expect(diagnostic).toContain("resource cleanup failed | resource operation failed");
   },

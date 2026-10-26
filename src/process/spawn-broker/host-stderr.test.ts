@@ -1,18 +1,11 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { existsSync, watch } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
 import { createSqliteReadOnlyWorkerSession } from "../../infra/sqlite-readonly-worker-session.js";
-import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { spawnBrokerContextEntrypoints } from "./context-runtime.test-support.js";
 import { createSpawnBrokerHost } from "./host.js";
 import { SpawnBrokerError } from "./protocol.js";
 
@@ -24,40 +17,66 @@ async function brokenRuntime(diagnostic: string, mode = 0o700, exit = 134) {
   return runtime;
 }
 
-it.skipIf(process.platform === "win32")(
-  "classifies loader stderr transferred after a read-only session is constructed",
-  async () => {
-    const host = createSpawnBrokerHost();
+it.skipIf(process.platform === "win32").each(["loader", "permission", "session"] as const)(
+  "classifies runtime failure at %s without restarting the broker",
+  async (kind) => {
+    const runtime = await brokenRuntime(
+      "dyld[123]: Library not loaded: /fixture/libsimdutf.dylib",
+      kind === "permission" ? 0o600 : 0o700,
+    );
+    let host: ReturnType<typeof createSpawnBrokerHost> | undefined;
     let session: ReturnType<typeof createSqliteReadOnlyWorkerSession> | undefined;
     try {
-      await host.ready();
-      process.execPath = await brokenRuntime(
-        "node: error while loading shared libraries: libfixture.so: cannot open shared object file",
-        0o700,
-        127,
-      );
-      session = createSqliteReadOnlyWorkerSession({
-        env: {},
-        cwd: process.cwd(),
-        transport: { kind: "broker", owner: host },
-        argv: [],
-        retainLifetime: false,
-        requestArgs: () => [],
-        readBudget: () => ({ timeoutMs: 5_000, size: "fixture" }),
-        deadlineOwnedByCaller: () => true,
-        timeoutError: () => new Error("unexpected timeout"),
-        closeTimeoutMs: 5_000,
-      });
-      await expect(session.run("fixture", { mode: "staging-create" })).rejects.toMatchObject({
+      if (kind !== "session") {
+        process.execPath = runtime;
+      }
+      host = createSpawnBrokerHost();
+      const failure = {
         code: "NODE_RUNTIME_UNAVAILABLE",
-        message: expect.stringContaining("Restart the Gateway."),
-      });
+        message: `The Node.js runtime this Gateway started with (${runtime}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
+      };
+      if (kind === "session") {
+        await host.ready();
+        process.execPath = runtime;
+        session = createSqliteReadOnlyWorkerSession({
+          env: {},
+          cwd: process.cwd(),
+          transport: { kind: "broker", owner: host },
+          argv: [],
+          retainLifetime: false,
+          requestArgs: () => [],
+          readBudget: () => ({ timeoutMs: 5_000, size: "fixture" }),
+          deadlineOwnedByCaller: () => true,
+          timeoutError: () => new Error("unexpected timeout"),
+          closeTimeoutMs: 5_000,
+        });
+        await expect(session.run("fixture", { mode: "staging-create" })).rejects.toMatchObject(
+          failure,
+        );
+      } else {
+        await expect(host.ready()).rejects.toMatchObject(failure);
+        await expect(host.ready()).rejects.toMatchObject(failure);
+      }
     } finally {
       try {
         await session?.close();
       } finally {
         process.execPath = executable;
-        await host.close();
+        await host?.close().catch((error: unknown) => {
+          expect(kind).toBe("loader");
+          expect(error).toMatchObject({
+            name: "AggregateError",
+            errors: [
+              {
+                code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+                cause: {
+                  code: "NODE_RUNTIME_UNAVAILABLE",
+                  message: expect.stringContaining(runtime),
+                },
+              },
+            ],
+          });
+        });
       }
     }
   },
@@ -117,134 +136,79 @@ it.each([undefined, true] as const)(
   },
 );
 
-it.skipIf(process.platform === "win32").each(["loader", "permission"])(
-  "reports runtime %s failure before broker readiness and does not restart it",
-  async (kind) => {
-    const runtime = await brokenRuntime(
-      "dyld[123]: Library not loaded: /fixture/libsimdutf.dylib",
-      kind === "permission" ? 0o600 : 0o700,
-    );
-    const message = `The Node.js runtime this Gateway started with (${runtime}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`;
-    let host: ReturnType<typeof createSpawnBrokerHost> | undefined;
-    try {
-      process.execPath = runtime;
-      host = createSpawnBrokerHost();
-      await expect(host.ready()).rejects.toThrow(message);
-      await expect(host.ready()).rejects.toThrow(message);
-    } finally {
-      process.execPath = executable;
-      await host?.close().catch((error: unknown) => {
-        // Early bootstrap EPIPE can make the intentional loader exit arrive during close.
-        expect(kind).toBe("loader");
-        expect(error).toMatchObject({
-          name: "AggregateError",
-          errors: [
-            {
-              code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-              cause: { code: "NODE_RUNTIME_UNAVAILABLE", message },
-            },
-          ],
-        });
-      });
-    }
-  },
-);
-
 it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
   "logs first-start %s and keeps subsequent broker starts in-process",
   async (failure) => {
-    const directory = tempDirs.make("openclaw-broker-startup-fallback-");
+    const directory = tempDirs.make("openclaw-broker-startup-");
     const marker = path.join(directory, "attempts");
-    const preload = path.join(directory, "exit-before-ready.mjs");
+    const worker = path.join(directory, "worker.mjs");
     await writeFile(
-      preload,
-      `
-      import {appendFileSync} from 'node:fs';
-      if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
-        appendFileSync(${JSON.stringify(marker)}, 'attempt\\n');
-        ${failure === "exit" ? "process.exit(73);" : "process.on('message',()=>{}); await new Promise(()=>{});"}
-      }
-    `,
+      worker,
+      'import {appendFileSync} from "node:fs"; appendFileSync(' +
+        JSON.stringify(marker) +
+        ',"attempt\\n");' +
+        (failure === "exit"
+          ? "process.exit(73);"
+          : 'process.on("message",()=>{}); process.once("disconnect",()=>process.exit(0));'),
     );
-    const execUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.exec).href;
-    const contextUrl = resolveRuntimeWorkerUrl(spawnBrokerContextEntrypoints.context);
-    const source = `
-      import {existsSync,readFileSync,watch} from 'node:fs';
-      import {mock} from 'node:test';
-      const state = {parents:[],brokers:[],errors:[]};
-      process.env.NODE_OPTIONS = ${JSON.stringify(`--import=${pathToFileURL(preload).href}`)};
-      const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
-      let startupClockOffset = 0n;
-      // The broker captures its clock at import; advance it with the startup timer below.
-      const monotonic = ${failure === "timeout"}
-        ? mock.method(process.hrtime, 'bigint', () => realMonotonic() + startupClockOffset)
-        : undefined;
-      const {startGatewaySpawnBroker} = await import(${JSON.stringify(contextUrl.href)});
-      const {runExec} = await import(${JSON.stringify(execUrl)});
-      let attemptWatcher;
-      try {
-        const attempted = ${failure === "timeout"} ? new Promise((resolve,reject) => {
-          const observe = () => {
-            if (existsSync(${JSON.stringify(marker)}) && readFileSync(${JSON.stringify(marker)},'utf8').trim()) resolve();
-          };
-          attemptWatcher = watch(${JSON.stringify(directory)}, observe);
-          attemptWatcher.on('error', reject);
-          observe();
-        }) : undefined;
-        if (attempted) mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
-        for (let count=0;count<2;count++) {
-          const starting = startGatewaySpawnBroker({
-            onReady() { throw new Error('Failed broker reported readiness'); },
-            onStartupFailure(message) { state.errors.push(message); }
-          });
-          if (attempted && count === 0) {
-            await Promise.race([attempted, starting.then(() => {
-              throw new Error('Broker started before the readiness deadline');
-            })]);
-            attemptWatcher.close();
-            startupClockOffset += 15_000_000_000n;
-            mock.timers.tick(15_000);
-          }
-          const broker = await starting;
-          state.brokers.push(broker?.pid ?? null);
-          state.parents.push(Number((await runExec(process.execPath,['-e','console.log(process.ppid)'],{logOutput:false})).stdout));
+    const watcher = watch(directory);
+    const attempted = new Promise<void>((resolve, reject) => {
+      watcher.on("change", () => {
+        if (existsSync(marker)) {
+          resolve();
         }
-        console.log(JSON.stringify({...state,hostPid:process.pid,attempts:readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length}));
-      } finally {
-        attemptWatcher?.close();
-        mock.timers.reset();
-        monotonic?.mock.restore();
-      }
-    `;
-    const node = resolveTestNodeExecPath();
-    const result = spawnSync(
-      node,
-      [
-        ...resolveRuntimeWorkerArgv(contextUrl, node).slice(0, -1),
-        "--input-type=module",
-        "--eval",
-        source,
-      ],
-      { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 },
-    );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const observed = JSON.parse(result.stdout);
-    expect(observed).toMatchObject({
-      attempts: 1,
-      brokers: [null, null],
-      parents: Array(2).fill(observed.hostPid),
+      });
+      watcher.on("error", reject);
     });
-    expect(observed.errors).toHaveLength(1);
-    expect(observed.errors[0]).toMatch(/before readiness|before becoming ready/);
-    expect(observed.errors[0]).toContain(
-      fileURLToPath(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker)),
-    );
-    if (failure === "timeout") {
-      expect(observed.errors[0]).toContain("readiness deadline exceeded");
+    const hosts: ReturnType<typeof createSpawnBrokerHost>[] = [];
+    try {
+      vi.resetModules();
+      const now = process.hrtime.bigint.bind(process.hrtime);
+      let offset = 0n;
+      vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now() + offset);
+      const owner = await import("./host.js");
+      const create = owner.createSpawnBrokerHost;
+      vi.spyOn(owner, "createSpawnBrokerHost").mockImplementation((options) => {
+        const host = create({ ...options, workerUrl: pathToFileURL(worker) });
+        hosts.push(host);
+        return host;
+      });
+      const context = await import("./context.js");
+      const onReady = vi.fn();
+      const onStartupFailure = vi.fn<(message: string) => void>();
+      const options = { onReady, onStartupFailure };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const starting = expect(context.startGatewaySpawnBroker(options)).resolves.toBeUndefined();
+      if (failure === "timeout") {
+        await attempted;
+        offset = 15_000_000_000n;
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+      await starting;
+      await expect(context.startGatewaySpawnBroker(options)).resolves.toBeUndefined();
+      expect(hosts).toHaveLength(1);
+      expect((await readFile(marker, "utf8")).trim()).toBe("attempt");
+      expect(onReady).not.toHaveBeenCalled();
+      expect(onStartupFailure).toHaveBeenCalledOnce();
+      const message = onStartupFailure.mock.calls[0]![0];
+      expect(message).toMatch(/before readiness|before becoming ready/);
+      expect(message).toContain(worker);
+      expect(message).toContain("in-process spawning");
+      expect(message).not.toMatch(/[\r\n]/);
+      if (failure === "timeout") {
+        expect(message).toContain("readiness deadline exceeded");
+      }
+      const { runExec } = await import("../exec.js");
+      const result = await context.runWithSpawnBroker(hosts[0], () =>
+        runExec(process.execPath, ["-e", "console.log(process.ppid)"], { logOutput: false }),
+      );
+      expect(Number(result.stdout)).toBe(process.pid);
+    } finally {
+      watcher.close();
+      vi.useRealTimers();
+      await Promise.all(hosts.map((host) => host.close().catch(() => {})));
+      vi.restoreAllMocks();
     }
-    expect(observed.errors[0]).toContain("in-process spawning");
-    expect(observed.errors[0]).not.toMatch(/[\r\n]/);
   },
   35_000,
 );
