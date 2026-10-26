@@ -117,6 +117,10 @@ interrupted work.
 | Background exec processes     | Process memory; notification obligation in session row       | Processes end; eligible owning sessions wake once with an unknown outcome       |
 | Gateway terminal PTYs         | Process memory                                               | End with the old process; terminal sessions are not recovered                   |
 
+Outbound recovery keeps checking queued deliveries when the Gateway restarts
+before a platform-send lease expires. It waits for the lease before inspecting
+the send and still reconciles uncertain outcomes before any replay.
+
 The Gateway resumes eligible accepted `chat.send` inputs from SQLite at startup,
 in acceptance order within each session. This includes queued inputs left by a
 process kill, without waiting for a client or history read. Recovery uses the

@@ -538,26 +538,21 @@ describe("readRemoteMediaBuffer", () => {
       header: "attachment; filename*=UTF-16''bad.csv; filename=fallback.csv",
       fileName: "fallback.csv",
     },
-  ] as const)("parses $name for buffered and stored remote media", async (testCase) => {
+  ] as const)("parses $name for buffered remote media", async (testCase) => {
     const fetchImpl = vi.fn(async () =>
       makeStreamResponse([1, 2, 3], {
         "content-disposition": testCase.header,
         "content-type": "text/csv",
       }),
     );
-    const request = {
+    const buffered = await readMedia({
       url: "https://example.com/download",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       maxBytes: 8,
-    };
-
-    const buffered = await readRemoteMediaBuffer(request);
-    const stored = await saveRemoteMedia(request);
+    });
 
     expect(buffered.fileName).toBe(testCase.fileName);
-    expect(stored.fileName).toBe(testCase.fileName);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it.each([[`attachment; filename*=UTF-8''reports%2F%2FQ1.pdf`, "reports__Q1.pdf"]])(

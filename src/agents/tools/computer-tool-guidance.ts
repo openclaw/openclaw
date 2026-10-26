@@ -37,12 +37,14 @@ const PIXEL_ACTIONS = [
 /** Build bounded model guidance from the selected node's advertised v2 families. */
 export function buildComputerToolDescription(
   capabilities?: ComputerUseCapabilityDescriptor,
-  targetScope: "paired" | "session" = "paired",
+  targetScope: "paired" | "node" | "session" = "paired",
 ): string {
   const target =
     targetScope === "session"
       ? "this session's desktop"
-      : "the Gateway desktop, a paired node (target: gateway or node), or a conversation-attached desktop (environmentId). Use the environmentId returned when opening an environment; later calls retain that desktop";
+      : targetScope === "paired"
+        ? "the Gateway desktop, a paired node (target: gateway or node), or a conversation-attached desktop (environmentId). Omit target to use the configured Gateway, otherwise the sole connected computer-capable node. Use the environmentId returned when opening an environment; later calls retain that desktop"
+        : "a paired node (omit target or use target: node; omission selects the sole connected computer-capable node), or a conversation-attached desktop (environmentId). The Gateway has no computer provider configured, so target: gateway is unavailable. Use the environmentId returned when opening an environment; later calls retain that desktop";
   const takeover =
     "For an attached or cloud session desktop, `take_control` switches the human viewer to view-only and returns a fresh screenshot; use it when asked to resume. Ordinary input never takes control automatically.";
   if (!capabilities) {

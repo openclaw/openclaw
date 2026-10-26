@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
+import type { PreparedNativeControlUiPluginBuild } from "../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -78,6 +79,7 @@ type OwnershipProbe = {
     name: string;
     url?: string | null;
     buildInfo?: typeof prebuiltBuildInfo | null;
+    nativePluginBuilds?: PreparedNativeControlUiPluginBuild[];
     bridge: boolean;
     productionRoot?: string;
   }>;
@@ -138,8 +140,13 @@ function probeOwnership(
     export const assertUiE2ePreflight = async () => {
       if (${JSON.stringify(options.failure)} === "preflight") throw new Error("fixture preflight failed");
     };
-    export async function prepareNativeControlUiPluginFixtures() {
-      return { catalog: { revision: "fixture", plugins: [], diagnostics: [] }, assets: new Map() };
+    export async function prepareNativeControlUiPluginFixtures(fixtures) {
+      return {
+        catalog: { revision: "fixture", plugins: [], diagnostics: [] }, assets: new Map(),
+        preparedBuilds: fixtures.map(({ rootDir, source }) => ({
+          rootDir, source, declaration: { entry: "dist/control-ui/fixture/index.js" },
+        })),
+      };
     }
     export default function admission(project) {
       fs.appendFileSync(${JSON.stringify(admissionsFile)}, JSON.stringify(project.name) + "\\n");
@@ -252,6 +259,7 @@ function probeOwnership(
         contexts: [...new Set(specs.map(spec => spec.project))].map(project => ({ name: project.name,
           url: project.getProvidedContext().controlUiE2eServerBaseUrl,
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
+          nativePluginBuilds: project.getProvidedContext().controlUiE2eNativePluginBuilds,
           productionRoot: project.getProvidedContext().controlUiE2ePrebuiltAssets?.root,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
@@ -313,6 +321,11 @@ describe("Control UI E2E resource ownership", () => {
       expect(result.setupError).toBeUndefined();
       expect(result.steps).toEqual(resourceSteps([0, Number(available), Number(available)], true));
       expect(result.leases).toEqual(available ? lease(true) : []);
+      for (const context of result.contexts.filter((entry) => entry.bridge)) {
+        expect(context.nativePluginBuilds?.map((build) => build.source) ?? []).toEqual(
+          available ? ["browser/index.ts"] : [],
+        );
+      }
       expect(
         result.contexts.filter((context) => context.bridge).map((context) => context.url),
       ).toEqual([
@@ -485,6 +498,9 @@ describe("Control UI E2E resource ownership", () => {
     expect(result.admissions).toHaveLength(3);
     expect(new Set(result.admissions).size).toBe(3);
     expect(result.leases).toEqual(lease(false));
+    for (const context of result.contexts.filter((entry) => entry.bridge)) {
+      expect(context.nativePluginBuilds).toEqual([]);
+    }
     expect(result.canonicalAssetsIntact).toBe(true);
   });
 

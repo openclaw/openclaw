@@ -8,6 +8,7 @@ import { runSessionRegistryMaintenanceForStore } from "../../config/sessions/ses
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   communicationEntryBinding,
   type CommunicationEndpoint,
@@ -16,6 +17,8 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { acceptCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 const tempDirs = useSessionStoreTempDirs(afterAll, "sessions-send-lineage-");
@@ -482,16 +485,29 @@ describe("sessions_send communication boundary", () => {
     const source = endpoint("source");
     const parent = endpoint("original-parent");
     const target = childOf(parent);
-    state.task = {
+    const task = createSubagentRunRecord({
       runId: "controlled-task",
+      childSessionKey: target.sessionKey,
       requesterSessionKey: source.sessionKey,
       requesterAgentId: "main",
-    };
-    await withGate({ ...operation(source, target), access: { controllerOnly: true } }, (gate) => {
-      expect(gate.ownedTask).toBe(false);
-      state.task = undefined;
-      expect(gate.assertCurrent).toThrow("controller access changed");
     });
+    subagentRuns.set(task.runId, task);
+    const claim = claimAgentRunContext(
+      task.runId,
+      { sessionKey: target.sessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    expect(claim).toBeDefined();
+    try {
+      await withGate({ ...operation(source, target), access: { controllerOnly: true } }, (gate) => {
+        expect(gate.ownedTask).toBe(false);
+        releaseAgentRunContext(task.runId, claim);
+        expect(gate.assertCurrent).toThrow("controller access changed");
+      });
+    } finally {
+      releaseAgentRunContext(task.runId, claim);
+      subagentRuns.delete(task.runId);
+    }
   });
 
   it("only live exact owned tasks get the guidance exception", async () => {

@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 let proofDir: string;
@@ -143,9 +144,7 @@ suite.define(() => {
 
   it("preserves tool and approval activity received before the send ACK", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -226,9 +225,7 @@ suite.define(() => {
 
   it("retains current startup progress through delayed history", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();

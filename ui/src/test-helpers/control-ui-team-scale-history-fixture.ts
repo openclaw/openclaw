@@ -1,3 +1,5 @@
+import type { ModelCatalogEntry } from "../api/types.ts";
+import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
 import type { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
@@ -7,10 +9,12 @@ export function createTeamScaleHistoryFixture(options: {
   inlineWidgets: number;
   now: number;
   largeSnapshot?: boolean;
-  historyStateReceipt?: boolean;
+  duplicateBootReads?: boolean;
   sessionInfo: ControlUiSessionFixture;
   sender?: ControlUiMockPresenceUser;
   rowFacts?: boolean;
+  models: ModelCatalogEntry[];
+  inFlightRun?: ChatHistoryResult["inFlightRun"];
   attachments?: ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"];
 }) {
   const messageIds = Array.from(
@@ -108,24 +112,64 @@ export function createTeamScaleHistoryFixture(options: {
       }),
     );
   }
-  const configuredHistory =
-    options.largeSnapshot || options.historyStateReceipt
+  const deltaCursor = JSON.stringify([
+    "team-scale-history-v1",
+    options.sessionInfo.key,
+    options.now,
+    options.messageCount,
+    options.largeSnapshot === true,
+    options.duplicateBootReads === true,
+  ]);
+  const configuredHistory = {
+    messages: historyMessages,
+    sessionId: options.sessionInfo.sessionId,
+    sessionInfo: options.sessionInfo,
+    deltaCursor,
+    pendingInputs: { items: [], total: 0, queuedCount: 0 },
+    stateRevision: {
+      sessionInfo: "fixture-session-v1",
+      commands: "fixture-commands-v1",
+      pendingInputs: "fixture-pending-inputs-v1",
+    },
+    ...(options.largeSnapshot
       ? {
-          messages: historyMessages,
-          sessionId: options.sessionInfo.sessionId,
-          sessionInfo: options.sessionInfo,
           hasMore: false,
           totalMessages: historyMessages.length,
           metadata: { commands: [], models: [] },
-          ...(options.historyStateReceipt
-            ? {
-                stateRevision: {
-                  sessionInfo: "fixture-session-v1",
-                  commands: "fixture-commands-v1",
-                },
-              }
-            : {}),
         }
-      : undefined;
-  return { messageIds, historyMessages, configuredHistory };
+      : {
+          thinkingLevel: null,
+          metadata: { commands: [], models: options.models },
+          ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
+        }),
+  };
+  const selectedHistory = {
+    cases: [
+      {
+        match: { sessionKey: options.sessionInfo.key, cursor: deltaCursor },
+        response: {
+          kind: "delta",
+          messages: [],
+          deltaCursor,
+          sessionInfo: configuredHistory.sessionInfo,
+          metadata: configuredHistory.metadata,
+          pendingInputs: configuredHistory.pendingInputs,
+          stateRevision: configuredHistory.stateRevision,
+          ...(options.inFlightRun ? { inFlightRun: options.inFlightRun } : {}),
+        },
+      },
+      {
+        match: { sessionKey: options.sessionInfo.key, limit: 80, knownState: {} },
+        response: {
+          ...configuredHistory,
+          messages: historyMessages.slice(-80),
+          hasMore: historyMessages.length > 80,
+          ...(historyMessages.length > 80 ? { nextOffset: 80 } : {}),
+          totalMessages: historyMessages.length,
+        },
+      },
+      { match: { sessionKey: options.sessionInfo.key }, response: configuredHistory },
+    ],
+  };
+  return { messageIds, historyMessages, selectedHistory };
 }

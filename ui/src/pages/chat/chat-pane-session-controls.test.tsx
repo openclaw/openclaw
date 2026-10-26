@@ -417,10 +417,10 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain(
-      "Follow the agent's configured execution permissions.",
-    );
-    expect(defaultOption?.textContent).toContain("Default (Guarded)");
+    expect(defaultOption?.textContent).toContain("The agent's configured permissions.");
+    expect(
+      container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
+    ).toContain("Default");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
     ).toBe("Execution permissions: Full Access");
@@ -478,7 +478,7 @@ describe("chat pane composer controls", () => {
     const selection = controls.permissionPicker.onSelect("workspace");
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.disabled).toBe(true);
+    expect(trigger.getAttribute("aria-busy")).toBe("true");
     expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
     await vi.waitFor(() =>
       expect(patch).toHaveBeenCalledWith(

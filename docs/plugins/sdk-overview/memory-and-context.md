@@ -278,14 +278,18 @@ type MemoryAudience =
   own agent only when the spawn that crossed agents was owner-attributed and the
   root is the owner's direct chat. Conversation audience never crosses agents;
   that lineage produces no audience.
-- Operator-created root sessions record a `direct` chat type at creation, so
-  sessions started later by `sessions_send`, cron, or the `agent` method resolve
-  an audience. The turn's owner status still selects `owner-private` or
-  `conversation`. `openclaw doctor --fix` records the same `direct` type on
-  dashboard chats created before that stamp existed: operator-created rows with
-  a generated `dashboard:` key, grouped under their agent's main session, and
-  with no spawn, fork, plugin owner, incognito boundary, or external delivery
-  route. Group and channel sessions never match.
+- Operator-created root sessions record a `direct` chat type at creation under
+  every `session.dmScope` and `session.scope`, so sessions started later by
+  `sessions_send`, cron, or the `agent` method resolve an audience. Children,
+  forks, plugin-owned sessions, and incognito sessions do not take this stamp.
+  The turn's owner status still selects `owner-private` or `conversation`.
+  `openclaw doctor --fix` records the same `direct` type on dashboard chats
+  created before that stamp existed: operator-created rows with a generated
+  `dashboard:` key, grouped under their agent's main session, and with no spawn,
+  fork, plugin owner, incognito boundary, or external delivery route. Group and
+  channel sessions never match. Dashboard roots created without the stamp under
+  another `dmScope` are not grouped under main, so doctor leaves them unchanged;
+  create a new session to give them an audience.
 - Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
   missing durable chat type also produces no audience. The Gateway logs every
   denial as `memory_audience_denied` with the session key and reason.

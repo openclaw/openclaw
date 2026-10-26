@@ -2,6 +2,7 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
 // --base-owner-suffix compares control-ui-session-pr-{read,source,subscriptions}.<suffix>.ts.
+// Subscription snapshots must expose the current four-argument replace API.
 // --base-projection-suffix compares session-row-projection.<suffix>.ts (redirect its
 // materialize import to the matching baseline snapshot). --captures isolates row capture.
 // --unrelated-churn updates an unrelated archived session between batches of 64 validations;
@@ -12,6 +13,7 @@
 // iterations must be divisible by 64 and count watcher validations, not polls.
 // Both arms share one prepared fixture; five pairs alternate AB/BA without rebuilding state.
 // Fixture setup is excluded: 10k persisted rows, 40 configured agents, 64 retained readers.
+// Each reader has four shared descendants created by a different profile.
 // Each arm acquires one physical source, then checks it at every reader's final assertion.
 // Preserve every arm, report host load, and interpret allocation-mode timing separately.
 import assert from "node:assert/strict";
@@ -212,6 +214,7 @@ const owners = await Promise.all(
   }),
 );
 const profile = ensureProfileForEmail("currency-reader@example.test");
+const childCreator = ensureProfileForEmail("currency-child-creator@example.test");
 setRuntimeConfigSnapshot(cfg);
 const keyFor = (index: number) => `agent:main:currency-${index}`;
 const projections: import("../../src/gateway/session-row-projection.js").SessionRowProjection[] =
@@ -235,7 +238,11 @@ try {
           sessionId: `currency-session-${index}`,
           updatedAt: 1_700_000_000_000 + index,
           spawnedCwd: "/synthetic/currency-workspace",
-          createdActor: { type: "human", source: "profile", id: profile.id },
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: child ? childCreator.id : profile.id,
+          },
           ...(child ? { parentSessionKey: keyFor((index - readerCount) % readerCount) } : {}),
           ...(index >= readerCount * (childrenPerRoot + 1)
             ? { archivedAt: 1_700_000_000_001 }
@@ -403,24 +410,12 @@ try {
           await owner.handler(request);
         }
         await settleReplacements();
-        assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
       } else {
         for (let index = 0; index < readerCount; index++) {
-          if (owner.name === "base" && values["base-owner-suffix"]) {
-            // Historical owner snapshots retain the removed admission callback position.
-            const replace = subscriptions.replace as (
-              connId: string,
-              keys: readonly string[],
-              refresh: ReadonlySet<string>,
-              admitted: undefined,
-              passive: ReadonlySet<string>,
-            ) => Promise<void>;
-            await replace(String(index), [], new Set(), undefined, new Set([keyFor(index)]));
-          } else {
-            await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
-          }
+          await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
         }
       }
+      assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
       run = async (count) => {
         for (let index = 0; index < Math.ceil(count / readerCount); index++) {
           if (owner.handler) {

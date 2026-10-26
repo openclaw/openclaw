@@ -701,7 +701,7 @@ Deployment-owned definitions retain their existing installation owner.
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the
 invoking CLI installation stays unchanged. The updater validates the service's
-actual Bun executable against the Bun 1.4.3+ and WAL-safe `node:sqlite` requirements;
+actual Bun executable against the Bun 1.4.4+ and WAL-safe `node:sqlite` requirements;
 Bun's emulated Node version is not checked against `engines.node`. If the updater
 runs on Node, its Node must also satisfy the target package's engine and SQLite
 requirements before package replacement, because finalization uses that runtime.
