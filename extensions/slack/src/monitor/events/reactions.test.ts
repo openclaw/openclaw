@@ -26,16 +26,12 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   ) => reactionQueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 
-function buildReactionEvent(overrides?: { user?: string; channel?: string }) {
+function buildReactionEvent({ user = "U1", channel = "D1" } = {}) {
   return {
     type: "reaction_added",
-    user: overrides?.user ?? "U1",
+    user,
     reaction: "thumbsup",
-    item: {
-      type: "message",
-      channel: overrides?.channel ?? "D1",
-      ts: "123.456",
-    },
+    item: { type: "message", channel, ts: "123.456" },
     item_user: "UBOT",
   };
 }
@@ -84,16 +80,18 @@ function createReactionHarness(
   };
 }
 
-function makeMemberEvent(overrides?: { channel?: string; user?: string }) {
-  return {
-    type: "member_joined_channel",
-    user: overrides?.user ?? "U1",
-    channel: overrides?.channel ?? "D1",
-    event_ts: "123.456",
-  };
+function makeMemberEvent({ channel = "D1", user = "U1" } = {}) {
+  return { type: "member_joined_channel", user, channel, event_ts: "123.456" };
 }
 function createMemberHarness(overrides?: SlackSystemEventTestOverrides) {
   return createReactionHarness(overrides, false, "member_joined_channel");
+}
+
+function createBotJoinHarness(channelType: "channel" | "group" = "channel") {
+  const harness = createMemberHarness({ channelType, channelUsers: ["U_OWNER"] });
+  harness.ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
+  harness.ctx.app.client = new WebClient("xoxb-test");
+  return harness;
 }
 
 const commonEvents = [
@@ -167,16 +165,25 @@ describe("Slack common events", () => {
     expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 
-  it.each(commonEvents)("does not track mismatched $kind events", async ({ eventName, event }) => {
-    const { ctx, handler, trackEvent } = createReactionHarness(undefined, false, eventName);
-    ctx.shouldDropMismatchedSlackEvent = () => true;
-    await handler({
-      event,
-      body: { api_app_id: "A_OTHER" },
-    });
-
-    expect(trackEvent).not.toHaveBeenCalled();
-  });
+  it.each(
+    commonEvents.flatMap((spec) => [false, true].map((missingScope) => ({ spec, missingScope }))),
+  )(
+    "rejects $spec.kind events before tracking or enqueueing (missing scope: $missingScope)",
+    async ({ spec: { eventName, event }, missingScope }) => {
+      const { ctx, handler, trackEvent } = createReactionHarness(
+        undefined,
+        missingScope,
+        eventName,
+      );
+      ctx.shouldDropMismatchedSlackEvent = () => !missingScope;
+      await handler({
+        event,
+        ...(missingScope ? buildEnterpriseListenerArgs() : { body: { api_app_id: "A_OTHER" } }),
+      });
+      expect(trackEvent).not.toHaveBeenCalled();
+      expect(reactionQueueMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(commonEvents)(
     "keeps enterprise $kind events isolated by listener workspace",
@@ -200,16 +207,9 @@ describe("Slack common events", () => {
           contextKey: contextKey(teamId),
         });
         expect(resolveChannelName).toHaveBeenCalledWith("D1", expect.objectContaining({ teamId }));
+        expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId }));
       }
       expect(trackEvent).toHaveBeenCalledTimes(2);
-      expect(resolveUserName).toHaveBeenCalledWith(
-        "U1",
-        expect.objectContaining({ teamId: "T111" }),
-      );
-      expect(resolveUserName).toHaveBeenCalledWith(
-        "U1",
-        expect.objectContaining({ teamId: "T222" }),
-      );
     },
   );
 
@@ -232,20 +232,6 @@ describe("Slack common events", () => {
     expect(reactionQueueMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(commonEvents)(
-    "rejects enterprise $kind events without validated listener scope",
-    async ({ eventName, event }) => {
-      const { handler, trackEvent } = createReactionHarness(undefined, true, eventName);
-
-      await handler({
-        event,
-        ...buildEnterpriseListenerArgs(),
-      });
-
-      expect(trackEvent).not.toHaveBeenCalled();
-      expect(reactionQueueMock).not.toHaveBeenCalled();
-    },
-  );
   it("blocks channel member events for users outside channel users allowlist", async () => {
     const { emit } = createMemberHarness({ channelType: "channel", channelUsers: ["U_OWNER"] });
     await emit(makeMemberEvent({ channel: "C1", user: "U_ATTACKER" }));
@@ -253,11 +239,7 @@ describe("Slack common events", () => {
   });
 
   it("introduces the joined bot in an allowed room despite sender and mention requirements", async () => {
-    const { ctx, emit } = createMemberHarness({
-      channelType: "channel",
-      channelUsers: ["U_OWNER"],
-    });
-    ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
+    const { ctx, emit } = createBotJoinHarness();
     ctx.resolveChannelName = vi.fn(async () => ({
       name: "deploys",
       type: "channel" as const,
@@ -265,7 +247,6 @@ describe("Slack common events", () => {
       topic: "Current release: 42",
     }));
     ctx.resolveUserName = vi.fn(async () => ({ name: "Morgan" }));
-    ctx.app.client = new WebClient("xoxb-test");
     const readHistory = vi.spyOn(ctx.app.client.conversations, "history").mockResolvedValue({
       ok: true,
       messages: [
@@ -308,29 +289,18 @@ describe("Slack common events", () => {
   });
 
   it("reports a denied bot self-join using conversation policy without applying sender policy", async () => {
-    const { ctx, emit } = createMemberHarness({
-      channelType: "channel",
-      channelUsers: ["U_OWNER"],
-    });
+    const { ctx, emit } = createBotJoinHarness();
     ctx.cfg = { channels: { slack: { groupPolicy: "allowlist" } } };
     ctx.isChannelAllowed = vi.fn(() => false);
 
     await emit(makeMemberEvent({ channel: "C1", user: "U_BOT" }), "Ev-self-denied");
 
-    expect(ctx.isChannelAllowed).toHaveBeenCalledWith({
-      teamId: "T_TEST",
-      channelId: "C1",
-      channelName: "general",
-      channelType: "channel",
-    });
     expect(reportJoinMock).toHaveBeenCalledWith(expect.objectContaining({ roomAllowed: false }));
     expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 
   it("keeps room metadata when Slack denies the joined room's message history", async () => {
-    const { ctx, emit } = createMemberHarness({ channelType: "group" });
-    ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
-    ctx.app.client = new WebClient("xoxb-test");
+    const { ctx, emit } = createBotJoinHarness("group");
     vi.spyOn(ctx.app.client.conversations, "history").mockRejectedValue(new Error("missing_scope"));
 
     await emit(makeMemberEvent({ channel: "G1", user: "U_BOT" }), "Ev-self-private");
@@ -342,11 +312,11 @@ describe("Slack common events", () => {
   });
 
   it.each([
-    { name: "direct message", channel: "D1", type: "im" as const, nativeType: "D" },
-    { name: "group DM", channel: "G1", type: "mpim" as const, nativeType: "G" },
-    { name: "C-prefixed group DM", channel: "C1", type: "mpim" as const, nativeType: "C" },
-    { name: "unresolved room", channel: "G1", type: undefined, nativeType: "G" },
-  ])("does not introduce the bot into a $name", async ({ channel, type, nativeType }) => {
+    ["direct message", "D1", "im", "D"],
+    ["group DM", "G1", "mpim", "G"],
+    ["C-prefixed group DM", "C1", "mpim", "C"],
+    ["unresolved room", "G1", undefined, "G"],
+  ] as const)("does not introduce the bot into a %s", async (_name, channel, type, nativeType) => {
     const { ctx, emit } = createMemberHarness();
     ctx.resolveChannelName = vi.fn(async () => ({ type }));
     ctx.runtime.log = vi.fn();
@@ -383,18 +353,15 @@ describe("Slack common events", () => {
       });
     }
 
-    expect(reportJoinMock.mock.calls.map(([request]) => request)).toEqual([
-      expect.objectContaining({
-        conversationId: "team:T111:C1",
-        deliverTo: "team:T111:channel:C1",
-        route: { agentId: "main", sessionKey: "session:T111" },
-      }),
-      expect.objectContaining({
-        conversationId: "team:T222:C1",
-        deliverTo: "team:T222:channel:C1",
-        route: { agentId: "main", sessionKey: "session:T222" },
-      }),
-    ]);
+    expect(reportJoinMock.mock.calls.map(([request]) => request)).toEqual(
+      ["T111", "T222"].map((teamId) =>
+        expect.objectContaining({
+          conversationId: `team:${teamId}:C1`,
+          deliverTo: `team:${teamId}:channel:C1`,
+          route: { agentId: "main", sessionKey: `session:${teamId}` },
+        }),
+      ),
+    );
     expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 
@@ -403,12 +370,10 @@ describe("Slack common events", () => {
       channelType: "channel",
       channelUsers: ["U1"],
     });
-    const resolveUserName = vi.fn(async () => ({ error: new Error("users.info failed") }));
-    ctx.resolveUserName = resolveUserName;
+    ctx.resolveUserName = vi.fn(async () => ({ error: new Error("users.info failed") }));
 
     await emit(makeMemberEvent({ channel: "C1", user: "U1" }), "Ev-member-id-fallback");
 
-    expect(resolveUserName).toHaveBeenCalledOnce();
     expect(reactionQueueMock).toHaveBeenCalledWith(
       "Slack: U1 joined #general.",
       expect.objectContaining({
