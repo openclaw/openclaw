@@ -869,6 +869,7 @@ it("separates discarded allocation churn from retained objects and cleans up fai
       return rows[rows.length - 1];
     }
     process.on('message', async message => {
+      if (message.stop) return process.disconnect();
       if (!message.run) return;
       for (let operation = 0; operation < 4; operation++) {
         allocationChurn();
@@ -936,7 +937,8 @@ it("separates discarded allocation churn from retained objects and cleans up fai
   const retained = await readJson<HeapProfiler.SamplingHeapProfile>(retainedPath);
   expect(heapBytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
   expect(heapBytesUnder(retained.head, "discardedAllocation")).toBe(0);
-  child.disconnect();
+  // Child-side IPC shutdown lets Node observe EOF and emit the close event.
+  child.send({ stop: true });
   await closed;
   const logPath = path.join(directory, "gateway.log");
   await writeFile(logPath, stdout());
