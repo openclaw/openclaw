@@ -11,6 +11,9 @@ const config = (
   defaults: Agents["defaults"],
   alpha?: NonNullable<Agents["entries"]>[string],
 ): OpenClawConfig => ({ agents: { defaults, ...(alpha ? { entries: { alpha } } : {}) } });
+const modelThinking = (key: string, thinking?: string | boolean) => ({
+  [key]: { params: { thinking } },
+});
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
@@ -43,14 +46,8 @@ describe("resolveThinkingDefault", () => {
   ] as const)("agent precedence (%s, %s)", (thinking, agentDefault, expected) => {
     const key = "fixture/reasoning-model";
     const cfg = config(
-      {
-        thinkingDefault: "low",
-        models: { [key]: { params: { thinking: "high" } } },
-      },
-      {
-        thinkingDefault: agentDefault,
-        models: { [key]: { params: { thinking } } },
-      },
+      { thinkingDefault: "low", models: modelThinking(key, "high") },
+      { thinkingDefault: agentDefault, models: modelThinking(key, thinking) },
     );
     expect(
       resolveThinkingDefault({
@@ -66,7 +63,7 @@ describe("resolveThinkingDefault", () => {
     const model = "openrouter/hunter-alpha";
     expect(
       resolveThinkingDefault({
-        cfg: config({ models: { [`openrouter/${model}`]: { params: { thinking: "high" } } } }),
+        cfg: config({ models: modelThinking(`openrouter/${model}`, "high") }),
         provider: "openrouter",
         model,
       }),
@@ -93,17 +90,13 @@ describe("resolveThinkingDefault", () => {
       const fresh = config(
         {
           model: { primary: `kimi/${model}` },
-          models: { [`kimi/${model}`]: { params: { thinking } } },
+          models: modelThinking(`kimi/${model}`, thinking),
         },
         { thinkingDefault: agentDefault },
       );
-      for (const [state, cfg] of [
-        ["fresh", fresh],
-        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
-        ["serialized existing", JSON.parse(JSON.stringify(fresh))],
-      ] as const) {
-        expect(resolve(cfg), state).toBe(expected);
-      }
+      expect(resolve(fresh), "fresh").toBe(expected);
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
+      expect(resolve(JSON.parse(JSON.stringify(fresh))), "serialized existing").toBe(expected);
     },
   );
 
