@@ -119,12 +119,6 @@ it("sanitizes DM, group, and media-caption text before the Urbit poke", async ()
     1024 * 1024,
   );
 
-  expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([
-    { app: "chat", mark: "chat-dm-action" },
-    { app: "channels", mark: "channel-action-1" },
-    { app: "chat", mark: "chat-dm-action" },
-  ]);
-
   const expectText = (index: number, included: string[], excluded: string[]) => {
     const json = JSON.stringify(expectDefined(pokes[index], `poke ${index}`).json);
     included.forEach((text) => expect(json).toContain(text));

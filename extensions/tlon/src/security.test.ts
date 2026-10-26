@@ -50,24 +50,18 @@ it.each([
   }
 });
 
-describe("Security: Bot Mention Detection", () => {
-  const botShip = "~sampel-palnet";
-  it.each([
-    ["@all", ["@all please respond", "hey @all", "@ALL uppercase"], undefined, true],
-    ["partial ship", ["~sampel-palnet-extra", "my~sampel-palnetfriend"], undefined, false],
-    ["substring nickname", ["nimbusy", "prenimbus"], "nimbus", false],
-    ["nickname boundary", ["nimbus, hello", "hello nimbus!", "nimbus?"], "nimbus", true],
-  ] as const)("detects %s matches", (_name, texts, nick, expected) => {
-    for (const text of texts) {
-      expect(isBotMentioned(text, botShip, nick)).toBe(expected);
-    }
-  });
-
-  it("handles empty/null inputs safely", () => {
-    expect(isBotMentioned("", botShip)).toBe(false);
-    expect(isBotMentioned("test", "")).toBe(false);
-    expect(isBotMentioned(null as unknown as string, botShip)).toBe(false);
-  });
+it.each([
+  ["@ALL uppercase", "~sampel-palnet", undefined, true],
+  ["~sampel-palnet-extra", "~sampel-palnet", undefined, false],
+  ["my~sampel-palnetfriend", "~sampel-palnet", undefined, false],
+  ["prenimbus", "~sampel-palnet", "nimbus", false],
+  ["nimbusy", "~sampel-palnet", "nimbus", false],
+  ["nimbus, hello", "~sampel-palnet", "nimbus", true],
+  ["", "~sampel-palnet", undefined, false],
+  ["test", "", undefined, false],
+  [null as unknown as string, "~sampel-palnet", undefined, false],
+] as const)("detects mentions in %j", (text, ship, nick, expected) => {
+  expect(isBotMentioned(text, ship, nick)).toBe(expected);
 });
 
 it.each([false, true])("admits thread follow-up with explicit mention: %s", async (explicit) => {

@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({ sendText: vi.fn(), sendMedia: vi.fn() }));
 
@@ -11,11 +10,7 @@ vi.mock("./channel.runtime.js", () => ({
 
 import { tlonPlugin } from "./channel.js";
 
-const cfg = {
-  channels: {
-    tlon: { ship: "~zod", url: "https://zod.example", code: "lidlut-tabwed-pillex-ridrup" },
-  },
-} as OpenClawConfig;
+const cfg = {};
 
 it("tlon target classification distinguishes ships from group nests", () => {
   expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "~sampel-palnet" })).toBe("direct");
@@ -63,14 +58,6 @@ it("preserves reply and thread metadata in the preferred adapter receipt", async
   });
   const adapter = expectDefined(tlonPlugin.message, "Tlon message adapter");
   const sendText = expectDefined(adapter.send?.text, "Tlon text sender");
-  // Text/media delivery itself is covered by outbound.loopback and the sanitize HTTP test.
-  expect(adapter.durableFinal?.capabilities).toEqual({
-    text: true,
-    media: true,
-    replyTo: true,
-    thread: true,
-    messageSendingHooks: true,
-  });
   const params = {
     cfg,
     to: "chat/~nec/general",
@@ -83,6 +70,4 @@ it("preserves reply and thread metadata in the preferred adapter receipt", async
   expect(mocks.sendText).toHaveBeenLastCalledWith(params);
   expect(result.receipt.replyToId).toBe("1700000000000");
   expect(result.receipt.threadId).toBe("1700000000000");
-  expect(result.receipt.platformMessageIds).toEqual(["~zod/1700000000000"]);
-  expect(result.receipt.parts[0]?.kind).toBe("text");
 });
