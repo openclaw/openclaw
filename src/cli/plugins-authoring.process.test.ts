@@ -8,6 +8,42 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pluginId = "authoring-proof";
 const invalidConfig = '{"gateway":{"port":"invalid"}}\n';
 
+async function createAuthoringFixture(root: string) {
+  const project = path.join(root, "project");
+  await fs.mkdir(project, { recursive: true });
+  const files = {
+    "package.json": JSON.stringify({
+      name: "openclaw-plugin-authoring-proof",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.ts"] },
+    }),
+    "index.ts": `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+export default defineToolPlugin({
+  id: "authoring-proof", name: "Authoring Proof", description: "Authoring fixture.",
+  tools: (tool) => [tool({
+    name: "echo", description: "Echo input.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ ok: true }),
+  })],
+});
+`,
+    "openclaw.plugin.json": JSON.stringify({
+      id: pluginId,
+      name: "Authoring Proof",
+      description: "Authoring fixture.",
+      version: "1.0.0",
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      activation: { onStartup: true },
+      contracts: { tools: ["echo"] },
+    }),
+  };
+  for (const [name, contents] of Object.entries(files)) {
+    await fs.writeFile(path.join(project, name), contents);
+  }
+  return project;
+}
+
 async function runPlugins(root: string, args: string[]) {
   const configPath = path.join(root, "openclaw.json");
   await fs.writeFile(configPath, invalidConfig);
@@ -35,15 +71,32 @@ async function runPlugins(root: string, args: string[]) {
   return result;
 }
 
-it("runs package authoring without reading invalid host config", async () => {
-  const root = tempDirs.make("openclaw-plugin-authoring-process-");
-  const project = path.join(root, "project");
-  const result = await runPlugins(root, ["init", pluginId, "--directory", project]);
-  expect(result.code, result.stderr).toBe(0);
-  expect(
-    JSON.parse(await fs.readFile(path.join(project, "openclaw.plugin.json"), "utf8")),
-  ).toMatchObject({ id: pluginId, contracts: { tools: ["echo"] } });
-});
+it.each(["init", "build", "validate"] as const)(
+  "runs plugins %s against its target package",
+  async (command) => {
+    const root = tempDirs.make("openclaw-plugin-authoring-process-");
+    const project =
+      command === "init" ? path.join(root, "project") : await createAuthoringFixture(root);
+    if (command === "build") {
+      await fs.unlink(path.join(project, "openclaw.plugin.json"));
+    }
+    const args =
+      command === "init"
+        ? [command, pluginId, "--directory", project]
+        : [command, "--root", project, ...(command === "validate" ? ["--json"] : [])];
+
+    const result = await runPlugins(root, args);
+
+    expect(result.code, result.stderr).toBe(0);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(project, "openclaw.plugin.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({ id: pluginId, contracts: { tools: ["echo"] } });
+    if (command === "validate") {
+      expect(JSON.parse(result.stdout)).toEqual({ valid: true, pluginId, errors: [] });
+    }
+  },
+);
 
 it("still rejects invalid host config for plugin enable", async () => {
   const root = tempDirs.make("openclaw-plugin-enable-process-");
@@ -60,29 +113,47 @@ it("lints installed runtime dependencies without executing code or reading host 
   const peer = path.join(physical, "peer");
   const transitive = path.join(project, "node_modules", "transitive");
   const development = path.join(project, "node_modules", "development");
-  const pkg = (dir: string, name: string, version: string, source?: string, metadata = {}) => ({
-    dir,
-    manifest: { name, version, ...metadata },
-    source,
-  });
   const packages = [
-    pkg(project, "plugin", "1.0.0", "throw new Error('must not execute plugin');", {
-      dependencies: { direct: "1.0.0" },
-      devDependencies: { development: "1.0.0" },
-    }),
-    pkg(direct, "direct", "1.0.0", undefined, {
-      dependencies: { transitive: "2.0.0" },
-      peerDependencies: { peer: "3.0.0" },
-    }),
-    pkg(transitive, "transitive", "2.0.0", "Buffer.concat = () => null;"),
-    pkg(peer, "peer", "3.0.0", "eval('must not execute peer');"),
-    pkg(development, "development", "1.0.0", "Array.prototype.push = () => 0;"),
+    {
+      dir: project,
+      manifest: {
+        name: "plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        devDependencies: { development: "1.0.0" },
+      },
+      source: "throw new Error('must not execute plugin');",
+    },
+    {
+      dir: direct,
+      manifest: {
+        name: "direct",
+        version: "1.0.0",
+        dependencies: { transitive: "2.0.0" },
+        peerDependencies: { peer: "3.0.0" },
+      },
+    },
+    {
+      dir: transitive,
+      manifest: { name: "transitive", version: "2.0.0" },
+      source: "Buffer.concat = () => null;",
+    },
+    {
+      dir: peer,
+      manifest: { name: "peer", version: "3.0.0" },
+      source: "eval('must not execute peer');",
+    },
+    {
+      dir: development,
+      manifest: { name: "development", version: "1.0.0" },
+      source: "Array.prototype.push = () => 0;",
+    },
   ];
-  for (const entry of packages) {
-    await fs.mkdir(entry.dir, { recursive: true });
-    await fs.writeFile(path.join(entry.dir, "package.json"), JSON.stringify(entry.manifest));
-    if (entry.source) {
-      await fs.writeFile(path.join(entry.dir, "index.js"), entry.source);
+  for (const pkg of packages) {
+    await fs.mkdir(pkg.dir, { recursive: true });
+    await fs.writeFile(path.join(pkg.dir, "package.json"), JSON.stringify(pkg.manifest));
+    if (pkg.source) {
+      await fs.writeFile(path.join(pkg.dir, "index.js"), pkg.source);
     }
   }
   await fs.symlink(direct, path.join(project, "node_modules", "direct"), "junction");
@@ -93,10 +164,20 @@ it("lints installed runtime dependencies without executing code or reading host 
     scannedPackages: 4,
     scannedFiles: 3,
     warnings: [
-      ["peer", "3.0.0", "runtime-code-generation"],
-      ["transitive", "2.0.0", "builtin-patch"],
-    ].map(([packageName, packageVersion, ruleId]) =>
-      expect.objectContaining({ packageName, packageVersion, ruleId, file: "index.js", line: 1 }),
-    ),
+      expect.objectContaining({
+        packageName: "peer",
+        packageVersion: "3.0.0",
+        ruleId: "runtime-code-generation",
+        file: "index.js",
+        line: 1,
+      }),
+      expect.objectContaining({
+        packageName: "transitive",
+        packageVersion: "2.0.0",
+        ruleId: "builtin-patch",
+        file: "index.js",
+        line: 1,
+      }),
+    ],
   });
 });

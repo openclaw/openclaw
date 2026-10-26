@@ -106,7 +106,7 @@ it("passes REST timeout options and fetch to internal Discord REST", async () =>
 });
 
 it("registers and stops presence lifecycle listeners with reactions initially disabled", async () => {
-  const listeners: object[] = [];
+  const listeners: Client["listeners"] = [];
   const stop = registerDiscordMonitorListeners({
     cfg: {},
     client: { listeners },

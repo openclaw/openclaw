@@ -100,6 +100,10 @@ describe("resolveDiscordMessageText", () => {
                 {
                   type: ComponentType.Section,
                   components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
+                  accessory: {
+                    type: ComponentType.Thumbnail,
+                    media: { url: "attachment://x.png" },
+                  },
                 },
               ],
             },

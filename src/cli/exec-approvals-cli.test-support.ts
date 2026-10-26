@@ -79,6 +79,7 @@ function resetLocalSnapshot() {
   localSnapshot.file = { version: 1, agents: {} };
 }
 
+// mock-isolation: Approval CLI fixtures supply Gateway replies without opening a real connection.
 vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli: mocks.callGatewayFromCli,
 }));

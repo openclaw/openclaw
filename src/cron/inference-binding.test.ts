@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
 import { mockOAuthProviderOperations } from "../agents/auth-profiles/oauth-native-provider.test-support.js";
@@ -8,9 +7,14 @@ import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/profil
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../agents/auth-profiles/store-state-owner.test-support.js";
+import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
+import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
+import { resolvePreparedRuntimeModelAuth } from "../agents/runtime-plan/resolve-auth.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -27,6 +31,17 @@ const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
 afterEach(() => vi.restoreAllMocks());
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
+
+function oauth(access = "synthetic-subscription-access"): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access,
+    refresh: "synthetic-subscription-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId: "synthetic-account",
+  };
+}
 
 function config(agentDir: string): OpenClawConfig {
   return {
@@ -61,14 +76,7 @@ async function fixture(
           { profileId: platformId, credential: apiKey("synthetic-platform-key") },
           {
             profileId: subscriptionId,
-            credential: {
-              type: "oauth",
-              provider: "openai",
-              access: "synthetic-subscription-access",
-              refresh: "synthetic-subscription-refresh",
-              accountId: "synthetic-account",
-              expires: Date.now() + (expired ? -1_000 : 3_600_000),
-            },
+            credential: { ...oauth(), ...(expired ? { expires: Date.now() - 1_000 } : {}) },
           },
         ],
       });
@@ -90,10 +98,10 @@ function creator(profileId: string): SessionEntry {
 
 async function capture(cfg: OpenClawConfig, profileId: string) {
   const sessionEntry = creator(profileId);
-  const binding = expectDefined(
-    await captureCronInferenceBinding({ cfg, agentId: "main", sessionEntry }),
-    "creator's stored inference account",
-  );
+  const binding = await captureCronInferenceBinding({ cfg, agentId: "main", sessionEntry });
+  if (!binding) {
+    throw new Error("Expected creator's stored inference account");
+  }
   // Capturing authorization must not pin or otherwise rewrite the creator's session.
   expect(sessionEntry).toEqual(creator(profileId));
   expect(binding).toMatchObject({ version: 1, provider: "openai", profileId, source: "auto" });
@@ -116,23 +124,76 @@ async function reloadJob(storePath: string) {
   clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
-  return expectDefined(
-    (await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding,
-    "stored cron inference binding",
-  );
+  const job = (await loadCronJobsStore(storePath)).jobs[0];
+  if (!job?.inferenceBinding) {
+    throw new Error("Stored cron inference binding was lost");
+  }
+  return job;
 }
 
-async function reloadAuthorizedBinding(storePath: string, cfg: OpenClawConfig, agentDir: string) {
-  const binding = await reloadJob(storePath);
+/** Real scheduler/auth owners, stopping at the provider I/O boundary (no session or runner mocks). */
+async function resolveFreshRun(
+  storePath: string,
+  cfg: OpenClawConfig,
+  agentDir: string,
+  modelId: "gpt-4.1" | "gpt-4o" = "gpt-4o",
+) {
+  const job = await reloadJob(storePath);
+  const binding = job.inferenceBinding!;
   const authority = await acquireCronInferenceAuthorization({ binding, cfg, agentDir });
   try {
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+    const prepared = prepareAgentRuntimeAuth({
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      provider: binding.provider,
+      modelId,
+      modelApi:
+        binding.authRequirement === "subscription"
+          ? "openai-chatgpt-responses"
+          : "openai-responses",
+      modelBaseUrl:
+        binding.authRequirement === "subscription"
+          ? "https://chatgpt.com/backend-api/codex"
+          : "https://api.openai.com/v1",
+      config: cfg,
+      agentId: "main",
+      agentDir,
+      env: {},
+      authProfileStore: store,
+      requiredAuthProfileId: binding.profileId,
+      sessionAuthProfileId: binding.profileId,
+      sessionAuthProfileSource: binding.source,
+      allowAuthProfileFallback: false,
+      routeIntent: { authRequirement: binding.authRequirement, source: "explicit" },
+    });
+    const route = prepared.plan.modelRoute;
+    if (!route) {
+      throw new Error("Expected a concrete provider route");
+    }
+    const model = makeProviderModelFixture({
+      id: modelId,
+      name: modelId,
+      provider: route.provider,
+      api: route.api,
+      baseUrl: route.baseUrl,
+      contextWindow: 128_000,
+      maxTokens: 8_000,
+    });
+    const resolved = await resolvePreparedRuntimeModelAuth({
+      plan: prepared.plan,
+      model,
+      cfg,
+      store,
+      agentDir,
+    });
     await authority.revalidate();
     authority.assertCurrent();
-    expect(authority.authorizationId).toBe(binding.authorizationId);
-    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     return {
-      binding,
-      credential: store.profiles[binding.profileId],
+      profileId: resolved.auth.profileId,
+      mode: resolved.auth.mode,
+      apiKey: resolved.auth.apiKey,
+      source: resolved.plan.forwardedAuthProfileSource,
+      authorizationId: authority.authorizationId,
     };
   } finally {
     authority.dispose();
@@ -192,12 +253,13 @@ describe("durable cron inference authorization", () => {
         accountId: "synthetic-account",
       }));
       mockOAuthProviderOperations({ refreshCredential });
+      const manager = createOAuthManager();
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(root.agentDir);
       const credential = store.profiles[subscriptionId];
       if (credential?.type !== "oauth") {
         throw new Error("Expected persisted OAuth fixture");
       }
-      await createOAuthManager().resolveOAuthAccess({
+      await manager.resolveOAuthAccess({
         store,
         profileId: subscriptionId,
         credential,
@@ -205,9 +267,11 @@ describe("durable cron inference authorization", () => {
         forceRefresh: true,
       });
       expect(refreshCredential).toHaveBeenCalledOnce();
-      expect(await reloadAuthorizedBinding(storePath, cfg, root.agentDir)).toMatchObject({
-        binding,
-        credential: { type: "oauth", access: "synthetic-refreshed-access" },
+      expect(await resolveFreshRun(storePath, cfg, root.agentDir, "gpt-4.1")).toMatchObject({
+        profileId: subscriptionId,
+        mode: "oauth",
+        apiKey: "synthetic-refreshed-access",
+        authorizationId: binding.authorizationId,
       });
     }, true);
   });
@@ -219,15 +283,15 @@ describe("durable cron inference authorization", () => {
         profileId: platformId,
         credential: apiKey("synthetic-replacement-key"),
       });
-      const adopted = expectDefined(
-        await captureCronInferenceBinding({
-          cfg,
-          agentId: "main",
-          model: "openai/gpt-4o@openai:platform",
-          sessionEntry: creator(subscriptionId),
-        }),
-        "explicitly adopted owner",
-      );
+      const adopted = await captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "openai/gpt-4o@openai:platform",
+        sessionEntry: creator(subscriptionId),
+      });
+      if (!adopted) {
+        throw new Error("Explicit adoption must capture the selected owner");
+      }
       expect(adopted).toMatchObject({
         profileId: platformId,
         source: "user",
@@ -235,10 +299,35 @@ describe("durable cron inference authorization", () => {
       });
       expect(adopted.authorizationId).not.toBe(old.authorizationId);
       const storePath = await persistJob(root.stateDir, adopted);
-      expect(await reloadAuthorizedBinding(storePath, cfg, root.agentDir)).toMatchObject({
-        binding: adopted,
-        credential: { type: "api_key", key: "synthetic-replacement-key" },
+      expect(await resolveFreshRun(storePath, cfg, root.agentDir)).toMatchObject({
+        profileId: platformId,
+        mode: "api-key",
+        apiKey: "synthetic-replacement-key",
+        source: "user",
+        authorizationId: adopted.authorizationId,
       });
+    });
+  });
+
+  it("rejects a route incompatible with the stored account instead of substituting Platform billing", async () => {
+    await fixture(async (root, cfg) => {
+      const binding = await capture(cfg, subscriptionId);
+      const storePath = await persistJob(root.stateDir, binding);
+      const incompatible: OpenClawConfig = {
+        ...cfg,
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+      };
+      await expect(resolveFreshRun(storePath, incompatible, root.agentDir)).rejects.toThrow(
+        /route|subscription|compatible/i,
+      );
     });
   });
 });

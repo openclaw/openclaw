@@ -40,6 +40,7 @@ const humanModules = [
   "./plugins-list-format.js",
 ];
 function mockHumanListModules(width = 120) {
+  // mock-isolation: Human-list fixtures use synthetic roots instead of inspecting installed sources.
   vi.doMock("../plugins/source-display.js", () => ({
     formatPluginSourceForTable: () => ({ value: "/workspace/plugins", rootKey: undefined }),
     resolvePluginSourceRoots: () => ({}),

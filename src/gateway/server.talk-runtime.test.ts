@@ -5,8 +5,9 @@ import { invokeTalkSpeakDirect, withSpeechProviders } from "./talk/test-helpers.
 const synthesizeSpeechMock = vi.hoisted(() =>
   vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(),
 );
-// Keep live provider modules out of this handler-boundary suite.
+// mock-isolation: Keep live provider modules out of this handler-boundary suite.
 vi.mock("../tts/tts.js", () => ({ synthesizeSpeech: synthesizeSpeechMock }));
+// mock-isolation: Supply synthetic speech bytes without initializing live synthesis providers.
 vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
 
 const text = "Hello from talk mode.";

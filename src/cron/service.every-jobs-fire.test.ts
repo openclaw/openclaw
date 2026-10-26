@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prepareGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -9,11 +9,6 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import {
-  cronTestDeps,
-  cronTestJob,
-  cronTestInput,
-} from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
@@ -22,6 +17,7 @@ import {
 } from "./service.test-harness.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
 import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
+import type { CronServiceDeps } from "./service/state.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite();
 
@@ -34,15 +30,15 @@ async function startEveryJob(text: string) {
     logger: noopLogger,
   });
   const { wake } = await captureCronSchedulerWakeForTest(() => fixture.cron.start());
-  const job = await fixture.cron.add(
-    cronTestInput({
-      name: text,
-      schedule: { kind: "every", everyMs: 10_000 },
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text },
-    }),
-  );
-  return { ...fixture, clock, job, wake };
+  const job = await fixture.cron.add({
+    name: text,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 10_000 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text },
+  });
+  return { ...fixture, store, clock, job, wake };
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
@@ -51,7 +47,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     ["restart signal admission rollback", "rollback-tick"],
   ])("resumes due cron work after %s", async (variant, text) => {
     const fixture = await startEveryJob(text);
-    const { cron, state, runSessionEvent, finished, clock, job } = fixture;
+    const { cron, state, runSessionEvent, finished, store, clock, job } = fixture;
     resetGatewayWorkAdmission();
     let wake: Promise<void> | undefined;
 
@@ -91,11 +87,15 @@ describe("CronService interval/cron jobs fire on time", () => {
       cron.stop();
       resetGatewayWorkAdmission();
       await wake;
+      await store.cleanup();
     }
   });
 
   it("keeps every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
+      status: "ok",
+    }));
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
     const clock = createGatewaySchedulerClock(nowMs);
 
@@ -106,27 +106,29 @@ describe("CronService interval/cron jobs fire on time", () => {
           ["loaded-every", "sf-tick", { kind: "every", everyMs: 120_000 }, 120_000],
           ["minute-cron", "minute-tick", { kind: "cron", expr: "* * * * *", tz: "UTC" }, 60_000],
         ] as const
-      ).map(([id, text, schedule, dueInMs]) =>
-        cronTestJob({
-          id,
-          createdAtMs: nowMs,
-          updatedAtMs: nowMs,
-          schedule,
-          sessionTarget: "main",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text },
-          state: { nextRunAtMs: nowMs + dueInMs },
-        }),
-      ),
+      ).map(([id, text, schedule, dueInMs]) => ({
+        id,
+        name: id,
+        enabled: true,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        schedule,
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text },
+        state: { nextRunAtMs: nowMs + dueInMs },
+      })),
     });
 
-    const deps = cronTestDeps({
+    const cron = new CronService({
       scheduler: createTestGatewayScheduler(clock.clock),
       storePath: store.storePath,
+      cronEnabled: true,
       log: noopLogger,
-      enqueueSessionEvent: undefined,
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    const cron = new CronService(deps);
     await cron.start();
     for (let minute = 1; minute <= 3; minute++) {
       clock.setTime(nowMs + minute * 60_000);
@@ -137,9 +139,10 @@ describe("CronService interval/cron jobs fire on time", () => {
     clock.setTime(nowMs + 6 * 60_000);
     expect(await cron.run("loaded-every", "due")).toEqual({ ok: true, ran: true });
 
-    for (const text of ["minute-tick", "sf-tick"]) {
-      expect(deps.runSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ text }));
-    }
+    expect(runSessionEvent.mock.calls.some(([request]) => request.text === "minute-tick")).toBe(
+      true,
+    );
+    expect(runSessionEvent.mock.calls.some(([request]) => request.text === "sf-tick")).toBe(true);
 
     const jobs = await cron.list({ includeDisabled: true });
     const sfJob = jobs.find((job) => job.id === "loaded-every");
@@ -149,5 +152,6 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     cron.stop();
+    await store.cleanup();
   });
 });
