@@ -102,7 +102,7 @@ export class SqliteReclamationWorker {
   private readonly unregisterAgent: () => void;
   private readonly unregisterState: () => void;
   private readonly stateContext;
-  private readonly stateAccess;
+  private stateAccess?: ReturnType<typeof captureStateDatabaseAccess>;
   private readonly beforeExit = () => {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
@@ -119,7 +119,6 @@ export class SqliteReclamationWorker {
   ) {
     this.options = structuredClone(options);
     this.stateContext = captureOpenClawStateWorkerContext({ env: options.env });
-    this.stateAccess = captureStateDatabaseAccess(this.stateContext.admission.databasePath);
     this.unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
       agentId: options.agentId,
       path: options.path,
@@ -321,6 +320,10 @@ export class SqliteReclamationWorker {
   ): Promise<Result> {
     const startedAt = performance.now();
     params.assertCurrent();
+    const stateAccess = await (this.stateAccess ??= captureStateDatabaseAccess(
+      this.stateContext.admission.databasePath,
+    ));
+    params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
     if (params.diagnostics) {
@@ -338,7 +341,7 @@ export class SqliteReclamationWorker {
           operationId,
           completion: "result",
           databaseAuthority: {
-            stateAccess: this.stateAccess,
+            stateAccess,
             maintenanceScope: this.stateContext.maintenanceScope,
             creationPaths: [
               this.options.path,

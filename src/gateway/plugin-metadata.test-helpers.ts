@@ -9,17 +9,14 @@ function ownerEntries(value: ReadonlyMap<string, readonly string[]>) {
 /** Verifies the manifest-derived fields of a trimmed metadata fixture agree. */
 export function assertPluginMetadataSnapshotConsistency(snapshot: PluginMetadataSnapshot): void {
   const plugins = snapshot.manifestRegistry.plugins;
-  const pluginIds = plugins.map((plugin) => plugin.id);
   assert.deepEqual(
     snapshot.plugins.map((plugin) => plugin.id),
-    pluginIds,
-    "fixture plugin IDs",
+    plugins.map((plugin) => plugin.id),
   );
-  assert.equal(snapshot.metrics.manifestPluginCount, plugins.length, "fixture manifest count");
-  assert.equal(
-    snapshot.metrics.indexPluginCount,
-    snapshot.index.plugins.length,
-    "fixture index count",
+  assert.deepEqual(
+    [snapshot.metrics.manifestPluginCount, snapshot.metrics.indexPluginCount],
+    [plugins.length, snapshot.index.plugins.length],
+    "fixture manifest/index counts",
   );
 
   const expectedProviderOwners = new Map<string, string[]>();

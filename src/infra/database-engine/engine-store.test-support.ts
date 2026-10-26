@@ -1,4 +1,5 @@
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import type { SearchSchema } from "./contract.js";
 import { openEngineStore, readEngineAnchor } from "./open.js";
 
 export function openPostgresEngineTestStore(
@@ -20,4 +21,20 @@ export function openPostgresEngineTestStore(
       return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(params.anchor)) };
     },
   });
+}
+
+export function createNotesSearch(): SearchSchema {
+  return {
+    text: {
+      notes: { table: "notes", fields: ["text"], postgres: { identity: "id", mode: "trigram" } },
+    },
+    vector: {
+      notes: {
+        table: "vectors",
+        alias: "v",
+        rowShape: { id: "string" },
+        postgres: { source: "notes", key: "id", embedding: "embedding", dimensions: 3 },
+      },
+    },
+  };
 }

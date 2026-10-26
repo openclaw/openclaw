@@ -4,7 +4,6 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, UserMessage } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
@@ -12,7 +11,6 @@ import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js"
 import {
   buildGoogleGenerateContentParams as buildParams,
   buildGoogleSimpleThinking as buildThinking,
-  runGoogleGenerateContentLifecycle as runLifecycle,
   type GoogleGenerateContentClient,
 } from "./google-shared.js";
 import {
@@ -22,6 +20,17 @@ import {
   makeGoogleAssistantMessage,
   makeModel,
 } from "./google-shared.test-helpers.js";
+import { streamGoogle } from "./google.js";
+
+const googleSdk = vi.hoisted(() => ({
+  generateContentStream: vi.fn<GoogleGenerateContentClient["models"]["generateContentStream"]>(),
+}));
+vi.mock("@google/genai", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@google/genai")>()),
+  GoogleGenAI: class {
+    models = { generateContentStream: googleSdk.generateContentStream };
+  },
+}));
 
 const user = (content: UserMessage["content"]): UserMessage => ({
   role: "user",
@@ -138,9 +147,8 @@ function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "
   };
 }
 
-type GoogleLifecycleParams = Parameters<typeof runLifecycle>[0];
 type GoogleFixtureOptions = {
-  options?: GoogleLifecycleParams["options"];
+  options?: Parameters<typeof streamGoogle>[2];
   generateContentStream?: GoogleGenerateContentClient["models"]["generateContentStream"];
 };
 
@@ -148,30 +156,28 @@ async function runFixture(
   responses: Parameters<typeof response>[0][] = [],
   fixture: GoogleFixtureOptions = {},
 ) {
-  const output = createAssistantOutput(model);
-  const stream = new AssistantMessageEventStream();
-  const events: AssistantMessageEvent[] = [];
-  const generateContentStream =
+  googleSdk.generateContentStream.mockImplementation(
     fixture.generateContentStream ??
-    async function* () {
-      yield* responses.map(response);
-    };
-  const collect = (async () => {
+      async function* () {
+        yield* responses.map(response);
+      },
+  );
+  const clock = vi.spyOn(Date, "now").mockReturnValue(123);
+  try {
+    const stream = streamGoogle(
+      model,
+      { messages: [] },
+      { apiKey: "test-key", ...fixture.options },
+    );
+    const events: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       events.push(event);
     }
-  })();
-  await runLifecycle({
-    stream,
-    model,
-    output,
-    options: fixture.options,
-    createClient: () => ({ models: { generateContentStream } }),
-    buildParams: () => ({ model: model.id, contents: [] }),
-    nextToolCallId: (name) => `generated-${name}`,
-  });
-  await collect;
-  return { output, events, result: await stream.result() };
+    const result = await stream.result();
+    return { output: result, events, result };
+  } finally {
+    clock.mockRestore();
+  }
 }
 
 it("reports every parsed Google response as request activity", async () => {
@@ -225,7 +231,7 @@ it("projects text, thinking, tool calls, response id, and usage into one stream"
   expect(output.content).toEqual([
     { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },
     { type: "text", text: "hello" },
-    toolCall({ query: "cats" }, undefined, "generated-lookup"),
+    toolCall({ query: "cats" }, undefined, "lookup_123_1"),
   ]);
   expect(output.usage.cost.total).toBeGreaterThan(0);
 });

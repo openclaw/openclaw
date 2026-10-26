@@ -21,6 +21,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -131,9 +132,13 @@ export async function updateFinalizeCommand(
                   recoverOrphanedSidecars: false,
                 });
                 await retainCliProcessJobUntilExit();
+                const reportResult = await readUpdateResultPolicy(process.env);
                 phase.assertCurrent();
                 // Public repair supplies a recovery selection, even when it is empty.
-                const admittedRunId = lifecycle.attachLedger(recoveryRunIds !== undefined);
+                const admittedRunId = lifecycle.attachLedger(
+                  recoveryRunIds !== undefined,
+                  reportResult,
+                );
                 const resolvedRoot = await resolveUpdateRoot();
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),

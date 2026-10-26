@@ -73,7 +73,7 @@ import {
 } from "../embedded-agent-runner/runs.test-support.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../internal-event-contract.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../internal-runtime-context.js";
-import { configFor } from "../model-auth.fixtures.test-support.js";
+import { configFor, createPlatformAuthRoute } from "../model-auth.fixtures.test-support.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createOpenClawOnlyToolConstructionPlan } from "../test-helpers/tool-construction-plan.js";
@@ -427,14 +427,7 @@ const maybeCompactAgentHarnessSession = createHarnessCompactionFixture(() => ({
 
 type CompactSessionParams = Parameters<typeof maybeCompactAgentHarnessSession>[0];
 
-const OPENAI_PLATFORM_ROUTE = {
-  provider: "openai",
-  modelId: "gpt-5.5",
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  authRequirement: "api-key",
-  requestTransportOverrides: "none",
-} as const;
+const OPENAI_PLATFORM_ROUTE = createPlatformAuthRoute();
 
 const OPENAI_CHATGPT_ROUTE = {
   provider: "openai",

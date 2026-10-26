@@ -110,10 +110,10 @@ function formatWorkshopChangeNotice(
 }
 
 /**
- * Opted-in, supported channels get a durable send mirrored into the session transcript as
- * plain text. All other sessions get a marked transcript entry the Control UI renders as the
- * Learned row. The next foreground turn also gets a system event naming the exact revert call,
- * because an assistant line the model did not write is weak evidence that "undo" means it.
+ * Opted-in, supported channels also get a durable send. Every session gets one marked
+ * transcript entry the Control UI renders as the Learned row; outbound delivery does not
+ * record the notice again because it belongs to this session. The next foreground turn also gets a system event
+ * naming the exact revert call, because an assistant line the model did not write is weak evidence that "undo" means it.
  * A conversation reset or replaced since the review started gets none of it.
  */
 export async function postWorkshopChangeNotice(params: {
@@ -185,14 +185,9 @@ export async function postWorkshopChangeNotice(params: {
           threadId: threadId ?? target.threadId,
           // Channels with buttons run the Undo command; plain-text channels show it to copy.
           payloads: [presentation ? { text, presentation } : { text }],
+          // The notice belongs to this session, which records it below with its marker.
           session: buildOutboundSessionContext({ cfg: params.config, sessionKey, agentId }),
-          mirror: {
-            sessionKey,
-            agentId,
-            idempotencyKey,
-            expectedSessionId: generation.sessionId,
-            deliveryMirror: marker,
-          },
+          deliveryIntentId: idempotencyKey,
           bestEffort: true,
         },
         undefined,
@@ -202,7 +197,6 @@ export async function postWorkshopChangeNotice(params: {
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
       }
-      return;
     }
     const { appendAssistantMessageToSessionTranscript } =
       await import("../../config/sessions/transcript.runtime.js");

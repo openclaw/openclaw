@@ -3,22 +3,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createClawDraft, prepareClawDraft } from "./draft.js";
+import { createResearchBriefProposal } from "./draft.test-support.js";
 import { extractBuiltClawArtifact } from "./project-build.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const proposal = {
-  name: "research-brief",
-  version: "0.1.0",
-  scope: {
-    input: "A research question and public sources.",
-    job: "Compare sources and produce a cited brief.",
-    output: "A short Markdown brief with links and uncertainties.",
-    authority: "Read public sources. Ask before sending messages or spending money.",
-  },
-  manifest:
-    "---\nschemaVersion: 1\nagent:\n  id: research-brief\n---\nCompare primary sources and cite every factual claim.\n",
-  files: [],
-};
+const proposal = createResearchBriefProposal();
 
 async function draftFixture(value: unknown = proposal) {
   const workspaceDir = tempDirs.make("claw-draft-");

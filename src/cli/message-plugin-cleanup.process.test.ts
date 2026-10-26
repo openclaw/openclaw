@@ -2,12 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import {
-  runCliProcessChild,
-  waitForCliProcessStderrMarker,
-} from "./cli-process-child.test-helpers.js";
+import { waitForCliProcessStderrMarker } from "./cli-process-child.test-helpers.js";
+import { createCliProcessFixture } from "./isolated-process-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SHUTDOWN_WARNING = "gateway_stop hook exceeded 2500ms; continuing";
@@ -20,7 +16,11 @@ it.each([
 ])("runs owned shutdown hooks after $name output", async ({ fail, json, pending }) => {
   const root = tempDirs.make("openclaw-message-cleanup-");
   const pluginDir = path.join(root, "plugin");
-  const configPath = path.join(root, "openclaw.json");
+  const fixture = createCliProcessFixture(root, {
+    ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    NO_COLOR: "1",
+  });
   const marker = path.join(root, "stopped.txt");
   const id = "cleanup";
   const mediaUrls = ["https://example.com/first.png", "https://example.com/second.png"] as const;
@@ -64,19 +64,19 @@ export default { id: plugin.id, register(api) {
   });
 } };`,
   );
-  await writeJson(configPath, {
+  await fixture.writeConfig({
     agents: { defaults: { workspace: path.join(root, "workspace") } },
     plugins: { load: { paths: [pluginDir] }, entries: { [id]: { enabled: true } } },
     channels: { [id]: { enabled: true } },
     logging: { level: "silent", consoleLevel: "silent" },
   });
-  const nodeArgs = resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli));
-  nodeArgs.push("message", "send", "--dry-run");
-  nodeArgs.push("--channel", id, "--target", "user:synthetic");
-  nodeArgs.push("--media", mediaUrls[0], "--message", "Synthetic payload");
-  nodeArgs.push("--media", mediaUrls[1], ...(json ? ["--json"] : []));
-  const result = await runCliProcessChild({
-    interact: pending
+  const args = ["message", "send", "--dry-run"];
+  args.push("--channel", id, "--target", "user:synthetic");
+  args.push("--media", mediaUrls[0], "--message", "Synthetic payload");
+  args.push("--media", mediaUrls[1], ...(json ? ["--json"] : []));
+  const result = await fixture.run(
+    args,
+    pending
       ? async (child) => {
           try {
             await waitForCliProcessStderrMarker(child, SHUTDOWN_WARNING);
@@ -86,20 +86,7 @@ export default { id: plugin.id, register(api) {
           }
         }
       : undefined,
-    nodeArgs,
-    env: {
-      PATH: process.env.PATH,
-      ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
-      HOME: root,
-      USERPROFILE: root,
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      NO_COLOR: "1",
-    },
-  });
+  );
   expect(result, result.stderr).toMatchObject({ signal: null, code: fail ? 1 : 0 });
   await expect(fs.readFile(marker, "utf8")).resolves.toBe("stopped\n");
   if (json) {

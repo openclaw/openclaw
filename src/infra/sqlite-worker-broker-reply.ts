@@ -40,6 +40,7 @@ import {
   bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
+  type SqliteWorkerAdmissionFactory,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
@@ -115,7 +116,7 @@ export async function dispatchSqliteWorkerJob(
     if (job.createAdmission || databasePath) {
       const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       job.settleNative = settlement.resolve;
-      const retained = job.createAdmission
+      const retained: ReturnType<SqliteWorkerAdmissionFactory> = job.createAdmission
         ? job.createAdmission({ settled: settlement.promise })
         : {
             admission: createSqliteWorkerOperationAdmission(() => {
@@ -127,6 +128,18 @@ export async function dispatchSqliteWorkerJob(
             nativeLocations: databasePath ? [databasePath] : [],
           };
       try {
+        if (retained.databaseIdentity) {
+          const existing = job.request.databaseIdentity;
+          if (
+            existing &&
+            (existing.databasePath !== retained.databaseIdentity.databasePath ||
+              existing.key !== retained.databaseIdentity.key ||
+              existing.birthtime !== retained.databaseIdentity.birthtime)
+          ) {
+            throw new SqliteWorkerError("SQLite request physical identities differ", "closed");
+          }
+          job.request.databaseIdentity = retained.databaseIdentity;
+        }
         bindSqliteWorkerDatabaseAdmissionCursor(
           retained.admission,
           slot.databaseAdmissionCursor,
@@ -180,6 +193,7 @@ export async function dispatchSqliteWorkerJob(
           };
           retained.admission.bindDatabaseAuthority({
             databasePath,
+            databaseIdentity: job.request.databaseIdentity,
             ...(job.request.type === "open" &&
             !job.request.existingIdentity &&
             resolveIdentityPathViaExistingAncestorSync(job.request.databasePath) ===

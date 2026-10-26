@@ -54,9 +54,20 @@ const edit = (record: any) => ({
 it("default repository, exact grouped content, clean index, actor, and one commit per publication", async () => {
   const f = await fixture(),
     input = { ...draft(), source: { text: "Evidence bytes\n", attribution: "Source" } };
-  const saved = await f.service.save(input, f.access, "operator");
+  // Git must not hold the operational database writer while spawning subprocesses.
+  let checkedWriter = false;
+  const service = new KnowledgeStorage(f.config, f.store, (stage) => {
+    if (stage === "before-git-ref") {
+      f.store.withDatabase((db) => {
+        db.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE; ROLLBACK");
+      });
+      checkedWriter = true;
+    }
+  });
+  const saved = await service.save(input, f.access, "operator");
   expect(Check(Receipt, saved)).toBeTruthy();
   expect(saved.git!.state, JSON.stringify(saved)).toBe("committed");
+  expect(checkedWriter).toBe(true);
   expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
   const sourceId = (await f.read(saved.id))!.metadata.evidence![0]!.source;
   expect(sourceId).toMatch(/^[a-f0-9]{64}$/);
@@ -145,6 +156,34 @@ for (const stage of ["before-git-ref", "after-git-ref"]) {
     expect(git(f.root, "diff", "--cached", "--name-only")).toBe("");
   });
 }
+
+it("revoked access after a Git commit leaves its acknowledgement pending for an authorized retry", async () => {
+  const f = await fixture(),
+    input = draft();
+  let revoked = false;
+  const service = new KnowledgeStorage(f.config, f.store, (stage) => {
+    if (stage === "after-git-ref") {
+      revoked = true;
+    }
+  });
+  await expect(
+    service.save(
+      input,
+      {
+        ...f.access,
+        assertCurrent() {
+          if (revoked) {
+            throw new Error("access revoked");
+          }
+        },
+      },
+      "agent",
+    ),
+  ).rejects.toThrow("access revoked");
+  expect(f.service.history(f.access, {}).git.pending).toBe(1);
+  expect(f.service.resume(f.access, input.requestId).git!.state).toBe("committed");
+  expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
+});
 
 it("process death after atomic Git ref update recovers from SQLite rollback without a duplicate", async () => {
   const f = await fixture(),

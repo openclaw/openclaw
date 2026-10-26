@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appendAssistantThinking } from "../../packages/llm-core/src/utils/event-stream.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
+import type { ThinkingContent } from "../llm/types.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 const logger = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -361,6 +364,139 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       ([event]) => event.stream === "item" && event.data.kind === "preamble",
     );
     expect(preambleEvents).toHaveLength(0);
+  });
+  it("does not re-trim accumulated multi-block reasoning on each native append", async () => {
+    const runId = "multi-block-reasoning-work";
+    const { emit, subscription } = subscribe({ runId });
+    const block: ThinkingContent = { type: "thinking", thinking: "" };
+    const message = makeAgentAssistantMessage({
+      content: [
+        { type: "thinking", thinking: " earlier summary " },
+        { type: "text", text: "Commentary." },
+        block,
+      ],
+    });
+    const events: Array<{ text: unknown; delta: unknown }> = [];
+    listeners.push(
+      onAgentEventForRun(runId, (event) => {
+        if (event.stream === "thinking") {
+          events.push({ text: event.data.text, delta: event.data.delta });
+        }
+      }),
+    );
+    emit({ type: "message_start", message });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Call the original built-in with the spied receiver below.
+    const trim = String.prototype.trim;
+    let trimmedChars = 0;
+    const probe = vi.spyOn(String.prototype, "trim").mockImplementation(function (this: string) {
+      if (this.includes("MULTI_REASONING:")) {
+        trimmedChars += this.length;
+      }
+      return trim.call(this);
+    });
+    try {
+      for (let index = 0; index < 256; index++) {
+        const delta = index === 0 ? " MULTI_REASONING:" : "x".repeat(64);
+        appendAssistantThinking(block, delta);
+        emit({
+          type: "message_update",
+          message,
+          assistantMessageEvent: {
+            type: "thinking_delta",
+            contentIndex: 2,
+            delta,
+            partial: message,
+          },
+        });
+        await subscription.waitForPendingEvents();
+      }
+    } finally {
+      probe.mockRestore();
+    }
+    expect(events).toHaveLength(256);
+    expect(events[0]).toEqual({
+      text: "earlier summary\nMULTI_REASONING:",
+      delta: "earlier summary\nMULTI_REASONING:",
+    });
+    expect(events.slice(1).every((event) => event.delta === "x".repeat(64))).toBe(true);
+    expect(events.at(-1)?.text).toBe("earlier summary\nMULTI_REASONING:" + "x".repeat(64 * 255));
+    expect(trimmedChars).toBeLessThan(block.thinking.length * 4);
+  });
+
+  it("reconciles reasoning snapshots, empty blocks, event fallbacks, and new messages", async () => {
+    const runId = "multi-block-reasoning-replacements";
+    const { emit, subscription } = subscribe({ runId });
+    const events: Array<{ text: unknown; delta: unknown }> = [];
+    listeners.push(
+      onAgentEventForRun(runId, (event) => {
+        if (event.stream === "thinking") {
+          events.push({ text: event.data.text, delta: event.data.delta });
+        }
+      }),
+    );
+    const message = makeAgentAssistantMessage({ content: [] });
+    emit({ type: "message_start", message });
+    for (const [summaries, fallback, expected] of [
+      [[" first ", " second "], "", "first\nsecond"],
+      [[" corrected ", " second "], "", "corrected\nsecond"],
+      [[" second ", " corrected "], "", "second\ncorrected"],
+      [[" second "], "", "second"],
+      [["", "   "], " fallback ", "fallback"],
+      [["", " after fallback "], "", "after fallback"],
+      [["", " after fallback ", ""], "", "after fallback"],
+      [["", " after fallback ", " third "], "", "after fallback\nthird"],
+    ] as const) {
+      message.content = summaries.map((thinking) => ({ type: "thinking", thinking }));
+      emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          contentIndex: message.content.length - 1,
+          delta: fallback,
+          partial: message,
+        },
+      });
+      await subscription.waitForPendingEvents();
+      expect(events.at(-1)?.text).toBe(expected);
+    }
+    expect(events.map((event) => event.delta)).toEqual([
+      "first\nsecond",
+      "corrected\nsecond",
+      "second\ncorrected",
+      "second",
+      "fallback",
+      "after fallback",
+      "\nthird",
+    ]);
+    emit({ type: "message_end", message });
+    await subscription.waitForPendingEvents();
+    expect(message.content).toEqual([
+      { type: "thinking", thinking: "" },
+      { type: "thinking", thinking: " after fallback " },
+      { type: "thinking", thinking: " third " },
+    ]);
+    emit({ type: "message_start", message });
+    message.content = [{ type: "thinking", thinking: "new message" }];
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "new message",
+        partial: message,
+      },
+    });
+    await subscription.waitForPendingEvents();
+    expect(events.at(-1)).toEqual({ text: "new message", delta: "new message" });
+    emit({
+      type: "message_update",
+      message: { ...message, content: "Visible answer" },
+      assistantMessageEvent: { type: "thinking_delta", delta: "Reasoning fallback" },
+    });
+    await subscription.waitForPendingEvents();
+    expect(events.at(-1)).toEqual({ text: "Reasoning fallback", delta: "Reasoning fallback" });
   });
 });
 

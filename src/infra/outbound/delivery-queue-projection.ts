@@ -22,7 +22,6 @@ export function projectQueuedDeliveryOptions(params: QueuedDeliveryPayload) {
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
     preparedMessageId: params.preparedMessageId,

@@ -3,11 +3,15 @@
 // Timings finish before forced GC. Snapshots use the committed aggregate-only code analyzer.
 // Warm allocation/CPU proof (Node 26.12+): add --messages 1024 --payload-bytes 2048
 // --iterations 2000 --warmup 20 --prewarm false --task-kind transcript-hydration.
-// Repeat --task-kind for compaction-context, recent-active-events, model-context or history-page.
+// Add --sessions 16 to rotate long transcripts; repeat --task-kind for compaction-context,
+// recent-active-events, model-context, history-page, history-range, export-snapshot,
+// transcript-search, cold-metadata or cold-storage-inventory (hot-fixture lookups, not restore).
 // V8 allocation counters and natural GC reclamation are measured inside the real worker;
 // first/last replies are compared across arms outside measured work. No Gateway claims.
 // Accept reduced allocation/CPU with byte/order-identical replies and no material adverse
 // matched timing/GC result; run --control before treating noisy tails as regressions.
+// Separate GC diagnosis: add --gc-details to save per-collection heap-space snapshots;
+// launch Node with --trace-gc --trace-incremental-marking to record collection reasons.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,7 +34,9 @@ const { values } = parseArgs({
     samples: { type: "string", default: "5" },
     control: { type: "boolean", default: false },
     snapshots: { type: "boolean", default: false },
+    "gc-details": { type: "boolean", default: false },
     messages: { type: "string", default: "2" },
+    sessions: { type: "string", default: "1" },
     "payload-bytes": { type: "string", default: "0" },
     iterations: { type: "string", default: "0" },
     warmup: { type: "string", default: "20" },
@@ -51,6 +57,8 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
 const messageCount = Number(values.messages);
+const sessionCount = Number(values.sessions);
+assert(Number.isSafeInteger(sessionCount) && sessionCount > 0, "--sessions must be positive");
 const payloadBytes = Number(values["payload-bytes"]);
 const iterations = Number(values.iterations);
 const warmup = Number(values.warmup);
@@ -163,15 +171,15 @@ const { appendTranscriptEventsInTransaction } =
 const { waitForSessionTranscriptProjection } =
   await import("../../src/config/sessions/session-transcript-reconcile.js");
 const { CURRENT_SESSION_VERSION } = await import("../../src/agents/sessions/session-manager.js");
-const scope = {
+const scopes = Array.from({ length: sessionCount }, (_, index) => ({
   agentId: "main",
   databaseAgentId: "main",
   env,
-  sessionId: "synthetic-borrower-session",
-  sessionKey: "agent:main:synthetic-borrower-session",
-};
+  sessionId: `synthetic-borrower-session-${index}`,
+  sessionKey: `agent:main:synthetic-borrower-session-${index}`,
+}));
 const timestamp = "2026-01-01T00:00:00.000Z";
-const events = [
+const createEvents = (scope) => [
   {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -221,76 +229,112 @@ const events = [
   }),
 ];
 let database;
-let compressedRows;
+let compressedRows = 0;
+const fixtureHash = createHash("sha256");
 try {
-  runOpenClawAgentWriteTransaction((opened) => {
-    database = { agentId: opened.agentId, path: opened.path };
-    writeSessionEntry(opened, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-    appendTranscriptEventsInTransaction(opened, scope, events);
-    compressedRows = opened.db
-      .prepare(
-        "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-      )
-      .get(scope.sessionId).count;
-  }, scope);
-  await waitForSessionTranscriptProjection(scope);
+  for (const scope of scopes) {
+    const events = createEvents(scope);
+    fixtureHash.update(JSON.stringify(events));
+    runOpenClawAgentWriteTransaction((opened) => {
+      database = { agentId: opened.agentId, path: opened.path };
+      writeSessionEntry(opened, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+      appendTranscriptEventsInTransaction(opened, scope, events);
+      const count = opened.db
+        .prepare(
+          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+        )
+        .get(scope.sessionId).count;
+      assert(typeof count === "number");
+      compressedRows += count;
+    }, scope);
+    await waitForSessionTranscriptProjection(scope);
+  }
   if (payloadBytes >= 1024) {
-    assert.equal(compressedRows, messageCount, "Synthetic message payloads must be compressed");
+    assert.equal(
+      compressedRows,
+      messageCount * sessionCount,
+      "Synthetic message payloads must be compressed",
+    );
   }
 } finally {
   await closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
 }
 const { formatSqliteSessionFileMarker } =
   await import("../../src/config/sessions/legacy-sqlite-marker.js");
-const target = {
-  ...scope,
-  storePath: database.path,
-  sessionFile: formatSqliteSessionFileMarker({ ...scope, storePath: database.path }),
-};
 const { resolveSqliteTranscriptReadScope } =
   await import("../../src/config/sessions/session-accessor.sqlite-scope.js");
-const resolvedScope = resolveSqliteTranscriptReadScope(target);
 const limits = { maxEvents: 128, maxBytes: 1024 * 1024 };
-const requests = {
-  prewarm: { kind: "prewarm", env, database },
-  "transcript-hydration": {
-    kind: "transcript-hydration",
-    database,
-    target,
-    resolvedScope,
-    limits,
-  },
-  "compaction-context": {
-    kind: "transcript-hydration",
-    database,
-    target,
-    resolvedScope,
-    limits: { compaction: true },
-  },
-  "recent-active-events": {
-    kind: "recent-active-events",
-    database,
-    target,
-    resolvedScope,
-    maxEvents: 128,
-  },
-  "model-context": { kind: "model-context", target, limits },
-  "session-entry-read": { kind: "session-entry-read", database, scope: target },
-  "session-entry-list": {
-    kind: "session-entry-list",
-    database,
-    scope: { agentId: scope.agentId, storePath: database.path, env, projection: "list" },
-  },
-  "history-page": {
-    kind: "history-page",
-    database,
-    target: { transcript: target },
-    request: {
-      kind: "recent-page",
-      params: { target, options: { maxMessages: 128, maxBytes: 1024 * 1024 } },
+const requests = scopes.map((scope) => {
+  const target = {
+    ...scope,
+    storePath: database.path,
+    sessionFile: formatSqliteSessionFileMarker({ ...scope, storePath: database.path }),
+  };
+  const resolvedScope = resolveSqliteTranscriptReadScope(target);
+  return {
+    prewarm: { kind: "prewarm", env, database },
+    "transcript-hydration": {
+      kind: "transcript-hydration",
+      database,
+      target,
+      resolvedScope,
+      limits,
     },
-  },
-};
+    "compaction-context": {
+      kind: "transcript-hydration",
+      database,
+      target,
+      resolvedScope,
+      limits: { compaction: true },
+    },
+    "recent-active-events": {
+      kind: "recent-active-events",
+      database,
+      target,
+      resolvedScope,
+      maxEvents: 128,
+    },
+    "model-context": { kind: "model-context", target, limits },
+    "session-entry-read": { kind: "session-entry-read", database, scope: target },
+    "session-entry-list": {
+      kind: "session-entry-list",
+      database,
+      scope: { agentId: scope.agentId, storePath: database.path, env, projection: "list" },
+    },
+    "history-page": {
+      kind: "history-page",
+      database,
+      target: { transcript: target },
+      request: {
+        kind: "recent-page",
+        params: { target, options: { maxMessages: 128, maxBytes: 1024 * 1024 } },
+      },
+    },
+    "history-range": {
+      kind: "history-page",
+      database,
+      target: { transcript: target },
+      request: {
+        kind: "history-event-page",
+        params: { target, options: { offset: 0, maxMessages: 128, maxBytes: 1024 * 1024 } },
+      },
+    },
+    "export-snapshot": {
+      kind: "session-entry",
+      mode: "snapshot",
+      includeOriginalMessages: true,
+      absPath: target.sessionFile,
+      options: target,
+    },
+    "cold-metadata": { kind: "cold-metadata", database, env, sessionId: scope.sessionId },
+    "cold-storage-inventory": { kind: "cold-storage-inventory", database, env },
+    "transcript-search": {
+      kind: "transcript-search",
+      database,
+      params: { ...target, query: "Synthetic", limit: 128, order: "recent" },
+    },
+  };
+});
 const kinds = values["task-kind"] ?? [
   "prewarm",
   "session-entry-read",
@@ -298,7 +342,7 @@ const kinds = values["task-kind"] ?? [
   "history-page",
 ];
 for (const kind of kinds) {
-  assert(Object.hasOwn(requests, kind), `Unknown --task-kind ${kind}`);
+  assert(Object.hasOwn(requests[0], kind), `Unknown --task-kind ${kind}`);
 }
 const modes = values.prewarm === "both" ? [false, true] : [values.prewarm === "true"];
 const report = {
@@ -316,11 +360,11 @@ const report = {
   },
   diffSha256: createHash("sha256").update(diff).digest("hex"),
   fixture: {
-    sessions: 1,
+    sessions: sessionCount,
     messages: messageCount,
     payloadBytes,
     compressedRows,
-    sha256: createHash("sha256").update(JSON.stringify(events)).digest("hex"),
+    sha256: fixtureHash.digest("hex"),
   },
   limitations: [
     "Synthetic production worker boundary; Gateway concurrency is separate proof",
@@ -363,6 +407,9 @@ for (let sample = 0; sample < samples; sample++) {
             ).href,
             prewarmHistory,
             captureGc: iterations > 0,
+            gcDetails: values["gc-details"]
+              ? path.join(output, `${sample}-${prewarmHistory}-${kind}-${side}-gc.json`)
+              : undefined,
             diagnostics: diagnostics.port2,
             baselineDir:
               values.control || side === "baseline" ? preparedBaselineDir : preparedCandidateDir,
@@ -396,7 +443,15 @@ for (let sample = 0; sample < samples; sample++) {
         tasks.port1.on("message", (message) => {
           if (message.status === "ready") {
             taskReady.resolve();
-          } else {
+          } else if (message.status === "request") {
+            assert.equal(message.value, "transcript-index-status");
+            // Fixture projection settled before worker startup; no writer runs during measurement.
+            tasks.port1.postMessage({
+              taskId: message.taskId,
+              responseId: message.id,
+              input: false,
+            });
+          } else if (message.status !== "consumed" && message.status !== "notification") {
             const promise = pending.get(message.taskId);
             pending.delete(message.taskId);
             if (message.status === "ok") {
@@ -413,13 +468,13 @@ for (let sample = 0; sample < samples; sample++) {
           ]);
           await taskReady.promise;
           const coldReadyMs = performance.now() - started;
-          const requestTask = async () => {
+          const requestTask = async (sessionIndex) => {
             const id = ++sequence;
             const task = Promise.withResolvers();
             pending.set(id, task);
             tasks.port1.postMessage({
               taskId: id,
-              input: requests[kind],
+              input: requests[sessionIndex][kind],
               interactive: true,
               nativeSections: new SharedArrayBuffer(4),
               taskContext: { deletedAgentDatabaseFences: [] },
@@ -437,50 +492,78 @@ for (let sample = 0; sample < samples; sample++) {
             diagnostics.port1.postMessage({ id, operation });
             return reply.promise;
           };
+          const verifyReply = (reply, sessionIndex) => {
+            const scope = scopes[sessionIndex];
+            if (kind === "session-entry-read") {
+              assert.equal(reply.entry?.sessionId, scope.sessionId);
+            } else if (kind === "session-entry-list") {
+              assert.equal(reply.entries.length, sessionCount);
+            } else if (kind === "history-page") {
+              assert.equal(reply.result.messages.length, Math.min(messageCount, 128));
+            } else if (kind === "history-range") {
+              assert.equal(reply.result.events.length, Math.min(messageCount, 128));
+            } else if (kind === "export-snapshot") {
+              assert.equal(reply.snapshot.events.length, messageCount + 1);
+              assert.equal(reply.snapshot.events[0].id, scope.sessionId);
+              assert.equal(reply.snapshot.events.at(-1).id, `synthetic-${messageCount - 1}`);
+            } else if (kind === "cold-metadata") {
+              assert.deepEqual(reply, { kind, archive: undefined });
+            } else if (kind === "cold-storage-inventory") {
+              assert.equal(reply.hotTranscripts, sessionCount);
+              assert.equal(reply.coldTranscripts, 0);
+            } else if (kind === "transcript-search") {
+              assert(reply.result.hits.length > 0, "Search fixture must produce indexed hits");
+              assert(reply.result.hits.every((hit) => hit.sessionId === scope.sessionId));
+            } else if (kind === "prewarm") {
+              assert.deepEqual(reply, { kind: "prewarm" });
+            } else if (kind === "transcript-hydration" || kind === "compaction-context") {
+              assert.equal(reply.kind, "bounded");
+              const selected =
+                kind === "compaction-context" ? messageCount : Math.min(messageCount, 128);
+              assert.equal(reply.snapshot.events.length, selected + 1);
+              assert.equal(reply.snapshot.events[0].id, scope.sessionId);
+              assert.equal(reply.snapshot.events[1].id, `synthetic-${messageCount - selected}`);
+              assert.equal(reply.snapshot.events.at(-1).id, `synthetic-${messageCount - 1}`);
+            } else if (kind === "recent-active-events") {
+              const selected = Math.min(messageCount, 128);
+              assert.equal(reply.events.length, selected);
+              assert.equal(reply.events[0].id, `synthetic-${messageCount - selected}`);
+              assert.equal(reply.events.at(-1).id, `synthetic-${messageCount - 1}`);
+            } else {
+              assert(reply.events.length > 0);
+              assert.equal(reply.events.at(-1).id, `synthetic-${messageCount - 1}`);
+            }
+            const key = `${kind}:${sessionIndex}`;
+            const actualDigest = digest(reply);
+            const expectedDigest = digests.get(key) ?? actualDigest;
+            digests.set(key, expectedDigest);
+            assert.equal(actualDigest, expectedDigest, `${key} result changed`);
+          };
           const taskStarted = performance.now();
-          let reply = await requestTask();
+          const firstReply = await requestTask(0);
           const firstTaskMs = performance.now() - taskStarted;
-          if (kind === "session-entry-read") {
-            assert.equal(reply.entry?.sessionId, scope.sessionId);
-          } else if (kind === "session-entry-list") {
-            assert.equal(reply.entries[0]?.entry.sessionId, scope.sessionId);
-          } else if (kind === "history-page") {
-            assert.equal(reply.result.messages.length, Math.min(messageCount, 128));
-          } else if (kind === "prewarm") {
-            assert.deepEqual(reply, { kind: "prewarm" });
-          } else if (kind === "transcript-hydration" || kind === "compaction-context") {
-            assert.equal(reply.kind, "bounded");
-            const selected =
-              kind === "compaction-context" ? messageCount : Math.min(messageCount, 128);
-            assert.equal(reply.snapshot.events.length, selected + 1);
-            assert.equal(reply.snapshot.events[0].id, scope.sessionId);
-            assert.equal(reply.snapshot.events[1].id, `synthetic-${messageCount - selected}`);
-            assert.equal(reply.snapshot.events.at(-1).id, `synthetic-${messageCount - 1}`);
-          } else if (kind === "recent-active-events") {
-            const selected = Math.min(messageCount, 128);
-            assert.equal(reply.events.length, selected);
-            assert.equal(reply.events[0].id, `synthetic-${messageCount - selected}`);
-            assert.equal(reply.events.at(-1).id, `synthetic-${messageCount - 1}`);
-          } else {
-            assert(reply.events.length > 0);
-            assert.equal(reply.events.at(-1).id, `synthetic-${messageCount - 1}`);
+          verifyReply(firstReply, 0);
+          // Establish each session's byte/order contract before measuring round-robin work.
+          for (let sessionIndex = 1; sessionIndex < sessionCount; sessionIndex++) {
+            verifyReply(await requestTask(sessionIndex), sessionIndex);
           }
-          const expectedDigest = digests.get(kind) ?? digest(reply);
-          digests.set(kind, expectedDigest);
-          assert.equal(digest(reply), expectedDigest, `${kind} first result changed`);
           let measured;
           if (iterations) {
             for (let index = 0; index < warmup; index++) {
-              reply = await requestTask();
+              await requestTask(index % sessionCount);
             }
             const before = await diagnostic("begin");
+            const lastReplies = new Map();
             const measuredStarted = performance.now();
             for (let index = 0; index < iterations; index++) {
-              reply = await requestTask();
+              const sessionIndex = index % sessionCount;
+              lastReplies.set(sessionIndex, await requestTask(sessionIndex));
             }
             const elapsedMs = performance.now() - measuredStarted;
             measured = await diagnostic("end");
-            assert.equal(digest(reply), expectedDigest, `${kind} repeated result changed`);
+            for (const [sessionIndex, reply] of lastReplies) {
+              verifyReply(reply, sessionIndex);
+            }
             measured = {
               ...measured,
               elapsedMs,
@@ -533,7 +616,7 @@ for (let sample = 0; sample < samples; sample++) {
             firstTaskMs,
             coldTaskMs: coldReadyMs + firstTaskMs,
             ...retained,
-            resultDigest: expectedDigest,
+            resultDigests: scopes.map((_, sessionIndex) => digests.get(`${kind}:${sessionIndex}`)),
             measured,
             hostLoadAfter: { loadavg: os.loadavg(), freeMemory: os.freemem() },
             ...(codeAnalysis ? { codeAnalysis } : {}),

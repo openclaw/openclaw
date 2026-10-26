@@ -275,7 +275,7 @@ export type SessionActorReceipt = {
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   reducers: SessionActorReducerOutcome[];
-  /** Complete detached postimage, installed on MAIN before acknowledgement. */
+  /** Complete postimage installed on MAIN; unchanged entries may share its frozen preimage. */
   postimage: SessionActorHotState;
 };
 

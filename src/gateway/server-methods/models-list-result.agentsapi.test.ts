@@ -12,11 +12,11 @@ import {
 } from "../../plugins/runtime.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   listModels,
   modelAuthStore,
   withModelsListState,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
 const { default: plugin } = await loadBundledPluginFacade<{

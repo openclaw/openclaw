@@ -4429,6 +4429,7 @@ process.on("exit", () => {
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
+    ["blacksmith-testbox", false, "prepared-partial"],
     ["blacksmith-testbox", false, "unchanged"],
     ["blacksmith-testbox", false, "unrelated-staging"],
     ["blacksmith-testbox", false, "captured-base"],
@@ -5475,6 +5476,72 @@ require('node:module').syncBuiltinESMExports();`,
           ? readFileSync(path.join(producer, ".git", "shallow"))
           : existsSync(path.join(producer, ".git", "shallow")),
       ).toEqual(shallowBefore ?? false);
+
+      if (scenario === "prepared-partial") {
+        const missingBlob = git(origin, ["rev-parse", `${base}:unchanged.bin`]);
+        const preparePartialReceiver = (receiver: string) => {
+          rmSync(receiver, { recursive: true, force: true });
+          git(root, [
+            "clone",
+            "-q",
+            "--filter=blob:none",
+            "--no-checkout",
+            `file://${origin}`,
+            receiver,
+          ]);
+          for (const entry of readdirSync(origin)) {
+            if (entry === ".git") {
+              continue;
+            }
+            cpSync(path.join(origin, entry), path.join(receiver, entry), {
+              recursive: true,
+              verbatimSymlinks: true,
+            });
+          }
+          git(receiver, ["remote", "set-url", "origin", `file://${root}/unavailable-promisor`]);
+          const missing = runCommand("git", ["cat-file", "-e", missingBlob], {
+            cwd: receiver,
+            env: { ...env, GIT_NO_LAZY_FETCH: "1" },
+          });
+          expect(missing.status, failureDetail(missing)).not.toBe(0);
+          expect(git(receiver, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+          expect(git(receiver, ["rev-parse", "refs/remotes/origin/main"])).toBe(base);
+        };
+        const importedPartial = receive("prepared-partial", candidate, {
+          prepareReceiver: preparePartialReceiver,
+        });
+        expect(importedPartial.result.status, failureDetail(importedPartial.result)).toBe(0);
+        expect(importedPartial.result.stdout).toBe("transport fixture reached\n");
+        expect(git(importedPartial.receiver, ["rev-parse", "HEAD^"])).toBe(base);
+        expect(git(importedPartial.receiver, ["rev-parse", "refs/remotes/origin/main"])).toBe(base);
+        const importedBlob = runCommand("git", ["cat-file", "-e", missingBlob], {
+          cwd: importedPartial.receiver,
+          env: { ...env, GIT_NO_LAZY_FETCH: "1" },
+        });
+        expect(importedBlob.status, failureDetail(importedBlob)).toBe(0);
+        expectFileBytes(importedPartial.receiver, "unchanged.bin", unchanged);
+        git(importedPartial.receiver, ["fsck", "--connectivity-only", "--no-dangling"]);
+
+        for (const condition of ["missing", "mismatched"] as const) {
+          const rejected = receive(`prepared-partial-${condition}`, candidate, {
+            source: path.join(root, "unavailable-canonical"),
+            prepareReceiver: (receiver) => {
+              preparePartialReceiver(receiver);
+              if (condition === "missing") {
+                git(receiver, ["update-ref", "-d", "refs/remotes/origin/main"]);
+              } else {
+                git(receiver, ["update-ref", "refs/remotes/origin/main", `${base}^`]);
+              }
+            },
+          });
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stdout).not.toContain("transport fixture reached");
+          expect(
+            readdirSync(rejected.receiver).filter((file) => file.startsWith(".openclaw-source-")),
+          ).toEqual([]);
+        }
+        return;
+      }
 
       const newerFiles = [
         "newer-source.txt",
