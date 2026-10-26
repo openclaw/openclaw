@@ -31,10 +31,7 @@ export function createLifecycleAgentCallWaits(
       // Retain serial producer joins for teardown even when RPC entry wins.
       pendingRootWork = pendingRootWork.then(() => settleRootWork(true));
       await Promise.race([entered(), pendingRootWork]);
-      if (getAgentCallCount() >= expectedCount) {
-        return;
-      }
-      throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCallCount()}`);
+      expect(getAgentCallCount()).toBeGreaterThanOrEqual(expectedCount);
     },
     async waitForCleanupHandledFalse(runId: string) {
       // RPC entry may precede persistence; join without advancing retry time.
