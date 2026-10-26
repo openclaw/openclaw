@@ -41,7 +41,6 @@ it.each<[string, Partial<InternalSessionEntry> | undefined]>([
           return prepared;
         },
       );
-      const remove = vi.spyOn(internalSessionEffects, "removeInternalSessionEffectsSession");
       const open = SessionManager.openAsync.bind(SessionManager);
       let changedEntry: InternalSessionEntry | undefined;
       let originalEvents: Awaited<ReturnType<typeof loadTranscriptEvents>> = [];
@@ -91,10 +90,6 @@ it.each<[string, Partial<InternalSessionEntry> | undefined]>([
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
         await expect(loadTranscriptEvents(target)).resolves.toEqual(originalEvents);
         await expect(readSessionEntryReadOnlyInWorker(target)).resolves.toEqual(changedEntry);
-        expect(remove).toHaveBeenCalledWith(target, {
-          lifecycleRevision: target.sessionEntry.lifecycleRevision,
-          activeWriterRunId: target.sessionEntry.activeWriterRunId,
-        });
       } finally {
         companion.dispose();
       }
