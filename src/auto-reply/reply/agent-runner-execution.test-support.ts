@@ -275,7 +275,6 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
           authProfileIdSource:
             params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
         },
-  resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
     (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
       provider: run.provider,
@@ -411,7 +410,7 @@ export function createMockTypingSignaler(): TypingSignaler {
   };
 }
 
-export function createFollowupRun(): FollowupRun {
+export function createFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
   const followup = createTestFollowupRun({
     // Missing fixture modalities trigger real provider catalog discovery during execution.
     thinkingCatalog: [
@@ -430,7 +429,32 @@ export function createFollowupRun(): FollowupRun {
   // Execution fixtures exercise runtime hints and select thinking themselves.
   delete followup.run.thinkLevel;
   delete followup.run.skipProviderRuntimeHints;
+  Object.assign(followup.run, overrides);
   return followup;
+}
+
+export function createRunResult(
+  text = "final",
+  meta: EmbeddedAgentRunResult["meta"] = { durationMs: 0 },
+) {
+  return { payloads: [{ text }], meta };
+}
+
+export async function runFallbackCandidate(
+  params: FallbackRunnerParams,
+  provider = params.provider,
+  model = params.model,
+  options = initialModelFallbackAttemptOptions(params),
+) {
+  return { result: await params.run(provider, model, options), provider, model, attempts: [] };
+}
+
+export function createCliFollowupRun(provider: string, model: string): FollowupRun {
+  state.isCliProviderMock.mockReturnValue(true);
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
+  );
+  return createFollowupRun({ provider, model });
 }
 
 export const requireRecord = createRequireRecord("object", "label-not-object");
@@ -503,7 +527,7 @@ export function createAgentTurnExecutionDefaults() {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
-    isHeartbeat: false,
+
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off",
@@ -585,12 +609,9 @@ export async function setupAgentRunnerExecutionTestState() {
         imageOrder: params.imageOrder,
       }),
     );
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude", initialModelFallbackAttemptOptions(params)),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementation((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "anthropic", "claude"),
+    );
   });
 
   afterEach(() => {

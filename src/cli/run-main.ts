@@ -43,7 +43,6 @@ import {
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
-import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -257,14 +256,14 @@ async function resolveReachableGateway(
         ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
         : {}),
     });
-    if (probe.kind === "configured") {
+    if (probe === "configured") {
       return { kind: "configured", gateway };
     }
-    if (probe.kind === "missing-configured-model") {
+    if (probe === "missing-configured-model") {
       missingModelGateway ??= gateway;
       continue;
     }
-    if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
+    if (probe === "reachable-unverified" && !reachableUnverifiedGateway) {
       reachableUnverifiedGateway = gateway;
     }
   }
@@ -458,7 +457,7 @@ function resolvesMachineOutput(
   },
   argv: readonly string[],
 ): boolean {
-  return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: process.stdout.isTTY || false }) ?? false;
 }
 
 function resolveBuiltInMachineOutput({
@@ -1221,23 +1220,13 @@ async function runCliWithPreparedOutputMode(
     try {
       const [
         { buildProgram },
-        { formatUncaughtError },
-        { formatCliFailureLines, formatCliJsonFailure },
-        { runFatalErrorHooks },
-        {
-          installUnhandledRejectionHandler,
-          isBenignUncaughtExceptionError,
-          isUncaughtExceptionHandled,
-        },
-        { defaultRuntime, restoreRuntimeTerminalState },
+        { handleCliUncaughtException },
+        { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program/build-program.js"),
-          import("../infra/errors.js"),
           import("./failure-output.js"),
-          import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../runtime.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () =>
@@ -1250,31 +1239,7 @@ async function runCliWithPreparedOutputMode(
       }
 
       process.on("uncaughtException", (error) => {
-        if (isUncaughtExceptionHandled(error)) {
-          return;
-        }
-        if (isBenignUncaughtExceptionError(error)) {
-          console.warn(
-            "[openclaw] Non-fatal uncaught exception (continuing):",
-            formatUncaughtError(error),
-          );
-          return;
-        }
-        if (isJsonOutputModeActive(normalizedArgv)) {
-          defaultRuntime.writeJson(formatCliJsonFailure(error));
-        }
-        for (const line of formatCliFailureLines({
-          title: "OpenClaw hit an unexpected runtime error.",
-          error,
-          argv: normalizedArgv,
-        })) {
-          console.error(line);
-        }
-        for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-          console.error("[openclaw]", message);
-        }
-        restoreRuntimeTerminalState("uncaught exception");
-        exitAfterSignalExitBarriers(1, "uncaught exception");
+        handleCliUncaughtException(error, normalizedArgv);
       });
 
       const invocation = resolveCliArgvInvocation(parseArgv);

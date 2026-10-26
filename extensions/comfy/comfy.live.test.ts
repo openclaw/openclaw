@@ -1,35 +1,16 @@
 // Comfy tests cover comfy plugin behavior.
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { isLiveTestEnabled, readLiveTestConfig } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it } from "vitest";
+import { withPluginsEnabled } from "../test-support/generation-live-test-helpers.js";
 import plugin from "./index.js";
 import { isComfyCapabilityConfiguredAsync } from "./workflow-runtime.js";
 
 const LIVE =
   isLiveTestEnabled(["COMFY_LIVE_TEST"]) && (process.env.COMFY_LIVE_TEST ?? "").trim() === "1";
 const describeLive = LIVE ? describe : describe.skip;
-
-type RegisteredMusicProvider = {
-  id: string;
-  generateMusic: Function;
-  isConfiguredAsync?: Function;
-};
-
-function withPluginsEnabled<T>(cfg: T): T {
-  if (!cfg || typeof cfg !== "object") {
-    return cfg;
-  }
-  const record = cfg as Record<string, unknown>;
-  return {
-    ...record,
-    plugins: {
-      ...(record.plugins && typeof record.plugins === "object" ? record.plugins : {}),
-      enabled: true,
-    },
-  } as T;
-}
 
 function requireProvider<T extends { id: string }>(providers: T[], id: string): T {
   const provider = providers.find((entry) => entry.id === id);
@@ -42,35 +23,13 @@ function requireProvider<T extends { id: string }>(providers: T[], id: string): 
 describeLive("comfy live", () => {
   let cfg = {} as OpenClawConfig;
   let agentDir = "";
-  const imageProviders: Array<{
-    id: string;
-    generateImage: Function;
-    isConfiguredAsync?: Function;
-  }> = [];
-  const musicProviders: RegisteredMusicProvider[] = [];
-  const videoProviders: Array<{
-    id: string;
-    generateVideo: Function;
-    isConfiguredAsync?: Function;
-  }> = [];
+  let captured: ReturnType<typeof createCapturedPluginRegistration>;
 
   beforeAll(async () => {
     cfg = withPluginsEnabled(await readLiveTestConfig());
     agentDir = resolveDefaultAgentDir(cfg as never);
-    plugin.register(
-      createTestPluginApi({
-        config: cfg as never,
-        registerImageGenerationProvider(provider) {
-          imageProviders.push(provider as never);
-        },
-        registerMusicGenerationProvider(provider) {
-          musicProviders.push(provider as never);
-        },
-        registerVideoGenerationProvider(provider) {
-          videoProviders.push(provider as never);
-        },
-      }),
-    );
+    captured = createCapturedPluginRegistration({ config: cfg as never });
+    plugin.register(captured.api);
   });
 
   // Capability gates must run after beforeAll loads the isolated live config;
@@ -86,7 +45,7 @@ describeLive("comfy live", () => {
       skip("No Comfy image workflow is configured");
       return;
     }
-    const provider = requireProvider(imageProviders, "comfy");
+    const provider = requireProvider(captured.imageGenerationProviders, "comfy");
     const result = await provider.generateImage({
       provider: "comfy",
       model: "workflow",
@@ -110,7 +69,7 @@ describeLive("comfy live", () => {
       skip("No Comfy video workflow is configured");
       return;
     }
-    const provider = requireProvider(videoProviders, "comfy");
+    const provider = requireProvider(captured.videoGenerationProviders, "comfy");
     const result = await provider.generateVideo({
       provider: "comfy",
       model: "workflow",
@@ -120,7 +79,7 @@ describeLive("comfy live", () => {
     });
     expect(result.videos.length).toBeGreaterThan(0);
     expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
-    expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(512);
+    expect(result.videos[0]?.buffer?.byteLength).toBeGreaterThan(512);
   }, 180_000);
 
   it("runs a music workflow", async ({ skip }) => {
@@ -134,7 +93,7 @@ describeLive("comfy live", () => {
       skip("No Comfy music workflow is configured");
       return;
     }
-    const provider = requireProvider(musicProviders, "comfy");
+    const provider = requireProvider(captured.musicGenerationProviders, "comfy");
     const result = await provider.generateMusic({
       provider: "comfy",
       model: "workflow",

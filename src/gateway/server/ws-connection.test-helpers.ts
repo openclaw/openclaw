@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
+import type { SerializedGatewayFrame } from "../serialized-json.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { GatewayClientRegistry } from "./client-registry.js";
@@ -55,7 +56,11 @@ export function createGatewayWsTestSocket(
     readyState: 1,
     bufferedAmount: 0,
     send: vi.fn(
-      (data: string | Buffer, options?: { binary: false } | SendCallback, cb?: SendCallback) => {
+      (
+        data: string | Buffer | SerializedGatewayFrame,
+        options?: { binary: false } | SendCallback,
+        cb?: SendCallback,
+      ) => {
         params.onSend?.(String(data));
         (typeof options === "function" ? options : cb)?.();
       },
@@ -140,9 +145,7 @@ export function attachGatewayWsForTest(params: {
     ...params.options,
   });
 
-  const onConnection = listeners.get("connection");
-  expect(onConnection).toBeTypeOf("function");
-  onConnection?.(socket, upgradeReq);
+  listeners.get("connection")!(socket, upgradeReq);
 
   return { clients, listeners, socket, upgradeReq, wss };
 }

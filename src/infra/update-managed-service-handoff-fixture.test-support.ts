@@ -1,10 +1,9 @@
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as artifacts from "./update-managed-service-handoff-artifacts.test-support.js";
-import { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
+import { createManagedServiceManagerBoundary as managerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
+import { createManagedServiceChildMock as childMock } from "./update-managed-service-handoff-command.test-support.js";
 import { signalMockManagedUpdateHandoffReady as signalReady } from "./update-managed-service-handoff.test-support.js";
 
 const { kill, tmp, spawn } = vi.hoisted(() => ({
@@ -16,14 +15,7 @@ const { kill, tmp, spawn } = vi.hoisted(() => ({
 const mockedChildren = new Set<ReturnType<typeof createSpawnMock>>();
 
 export function createSpawnMock(params?: { pid?: number }) {
-  const child = Object.assign(new EventEmitter(), {
-    pid: params?.pid ?? process.pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
+  const child = childMock(params);
   mockedChildren.add(child);
   return child;
 }
@@ -57,10 +49,9 @@ export function useManagedServiceHandoffLifecycleFixture() {
     spawn.mockImplementation((_command: string, args: string[]) => {
       const child = createSpawnMock();
       const { paramsPath } = artifacts.readManagedHandoffArtifacts(args);
-      const params = JSON.parse(readFileSync(paramsPath, "utf8")) as {
-        updateLeaseKey: string;
-        handoffId: string;
-      };
+      const params: { updateLeaseKey: string; handoffId: string } = JSON.parse(
+        readFileSync(paramsPath, "utf8"),
+      );
       handoffs.set(params.updateLeaseKey, params.handoffId);
       process.nextTick(() => signalReady({ child, paramsPath, cleanups: leaseCleanups }));
       return child;
@@ -78,9 +69,9 @@ export function useManagedServiceHandoffLifecycleFixture() {
       cleanup();
     }
     try {
+      const { cancelManagedServiceUpdateHandoff: cancel } =
+        await import("./update-managed-service-handoff.js");
       for (const [installRoot, handoffId] of handoffs) {
-        const { cancelManagedServiceUpdateHandoff: cancel } =
-          await import("./update-managed-service-handoff.js");
         // Cancellation retires the exited owner only after verifying its lease was released.
         await expect(
           cancel({ kind: "managed-update-handoff", installRoot, handoffId }),
@@ -103,7 +94,7 @@ export function useManagedServiceHandoffLifecycleFixture() {
     resolvePreferredOpenClawTmpDirMock: tmp,
     spawnMock: spawn,
     tempDirs,
-    runManagedServiceManagerBoundary: createManagedServiceManagerBoundary({
+    runManagedServiceManagerBoundary: managerBoundary({
       spawnMock: spawn,
       tempDirs,
       cleanups: processCleanups,

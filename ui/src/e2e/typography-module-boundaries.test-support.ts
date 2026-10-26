@@ -84,18 +84,7 @@ export function defineTypographyModuleBoundaryTests(
         const labels = applePlatform
           ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"]
           : ["Ctrl+Alt+Shift+E", "Ctrl+Shift+B", "Ctrl+Shift+S"];
-        expect(
-          await Promise.all(
-            panelShortcuts.map((shortcut) =>
-              shortcut.evaluate((key) => ({
-                text: key.textContent?.replace(/\s+/gu, ""),
-                font: getComputedStyle(key).fontFamily,
-              })),
-            ),
-          ),
-        ).toEqual(labels.map((text) => ({ text, font: expect.stringMatching(/^system-ui,/u) })));
-
-        const inkOffsets = await Promise.all(
+        const shortcuts = await Promise.all(
           panelShortcuts.map((shortcut) =>
             shortcut.evaluate((key) => {
               const letter = key.querySelector<HTMLElement>(".kbd__text");
@@ -113,27 +102,26 @@ export function defineTypographyModuleBoundaryTests(
               const baselineY = baseline.getBoundingClientRect().y;
               baseline.remove();
               const box = key.getBoundingClientRect();
-              return (
-                baselineY +
-                (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2 -
-                box.y -
-                box.height / 2
-              );
+              const inkY =
+                baselineY + (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2;
+              return {
+                text: key.textContent?.replace(/\s+/gu, ""),
+                font: getComputedStyle(key).fontFamily,
+                offset: Math.abs(inkY - box.y - box.height / 2),
+              };
             }),
           ),
         );
         // Font hinting rounds cap ink to device pixels; do not center the whole line box instead.
-        for (const offset of inkOffsets) {
-          expect(Math.abs(offset)).toBeLessThan(0.75);
-        }
+        expect(shortcuts.map(({ text, font }) => ({ text, font }))).toEqual(
+          labels.map((text) => ({ text, font: expect.stringMatching(/^system-ui,/u) })),
+        );
+        shortcuts.forEach(({ offset }) => expect(offset).toBeLessThan(0.75));
 
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
           await panelSelector.screenshot({
-            path: path.join(
-              path.join(suite.artifactDir, "theme-typography"),
-              "phosphor-panel-shortcuts.png",
-            ),
+            path: path.join(suite.artifactDir, "theme-typography", "phosphor-panel-shortcuts.png"),
           });
         }
 
@@ -142,7 +130,7 @@ export function defineTypographyModuleBoundaryTests(
 
         const genericFonts = await page.evaluate(() => {
           const fixture = document.createElement("div");
-          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd>C</kbd></span>
+          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd class="shortcut-kbd">C</kbd></span>
           <span class="session-menu__shortcut">C</span>`;
           document.body.append(fixture);
           const fonts = Array.from(
@@ -155,7 +143,10 @@ export function defineTypographyModuleBoundaryTests(
             mono: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
           };
         });
-        expect(genericFonts.fonts).toEqual([genericFonts.mono, genericFonts.mono]);
+        expect(genericFonts.fonts).toEqual([
+          expect.stringMatching(/^system-ui,/u),
+          genericFonts.mono,
+        ]);
       },
     );
   });

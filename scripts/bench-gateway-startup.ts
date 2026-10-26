@@ -1,7 +1,13 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+// teamBoot includes a matching config backup so early environment selection exercises
+// config-health recovery reads. Seed with --case teamBoot --fixture-root <path> --seed-only;
+// measure a fresh copy per boot with --runs 1 --warmup 0 and --output <json>.
+// Compare >=5 boots per revision; --heap-prof-dir collects allocations in a separate pass.
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,12 +19,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
+import { isMainModule } from "../src/infra/is-main.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -40,6 +47,7 @@ import {
   formatMb,
   formatMs,
   formatStats,
+  gatewayBenchCpuProfileArgs,
   hasHelpFlag,
   parseGatewayBenchRuntimeOptions,
   parseNonNegativeInt,
@@ -75,10 +83,12 @@ type GatewayBenchCase = {
   providerCatalogStallMs?: number;
   providerStaticCatalogModelCount?: number;
   providerStaticCatalogStallMs?: number;
+  publicationGitDelayMs?: number;
   runByDefault?: boolean;
 };
 
 type GatewaySample = {
+  publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
   agentRecoveryMs?: Record<string, number>;
   registryRecovery?: {
     events: Record<string, number>;
@@ -98,6 +108,7 @@ type GatewaySample = {
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
+  heapProfilePath?: string;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   maxRssMb: number | null;
@@ -170,6 +181,7 @@ const VALUE_FLAGS = new Set([
   "--agent-gate-delay-ms",
   "--start-at",
   "--bundled-plugin-fixture",
+  "--publication-git-delay-ms",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -211,7 +223,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "teamBoot",
-    name: "gateway, 44 startup plugins, eight agents and 4096 sessions",
+    name: "gateway, 44 startup plugins, eight agents and 10000 sessions",
     agentTopology: "incident-scale",
     pluginActivationOnStartup: true,
     pluginCount: 44,
@@ -220,6 +232,10 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     config: {
       ...BASE_CONFIG,
       gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
+      plugins: {
+        ...BASE_CONFIG.plugins,
+        entries: { ...BASE_CONFIG.plugins.entries, "memory-core": { enabled: false } },
+      },
       cron: { enabled: false },
     },
   },
@@ -249,6 +265,14 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "default",
     name: "gateway default",
+    config: BASE_CONFIG,
+  },
+  {
+    id: "pluginMetadataMaintenance",
+    name: "gateway through post-ready plugin metadata refresh",
+    runByDefault: false,
+    completionTracePhase: "startup.maintenance.plugin-registry",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
   },
   {
@@ -431,6 +455,20 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  if (flags.has("--publication-git-delay-ms")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot" || process.platform === "win32") {
+      throw new CliArgumentError("--publication-git-delay-ms requires --case teamBoot on POSIX");
+    }
+    const publicationGitDelayMs = parsePositiveInt(
+      flags.get("--publication-git-delay-ms")?.[0],
+      10_000,
+      "--publication-git-delay-ms",
+    );
+    if (publicationGitDelayMs > 30_000) {
+      throw new CliArgumentError("--publication-git-delay-ms must not exceed 30000");
+    }
+    cases = [{ ...cases[0], publicationGitDelayMs }];
+  }
   const bundledPluginFixturePath = flags.get("--bundled-plugin-fixture")?.[0];
   if (bundledPluginFixturePath !== undefined) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
@@ -514,7 +552,7 @@ Options:
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
-  --heap-prof-dir <dir> Write one V8 heap profile per run
+  --heap-prof-dir <dir> Sample main-thread allocations through /readyz, including collected objects
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
   --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
@@ -523,6 +561,7 @@ Options:
   --fixture-root <path> Prepared teamBoot, slowAgentDatabase or interruptedRegistry fixture (requires --runs 1 --warmup 0)
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
@@ -545,6 +584,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
       ? {
           expectedPluginCount: benchCase.pluginCount ?? 44,
           bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
+          publicationGitDelayMs: benchCase.publicationGitDelayMs,
         }
       : {}),
     samples,
@@ -587,6 +627,15 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       }
       if (sample.maxRssMb == null) {
         missing.push("rss");
+      }
+      if (
+        result.publicationGitDelayMs !== undefined &&
+        (!sample.publicationRecovery ||
+          sample.publicationRecovery.delayMs !== result.publicationGitDelayMs ||
+          sample.publicationRecovery.releasedAtMs - sample.publicationRecovery.startedAtMs <
+            result.publicationGitDelayMs)
+      ) {
+        missing.push("pending publication reached and completed its delayed Git read");
       }
       if (result.id === "slowAgentDatabase") {
         if (
@@ -1234,6 +1283,137 @@ async function inspectInterruptedRegistryRecovery(root: string, events: Record<s
   }
 }
 
+async function seedTeamBootPublication(root: string, delayMs: number, agentId: string) {
+  const [
+    { resolveExecutablePath },
+    { insertRegistryWorktreeInDatabase },
+    { resolveRepositoryIdentity },
+    stateDb,
+    agentDb,
+    { writeSessionEntry },
+    { insertGitHubPublicationRequest },
+    { digestGitHubPublicationRequest },
+  ] = await Promise.all([
+    import("../src/infra/executable-path.js"),
+    import("../src/agents/worktrees/registry-run-end.worker.js"),
+    import("../src/agents/worktrees/repository-paths.js"),
+    import("../src/state/openclaw-state-db.js"),
+    import("../src/state/openclaw-agent-db.js"),
+    import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+    import("../src/gateway/github-publication-store.worker.js"),
+    import("../src/gateway/github-publication-receipt.js"),
+  ]);
+  const gitPath = resolveExecutablePath("git");
+  if (!gitPath) {
+    throw new Error("The pending-publication fixture requires Git");
+  }
+  const repoRoot = path.join(root, "publication-repository");
+  const worktreePath = path.join(root, "publication-worktree");
+  const branch = "bench-publication";
+  const git = (...args: string[]) => execFileSync(gitPath, args, { stdio: "pipe" });
+  git("init", "--initial-branch=main", repoRoot);
+  git(
+    "-C",
+    repoRoot,
+    "-c",
+    "user.name=Startup Benchmark",
+    "-c",
+    "user.email=startup-benchmark@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--allow-empty",
+    "--message",
+    "test: seed synthetic publication workspace",
+  );
+  git("-C", repoRoot, "worktree", "add", "-b", branch, worktreePath);
+  const repository = await resolveRepositoryIdentity(repoRoot);
+  const sessionKey = `agent:${agentId}:bench-0`;
+  const sessionId = `team-boot-${agentId}-0`;
+  const requestId = "startup-publication";
+  const now = Date.parse("2026-10-19T00:00:00Z");
+  const worktree = {
+    id: "startup-publication-worktree",
+    name: "Synthetic publication workspace",
+    path: worktreePath,
+    repoRoot: repository.repoRoot,
+    repoFingerprint: repository.fingerprint,
+    branch,
+    baseRef: "main",
+    ownerKind: "session" as const,
+    ownerId: sessionKey,
+    createdAt: now,
+    lastActiveAt: now,
+  };
+  agentDb.runOpenClawAgentWriteTransaction(
+    (database) => {
+      writeSessionEntry(database, sessionKey, {
+        sessionId,
+        updatedAt: now,
+        label: "Synthetic startup session 0",
+        visibility: "shared",
+        worktree: { id: worktree.id, branch, repoRoot: worktree.repoRoot },
+        spawnedCwd: worktreePath,
+      });
+    },
+    { agentId },
+  );
+  stateDb.runOpenClawStateWriteTransaction(({ db }) => {
+    insertRegistryWorktreeInDatabase(db, { record: worktree, provisionedPaths: [] });
+    const request = { sessionKey, agentId, idempotencyKey: requestId, draft: false };
+    insertGitHubPublicationRequest(db, {
+      request,
+      requestId,
+      requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
+      sessionId,
+      lifecycleRevision: null,
+      requester: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+      now,
+      worktree,
+      identity: {
+        source: "system-configured",
+        profileId: "startup-fixture",
+        account: { accountId: 1, login: "startup-fixture", avatarUrl: null },
+      },
+      assertCurrent() {},
+    });
+    // Offline historical receipt: recovery inspects its workspace, then refuses absent
+    // requester authority before credential preparation or any GitHub operation.
+    db.prepare(
+      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'",
+    ).run();
+  });
+  const bin = path.join(root, "publication-bin");
+  mkdirSync(bin);
+  writeFileSync(
+    path.join(bin, "git"),
+    `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const { setTimeout } = require("node:timers/promises");
+(async () => {
+  const args = process.argv.slice(2);
+  let startedAtMs;
+  if (process.cwd() === ${JSON.stringify(worktreePath)} &&
+      JSON.stringify(args) === JSON.stringify(["config", "--local", "--includes", "--bool", "--get", "extensions.worktreeConfig"])) {
+    startedAtMs = Date.now();
+    writeFileSync(${JSON.stringify(path.join(root, "publication-git-started.json"))}, JSON.stringify({ startedAtMs, delayMs: ${delayMs} }), { flag: "wx" });
+    await setTimeout(${delayMs});
+  }
+  const child = spawn(${JSON.stringify(gitPath)}, args, { stdio: "inherit" });
+  child.on("error", (error) => { console.error(error); process.exitCode = 1; });
+  child.on("exit", (code, signal) => {
+    if (startedAtMs !== undefined && !signal && (code === 0 || code === 1)) {
+      writeFileSync(${JSON.stringify(path.join(root, "publication-git-released.json"))}, JSON.stringify({ startedAtMs, releasedAtMs: Date.now(), delayMs: ${delayMs} }));
+    }
+    if (signal) process.kill(process.pid, signal); else process.exitCode = code ?? 1;
+  });
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+`,
+    { mode: 0o755 },
+  );
+}
+
 async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
   mkdirSync(root);
   const configPath = writeConfig(root, benchCase);
@@ -1258,7 +1438,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
-            for (let index = 0; index < 512; index++) {
+            for (let index = 0; index < 1250; index++) {
               writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
                 sessionId: `team-boot-${agentId}-${index}`,
                 updatedAt: now - index,
@@ -1274,6 +1454,9 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
       }
       const state = stateDb.openOpenClawStateDatabase({ env });
       statePath = state.path;
+      if (benchCase.publicationGitDelayMs !== undefined) {
+        await seedTeamBootPublication(root, benchCase.publicationGitDelayMs, agents[0]!.id);
+      }
       // An inert machine-state namespace adds real, incompressible pages without
       // making startup parse 128 MiB of synthetic records or changing the schema.
       const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
@@ -1303,9 +1486,10 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
       {
         pluginCount: 44,
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
+        publicationGitDelayMs: benchCase.publicationGitDelayMs,
         externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
-        sessionCount: agents.length * 512,
+        sessionCount: agents.length * 1250,
         stateDatabaseBytes: statSync(statePath).size,
         agentDatabaseBytes: databasePaths.map((databasePath) => statSync(databasePath).size),
         workerEnvironments: "default local startup; no provisioned remote workers",
@@ -1571,6 +1755,50 @@ async function waitForFirstSessionRpc(params: {
   return { ms: null, attempts, lastError };
 }
 
+async function captureStartupHeapProfile(
+  child: ChildProcess,
+  directory: string,
+  timeoutMs: number,
+): Promise<string> {
+  const outputPath = path.resolve(directory, `gateway-startup-${child.pid}.heapprofile`);
+  return await new Promise<string>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => onError(new Error("Gateway exited before startup heap capture completed"));
+    const onMessage = (message: unknown) => {
+      if (!isRecord(message) || message.type !== "openclaw-startup-heap:captured") {
+        return;
+      }
+      if (typeof message.error === "string") {
+        onError(new Error(message.error));
+      } else if (message.outputPath === outputPath) {
+        cleanup();
+        resolve(outputPath);
+      }
+    };
+    const timer = setTimeout(
+      () => onError(new Error("Gateway startup heap capture timed out")),
+      timeoutMs,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.send({ type: "openclaw-startup-heap:capture", outputPath }, (error) => {
+      if (error) {
+        onError(error);
+      }
+    });
+  });
+}
+
 async function runGatewaySample(
   options: GatewayBenchRuntimeOptions & {
     benchCase: GatewayBenchCase;
@@ -1604,7 +1832,24 @@ async function runGatewaySample(
       );
     }
     const configPath = writeConfig(root, options.benchCase);
+    if (options.benchCase.id === "teamBoot") {
+      copyFileSync(configPath, `${configPath}.bak`);
+    }
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
+    const publicationMarker =
+      options.benchCase.publicationGitDelayMs !== undefined
+        ? path.join(root, "publication-git-released.json")
+        : undefined;
+    if (publicationMarker) {
+      if (existsSync(path.join(root, "publication-git-started.json"))) {
+        throw new CliArgumentError(
+          "The pending-publication fixture has already run; seed a new root",
+        );
+      }
+      env.PATH = `${path.join(root, "publication-bin")}${path.delimiter}${env.PATH ?? ""}`;
+      // Keep startup PATH hardening from moving the real Git ahead of the fixture wrapper.
+      env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
+    }
     if (preload) {
       env.NODE_OPTIONS = `--import=${preload}`;
     }
@@ -1637,22 +1882,20 @@ async function runGatewaySample(
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
     let childExited = false;
-    let child: ChildProcessWithoutNullStreams | undefined;
+    let heapProfilePath: string | undefined;
+    let child: ChildProcess | undefined;
     let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
       const nodeOptions = [
-        ...(preload ? ["--import", preload] : []),
-        ...(options.cpuProfDir
+        ...(options.heapProfDir
           ? [
-              "--cpu-prof",
-              "--cpu-prof-dir",
-              options.cpuProfDir,
-              "--cpu-prof-name",
-              `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
+              "--import",
+              fileURLToPath(new URL("./lib/gateway-startup-heap-profile.mjs", import.meta.url)),
             ]
           : []),
-        ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
+        ...(preload ? ["--import", preload] : []),
+        ...gatewayBenchCpuProfileArgs(options.cpuProfDir),
       ];
       const childArgs = buildGatewayBenchChildArgs(
         options.entry,
@@ -1665,7 +1908,7 @@ async function runGatewaySample(
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", ...(options.heapProfDir ? ["ipc" as const] : [])],
       });
       try {
         await once(child, "spawn");
@@ -1674,6 +1917,8 @@ async function runGatewaySample(
         throw error;
       }
       const startedChild = child;
+      // Node's IPC spawn overload does not retain the three configured pipe types.
+      assert(startedChild.stdout && startedChild.stderr, "Gateway output pipes are required");
       const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
       rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
@@ -1740,7 +1985,16 @@ async function runGatewaySample(
       const healthzProbe = probe("/healthz");
       const [healthz, readyz, firstSessionRpc] = await Promise.all([
         healthzProbe,
-        probe("/readyz"),
+        probe("/readyz").then(async (readiness) => {
+          if (readiness.status === 200 && options.heapProfDir) {
+            heapProfilePath = await captureStartupHeapProfile(
+              startedChild,
+              options.heapProfDir,
+              Math.max(1, deadlineAt - performance.now()),
+            );
+          }
+          return readiness;
+        }),
         healthzProbe.then((health) =>
           health.status === 200
             ? waitForFirstSessionRpc({
@@ -1765,14 +2019,40 @@ async function runGatewaySample(
           await delay(25);
         }
       }
-      const completionMs = options.benchCase.completionTracePhase
-        ? await waitForStartupTracePhase({
-            deadlineAt,
-            isDone: () => childExited,
-            phase: options.benchCase.completionTracePhase,
-            startupTrace,
-          })
-        : performance.now() - startAt;
+      // Keep the recovered request alive through its real subprocess boundary even
+      // when readyz and the first RPC complete before this optional work finishes.
+      if (publicationMarker) {
+        while (!existsSync(publicationMarker)) {
+          if (childExited || performance.now() >= deadlineAt) {
+            break;
+          }
+          await delay(25);
+        }
+      }
+      // Compare CPU/RSS after the same optional startup work, even when publication
+      // recovery overlaps that work on only one side of the comparison.
+      const postReadyCompletion = publicationMarker
+        ? await Promise.all(
+            ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
+              waitForStartupTracePhase({
+                deadlineAt,
+                isDone: () => childExited,
+                phase,
+                startupTrace,
+              }),
+            ),
+          )
+        : [];
+      const completionMs = postReadyCompletion.includes(null)
+        ? null
+        : options.benchCase.completionTracePhase
+          ? await waitForStartupTracePhase({
+              deadlineAt,
+              isDone: () => childExited,
+              phase: options.benchCase.completionTracePhase,
+              startupTrace,
+            })
+          : performance.now() - startAt;
       const completedAt = performance.now();
       const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
       const cpuMs =
@@ -1792,6 +2072,13 @@ async function runGatewaySample(
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
+        ...(publicationMarker && existsSync(publicationMarker)
+          ? {
+              publicationRecovery: JSON.parse(
+                readFileSync(publicationMarker, "utf8"),
+              ) as NonNullable<GatewaySample["publicationRecovery"]>,
+            }
+          : {}),
         ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
         ...(interruptedRegistry
           ? {
@@ -1812,6 +2099,7 @@ async function runGatewaySample(
         gatewayReadyLogLine,
         gatewayReadyLogMs,
         healthz,
+        ...(heapProfilePath ? { heapProfilePath } : {}),
         httpListenLogLine,
         httpListenLogMs,
         maxRssMb,
@@ -1962,12 +2250,15 @@ async function main() {
     if (teamBoot) {
       const fixture = JSON.parse(
         readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
-      ) as { bundledPluginFixture?: OpenClawConfig };
+      ) as { bundledPluginFixture?: OpenClawConfig; publicationGitDelayMs?: number };
       if (
         JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
         JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
       ) {
         throw new CliArgumentError("--bundled-plugin-fixture must match the prepared fixture");
+      }
+      if (fixture.publicationGitDelayMs !== options.cases[0]?.publicationGitDelayMs) {
+        throw new CliArgumentError("--publication-git-delay-ms must match the prepared fixture");
       }
     }
   }
@@ -2040,7 +2331,7 @@ export const testing = {
   writeConfig,
 };
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   main().catch((err: unknown) => {
     if (err instanceof CliArgumentError) {
       console.error(err.message);

@@ -1,7 +1,9 @@
 import { createComponent } from "solid-js";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import "../../../styles/chat/side-panel.css";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
@@ -282,6 +284,7 @@ describe.runIf(browserMode)("Review header layout", () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(390, 800);
     const openPage = vi.fn();
+    const pending = Promise.withResolvers<SessionsDiffResult>();
 
     const mounted = mountSolid(() =>
       createComponent(SessionDiffPanel, {
@@ -292,15 +295,7 @@ describe.runIf(browserMode)("Review header layout", () => {
         loadFileText: null,
         openFile: null,
         revealFile: null,
-        loader: async () => ({
-          sessionKey: "main",
-          root,
-          branch,
-          baseRef: "main",
-          additions: 1,
-          deletions: 0,
-          files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
-        }),
+        loader: () => pending.promise,
       }),
     );
     const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
@@ -325,6 +320,19 @@ describe.runIf(browserMode)("Review header layout", () => {
     expect(bounds.left).toBeGreaterThanOrEqual(0);
     expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
     expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    pending.resolve({
+      sessionKey: "main",
+      root,
+      branch,
+      baseRef: "main",
+      additions: 1,
+      deletions: 0,
+      files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
+    });
+    await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
+    expect(panel.querySelector(".session-diff-mobile__rail .session-diff__toolbar-icon")).toBe(
+      view,
+    );
     await userEvent.keyboard("{Escape}");
     await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
     expect(document.activeElement).toBe(view);

@@ -11,11 +11,7 @@ import { createCronServiceState, type CronServiceDeps, type Logger } from "./sta
 type RecoveryStateOverrides = Partial<
   Pick<
     Parameters<typeof createCronServiceState>[0],
-    | "cronConfig"
-    | "enqueueSystemEvent"
-    | "enqueueSessionEvent"
-    | "requestHeartbeat"
-    | "sendCronFailureAlert"
+    "cronConfig" | "enqueueSystemEvent" | "enqueueSessionEvent" | "sendCronFailureAlert"
   >
 >;
 
@@ -33,7 +29,6 @@ export function makeCronRecoveryState(
     nowMs: () => nowMs,
     enqueueSystemEvent: vi.fn(),
     enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });

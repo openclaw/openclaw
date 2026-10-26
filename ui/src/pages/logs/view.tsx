@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
@@ -11,14 +11,18 @@ import {
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
 import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
-import { createMsFormatter } from "../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 
 registerEnglishCatalog(registerLogsEnglish);
 
+export type LogsReadCompletion = {
+  promise: Promise<RefreshStatus | null>;
+  quiet: boolean;
+};
+
 export type LogsProps = {
-  loading: boolean;
+  completion: LogsReadCompletion | null;
   refreshDisabled: boolean;
   status: RefreshStatus;
   file: string | null;
@@ -36,15 +40,31 @@ export type LogsProps = {
   onScroll: JSX.EventHandler<HTMLDivElement, Event>;
 };
 
-function formatLogTime(value: string | null | undefined, formatTime: (ms: number) => string) {
+function formatLogTime(value: string | null | undefined, formatter: Intl.DateTimeFormat) {
   if (!value) {
     return "";
   }
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : formatTime(date.getTime());
+  return Number.isNaN(date.getTime()) ? value : formatter.format(date.getTime());
 }
 
 export function LogsView(props: LogsProps) {
+  const read = createMemo(() =>
+    props.completion?.promise.then((result) => {
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+    }),
+  );
+  const readStatus = () => {
+    read();
+    return null;
+  };
+  const loading = () => !props.completion?.quiet && isPending(read);
+  const refreshStatus = () => (
+    // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
+    <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
+  );
   const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
   const filtered = createMemo(() =>
     props.entries.filter((entry) => {
@@ -59,14 +79,20 @@ export function LogsView(props: LogsProps) {
       ).includes(needle());
     }),
   );
-  // A visible-row update also picks up system timezone changes without a formatter per row.
-  const display = createMemo(() => {
-    t("gatewayLogs.title");
-    return {
-      entries: filtered(),
-      formatTime: createMsFormatter({ timeStyle: "short" }),
-    };
-  });
+  // Check system timezone on row updates without invalidating unchanged rows' timestamps.
+  const timeFormatter = createMemo(
+    () => {
+      filtered();
+      return new Intl.DateTimeFormat(getLocale(), { timeStyle: "short" });
+    },
+    {
+      equals: (previous, next) => {
+        const before = previous.resolvedOptions();
+        const after = next.resolvedOptions();
+        return before.locale === after.locale && before.timeZone === after.timeZone;
+      },
+    },
+  );
   const exportFileLabel = () =>
     needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
@@ -76,9 +102,21 @@ export function LogsView(props: LogsProps) {
       <div class="settings-section__header">
         <h2 class="settings-section__heading">{t("gatewayLogs.title")}</h2>
         <div class="settings-section__actions">
-          <button class="btn" disabled={props.refreshDisabled} onClick={() => props.onRefresh()}>
-            {props.loading ? t("common.loading") : t("common.refresh")}
-          </button>
+          <Loading
+            fallback={
+              <button class="btn" disabled>
+                {props.completion?.quiet ? t("common.refresh") : t("common.loading")}
+              </button>
+            }
+          >
+            <button
+              class="btn"
+              disabled={props.refreshDisabled || isPending(read)}
+              onClick={() => props.onRefresh()}
+            >
+              {loading() ? t("common.loading") : t("common.refresh")}
+            </button>
+          </Loading>
           <button
             class="btn"
             disabled={filtered().length === 0}
@@ -96,8 +134,16 @@ export function LogsView(props: LogsProps) {
         </div>
       </div>
       <p class="settings-section__desc">{t("gatewayLogs.subtitle")}</p>
-      {/* eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className. */}
-      <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
+      <Show when={props.completion} keyed fallback={refreshStatus()}>
+        {(completion) => (
+          <Errored fallback={refreshStatus()}>
+            <Loading on={completion} fallback={refreshStatus()}>
+              {readStatus()}
+              {refreshStatus()}
+            </Loading>
+          </Errored>
+        )}
+      </Show>
       <div class="settings-group logs-card">
         <SettingsRow
           title={t("gatewayLogs.filter")}
@@ -149,14 +195,16 @@ export function LogsView(props: LogsProps) {
           tabindex={0}
           onScroll={(event) => props.onScroll(event)}
         >
-          <Show when={props.status.hasLoaded} fallback={props.loading ? <LoadingState /> : null}>
-            <For
-              each={display().entries}
-              fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}
-            >
+          <Show
+            when={props.status.hasLoaded}
+            fallback={
+              <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
+            }
+          >
+            <For each={filtered()} fallback={<SettingsEmpty message={t("gatewayLogs.empty")} />}>
               {(entry) => (
                 <div class="log-row">
-                  <div class="log-time mono">{formatLogTime(entry.time, display().formatTime)}</div>
+                  <div class="log-time mono">{formatLogTime(entry.time, timeFormatter())}</div>
                   <div class={["log-level", entry.level ?? ""]}>{entry.level ?? ""}</div>
                   <div class="log-subsystem mono">{entry.subsystem ?? ""}</div>
                   <div class="log-message mono">{entry.message ?? entry.raw}</div>

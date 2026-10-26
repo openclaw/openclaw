@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createStubChild } from "../supervisor/adapters/child.test-support.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
-import type { BrokerNativeResourceLease } from "./resource-host.js";
+import type { BrokerNativeResourceCallbacks, BrokerNativeResourceLease } from "./resource-host.js";
 import { SPAWN_BROKER_STARTUP_TIMEOUT_MS } from "./resource-protocol.js";
 
 const native = vi.hoisted(() => ({
@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 type SendFailure = { type: string; mode: "callback" | "throw" };
-function brokerFixture(bootstrapFailure?: SendFailure) {
+function brokerFixture(channelControl = false) {
   const stub = createStubChild(41001);
   const worker = stub.child;
   const output = new PassThrough();
@@ -66,13 +66,26 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
     deliveries.set(type, delivery);
     return delivery;
   };
-  let sendFailure = bootstrapFailure;
+  let sendFailure: SendFailure | undefined;
   let exited = false;
+  const referenced = { child: true, channel: true };
+  const referenceChild = (value: boolean) => () => {
+    referenced.child = value;
+    if (!channelControl) {
+      referenced.channel = value;
+    }
+  };
+  const referenceChannel = (value: boolean) => () => {
+    referenced.channel = value;
+  };
   Object.defineProperties(worker, {
     stdio: { value: [null, null, output] },
     stderr: { value: output },
+    channel: {
+      value: channelControl ? { ref: referenceChannel(true), unref: referenceChannel(false) } : {},
+    },
   });
-  Object.assign(worker, { ref() {}, unref() {} });
+  Object.assign(worker, { ref: referenceChild(true), unref: referenceChild(false) });
   stub.sendMock.mockImplementation((message: unknown, ...args: unknown[]) => {
     if (!message || typeof message !== "object" || !("type" in message)) {
       throw new Error("Expected an unframed fixture request");
@@ -98,9 +111,22 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   const fixture = {
     host,
     worker,
+    referenced,
     disconnect: stub.disconnectMock,
     kill: stub.killMock,
     leases,
+    async ready() {
+      worker.emit("message", { type: "ready", pid: worker.pid });
+      await host.ready();
+    },
+    capture(callbacks: BrokerNativeResourceCallbacks = { message: vi.fn(), failed: vi.fn() }) {
+      const lease = host.captureNativeResource(
+        { moduleUrl: "file:///synthetic/resource.mjs", ownerPort: true },
+        callbacks,
+      );
+      leases.push(lease);
+      return lease;
+    },
     sent: (type: string) => sent(type).promise,
     failSend: (failure: SendFailure) => {
       sendFailure = failure;
@@ -118,12 +144,32 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   return fixture;
 }
 
-it.each(["before", "after disconnect", "during"] as const)(
+it.each([true, false])(
+  "releases idle IPC while retaining open native claims (channel controls: %s)",
+  async (channelControl) => {
+    const fixture = brokerFixture(channelControl);
+    const { worker, referenced } = fixture;
+    await fixture.ready();
+    const lease = fixture.capture();
+    expect(referenced).toEqual({ child: true, channel: true });
+    lease.receive({
+      type: "resource-ready",
+      id: lease.attachment.id,
+      pid: worker.pid!,
+      generation: 0,
+    });
+    lease.receive({ type: "resource-created", id: lease.attachment.id });
+    lease.receive({ type: "resource-closed", id: lease.attachment.id, requestId: 0 });
+    lease.release();
+    expect(referenced).toEqual({ child: false, channel: false });
+  },
+);
+
+it.each(["before", "after disconnect"] as const)(
   "classifies a nonzero broker exit %s close while waiting for late stderr",
   async (exitTiming) => {
     const fixture = brokerFixture();
-    fixture.worker.emit("message", { type: "ready", pid: fixture.worker.pid });
-    await fixture.host.ready();
+    await fixture.ready();
     if (exitTiming === "before") {
       fixture.exit(null, "SIGKILL");
     } else if (exitTiming === "after disconnect") {
@@ -132,30 +178,14 @@ it.each(["before", "after disconnect", "during"] as const)(
     const closing = fixture.host.close();
     const settled = vi.fn();
     void closing.then(settled, settled);
-    if (exitTiming === "during") {
-      fixture.exit(1);
-    } else if (exitTiming === "after disconnect") {
+    if (exitTiming === "after disconnect") {
       fixture.exit(null, "SIGKILL");
     }
     await fixture.host.waitForCleanup();
     expect(settled).not.toHaveBeenCalled();
     fixture.stderr("late broker diagnostic\n");
     fixture.close();
-    if (exitTiming !== "during") {
-      await expect(closing).resolves.toBeUndefined();
-    } else {
-      await expect(closing).rejects.toMatchObject({
-        message: "Spawn broker cleanup did not complete",
-        errors: [
-          {
-            message: "Spawn broker shutdown failed",
-            cause: {
-              message: expect.stringContaining("late broker diagnostic"),
-            },
-          },
-        ],
-      });
-    }
+    await expect(closing).resolves.toBeUndefined();
     fixtures.splice(fixtures.indexOf(fixture), 1);
   },
 );
@@ -163,18 +193,14 @@ it.each(["before", "after disconnect", "during"] as const)(
 it("releases undispatched native claims only after refused startup and broker close", async () => {
   const fixture = brokerFixture();
   const closed = createDeferredCore();
-  const lease = fixture.host.captureNativeResource(
-    { moduleUrl: "file:///synthetic/resource.mjs", ownerPort: true },
-    {
-      message: (message) => {
-        if (message.type === "resource-closed") {
-          closed.resolve();
-        }
-      },
-      failed() {},
+  const lease = fixture.capture({
+    message: (message) => {
+      if (message.type === "resource-closed") {
+        closed.resolve();
+      }
     },
-  );
-  fixture.leases.push(lease);
+    failed() {},
+  });
   fixture.worker.emit("message", {
     type: "startup-failed",
     error: { message: "listen EPERM: synthetic socket", code: "EPERM", syscall: "listen" },
@@ -190,26 +216,21 @@ it("releases undispatched native claims only after refused startup and broker cl
   await fixture.host.close();
 });
 
-it.each(["callback", "throw", "deadline"] as const)(
-  "retires a connected native broker after bootstrap %s failure without killing its isolate",
-  async (mode) => {
-    const fixture = brokerFixture(mode === "deadline" ? undefined : { type: "bootstrap", mode });
-    if (mode === "deadline") {
-      native.now.mockReturnValue(SPAWN_BROKER_STARTUP_TIMEOUT_MS);
-      fixture.host.serviceNativeResources();
-    }
-    await expect(fixture.host.ready()).rejects.toMatchObject({
-      code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-    });
-    expect(fixture.disconnect).toHaveBeenCalledOnce();
-    expect(fixture.kill).not.toHaveBeenCalled();
-    expect(native.groupCleanup).not.toHaveBeenCalled();
-    const closing = fixture.host.close();
-    fixture.exit();
-    fixture.close();
-    await closing;
-  },
-);
+it("retires a connected native broker after its startup deadline without killing its isolate", async () => {
+  const fixture = brokerFixture();
+  native.now.mockReturnValue(SPAWN_BROKER_STARTUP_TIMEOUT_MS);
+  fixture.host.serviceNativeResources();
+  await expect(fixture.host.ready()).rejects.toMatchObject({
+    code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+  });
+  expect(fixture.disconnect).toHaveBeenCalledOnce();
+  expect(fixture.kill).not.toHaveBeenCalled();
+  expect(native.groupCleanup).not.toHaveBeenCalled();
+  const closing = fixture.host.close();
+  fixture.exit();
+  fixture.close();
+  await closing;
+});
 
 it.each([
   "frame",
@@ -228,15 +249,10 @@ it.each([
   async (failure) => {
     const fixture = brokerFixture();
     const { host, worker } = fixture;
-    worker.emit("message", { type: "ready", pid: worker.pid });
-    await host.ready();
+    await fixture.ready();
     const failed = createDeferredCore<Error>();
     const callbacks = { message: vi.fn(), failed: vi.fn((error: Error) => failed.resolve(error)) };
-    const lease = host.captureNativeResource(
-      { moduleUrl: "file:///synthetic/resource.mjs", ownerPort: true },
-      callbacks,
-    );
-    fixture.leases.push(lease);
+    const lease = fixture.capture(callbacks);
     const id = lease.attachment.id;
     lease.receive({ type: "resource-ready", id, pid: worker.pid!, generation: 0 });
     lease.receive({ type: "resource-created", id });

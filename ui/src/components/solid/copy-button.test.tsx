@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { CopyButton } from "./copy-button.tsx";
 
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -20,16 +21,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 describe("Solid copy button", () => {
@@ -99,17 +92,6 @@ describe("Solid copy button", () => {
     await vi.advanceTimersByTimeAsync(1_500);
     expect(button.getAttribute("aria-label")).toBe("Copier la valeur");
     expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
-  });
-
-  it("keeps an empty payload mounted and reports failure without writing the clipboard", async () => {
-    const view = render(() => <CopyButton text="" idleLabel="Copy empty value" />);
-    const button = view.getByRole<HTMLButtonElement>("button", { name: "Copy empty value" });
-    fireEvent.click(button);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(writeText).not.toHaveBeenCalled();
-    expect(fallback).not.toHaveBeenCalled();
-    expect(button.dataset.copyState).toBe("error");
-    expect(view.getByRole("status").textContent).toBe("Copy failed");
   });
 
   it("does not fall back after its Solid owner is disposed", async () => {

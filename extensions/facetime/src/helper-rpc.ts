@@ -28,11 +28,11 @@ type HelperSocketServerParams = {
   onStale?: (bundleIdentifier: string, processId: number) => void;
 };
 
-const FACETIME_HELPER_BUNDLES = new Set([
-  ...DIAL_BUNDLES,
-  "com.apple.mobilephone",
-  "com.apple.TelephonyUtilities",
-]);
+// An already injected Phone helper reconnects until Phone exits. Admit even an
+// older build so upgrades do not create a reconnect loop; it remains inert.
+const LEGACY_PHONE_BUNDLES = new Set(["com.apple.mobilephone", "com.apple.TelephonyUtilities"]);
+const FACETIME_HELPER_BUNDLES = new Set([...DIAL_BUNDLES, ...LEGACY_PHONE_BUNDLES]);
+const isCallHelper = (bundleIdentifier: string) => DIAL_BUNDLES.has(bundleIdentifier);
 const MAX_FRAME_BYTES = 64 * 1024;
 const MAX_CONNECTIONS = 8;
 const MAX_PENDING_ACTIONS = 32;
@@ -62,9 +62,8 @@ type HelperAuthSession = PendingHelperHandshake & {
 };
 
 function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(record).toSorted();
-  const expected = [...keys].toSorted();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  const actual = Object.keys(record);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
 export class FaceTimeHelperSocketServer {
@@ -190,11 +189,18 @@ export class FaceTimeHelperSocketServer {
   }
 
   get connectedSockets(): number {
-    return this.#socketPeers.size;
+    return [...this.#socketPeers.values()].filter((peer) => isCallHelper(peer.bundleIdentifier))
+      .length;
   }
 
   get connectedHelperBundles(): string[] {
-    return [...new Set([...this.#socketPeers.values()].map((peer) => peer.bundleIdentifier))];
+    return [
+      ...new Set(
+        [...this.#socketPeers.values()]
+          .filter((peer) => isCallHelper(peer.bundleIdentifier))
+          .map((peer) => peer.bundleIdentifier),
+      ),
+    ];
   }
 
   #handleSocket(socket: net.Socket): void {
@@ -238,7 +244,7 @@ export class FaceTimeHelperSocketServer {
     });
     socket.on("close", () => {
       const disconnectedBundle = this.#socketPeers.get(socket)?.bundleIdentifier;
-      if (disconnectedBundle) {
+      if (disconnectedBundle && isCallHelper(disconnectedBundle)) {
         this.#connectionGeneration += 1;
       }
       this.#sockets.delete(socket);
@@ -250,7 +256,7 @@ export class FaceTimeHelperSocketServer {
         clearTimeout(deadline);
         this.#authDeadlineTimers.delete(socket);
       }
-      if (disconnectedBundle) {
+      if (disconnectedBundle && isCallHelper(disconnectedBundle)) {
         this.params.onDisconnect?.(disconnectedBundle);
       }
     });
@@ -319,7 +325,7 @@ export class FaceTimeHelperSocketServer {
       return;
     }
     const peer = this.#socketPeers.get(socket);
-    if (peer) {
+    if (peer && isCallHelper(peer.bundleIdentifier)) {
       void this.params.onMessage(payload, peer);
     }
   }
@@ -369,7 +375,7 @@ export class FaceTimeHelperSocketServer {
       socket.destroy();
       return;
     }
-    if (buildId !== this.params.buildId) {
+    if (buildId !== this.params.buildId && isCallHelper(bundleIdentifier)) {
       this.params.onStale?.(bundleIdentifier, processId);
       socket.destroy();
       return;
@@ -430,14 +436,18 @@ export class FaceTimeHelperSocketServer {
       bundleIdentifier: session.bundleIdentifier,
       processId: session.processId,
       processStartedAtMs: session.processStartedAtMs,
-      connectionGeneration: ++this.#connectionGeneration,
+      connectionGeneration: isCallHelper(session.bundleIdentifier)
+        ? ++this.#connectionGeneration
+        : this.#connectionGeneration,
     });
     const deadline = this.#authDeadlineTimers.get(socket);
     if (deadline) {
       clearTimeout(deadline);
       this.#authDeadlineTimers.delete(socket);
     }
-    this.params.onConnect?.(session.bundleIdentifier);
+    if (isCallHelper(session.bundleIdentifier)) {
+      this.params.onConnect?.(session.bundleIdentifier);
+    }
   }
 
   #consumeHelperEnvelope(
@@ -532,7 +542,7 @@ export class FaceTimeHelperSocketServer {
     const sockets = [...this.#sockets].filter(
       (candidate) =>
         !candidate.destroyed &&
-        FACETIME_HELPER_BUNDLES.has(this.#socketPeers.get(candidate)?.bundleIdentifier ?? ""),
+        isCallHelper(this.#socketPeers.get(candidate)?.bundleIdentifier ?? ""),
     );
     if (sockets.length === 0) {
       throw new FaceTimeHelperUnavailableError(
@@ -577,9 +587,6 @@ export class FaceTimeHelperSocketServer {
       throw new FaceTimeHelperUnavailableError("FaceTime helper action queue is full");
     }
     const transactionId = randomUUID();
-    if (!this.#socketAuthSessions.has(socket)) {
-      throw new FaceTimeHelperUnavailableError("FaceTime helper socket is not authenticated");
-    }
     return await new Promise<HelperActionResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.#pending.delete(transactionId);

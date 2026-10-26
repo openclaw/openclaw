@@ -33,6 +33,7 @@ export type CronRunExecutionParams = Pick<
   | "agentPayload"
   | "useSubagentFallbacks"
   | "inheritDefaultFallbacksForAgentStringModel"
+  | "sessionModelOverrideSource"
   | "modelFallbacksOverride"
   | "liveSelection"
   | "cronSession"
@@ -51,6 +52,7 @@ export type CronRunExecutionParams = Pick<
     | "executionIdentity"
     | "admissionSource"
     | "deliveryAttemptFence"
+    | "occurrence"
   > & {
     runId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;

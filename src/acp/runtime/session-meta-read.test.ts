@@ -4,6 +4,7 @@ import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -23,6 +24,7 @@ import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import { listAcpSessionEntries } from "./session-meta-list.js";
+import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
 import * as metadataReads from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
@@ -34,16 +36,22 @@ function seed(env: NodeJS.ProcessEnv, sessionKey: string, lifecycleRevision?: st
   seedCanonicalAcpSessionMeta({ env, sessionKey, lifecycleRevision, meta });
 }
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
+afterEach(() => vi.restoreAllMocks());
+
+it("reuses a captured config across ACP read contexts without cloning it again", async () => {
+  const config = captureRuntimeConfig(baseConfig);
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  for (let index = 0; index < 3; index++) {
+    const context = await captureAcpSessionReadContext({ cfg: config });
+    expect(context.cfg).toBe(config);
+  }
+  expect(clone).not.toHaveBeenCalled();
 });
 
 it.each(["cold-file", "incognito"] as const)(
   "joins the %s session with its current metadata through the owning storage route",
-  async (storage) => {
-    await withOpenClawTestState({ label: `acp-singular-${storage}` }, async (state) => {
+  (storage) =>
+    withOpenClawTestState({ label: `acp-singular-${storage}` }, async (state) => {
       const incognito = storage === "incognito";
       const storePath = incognito ? undefined : state.path("custom.sqlite");
       const sessionKey = incognito ? "agent:main:dashboard:incognito-private" : "agent:main:main";
@@ -98,12 +106,11 @@ it.each(["cold-file", "incognito"] as const)(
         expect(await listAcpSessionEntries({ cfg, env: state.env })).toEqual([]);
       }
       sql.expectIdle();
-    });
-  },
+    }),
 );
 
-it("retains absent ACP metadata across async reads and follows in-process set and clear", async () => {
-  await withOpenClawTestState({ label: "acp-absent-receipt" }, async (state) => {
+it("retains absent ACP metadata across async reads and follows in-process set and clear", () =>
+  withOpenClawTestState({ label: "acp-absent-receipt" }, async (state) => {
     const sessionKey = "agent:main:acp:absent";
     const entry = baseEntry;
     const cfg = baseConfig;
@@ -128,11 +135,10 @@ it("retains absent ACP metadata across async reads and follows in-process set an
     requests.mockClear();
     await expectRead(undefined);
     sql.expectIdle();
-  });
-});
+  }));
 
-it("preserves missing-entry binding fences and unreadable-store results without creating stores", async () => {
-  await withOpenClawTestState({ label: "acp-singular-missing" }, async (state) => {
+it("preserves missing-entry binding fences and unreadable-store results without creating stores", () =>
+  withOpenClawTestState({ label: "acp-singular-missing" }, async (state) => {
     const storePath = state.path("absent", "custom.sqlite");
     const sessionKey = "agent:main:acp:missing";
     const input = { cfg: { session: { store: storePath } }, env: state.env, sessionKey };
@@ -161,13 +167,12 @@ it("preserves missing-entry binding fences and unreadable-store results without 
       ...unreadable,
       acp: meta,
     });
-  });
-});
+  }));
 
 it.each(["caller", "store"] as const)(
   "rejects a retired %s while the metadata join is held",
-  async (retired) => {
-    await withOpenClawTestState({ label: "acp-singular-retirement" }, async (state) => {
+  (retired) =>
+    withOpenClawTestState({ label: "acp-singular-retirement" }, async (state) => {
       const storePath = state.path("custom.sqlite");
       const sessionKey = "agent:main:acp:held";
       const cfg = { session: { store: storePath } };
@@ -225,6 +230,5 @@ it.each(["caller", "store"] as const)(
         await Promise.allSettled([pending, ...(closing ? [closing] : [])]);
         unregister?.();
       }
-    });
-  },
+    }),
 );

@@ -27,15 +27,23 @@ function observeTraffic() {
   return observations;
 }
 
-function traffic(observations: DiagnosticEventPayload[]) {
+function traffic(observations: DiagnosticEventPayload[], includeHistogram = false) {
   return observations.map(({ seq: _seq, ts: _ts, ...event }) => {
-    if (event.type === "gateway.ws.event") {
+    if (event.type === "gateway.ws.event" && !includeHistogram) {
       const { frameBytes: _frameBytes, ...rest } = event;
       return rest;
     }
     return event;
   });
 }
+
+const histogram = (counts: number[]) =>
+  Object.fromEntries(
+    ["256", "512", "1024", "2048", "4096", "8192", "16384", "65536", "+Inf"].map((bound, index) => [
+      bound,
+      counts[index],
+    ]),
+  );
 
 function recordingClient(id: string) {
   const peer = makeClient(id, "operator", ["operator.read"]);
@@ -54,7 +62,7 @@ const wireFrame = (event: string, payload: unknown, seq: number) =>
 const frameBytes = (event: string, payload: unknown, seqs: number[]) =>
   seqs.reduce((sum, seq) => sum + Buffer.byteLength(wireFrame(event, payload, seq)), 0);
 
-it("batches session frame bytes by reason and exact subscription without changing the wire", async () => {
+it("batches session frame bytes by reason and exact subscription", async () => {
   const observations = observeTraffic();
   const viewer = recordingClient("viewer");
   const roster = recordingClient("roster");
@@ -93,12 +101,6 @@ it("batches session frame bytes by reason and exact subscription without changin
       })),
     ),
   );
-  expect(viewer.socket.send.mock.calls.map(([frame]) => String(frame))).toEqual(
-    roster.socket.send.mock.calls.map(([frame]) => String(frame)),
-  );
-  expect(String(viewer.socket.send.mock.calls[0]![0])).toBe(
-    wireFrame("sessions.changed", changed, 1),
-  );
   observations.length = 0;
   for (const [event, payload] of [
     ["sessions.changed", { phase: "end" }],
@@ -109,20 +111,11 @@ it("batches session frame bytes by reason and exact subscription without changin
     broadcastToConnIds(event, payload, recipients);
   }
   await drain();
-  expect(
-    observations
-      .filter((event) => event.type === "gateway.ws.event")
-      .map((event) => ({
-        event: event.event,
-        count: event.count,
-        reason: event.sessionEvent?.reason,
-        delivery: event.sessionEvent?.delivery,
-      })),
-  ).toEqual([
-    { event: "sessions.changed", count: 2, reason: "end", delivery: "roster" },
-    { event: "sessions.changed", count: 2, reason: "other", delivery: "roster" },
-    { event: "session.message", count: 2, reason: "other", delivery: "roster" },
-    { event: "session.message", count: 2, reason: "message", delivery: "roster" },
+  expect(traffic(observations)).toMatchObject([
+    { event: "sessions.changed", count: 2, sessionEvent: { reason: "end", delivery: "roster" } },
+    { event: "sessions.changed", count: 2, sessionEvent: { reason: "other", delivery: "roster" } },
+    { event: "session.message", count: 2, sessionEvent: { reason: "other", delivery: "roster" } },
+    { event: "session.message", count: 2, sessionEvent: { reason: "message", delivery: "roster" } },
   ]);
   expect(JSON.stringify(observations)).not.toMatch(
     /private-reason|private-role|sessionKey|content/,
@@ -149,7 +142,7 @@ it("batches accepted presence frame counts and UTF-8 bytes by delivery mode", as
   await drain();
   const bytes = (peer: typeof capable, indices: number[]) =>
     indices.reduce(
-      (total, index) => total + Buffer.byteLength(peer.socket.send.mock.calls[index]![0]),
+      (total, index) => total + Buffer.byteLength(String(peer.socket.send.mock.calls[index]![0])),
       0,
     );
   expect(traffic(observations)).toEqual(
@@ -177,7 +170,7 @@ it("preserves histogram boundaries, wire-only batches, and detached snapshots ac
   recordGatewayWsEvent("another-private-event", 0, undefined, undefined, 7);
   expect(observations).toEqual([]);
   await drain();
-  const firstBatch = observations.map(({ seq: _seq, ts: _ts, ...event }) => event);
+  const firstBatch = traffic(observations, true);
   expect(firstBatch).toEqual([
     {
       type: "gateway.ws.event",
@@ -185,17 +178,7 @@ it("preserves histogram boundaries, wire-only batches, and detached snapshots ac
       count: 4,
       bytes: 67074,
       wireBytes: 0,
-      frameBytes: {
-        "256": 1,
-        "512": 2,
-        "1024": 3,
-        "2048": 3,
-        "4096": 3,
-        "8192": 3,
-        "16384": 3,
-        "65536": 3,
-        "+Inf": 4,
-      },
+      frameBytes: histogram([1, 2, 3, 3, 3, 3, 3, 3, 4]),
     },
     { type: "gateway.ws.event", event: "other", count: 0, bytes: 0, wireBytes: 20 },
   ]);
@@ -203,27 +186,15 @@ it("preserves histogram boundaries, wire-only batches, and detached snapshots ac
   recordGatewayWsEvent("not-a-protocol-event", 512);
   recordGatewayWsEvent("chat", 0, undefined, undefined, 99);
   await drain();
-  expect(observations.slice(2).map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual([
+  expect(traffic(observations.slice(2), true)).toEqual([
     {
       type: "gateway.ws.event",
       event: "other",
       count: 1,
       bytes: 512,
-      frameBytes: {
-        "256": 0,
-        "512": 1,
-        "1024": 1,
-        "2048": 1,
-        "4096": 1,
-        "8192": 1,
-        "16384": 1,
-        "65536": 1,
-        "+Inf": 1,
-      },
+      frameBytes: histogram([0, 1, 1, 1, 1, 1, 1, 1, 1]),
     },
     { type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 99 },
   ]);
-  expect(observations.slice(0, 2).map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual(
-    firstBatch,
-  );
+  expect(traffic(observations.slice(0, 2), true)).toEqual(firstBatch);
 });

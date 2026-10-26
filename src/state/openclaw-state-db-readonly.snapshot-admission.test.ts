@@ -131,15 +131,25 @@ beforeEach(() => {
     cleanupAsync: mocks.cleanup,
   });
   mocks.start.mockReset().mockImplementation(() => {
-    const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {
-      retained.resolve(privateSource());
-    });
-    return {
-      ...retained.operation,
-      startClose: () => observeAsyncFixture(mocks.closePreparation),
-    };
+    const retained = preparation(() => retained.resolve(privateSource()));
+    return retained.operation;
   });
 });
+
+function preparation(service: () => void = () => {}) {
+  const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(service);
+  return {
+    ...retained,
+    operation: {
+      ...retained.operation,
+      startClose: () => observeAsyncFixture(mocks.closePreparation),
+    },
+  };
+}
+
+function readRows(readOptions?: Parameters<typeof readExisting>[2]) {
+  return readExisting(options, { type: "backup.runs" }, readOptions);
+}
 
 function privateSource(): RetainedPreparedSqliteReadOnlyLocation {
   return {
@@ -166,19 +176,16 @@ it("lets a sync reader join the same lazy preparation started by an async reader
   let ready = false;
   let delivered = false;
   mocks.start.mockImplementation(() => {
-    const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {
+    const retained = preparation(() => {
       if (ready) {
         retained.resolve(privateSource());
       }
     });
-    return {
-      ...retained.operation,
-      startClose: () => observeAsyncFixture(mocks.closePreparation),
-    };
+    return retained.operation;
   });
   await withSnapshot(
     async () => {
-      const reading = readExisting(options, { type: "backup.runs" }).then((result) => {
+      const reading = readRows().then((result) => {
         delivered = true;
         return result;
       });
@@ -189,7 +196,7 @@ it("lets a sync reader join the same lazy preparation started by an async reader
       expect(snapshot?.location).toBe("/fixture/private.sqlite");
       expect(delivered).toBe(false);
       await expect(reading).resolves.toMatchObject({ runs: [] });
-      await readExisting(options, { type: "backup.runs" });
+      await readRows();
       expect(activeSnapshot(options)).toBe(snapshot);
       expect(mocks.read.mock.calls.map(([location]) => location.location)).toEqual([
         "/fixture/private.sqlite",
@@ -208,12 +215,9 @@ it("honors preservation entered after a lazy report was created", async () => {
   const refusal = new Error("stop after observing nested preservation admission");
   mocks.capture.mockReturnValue({ identity, assertCurrent() {} });
   mocks.start.mockImplementation(() => {
-    const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
-    preparation.reject(refusal);
-    return {
-      ...preparation.operation,
-      startClose: () => observeAsyncFixture(mocks.closePreparation),
-    };
+    const retained = preparation();
+    retained.reject(refusal);
+    return retained.operation;
   });
   await expect(
     withSnapshot(
@@ -236,20 +240,17 @@ it("honors preservation entered after a lazy report was created", async () => {
 });
 
 it("joins in-flight materialization before lending a private fork", async () => {
-  const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
-  mocks.start.mockReturnValue({
-    ...preparation.operation,
-    startClose: () => observeAsyncFixture(mocks.closePreparation),
-  });
+  const retained = preparation();
+  mocks.start.mockReturnValue(retained.operation);
   const family = { root: "/fixture", main: "1:2:3:4:5:6", wal: "1:7:8:9:10:11" };
   const fork = { location: "/fixture/fork.sqlite" };
   mocks.fork.mockResolvedValue(fork);
   await withSnapshot(
     async () => {
-      const reading = readExisting(options, { type: "backup.runs" });
+      const reading = readRows();
       const forking = forkSnapshot(options);
       expect(mocks.fork).not.toHaveBeenCalled();
-      preparation.resolve({ ...privateSource(), privateFamily: family });
+      retained.resolve({ ...privateSource(), privateFamily: family });
       expect(await forking).toBe(fork);
       await reading;
       expect(mocks.start).toHaveBeenCalledOnce();
@@ -295,12 +296,9 @@ it("joins failed eager retained production and preserves its cleanup failure", a
   const closing = createDeferredCore();
   const finishClose = createDeferredCore();
   mocks.start.mockImplementation(() => {
-    const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
-    preparation.reject(failure);
-    return {
-      ...preparation.operation,
-      startClose: () => observeAsyncFixture(mocks.closePreparation),
-    };
+    const retained = preparation();
+    retained.reject(failure);
+    return retained.operation;
   });
   mocks.closePreparation.mockImplementation(async () => {
     closing.resolve();
@@ -327,11 +325,11 @@ it("joins failed eager retained production and preserves its cleanup failure", a
 it("keeps current and live reads outside the lazy report source", async () => {
   await withSnapshot(
     async () => {
-      await readExisting(options, { type: "backup.runs" }, { current: true });
-      await readExisting(options, { type: "backup.runs" }, { live: true });
+      await readRows({ current: true });
+      await readRows({ live: true });
       expect(mocks.start).not.toHaveBeenCalled();
-      await readExisting(options, { type: "backup.runs" });
-      await readExisting(options, { type: "backup.runs" }, { current: true });
+      await readRows();
+      await readRows({ current: true });
       expect(mocks.read.mock.calls.map(([location]) => location.location)).toEqual([
         source,
         source,
@@ -372,24 +370,21 @@ it("joins lazy preparation close after caller cancellation", async () => {
   });
   mocks.start.mockImplementation((_pathname, value) => {
     const { signal } = value as { signal: AbortSignal };
-    const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {
+    const retained = preparation(() => {
       started.resolve();
       if (signal.aborted) {
         retained.reject(signal.reason);
       }
     });
     signal.addEventListener("abort", () => retained.operation.service(), { once: true });
-    return {
-      ...retained.operation,
-      startClose: () => observeAsyncFixture(mocks.closePreparation),
-    };
+    return retained.operation;
   });
   let settled = false;
   const result = settle(
     caller.track(() =>
       withSnapshot(
         async () => {
-          await readExisting(options, { type: "backup.runs" });
+          await readRows();
         },
         { ...options, lazy: true },
       ),
@@ -415,21 +410,16 @@ it("joins lazy preparation close after caller cancellation", async () => {
 it("does not query a canceled read after the shared preparation completes", async () => {
   const caller = new AbortController();
   const cancelled = new Error("only this read was cancelled");
-  const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
-  mocks.start.mockReturnValue({
-    ...preparation.operation,
-    startClose: () => observeAsyncFixture(mocks.closePreparation),
-  });
+  const retained = preparation();
+  mocks.start.mockReturnValue(retained.operation);
   await withSnapshot(
     async () => {
-      const reading = settle(
-        readExisting(options, { type: "backup.runs" }, { signal: caller.signal }),
-      );
+      const reading = settle(readRows({ signal: caller.signal }));
       caller.abort(cancelled);
-      preparation.resolve(privateSource());
+      retained.resolve(privateSource());
       expect(await reading).toEqual({ error: cancelled });
       expect(mocks.read).not.toHaveBeenCalled();
-      await expect(readExisting(options, { type: "backup.runs" })).resolves.toMatchObject({
+      await expect(readRows()).resolves.toMatchObject({
         runs: [],
       });
     },
@@ -445,16 +435,13 @@ it("bounds sync joining even when the async caller owns the deadline", async () 
   });
   mocks.start.mockImplementation((_pathname, value) => {
     const { signal } = value as { signal: AbortSignal };
-    const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {
+    const retained = preparation(() => {
       if (signal.aborted) {
         retained.reject(signal.reason);
       }
     });
     signal.addEventListener("abort", () => retained.operation.service(), { once: true });
-    return {
-      ...retained.operation,
-      startClose: () => observeAsyncFixture(mocks.closePreparation),
-    };
+    return retained.operation;
   });
   try {
     await expect(
@@ -619,7 +606,7 @@ async function expectRetiredAdmission() {
     currentSnapshot: () => withSyncSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withSnapshot(async () => "nested", options),
     nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
-    worker: () => readExisting(options, { type: "backup.runs" }),
+    worker: () => readRows(),
   };
   await Promise.all(
     Object.entries(attempts).map(async ([name, run]) => {
@@ -653,7 +640,7 @@ it.each(["snapshot", "lazy", "disposable"] as const)(
     let read!: ReturnType<typeof readExisting>;
     const callback = async () => {
       escape = AsyncLocalStorage.snapshot();
-      read = readExisting(options, { type: "backup.runs" });
+      read = readRows();
       await started.promise;
     };
     const closing =
@@ -686,9 +673,10 @@ it("keeps captured schema authority while selecting current rows", async () => {
         expect([existingSchemaPath(), location.location]).toEqual([source, source]);
         return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
       });
-      await expect(
-        readExisting(options, { type: "backup.runs" }, { current: true, context }),
-      ).resolves.toMatchObject({ ok: true, runs: [] });
+      await expect(readRows({ current: true, context })).resolves.toMatchObject({
+        ok: true,
+        runs: [],
+      });
       expect(mocks.read).toHaveBeenCalledOnce();
     }, options),
   );

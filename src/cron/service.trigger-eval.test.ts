@@ -86,7 +86,6 @@ async function createHarness(
     cronConfig: { triggers: { enabled: true } },
     enqueueSystemEvent,
     runSessionEvent,
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
     ...params,
     onEvent: (event, context) => {
@@ -725,7 +724,6 @@ describe("cron trigger cadence", () => {
     expect(evaluate).toHaveBeenCalledOnce();
     expect(h.runSessionEvent).not.toHaveBeenCalled();
     expect(h.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(h.deps.requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("catches up an old occurrence whose future slot has no recent evaluation", async () => {

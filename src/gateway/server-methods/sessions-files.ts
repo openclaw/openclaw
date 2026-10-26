@@ -48,6 +48,7 @@ import {
   sessionFileWorkspaceMatches,
 } from "./session-file-read-authority.js";
 import {
+  rejectDeviceFolderFiles,
   respondSessionFileNotFound,
   respondSessionFileTooLarge,
   sessionFilesError,
@@ -77,25 +78,7 @@ import {
   type LoadedSessionFiles,
 } from "./workspace-files.js";
 
-function rejectDeviceFolderFiles(
-  entry: Pick<InternalSessionEntry, "deviceFolder"> | undefined,
-  respond: RespondFn,
-): boolean {
-  if (!entry?.deviceFolder) {
-    return false;
-  }
-  respond(
-    false,
-    undefined,
-    sessionFilesError(
-      "device_folder_files_unavailable",
-      "Files access is unavailable for existing folders on paired devices. Use the session's file tools on the selected device.",
-    ),
-  );
-  return true;
-}
-
-async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
+async function loadSessionFileRoot(loaded: GatewaySessionEntryRead, messageEntryId?: string) {
   if (!loaded.entry?.sessionId || loaded.entry.repositoryWorkspaceId) {
     const unavailable = {
       source: undefined,
@@ -113,12 +96,14 @@ async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
     loaded.agentId,
     loaded.canonicalKey,
     loaded.entry,
+    messageEntryId ? { entryId: messageEntryId, storePath: loaded.storePath } : undefined,
   );
   const { spawnedCwd, root, diffCwd } = fileWorkspace;
   const fileRoot = resolveFileRoot({ root, spawnedCwd });
-  const source = loaded.entry.worktree?.id
-    ? { workspaceId: loaded.entry.worktree.id, root: root ?? null, fileRoot: fileRoot ?? null }
-    : undefined;
+  const source =
+    !fileWorkspace.historical && loaded.entry.worktree?.id
+      ? { workspaceId: loaded.entry.worktree.id, root: root ?? null, fileRoot: fileRoot ?? null }
+      : undefined;
   return {
     ...loaded,
     fileWorkspace,
@@ -158,6 +143,8 @@ export async function withSessionFileRoot<T>(
     agentId?: string;
     projection?: SessionEntryReadScope["projection"];
     getRuntimeConfig?: () => OpenClawConfig;
+    messageEntryId?: string;
+    retained?: Awaited<ReturnType<typeof retainGatewaySessionEntryReadOnly>>;
   },
   cfg: OpenClawConfig,
   consume: (
@@ -166,20 +153,22 @@ export async function withSessionFileRoot<T>(
     readEntry: () => InternalSessionEntry | undefined,
   ) => Promise<T>,
 ): Promise<T> {
-  const session = await retainGatewaySessionEntryReadOnly(
-    params.sessionKey,
-    params.agentId,
-    sessionFileWorkspaceMatches,
-    cfg,
-    {
-      projection:
-        params.projection && params.projection !== "full"
-          ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
-          : "full",
-    },
-  );
+  const session =
+    params.retained ??
+    (await retainGatewaySessionEntryReadOnly(
+      params.sessionKey,
+      params.agentId,
+      sessionFileWorkspaceMatches,
+      cfg,
+      {
+        projection:
+          params.projection && params.projection !== "full"
+            ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
+            : "full",
+      },
+    ));
   try {
-    const loaded = await loadSessionFileRoot(session);
+    const loaded = await loadSessionFileRoot(session, params.messageEntryId);
     const assertCurrent = () => {
       if (!session.isCurrentAtResponse()) {
         throw new SessionMutationAuthorizationChangedError(
@@ -196,7 +185,9 @@ export async function withSessionFileRoot<T>(
     assertCurrent();
     return result;
   } finally {
-    session.release();
+    if (!params.retained) {
+      session.release();
+    }
   }
 }
 
@@ -211,7 +202,7 @@ async function loadSessionFiles(
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
-  if (entry.worktree?.id && loaded.root) {
+  if (entry.worktree?.id && loaded.root && !loaded.fileWorkspace?.historical) {
     const { withSettledLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-projection.js");
     await withSettledLocalWorkspacePath(
@@ -247,7 +238,8 @@ async function loadSessionFiles(
     root: loaded.root,
     fileRoot: loaded.fileRoot,
     diffCwd: loaded.diffCwd,
-    files: [...files.values()].toSorted((a, b) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a fresh, private array.
+    files: [...files.values()].sort((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
       }
@@ -421,6 +413,9 @@ async function handleSessionFilesRead(
                   });
           assertCurrent();
           const { file } = fileResult;
+          if (file && source.fileWorkspace?.historical) {
+            delete file.hash;
+          }
           if (!file || file.missing) {
             failure = () =>
               respondSessionFileNotFound(
@@ -538,7 +533,9 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           assertSourceCurrent();
           sessionMutationAuthorization?.assertCurrent();
           if (
-            params.expectedSource !== undefined &&
+            (params.expectedSource !== undefined ||
+              (source !== undefined &&
+                loaded.entry?.priorWorkspace?.worktreeId === source.workspaceId)) &&
             !isDeepStrictEqual(params.expectedSource, source)
           ) {
             throw new SessionMutationAuthorizationChangedError(

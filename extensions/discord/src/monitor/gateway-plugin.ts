@@ -227,9 +227,6 @@ export function createDiscordGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
-      if (!url) {
-        throw new Error("Gateway URL is required");
-      }
       assertDiscordEndpointGatewayUrl(url, endpoint?.gatewayOrigin);
       const wsFlowId = randomUUID();
       // Avoid Node's undici-backed global WebSocket here. We have seen late

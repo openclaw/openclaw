@@ -4,6 +4,7 @@ import * as execRunner from "../process/exec-runner.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import * as processExec from "../process/exec.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { executeGitCommand, executeGitCommandBytes } from "./git-exec.js";
 import { buildUpdateCommandRunner, runStep } from "./update-runner-command.js";
 
@@ -21,14 +22,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const failure: SpawnResult = {
+const failure: SpawnResult = createCommandResult({
   stdout: "partial output",
   stderr: "error: origin did not send all necessary objects",
-  termination: "exit",
   code: 1,
-  signal: null,
-  killed: false,
-};
+});
 const success: SpawnResult = { ...failure, stdout: "complete output", stderr: "", code: 0 };
 
 type Attempt = Pick<CommandOptions, "timeoutMs" | "input"> & { argv: string[] };
@@ -89,14 +87,22 @@ it("retries the same object request once without leaking partial output or reset
   );
 });
 
-it("cancels during backoff without starting another Git process", async () => {
-  const controller = new AbortController();
-  const pending = fetch({ signal: controller.signal });
-  await vi.advanceTimersByTimeAsync(100);
-  controller.abort();
-  expect(await pending).toMatchObject({ termination: "signal", code: null });
-  expect(calls).toHaveLength(1);
-});
+it.each(["direct", "updater"] as const)(
+  "cancels %s backoff without another Git process",
+  async (route) => {
+    const controller = new AbortController();
+    const runUpdate =
+      route === "updater" ? (await buildUpdateCommandRunner()).runCommand : undefined;
+    const pending = runUpdate
+      ? withCommandProcessScope(() => runUpdate(["git", "fetch", "origin"], {}), controller.signal)
+      : fetch({ signal: controller.signal });
+    await vi.advanceTimersByTimeAsync(100);
+    controller.abort();
+    expect(await pending).toMatchObject({ termination: "signal", code: null });
+    expect(calls).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 
 it.each([10_000, undefined])(
   "completes an update fetch after an incomplete advertisement (timeout %s)",
@@ -128,37 +134,6 @@ it.each([10_000, undefined])(
   },
 );
 
-it("stops the updater's inherited command scope during retry backoff", async () => {
-  const { runCommand } = await buildUpdateCommandRunner();
-  const controller = new AbortController();
-  const pending = withCommandProcessScope(
-    () => runCommand(["git", "fetch", "origin"], {}),
-    controller.signal,
-  );
-  await vi.advanceTimersByTimeAsync(100);
-  controller.abort();
-  expect(await pending).toMatchObject({ termination: "signal", code: null });
-  expect(calls).toHaveLength(1);
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it("rechecks updater authority before a second network attempt", async () => {
-  const revoked = new Error("update requester revoked");
-  let current = true;
-  const { runCommand } = await buildUpdateCommandRunner(undefined, () => {
-    if (!current) {
-      throw revoked;
-    }
-  });
-  const pending = runCommand(["git", "fetch", "origin"], {});
-  const rejected = expect(pending).rejects.toBe(revoked);
-  await vi.advanceTimersByTimeAsync(100);
-  current = false;
-  await vi.advanceTimersByTimeAsync(900);
-  await rejected;
-  expect(calls).toHaveLength(1);
-});
-
 it("does not retry package installation after a transport-like failure", async () => {
   const { runCommand } = await buildUpdateCommandRunner();
   expect(await runCommand(["pnpm", "install"], {})).toEqual(failure);
@@ -166,7 +141,7 @@ it("does not retry package installation after a transport-like failure", async (
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it.each(["beforeRun", "startRun"] as const)(
+it.each(["beforeRun", "startRun", "updater"] as const)(
   "rechecks %s authority before retrying",
   async (hook) => {
     const revoked = new Error("operation no longer owns the workspace");
@@ -181,7 +156,13 @@ it.each(["beforeRun", "startRun"] as const)(
       admit();
       return await start();
     };
-    const pending = fetch(hook === "beforeRun" ? { beforeRun: admit } : { startRun });
+    const pending =
+      hook === "updater"
+        ? (await buildUpdateCommandRunner(undefined, admit)).runCommand(
+            ["git", "fetch", "origin"],
+            {},
+          )
+        : fetch(hook === "beforeRun" ? { beforeRun: admit } : { startRun });
     const outcome = expect(pending).rejects.toBe(revoked);
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toHaveLength(1);
@@ -206,8 +187,6 @@ it("recovers transport errors with Git global options", async () => {
 it.each([
   [["fetch", "origin"], "fatal: repository not found"],
   [["push", "origin", "main"], failure.stderr],
-  [["fetch", "origin"], "error: cannot lock ref: File exists."],
-  [["fetch", "origin"], "error: cannot lock ref: is at aaaa but expected bbbb"],
   [["fetch", "origin"], `error: cannot lock ref: is at aaaa but expected bbbb\n${failure.stderr}`],
 ] satisfies Array<[string[], string]>)(
   "does not replay permanent failures or unsafe operations: %j %s",

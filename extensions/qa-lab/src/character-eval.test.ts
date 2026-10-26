@@ -65,10 +65,8 @@ function createConcurrencyGate(expectedActive: number) {
   let active = 0;
   let maxActive = 0;
   let releaseStartedTasks = false;
-  let resolveExpectedActive: () => void = () => {};
-  const expectedActiveReached = new Promise<void>((resolve) => {
-    resolveExpectedActive = resolve;
-  });
+  const { promise: expectedActiveReached, resolve: resolveExpectedActive } =
+    Promise.withResolvers<void>();
   const taskReleases: Array<() => void> = [];
   const releaseQueuedTasks = () => {
     if (!releaseStartedTasks) {
@@ -308,14 +306,8 @@ describe("runQaCharacterEval", () => {
     const firstModel = "ollama/qwen3.5:9b";
     const secondModel = "ollama/qwen3.5/9b";
     const models = [firstModel, secondModel];
-    let releaseSecondRun: () => void = () => {};
-    let releaseFirstRun: () => void = () => {};
-    const firstRunWritten = new Promise<void>((resolve) => {
-      releaseSecondRun = resolve;
-    });
-    const secondRunWritten = new Promise<void>((resolve) => {
-      releaseFirstRun = resolve;
-    });
+    const { promise: firstRunWritten, resolve: releaseSecondRun } = Promise.withResolvers<void>();
+    const { promise: secondRunWritten, resolve: releaseFirstRun } = Promise.withResolvers<void>();
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
       const markerPath = path.join(params.outputDir, "model-marker.txt");
       await fs.mkdir(params.outputDir, { recursive: true });

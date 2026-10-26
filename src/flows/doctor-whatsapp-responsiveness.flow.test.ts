@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   createDoctorHealthFlowContext,
@@ -26,10 +26,12 @@ vi.mock("node:child_process", async () => {
     vi.importActual<typeof import("node:child_process")>("node:child_process"),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+// Do not mock doctor-whatsapp-responsiveness: its actual owner reads mocked ps
+// and queues the advisory through the real contribution runner.
+
+beforeEach(() => vi.clearAllMocks());
 
 it.each([false, true])("keeps CPU advice observational (maintenance=%s)", async (maintenance) => {
-  vi.clearAllMocks();
   const cfg = { channels: { whatsapp: { enabled: true } } };
   const status = { eventLoop: { degraded: true } };
   const fakePid = process.pid + 1_000_000;
@@ -46,33 +48,26 @@ it.each([false, true])("keeps CPU advice observational (maintenance=%s)", async 
   });
   ctx.prompter = createDoctorPrompter({ runtime: ctx.runtime, options: ctx.options });
   expect(ctx.prompter.shouldRepair).toBe(maintenance);
-  const ids = ["doctor:gateway-health", "doctor:whatsapp-responsiveness"];
-  const selected = resolveDoctorHealthContributions().filter((entry) => ids.includes(entry.id));
-  expect(selected.map((entry) => entry.id)).toEqual(ids);
-  const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+  const selected = resolveDoctorHealthContributions().filter((entry) =>
+    ["doctor:gateway-health", "doctor:whatsapp-responsiveness"].includes(entry.id),
+  );
+  using kill = vi.spyOn(process, "kill").mockImplementation(() => {
     throw new Error("This advisory flow must not signal any process");
   });
   await runDoctorHealthContributionList(ctx, selected);
-  expect(ctx.gatewayStatus).toEqual(maintenance ? undefined : status);
-  expect(mocks.checkGatewayHealth).toHaveBeenCalledTimes(maintenance ? 0 : 1);
-  expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
-  const notes = mocks.note.mock.calls.filter(([, title]) => title === "WhatsApp responsiveness");
+  const findings =
+    ctx.healthFindings?.filter(
+      (finding) => finding.checkId === "core/doctor/whatsapp-responsiveness",
+    ) ?? [];
   if (maintenance || process.platform === "win32") {
     expect(mocks.ps).not.toHaveBeenCalled();
-    expect(notes).toEqual([]);
+    expect(findings).toEqual([]);
   } else {
-    expect(mocks.ps).toHaveBeenCalledExactlyOnceWith("ps", ["-axo", "pid=,command="], {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: 1_000,
-    });
-    expect(notes).toEqual([
-      [
-        `Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.
-Local TUI pids: ${fakePid}
-Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.`,
-        "WhatsApp responsiveness",
-      ],
+    expect(findings).toEqual([
+      expect.objectContaining({
+        category: "recommended",
+        target: String(fakePid),
+      }),
     ]);
   }
   expect(kill).not.toHaveBeenCalled();

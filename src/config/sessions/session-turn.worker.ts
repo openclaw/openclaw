@@ -312,7 +312,7 @@ export function applySessionTurn<T>(
             ...(input.custody ? [input.custody.sessionKey] : []),
           ],
           () => {
-            const scope = {
+            let scope = {
               agentId: input.agentId,
               path: context.options.path,
               sessionKey: input.sessionKey,
@@ -377,7 +377,8 @@ export function applySessionTurn<T>(
                   projectionNeedsReconcile = true;
                 },
               },
-              (selected) => {
+              (selected, selectedScope) => {
+                scope = { ...scope, sessionKey: selectedScope.sessionKey };
                 const revision = getSqliteReadScopeRevision(database.db);
                 selectedPostimage =
                   selected && revision

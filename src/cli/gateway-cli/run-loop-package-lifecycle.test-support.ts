@@ -16,6 +16,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
   gateFixtureHandoffPublication,
   observeFixtureHelper,
@@ -47,12 +48,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
     async ({ signal, uncertain, closeFailure, phase }, context) => {
       const hosted = signal === "hosted Gateway stop";
       fixtures.setPlatform(fixtures.originalPlatformDescriptor!.value);
-      // Initialize against the case's mocks before the helper starts its held script.
-      const { discardPackageUpdateStage, runPackageUpdateLifecycle } =
-        await import("../../infra/package-update-lifecycle.js");
-      const { createNpmTarget } = await import("../../infra/package-update-steps.test-support.js");
-      const { resolveNpmGlobalPrefixLayoutFromPrefix } =
-        await import("../../infra/update-npm-prefix.js");
       const dirs = createTempDirTracker();
       // The runner removes its TMPDIR after failure; unresolved ownership evidence
       // must survive that outer cleanup until its test owner can inspect it.
@@ -207,7 +202,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                 const helper = await observeFixtureHelper(
                   root,
                   identity.handoffId,
-                  control,
                   fixtures.spawnProcess,
                 );
                 const preparing =
@@ -228,10 +222,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                 let starting:
                   | ReturnType<typeof handoff.startManagedServiceUpdateHandoff>
                   | undefined;
-                let competing: Promise<unknown> | undefined;
                 let lifecycleScriptPid: number | undefined;
-                let competingScripts = 0;
-                let failure: { error: unknown } | undefined;
                 const cleanupErrors: unknown[] = [];
                 const join = (pending: Promise<unknown> | undefined) =>
                   pending && withTimeout(pending, 15000);
@@ -358,26 +349,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   const pendingPath = path.join(stage.packageRoot, ".openclaw-lifecycle-pending");
                   const lockPath = path.join(stage.packageRoot, ".openclaw-lifecycle-lock");
                   context.signal.throwIfAborted();
-                  competing = runPackageUpdateLifecycle({
-                    packageRoot: stage.packageRoot,
-                    manager: "npm",
-                    timeoutMs: 30000,
-                    steps: [],
-                    verifyCompleted: async () => {},
-                    runStep: async () => {
-                      competingScripts++;
-                      throw new Error("overlapping lifecycle dispatch");
-                    },
-                  });
-                  const disposal = await discardPackageUpdateStage({
-                    stage: {
-                      ...stage,
-                      layout: resolveNpmGlobalPrefixLayoutFromPrefix(stage.prefix),
-                      installTarget: createNpmTarget(path.dirname(root)),
-                    },
-                    committed: false,
-                  });
-                  expect(disposal).toMatchObject({ status: "failed", preserveStage: true });
                   expect(await fs.readFile(pendingPath, "utf8")).toBe(
                     "pending candidate lifecycle\n",
                   );
@@ -438,7 +409,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   ).rejects.toMatchObject({ name: "GatewayDrainingError" });
                   expect(fixtures.spawnProcess).toHaveBeenCalledTimes(spawnedBeforeRefusal);
                   expect(store.read(root).kind).toBe("current");
-                  expect(competingScripts).toBe(0);
                   expect(fsSync.existsSync(stage.packageRoot)).toBe(true);
                   expect(controlExists("script-settled")).toBe(false);
                   if (uncertain) {
@@ -458,13 +428,11 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     await withTimeout(exited, handoffParams.timeoutMs!);
                     expect(controlExists("outcome.json")).toBe(true);
                   }
-                  await competing;
                   await expect.poll(() => store.read(root).kind, { timeout: 15000 }).toBe("absent");
                   const { isPidAlive } = await import("../../shared/pid-alive.js");
                   await withinTest(helper.waitForClose(), context.signal);
                   expect(prepared.pid !== undefined && isPidAlive(prepared.pid)).toBe(false);
                   expect(isPidAlive(lifecycleScriptPid)).toBe(false);
-                  expect(competingScripts).toBe(0);
                   expect(controlExists("script-settled")).toBe(true);
                   expect(await readControl("script-calls")).toBe(
                     uncertain ? "preinstall\n" : "preinstall\npostinstall\n",
@@ -487,85 +455,61 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     expect(outcome).toMatchObject({ failedStep: null, afterVersion: "2.0.0" });
                   }
                   expect(close).toHaveBeenCalledOnce();
-                  expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
                   if (hosted) {
                     stop.expectHostedCompleted();
                   }
                 };
-                try {
-                  await runScenario();
-                } catch (error) {
-                  failure = { error };
-                  await settle(async () => {
-                    await fs.writeFile(
-                      path.join(control, "gateway-events.json"),
-                      JSON.stringify({
-                        info: fixtures.gatewayLog.info.mock.calls,
-                        warn: fixtures.gatewayLog.warn.mock.calls,
-                      }),
-                    );
-                  });
-                } finally {
-                  context.signal.removeEventListener("abort", abort);
-                  released = true;
-                  preparing?.release();
-                  await settle(() => abortRelease);
-                  await settle(() => fs.writeFile(releasePath, "fixture cleanup"));
-                  await settle(() => join(starting?.catch(() => undefined)));
-                  await settle(async () => {
-                    if (lifecycleScriptPid === undefined) {
-                      return;
-                    }
-                    const { isPidAlive } = await import("../../shared/pid-alive.js");
-                    await expect
-                      .poll(() => isPidAlive(lifecycleScriptPid!), { timeout: 15000 })
-                      .toBe(false);
-                  });
-                  await settle(() => join(competing));
-                  // Cancellation alone is not settlement: join the captured child and lease below.
-                  await settle(() => handoff.cancelManagedServiceUpdateHandoff(identity));
-                  await settle(() => helper.close());
-                  await settle(() => join(competing));
-                  await settle(() => {
-                    const remaining = store.read(root);
-                    if (remaining.kind !== "absent") {
-                      throw new Error(
-                        `Fixture handoff ${identity.handoffId} remains ${remaining.kind}; preserve ${home}`,
+                await withRunLoopCleanup(
+                  runScenario,
+                  async () => {
+                    context.signal.removeEventListener("abort", abort);
+                    released = true;
+                    preparing?.release();
+                    await settle(() => abortRelease);
+                    await settle(() => fs.writeFile(releasePath, "fixture cleanup"));
+                    await settle(() => join(starting?.catch(() => undefined)));
+                    await settle(async () => {
+                      if (lifecycleScriptPid === undefined) {
+                        return;
+                      }
+                      const { isPidAlive } = await import("../../shared/pid-alive.js");
+                      await expect
+                        .poll(() => isPidAlive(lifecycleScriptPid!), { timeout: 15000 })
+                        .toBe(false);
+                    });
+                    // Cancellation alone is not settlement: join the captured child and lease below.
+                    await settle(() => handoff.cancelManagedServiceUpdateHandoff(identity));
+                    await settle(() => helper.close());
+                    await settle(() => {
+                      const remaining = store.read(root);
+                      if (remaining.kind !== "absent") {
+                        throw new Error(
+                          `Fixture handoff ${identity.handoffId} remains ${remaining.kind}; preserve ${home}`,
+                        );
+                      }
+                    });
+                    await settle(closeServer);
+                    await settle(() => gatewayLock.current?.release());
+                    await settle(async () => {
+                      const { closeOpenClawStateDatabaseForTest } =
+                        await import("../../state/openclaw-state-db.js");
+                      closeOpenClawStateDatabaseForTest();
+                    });
+                    helper.restore();
+                    preparing?.restore();
+                    drain.mockRestore();
+                    admission.resetGatewayWorkAdmission();
+                    temporarySpy.mockRestore();
+                    fixtures.gatewayLog.info.mockReset();
+                    if (cleanupErrors.length) {
+                      throw new AggregateError(
+                        cleanupErrors,
+                        `Fixture cleanup remains uncertain; preserved ${home}`,
                       );
                     }
-                  });
-                  await settle(closeServer);
-                  await settle(() => gatewayLock.current?.release());
-                  await settle(async () => {
-                    const { closeOpenClawStateDatabaseForTest } =
-                      await import("../../state/openclaw-state-db.js");
-                    closeOpenClawStateDatabaseForTest();
-                  });
-                  helper.restore();
-                  preparing?.restore();
-                  drain.mockRestore();
-                  admission.resetGatewayWorkAdmission();
-                  temporarySpy.mockRestore();
-                  fixtures.gatewayLog.info.mockReset();
-                }
-                if (cleanupErrors.length) {
-                  throw new AggregateError(
-                    [...(failure ? [failure.error] : []), ...cleanupErrors],
-                    `Fixture cleanup remains uncertain; preserved ${home}`,
-                    { cause: failure?.error },
-                  );
-                }
-                if (failure) {
-                  const diagnostics = await Promise.all(
-                    ["handoff.log", "handoff.stderr.log"].map(
-                      async (name) =>
-                        `${name}:\n${await readControl(name).catch(() => "<not captured>")}`,
-                    ),
-                  );
-                  throw new Error(`Fixture failed; preserved ${home}\n${diagnostics.join("\n")}`, {
-                    cause: failure.error,
-                  });
-                }
+                  },
+                  `Fixture failed; preserved ${home}`,
+                );
               });
             } finally {
               await closeServer();

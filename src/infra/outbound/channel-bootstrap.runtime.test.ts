@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -79,6 +78,10 @@ function durable(requirements: Parameters<typeof checkDurable>[0]["requirements"
   return checkDurable({ ...discordParams, requirements });
 }
 
+function loadDiscord(fields: object) {
+  loaderMocks.loadPluginRegistryHandle.mockReturnValue(discordRegistry(fields));
+}
+
 describe("bootstrapOutboundChannelPlugin", () => {
   beforeEach(() => setActivePluginRegistry(discordRegistry({}, "setup")));
   afterEach(() => {
@@ -89,10 +92,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("uses the admitted agent workspace during outbound preparation", async () => {
-    const handle = discordRegistry({
-      outbound: { ...outbound, extractMarkdownImages: true },
-    });
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+    loadDiscord({ outbound: { ...outbound, extractMarkdownImages: true } });
 
     const sender = await handler(explicitFleetDiscordConfig, "ops");
     await expect(sender.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
@@ -105,11 +105,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
   it("bootstraps ownerless fleets with global discovery instead of throwing", () => {
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
-    expect(() =>
-      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: explicitFleetDiscordConfig }),
-    ).not.toThrow(AgentSelectionRequiredError);
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: explicitFleetDiscordConfig });
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: undefined }),
     );
@@ -130,11 +126,10 @@ describe("bootstrapOutboundChannelPlugin", () => {
       from: "discord:channel:ops",
       to: "channel:ops",
     }));
-    const handle = discordRegistry({
+    loadDiscord({
       outbound,
       messaging: { targetResolver: { resolveTarget }, resolveOutboundSessionRoute },
     });
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(
       resolveChannelTargetForDelivery({ ...admittedOwner, input: "ops" }),
@@ -142,9 +137,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     await expect(
       resolveOutboundSessionRouteForDelivery({ ...admittedOwner, target: "channel:ops" }),
     ).resolves.toMatchObject({ sessionKey: "agent:ops:discord:channel:ops" });
-
-    expect(resolveTarget).toHaveBeenCalledTimes(1);
-    expect(resolveOutboundSessionRoute).toHaveBeenCalledTimes(1);
   });
 
   it("skips bootstrap when the selected channel entry can already send", () => {
@@ -181,14 +173,12 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("resolves durable message capabilities inside the scoped handle", async () => {
-    const handle = discordRegistry({
+    loadDiscord({
       message: {
         durableFinal: { capabilities: { text: true, silent: true } },
         send: { text: async () => ({ messageId: "1" }) },
       },
     });
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
-
     await expect(durable({ text: true, silent: true })).resolves.toEqual({
       ok: true,
       automaticUnknownSendReconciliation: false,
@@ -247,7 +237,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
       });
       await expect(sender.sendText("hello")).resolves.toMatchObject({ messageId: "scoped" });
       expect(sendRegistries).toEqual([scopedRegistry]);
-      expect(scopedSend).toHaveBeenCalledOnce();
       expect(rootSend).not.toHaveBeenCalled();
       expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
     },

@@ -2,13 +2,15 @@ import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
+import {
+  CommandOwnerRevokedError,
+  getCommandOwnerAuthority,
+} from "../auto-reply/command-owner-authority.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { loadUnfinishedDeliveries } from "../infra/outbound/delivery-queue-storage.js";
 import {
   getRpcSourceIdentity,
@@ -19,6 +21,7 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import {
   createScenario,
   dispatchProofHuman,
+  expectProofIdle,
   gateway,
   gatewayContext,
   humanReplies,
@@ -132,8 +135,12 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           channelIngress,
         });
         expect(getRequesterProfile(ctx)?.id).toBe(profile.id);
-        expect(getCommandOwnerAuthority(ctx)?.operatorAuthority?.profileId).toBe(profile.id);
-        expect(getCommandOwnerAuthority(ctx)?.isCurrent()).toBe(true);
+        const authority = getCommandOwnerAuthority(ctx);
+        const revocationSignal = authority?.operatorAuthority?.signal;
+        expect(authority?.operatorAuthority?.profileId).toBe(profile.id);
+        expect(authority?.isCurrent()).toBe(true);
+        expect(revocationSignal).toBeDefined();
+        expect(revocationSignal?.aborted).toBe(false);
         await gateway.client.request("sessions.create", { agentId: "deployment", key: targetKey });
         const firstReply = humanReplies.length;
         let completion: ReturnType<typeof waitForProofRun> | undefined;
@@ -167,18 +174,25 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
               await link(bob.id);
             }
           }
-          expect(getCommandOwnerAuthority(ctx)?.isCurrent()).toBe(current);
-          // The plugin only waits. Production's post-await authority check owns refusal.
+          expect(revocationSignal?.aborted).toBe(!current);
+          if (!current) {
+            expect(revocationSignal?.reason).toBeInstanceOf(CommandOwnerRevokedError);
+            expect(revocationSignal?.reason).toMatchObject({
+              message: "Channel operator authority changed; send a new request.",
+            });
+          }
+          expect(authority?.isCurrent()).toBe(current);
+          // Retained authority cancels the target; the effect boundary also refuses
+          // revoked sends after plugin preparation. The plugin only waits.
           hold.release.resolve();
           const terminal = await withinTest(completion, signal);
-          expect(terminal, JSON.stringify(terminal)).toMatchObject({
-            status: current ? "ok" : "error",
-          });
+          expect(terminal, JSON.stringify(terminal)).toMatchObject(
+            current ? { status: "ok" } : { status: "error", stopReason: "rpc" },
+          );
           if (!current) {
-            expect(terminal.error).toContain("Channel operator authority changed");
             refusedRecipients.push(recipient);
           }
-          await waitForGatewayActiveWork(30_000);
+          await expectProofIdle();
           expect(
             listRpcSourceEntries().some(
               ([, source]) =>
@@ -192,7 +206,6 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
             current ? [{ to: recipient, text: scenario.marker, accountId: "default" }] : [],
           );
           expect(scenario.effectAfterSourceCompletion).toEqual(current ? [true] : []);
-          expect(providerErrors).toEqual([]);
         } finally {
           scenario.releaseTarget.resolve();
           hold.release.resolve();

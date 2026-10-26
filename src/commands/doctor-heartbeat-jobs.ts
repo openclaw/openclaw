@@ -1,7 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, rowToCronJob } from "../cron/store/row-codec.js";
 import type { CronJobReadRow } from "../cron/store/schema.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -72,7 +72,10 @@ export function readDoctorHeartbeatJobs(
 ): DoctorCronJob[] {
   return (
     withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => decodeDoctorHeartbeatJobRows(loadCronRows(db, cronStoreKey(storePath))),
+      ({ db }) =>
+        decodeDoctorHeartbeatJobRows(
+          loadCronRows(db, resolveCronStoreKeyInDatabase(db, storePath, env)),
+        ),
       { env },
     ) ?? []
   );

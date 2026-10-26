@@ -5,7 +5,7 @@ import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
-export function codeModeWaitRunUnavailableMessage(ctx: ToolSearchToolContext): string {
+function codeModeWaitRunUnavailableMessage(ctx: ToolSearchToolContext): string {
   const entries = ctx.catalogRef?.current?.entries ?? [];
   // Resolve the effective binding before selecting the core tool so client shadows win.
   const processTool =

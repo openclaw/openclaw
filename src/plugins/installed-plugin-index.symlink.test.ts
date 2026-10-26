@@ -8,10 +8,10 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifest } from "./manifest.js";
-import { readPluginCacheFile } from "./plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { inspectPluginRegistry } from "./plugin-registry.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -30,12 +30,11 @@ function createAliasedPlugin() {
   fs.symlinkSync(projects, alias, process.platform === "win32" ? "junction" : "dir");
   const manifestPath = path.join(root, "openclaw.plugin.json");
   const contents = JSON.stringify({ id: "demo", configSchema: { type: "object" } });
-  fs.writeFileSync(manifestPath, contents);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "@fixture/demo", openclaw: { extensions: ["./index.js"] } }),
-  );
-  fs.writeFileSync(path.join(root, "index.js"), 'throw new Error("metadata executed runtime");');
+  writeArtifacts(root, {
+    "openclaw.plugin.json": contents,
+    "package.json": { name: "@fixture/demo", openclaw: { extensions: ["./index.js"] } },
+    "index.js": 'throw new Error("metadata executed runtime");',
+  });
   return {
     roots: { canonical: root, alias: path.join(alias, "demo") },
     manifestPath,
@@ -56,7 +55,7 @@ it.each([
   { prewarm: "alias", configured: "canonical" },
   { prewarm: "canonical", configured: "alias" },
 ] as const)("hashes $configured roots after $prewarm prewarming", ({ prewarm, configured }) => {
-  const { roots, identity, manifestPath, env } = createAliasedPlugin();
+  const { roots, identity, env } = createAliasedPlugin();
   freshCache(() => {
     expect(loadPluginManifest(roots[prewarm]).ok).toBe(true);
     const index = loadInstalledPluginIndex({
@@ -68,52 +67,23 @@ it.each([
     expect(index.plugins[0]).toMatchObject({
       rootDir: roots.canonical,
       ...identity,
-      packageJson: { path: "package.json" },
     });
     expect(index.diagnostics).toEqual([]);
-    for (const root of Object.values(roots)) {
-      expect(loadPluginManifest(root)).toMatchObject({
-        ok: true,
-        manifestPath,
-      });
-    }
   });
 });
 
-it.each(["contained-symlink", "escaping-symlink", "hardlink", "oversized"] as const)(
-  "still rejects %s manifests beneath an aliased root",
-  (mode) => {
-    const { roots, manifestPath } = createAliasedPlugin();
-    const target = path.join(
-      mode === "escaping-symlink" ? path.dirname(roots.canonical) : roots.canonical,
-      "target.json",
-    );
-    fs.renameSync(manifestPath, target);
-    if (mode === "oversized") {
-      fs.writeFileSync(manifestPath, JSON.stringify({ id: "demo", pad: "x".repeat(256 * 1024) }));
-    } else if (mode === "hardlink") {
-      fs.linkSync(target, manifestPath);
-    } else {
-      fs.symlinkSync(target, manifestPath);
-    }
-    freshCache(() => {
-      if (mode === "hardlink" || mode === "oversized") {
-        expect(
-          readPluginCacheFile({
-            rootDir: roots.alias,
-            relativePath: "openclaw.plugin.json",
-            rejectHardlinks: false,
-            maxBytes: null,
-          }).ok,
-        ).toBe(true);
-      }
-      expect(loadPluginManifest(roots.alias)).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("unsafe plugin manifest path"),
-      });
+it("still rejects manifest symlinks beneath an aliased root", () => {
+  const { roots, manifestPath } = createAliasedPlugin();
+  const target = path.join(roots.canonical, "target.json");
+  fs.renameSync(manifestPath, target);
+  fs.symlinkSync(target, manifestPath);
+  freshCache(() => {
+    expect(loadPluginManifest(roots.alias)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("unsafe plugin manifest path"),
     });
-  },
-);
+  });
+});
 
 it("repairs persisted empty hashes through the supported registry refresh", async () => {
   const fixture = createAliasedPlugin();

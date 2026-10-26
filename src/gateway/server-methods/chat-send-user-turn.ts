@@ -39,15 +39,6 @@ import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
-type ChatSendUserTurnInputController = {
-  baseInput: UserTurnInput;
-  setInputPromise: (input: Promise<UserTurnInput>) => void;
-};
-
-type PersistedChatSendMedia = Awaited<
-  ReturnType<typeof persistInboundImagesForTranscript>
->["entries"];
-
 const audioPreflightLoader = createLazyImportLoader(
   () => import("../../media-understanding/audio-preflight.js"),
 );
@@ -121,20 +112,6 @@ async function resolveChatUiTranscriptEcho(params: {
   return echoFormat.replace("{transcript}", () => transcript);
 }
 
-function resolveChatSendManagedMedia(
-  entries: PersistedChatSendMedia,
-  suppressPromptHydration = false,
-): MediaFact[] {
-  return entries.map((entry) => ({
-    path: entry.path,
-    contentType: entry.fact.contentType ?? "application/octet-stream",
-    ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
-    ...(suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
-      ? { hydrationSuppressed: true }
-      : {}),
-  }));
-}
-
 type ChatSendManagedMediaApplyMode = "replace-empty" | "append-missing";
 
 export function applyChatSendManagedMedia(
@@ -191,7 +168,10 @@ export function prepareChatSendUserTurn(params: {
   logGateway: GatewayRequestContext["logGateway"];
   getConfig?: () => OpenClawConfig;
   assertInputCurrent?: () => void;
-  userTurn: ChatSendUserTurnInputController;
+  userTurn: {
+    baseInput: UserTurnInput;
+    setInputPromise: (input: Promise<UserTurnInput>) => void;
+  };
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
   const persistedMediaForTranscriptPromise = (async (): ReturnType<
@@ -214,18 +194,28 @@ export function prepareChatSendUserTurn(params: {
       },
     });
   })();
-  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) =>
-    resolveChatSendManagedMedia(
-      result.entries.filter(
-        (entry) =>
-          attachments.explicitOriginTargetsPlugin ||
-          entry.imageKind === "inline" ||
-          (entry.imageKind === "offloaded" &&
-            !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) => {
+    const entries = result.entries.filter(
+      (entry) =>
+        attachments.explicitOriginTargetsPlugin ||
+        entry.imageKind === "inline" ||
+        (entry.imageKind === "offloaded" &&
+          !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+    );
+    const suppressPromptHydration = !attachments.explicitOriginTargetsPlugin;
+    return entries.map((entry): MediaFact =>
+      Object.assign(
+        {
+          path: entry.path,
+          contentType: entry.fact.contentType ?? "application/octet-stream",
+        },
+        entry.fact.fileName ? { fileName: entry.fact.fileName } : {},
+        suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
+          ? { hydrationSuppressed: true }
+          : {},
       ),
-      !attachments.explicitOriginTargetsPlugin,
-    ),
-  );
+    );
+  });
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;

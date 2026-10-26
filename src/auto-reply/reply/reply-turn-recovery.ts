@@ -29,7 +29,7 @@ export async function reconcileOrWaitForReplyRecovery(params: {
   claim?: SessionControllerMailboxClaim;
 }): Promise<void> {
   const { reconcileOrphanedGatewaySessionRecovery } =
-    await import("../../gateway/session-recovery-service.js");
+    await import("../../gateway/session-recovery-source.js");
   const { resolveSessionWorkerPlacementContext } =
     await import("../../gateway/session-worker-placement-context.js");
   const signal =

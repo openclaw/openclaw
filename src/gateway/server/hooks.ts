@@ -14,14 +14,15 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { admitEventOccurrence } from "../../cron/event-occurrence-admission.js";
 import type {
   CronAgentAdmissionDisposition,
   RunCronAgentTurnResult,
 } from "../../cron/isolated-agent/run.types.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js";
-import type { DeferredHookWake } from "../../cron/service/wake.js";
 import type { CronJob } from "../../cron/types.js";
+import type { DeferredHookWake } from "../../cron/wake-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -537,8 +538,10 @@ export function createGatewayHookDispatcher(params: {
             if (startupAbortController.signal.aborted) {
               return;
             }
+            const ingressBoundary = pluginId ? "gateway.hooks.plugin" : "gateway.hooks.agent";
             const runHookIsolatedTurn = async () =>
               await runCronIsolatedAgentTurn({
+                occurrence: await admitEventOccurrence({ cfg, job, agentId, ingressBoundary }),
                 cfg,
                 deps,
                 job,
@@ -556,13 +559,13 @@ export function createGatewayHookDispatcher(params: {
                   ingress: pluginId
                     ? {
                         kind: "webhook",
-                        boundary: "gateway.hooks.plugin",
+                        boundary: ingressBoundary,
                         state: "present",
                         rawSourceRef: `${pluginId}:${safeName}`,
                       }
                     : {
                         kind: "webhook",
-                        boundary: "gateway.hooks.agent",
+                        boundary: ingressBoundary,
                         state: "present",
                         ...(acceptedValue.mappingId
                           ? { rawSourceRef: acceptedValue.mappingId }

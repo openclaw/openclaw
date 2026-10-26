@@ -42,6 +42,14 @@ require the `node` role.
 | `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
 | `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
 
+Personal profile editing is a narrowly self-scoped exception to read-only
+behavior: `operator.read` or `operator.sessions.read` (including their implied
+write/admin scopes) allows an authenticated person to change their own display
+name, avatar, and credit preference. Avatar downloads under session-only scopes
+are restricted to that person's profile. Editing someone else's profile,
+assigning roles, linking identity aliases, and merging profiles still require
+`operator.admin`. These edits do not grant general write access.
+
 Personal GitHub connection management is a narrowly self-scoped exception to
 read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,
@@ -327,6 +335,19 @@ Bounded automatic metadata, operator-configured
 inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
 model access, and shared-secret System access is unchanged.
+
+Activity recaps use the owning agent's utility route under the session's assigned
+human owner's model policy, or its authenticated profile creator's policy when
+there is no assigned human owner. Historical profile aliases resolve to the current
+canonical profile before policy is bound. The Gateway checks committed policy before provider
+requests, including retries and fallbacks; denied or revoked work is skipped with
+a logged reason and retains the previous recap. Requesting a refresh still requires
+session write access and never substitutes the viewer's model permissions for the
+session owner's. Assigning a task to an agent or the system does not remove its
+authenticated creator's policy. Sessions without an assigned human owner or
+authenticated profile creator retain Gateway service authority. Cron, subagent,
+and incognito sessions do not generate recaps. Disabling the owning agent's utility
+routing stops all its recap generation. See [Activity tab](/web/control-ui/settings#activity-tab).
 
 Native Codex staff work without a model policy has a limited attribution case
 when qualified native hooks are disabled or unavailable: previously accepted

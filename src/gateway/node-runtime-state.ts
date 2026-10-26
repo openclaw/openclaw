@@ -70,9 +70,8 @@ export function enqueuePendingNodeAction(params: {
   idempotencyKey: string;
   ttlMs: number;
   maxPerNode: number;
-  nowMs?: number;
 }): { action: PendingNodeAction; created: boolean } {
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const queue = prunePendingNodeActions({
     nodeId: params.nodeId,
     nowMs,
@@ -109,11 +108,10 @@ export function listPendingNodeActions(params: {
   nodeId: string;
   pairingGeneration?: string;
   ttlMs: number;
-  nowMs?: number;
 }): PendingNodeAction[] {
   return prunePendingNodeActions({
     nodeId: params.nodeId,
-    nowMs: params.nowMs ?? Date.now(),
+    nowMs: Date.now(),
     ttlMs: params.ttlMs,
     pairingGeneration: params.pairingGeneration,
   });

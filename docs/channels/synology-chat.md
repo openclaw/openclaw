@@ -103,7 +103,7 @@ Config values override env vars.
 
 ## Outbound delivery
 
-Use numeric Synology Chat user IDs as targets. The `synology-chat:`, `synology_chat:`, and `synology:` prefixes are accepted.
+Use numeric Synology Chat user IDs as targets. The `synology-chat:`, `synology_chat:`, and `synology:` prefixes are accepted. Invalid recipients are rejected before sending.
 
 Examples:
 
@@ -113,7 +113,7 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --me
 openclaw message send --channel synology-chat --target synology:123456 --message "Short prefix"
 ```
 
-Outbound text is chunked at 2000 characters, and ordinary links remain intact. Keep **Hide URL previews in conversations and channels** enabled in Synology Chat Admin Console on a supported Chat Server release.
+Outbound text is chunked at 2000 characters, and ordinary links remain intact. Attachment captions share the same limit; longer captions continue as text messages after the attachment. Keep **Hide URL previews in conversations and channels** enabled in Synology Chat Admin Console on a supported Chat Server release.
 
 When Synology returns the recipient's post ID in `data.succ.user_id_post_map`, OpenClaw uses it to confirm text and attachment delivery. Split text is confirmed only when every chunk has an ID. Acknowledgments without usable recipient-matched IDs remain unconfirmed even if the message appears in Chat; OpenClaw does not invent message IDs.
 

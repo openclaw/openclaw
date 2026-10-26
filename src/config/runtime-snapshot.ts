@@ -25,7 +25,6 @@ import { runtimeSessionPublicationChangeScope } from "./runtime-session-changes.
 import {
   hashRuntimeConfigValue,
   hashModelConfig,
-  matchesRuntimeConfigPublicationFact,
   matchesRuntimeConfigValueFact,
   matchesRuntimeSourceConfigValueFact,
   prepareRuntimeConfigValueFact,
@@ -186,7 +185,13 @@ function publishRuntimeConfigSnapshot(
   const previousEditedInPlace =
     runtimeConfigSnapshot !== null &&
     runtimeConfigValueFact !== null &&
-    !matchesRuntimeConfigPublicationFact(runtimeConfigSnapshot, runtimeConfigValueFact);
+    !(
+      matchesRuntimeConfigValueFact(runtimeConfigSnapshot, runtimeConfigValueFact) &&
+      isDeepStrictEqual(
+        serializeConfigResolutionFacts(runtimeConfigSnapshot),
+        runtimeConfigValueFact.facts,
+      )
+    );
   const previousSourceEditedInPlace =
     runtimeConfigSourceSnapshot !== null &&
     runtimeSourceConfigValueFact !== null &&
@@ -231,10 +236,15 @@ function publishRuntimeConfigSnapshot(
     sourceUnchanged: sourceMatchesPublished,
     previousEditedInPlace: previousEditedInPlace || previousSourceEditedInPlace,
   });
+  // SDK setters also accept opaque values; only proven plain revisions capture eagerly.
+  const captured =
+    configFact.value && sourceFact.value
+      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config)
+      : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
-  runtimeConfigCapturedSnapshot = null;
+  runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
   if (
@@ -435,6 +445,17 @@ export function selectApplicableRuntimeConfig(params: {
     return runtimeConfig;
   }
   return inputConfig;
+}
+
+/** Select current runtime values without rebinding an explicit scoped config. */
+export function selectLiveRuntimeConfig(inputConfig: OpenClawConfig): OpenClawConfig;
+export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawConfig | undefined;
+export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawConfig | undefined {
+  return selectApplicableRuntimeConfig({
+    inputConfig,
+    runtimeConfig: runtimeConfigSnapshot,
+    runtimeSourceConfig: runtimeConfigSourceSnapshot,
+  });
 }
 
 /** Bind a retained consumer to its current runtime owner while preserving scoped configs. */

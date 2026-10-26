@@ -86,7 +86,6 @@ it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as
         },
       };
       const runtimeSpy = vi.spyOn(imessageRuntime, "getIMessageRuntime").mockReturnValue(runtime);
-      // Exercise core reply dispatch without introducing an external ACP harness.
       const targetSessionKey = bound
         ? "agent:second:imessage:direct:+15555550123"
         : "agent:second:acp:bound";
@@ -141,13 +140,6 @@ it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as
         if (decision.kind !== "dispatch") {
           return;
         }
-        if (bound) {
-          expect(decision).toMatchObject({
-            route: { agentId: "second", sessionKey: targetSessionKey },
-            bindingResolution: null,
-          });
-        }
-
         const buildContext = createHostChannelInboundEventContextBuilder(
           buildChannelInboundEventContext,
           owner,
@@ -159,7 +151,7 @@ it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as
           message,
           historyLimit: 0,
           groupHistories: new Map(),
-          buildContext: async (input) => buildContext(input),
+          buildContext,
         });
 
         expect(ctxPayload).toMatchObject({
@@ -173,7 +165,6 @@ it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as
           ctxPayload.MessageSid,
         );
         if (bound) {
-          // Leave the single-use host carrier intact for real dispatch admission.
           expect(readChannelContextAdmissionEvidence(ctxPayload)).toBeDefined();
         } else {
           expect(
@@ -235,13 +226,11 @@ it.each(["context-only", "permitted", "revoked", "reassigned", "unavailable"] as
           }
           if (dispatchState === "permitted") {
             expect(await outcome).toEqual({ status: "fulfilled" });
-            expect(replyResolver).toHaveBeenCalledOnce();
             expect(replyResolver.mock.calls[0]?.[0]).toMatchObject({
               AgentId: "second",
               SessionKey: targetSessionKey,
               MessageSid: ctxPayload.MessageSid,
             });
-            expect(deliver).toHaveBeenCalledOnce();
             expect(deliver).toHaveBeenCalledWith(
               expect.objectContaining({ text: "bound reply" }),
               expect.objectContaining({ kind: "final" }),

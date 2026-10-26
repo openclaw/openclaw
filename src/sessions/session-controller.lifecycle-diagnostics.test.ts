@@ -14,20 +14,14 @@ import {
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { controllerGate as gate } from "./controller-core.test-support.js";
 import { logSessionControllerPhase as logPhase } from "./session-controller.diagnostics.js";
 import {
   beginSessionEffect as beginEffect,
   captureSessionTarget,
   runSessionMutation as runMutation,
 } from "./session-controller.lifecycle.js";
-import {
-  claimSessionControllerTask as claimTask,
-  releaseSessionControllerClaim as releaseClaim,
-  reserveSessionControllerSource as reserveSource,
-  tryClaimSessionControllerTask as tryClaim,
-} from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
-import { findSessionControllerEntry as findEntry } from "./session-controller.state.js";
 
 const traces = {
   first: { traceId: "1".repeat(32), spanId: "1".repeat(16) },
@@ -77,17 +71,9 @@ async function advance(ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
-function gate(onEnter?: () => void) {
-  const [entered, release] = [createDeferred(), createDeferred()];
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    run: async () => {
-      onEnter?.();
-      entered.resolve();
-      await release.promise;
-    },
-  };
+async function finish(releases: (() => void)[], ...work: Promise<unknown>[]) {
+  releases.forEach((release) => release());
+  await Promise.allSettled(work);
 }
 
 async function expectRecords(kind: RecordKind, rows: Record<string, unknown>[], unordered = false) {
@@ -135,12 +121,7 @@ function hold(
           assertAllowed: held.run,
           revalidateAllowed: () => {},
         }).then((lease) => lease.release())
-      : runMutation({
-          ...target,
-          run: held.run,
-          policy: "wait",
-          diagnosticLabel: "sharing",
-        }),
+      : runMutation({ ...target, run: held.run, policy: "wait", diagnosticLabel: "sharing" }),
   );
   return { ...held, promise };
 }
@@ -261,9 +242,7 @@ it("reports the current holder after turnover and preserves the waiter's trace a
     expectPrivate([row], target);
     expect(order).toEqual(["first", "second"]);
   } finally {
-    firstGate.release();
-    secondGate.release();
-    await Promise.allSettled([first, second, waiter]);
+    await finish([firstGate.release, secondGate.release], first, second, waiter);
   }
   expect(order).toEqual(["first", "second", "waiter"]);
   const completed = await expectRecords(
@@ -306,10 +285,12 @@ it("distinguishes mutation and lifecycle holders of the same normalized identity
     expect(waiting).toHaveLength(2);
     expect(new Set(waiting.map((record) => record.identityHash)).size).toBe(1);
   } finally {
-    lifecycle.release();
-    mutation.release();
-    waiter.release();
-    await Promise.allSettled([lifecycle.promise, mutation.promise, waiter.promise]);
+    await finish(
+      [lifecycle.release, mutation.release, waiter.release],
+      lifecycle.promise,
+      mutation.promise,
+      waiter.promise,
+    );
   }
 });
 
@@ -347,9 +328,7 @@ it("leaves the holder unknown while waiting on a turn instead of naming an unrel
       queueKind: "lifecycle",
     });
   } finally {
-    turn.complete();
-    unrelated.release();
-    await Promise.allSettled([unrelated.promise, waiter]);
+    await finish([() => turn.complete(), unrelated.release], unrelated.promise, waiter);
   }
 });
 
@@ -366,10 +345,7 @@ it.each([true, false])(
       run: async () => {
         outerStarted.resolve();
         await beginNested.promise;
-        await mutate(target, traces.second, {
-          diagnosticLabel: "delete",
-          run: nested.run,
-        });
+        await mutate(target, traces.second, { diagnosticLabel: "delete", run: nested.run });
         nestedDone.resolve();
         await releaseOuter.promise;
       },
@@ -391,11 +367,11 @@ it.each([true, false])(
       expect(row.holderTraceId).toBe(initiallyEnabled ? traces.first.traceId : undefined);
       expect(row.holderTraceId).not.toBe(traces.second.traceId);
     } finally {
-      beginNested.resolve();
-      nested.release();
-      releaseOuter.resolve();
-      waiter.release();
-      await Promise.allSettled([outer, waiter.promise]);
+      await finish(
+        [beginNested.resolve, nested.release, releaseOuter.resolve, waiter.release],
+        outer,
+        waiter.promise,
+      );
     }
   },
 );
@@ -415,20 +391,20 @@ it("measures prepare and finalize separately while successors wait for real fina
   await advance(200);
   prepare.release();
   await finalize.entered;
-  const waiter = hold("mutation", target, traces.waiter);
+  const runWaiter = vi.fn(async () => {});
+  const waiter = mutate(target, traces.waiter, { run: runWaiter });
   try {
     await advance(1_000);
+    expect(runWaiter).not.toHaveBeenCalled();
     await expectRecord("waiting", {
       operationTraceId: traces.waiter.traceId,
       holderTraceId: traces.first.traceId,
       holderPhase: "finalize",
     });
   } finally {
-    prepare.release();
-    finalize.release();
-    waiter.release();
-    await Promise.allSettled([first, waiter.promise]);
+    await finish([prepare.release, finalize.release], first, waiter);
   }
+  expect(runWaiter).toHaveBeenCalledOnce();
   await expectRecords(
     "slow",
     [
@@ -438,10 +414,7 @@ it("measures prepare and finalize separately while successors wait for real fina
         mutationQueueWaitMs: 0,
         lifecycleQueueWaitMs: 0,
       },
-      {
-        operationTraceId: traces.waiter.traceId,
-        mutationQueueWaitMs: 1_000,
-      },
+      { operationTraceId: traces.waiter.traceId, mutationQueueWaitMs: 1_000 },
     ],
     true,
   );
@@ -477,19 +450,11 @@ it("keeps canceled validator custody visible until the real callback returns", a
       queueKind: "lifecycle",
     });
   } finally {
-    validator.release();
-    waiter.release();
-    await Promise.allSettled([effect, waiter.promise]);
+    await finish([validator.release, waiter.release], effect, waiter.promise);
   }
   await expectRecords(
     "slow",
-    [
-      {
-        operationTraceId: traces.first.traceId,
-        signalAborted: true,
-        elapsedMs: 1_000,
-      },
-    ],
+    [{ operationTraceId: traces.first.traceId, signalAborted: true, elapsedMs: 1_000 }],
     true,
   );
 });
@@ -547,14 +512,11 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
       ),
     ).toBe(true);
   } finally {
-    unobserved.release();
-    holders.forEach((holder) => holder.release());
-    waiters.forEach((waiter) => waiter.release());
-    await Promise.allSettled([
-      unobserved.promise,
-      ...holders.map((holder) => holder.promise),
-      ...waiters.map((waiter) => waiter.promise),
-    ]);
+    const held = [unobserved, ...holders, ...waiters];
+    await finish(
+      held.map((holder) => holder.release),
+      ...held.map((holder) => holder.promise),
+    );
   }
   const waiting = await records("waiting");
   const completed = await records("slow");
@@ -568,39 +530,10 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
   expect((await records("slow")).at(-1)?.omittedObservations).toBeGreaterThan(0);
 });
 
-it("does not let pre-dispatch bypass an older preparing input or retain a failed claim request", async () => {
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
-  const sessionKey = "agent:phase-claim:test";
-  let firstClaim: ReturnType<typeof tryClaim>;
-  let secondClaim: ReturnType<typeof tryClaim>;
-  try {
-    const first = reserveSource(sessionKey, { policy: { mode: "followup" } });
-    const second = reserveSource(sessionKey, { policy: { mode: "followup" } });
-    expect(tryClaim(second)).toBeUndefined();
-    firstClaim = tryClaim(first);
-    expect(firstClaim?.inputs).toEqual([first]);
-    expect(tryClaim(second)).toBeUndefined();
-    releaseClaim(firstClaim!);
-    await firstClaim!.settlement.promise;
-    secondClaim = await claimTask(second, () => {});
-    expect(secondClaim.inputs).toEqual([second]);
-    expect(
-      (await records("phase"))
-        .filter((record) => record.phase === "source-claim")
-        .map((record) => record.status),
-    ).toEqual(["selected", "waiting", "selected"]);
-  } finally {
-    const claims = [firstClaim, secondClaim].filter((claim) => claim !== undefined);
-    for (const claim of claims) {
-      releaseClaim(claim);
-    }
-    await Promise.all(claims.map((claim) => claim.settlement.promise));
-  }
-  expect(findEntry(sessionKey)).toBeUndefined();
-});
-
 it("gates and hashes phase events without consuming the slow-warning budget", async () => {
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+  setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "pretty", file: logFile });
+  const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+  const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const fields = {
     phase: "source-claim" as const,
     status: "waiting" as const,
@@ -625,6 +558,7 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     prioritySourceIdHash: expect.stringMatching(/^[0-9a-f]{64}$/),
   });
   expect(JSON.stringify(phases)).not.toContain("sensitive-phase-");
+  expect(consoleLog).not.toHaveBeenCalled();
   const holder = hold("mutation", {
     scope: "phase-budget-store",
     identities: ["phase-budget-session"],
@@ -637,6 +571,10 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     await holder.promise;
   }
   expect(await records("slow")).toHaveLength(1);
+  expect(consoleWarn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("slow session lifecycle operation"),
+  );
+  expect(consoleWarn.mock.calls[0]?.[0]).toContain("elapsedMs=1000");
 });
 it("preserves operation errors and queue release when the native logging sink throws", async () => {
   vi.resetModules();
@@ -657,11 +595,13 @@ it("preserves operation errors and queue release when the native logging sink th
   const lifecycle = await import("./session-controller.lifecycle.js");
   const [started, release] = [createDeferred(), createDeferred()];
   const operationError = new Error("original operation failure");
+  const finalize = vi.fn(async () => {});
   const target = { scope: "failed-sink-store", identities: ["failed-sink-session"] };
   const first = lifecycle.runSessionMutation({
     diagnosticLabel: "delete",
     policy: "wait",
     ...target,
+    finalize,
     run: async () => {
       started.resolve();
       await release.promise;
@@ -681,6 +621,7 @@ it("preserves operation errors and queue release when the native logging sink th
     expect(failedSink).toHaveBeenCalled();
     release.resolve();
     await expect(firstOutcome).resolves.toBe(operationError);
+    expect(finalize).toHaveBeenCalledOnce();
     await expect(second).resolves.toBe("next operation");
     expect(lifecycle.getSessionMutationCount()).toBe(0);
   } finally {

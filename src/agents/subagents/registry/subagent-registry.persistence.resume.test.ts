@@ -143,6 +143,7 @@ describe("subagent registry persistence resume", () => {
 
   it("retries pending timed-out child delivery after restart", async () => {
     const status = "timeout" as const;
+    const resultText = "pending result: ".repeat(2_048);
     await withRegistryState(async (stateDir) => {
       const runId = "run-pending-timed-out-delivery";
       const childSessionKey = "agent:main:subagent:pending-timed-out-delivery";
@@ -158,7 +159,12 @@ describe("subagent registry persistence resume", () => {
         endedAt: 200,
         outcome: { status },
         expectsCompletionMessage: true,
-        completion: { required: true, resultText: "done", capturedAt: 200 },
+        completion: {
+          required: true,
+          resultText,
+          terminalReply: { disposition: "visible", text: resultText.slice(0, 4_096).trim() },
+          capturedAt: 200,
+        },
         delivery: {
           status: "pending",
           payload: {
@@ -178,7 +184,9 @@ describe("subagent registry persistence resume", () => {
       await seedRecovery(stateDir, run);
       await writeChildSession(stateDir, run.childSessionKey, "sess-pending-timed-out-delivery");
 
-      await restoreRegistry();
+      await mod.initSubagentRegistry();
+      expect(mod.getSubagentRunByRunId(runId)?.completion).toEqual(run.completion);
+      await activateRegistry();
 
       await settleWork();
       expect(announceSpy).toHaveBeenCalled();
@@ -285,7 +293,7 @@ describe("subagent registry persistence resume", () => {
 
         await mod.initSubagentRegistry();
         if (restarting) {
-          await mod.activateSubagentRegistry(() => firstGateway as never);
+          await mod.activateSubagentRegistry(() => firstGateway as never).settled;
         } else {
           await activateRegistry();
         }
@@ -340,10 +348,10 @@ describe("subagent registry persistence resume", () => {
             );
           }
           await mod.initSubagentRegistry();
-          await mod.activateSubagentRegistry(() => replacementGateway as never);
+          await mod.activateSubagentRegistry(() => replacementGateway as never).settled;
           const recoveredRun = mod.getSubagentRunByRunId(run.runId);
           expect(recoveredRun).not.toBe(retiredRun);
-          await mod.activateSubagentRegistry(() => replacementGateway as never);
+          await mod.activateSubagentRegistry(() => replacementGateway as never).settled;
           expect(mod.getSubagentRunByRunId(run.runId)).toBe(recoveredRun);
           expect(retiredResolver?.()).toBeUndefined();
           await mod.testing.runSweeperTickForTests();
@@ -456,7 +464,7 @@ describe("subagent registry persistence resume", () => {
             mockRequesterWake(wakeRequester);
             saveRuns(...runs);
             await mod.initSubagentRegistry();
-            await mod.activateSubagentRegistry(() => firstGateway as never);
+            await mod.activateSubagentRegistry(() => firstGateway as never).settled;
             const oldActiveCount = Math.min(runCount, 2);
             await waitForCalls(oldActiveCount);
             expect(wakeRequester).toHaveBeenCalledTimes(oldActiveCount);
@@ -487,7 +495,7 @@ describe("subagent registry persistence resume", () => {
                 expectedWakes,
               );
             }
-            await mod.activateSubagentRegistry(() => replacementGateway as never);
+            await mod.activateSubagentRegistry(() => replacementGateway as never).settled;
             const recoveredRuns = runs.map((run) => mod.getSubagentRunByRunId(run.runId)!);
             recoveredRuns.forEach((run, index) => {
               expect(run).not.toBe(retiredRuns[index]);
@@ -610,12 +618,19 @@ describe("subagent registry persistence resume", () => {
   ])("retains $status required delivery with its owner after restart", async (expected) => {
     await withRegistryState(async (stateDir) => {
       const run = createOrphanedRequiredDelivery(expected.status);
+      run.completion = {
+        ...run.completion,
+        required: true,
+        resultText: "retained result ".repeat(2_048),
+      };
       await seedRecovery(stateDir, run);
 
       await restoreRegistry();
       await nextTask();
 
       expect(announceSpy).not.toHaveBeenCalled();
+      expect(mod.getSubagentRunByRunId(run.runId)?.completion).toEqual(run.completion);
+      expect(readPersistedRun(run.runId)?.completion).toEqual(run.completion);
       expect(readPersistedRun(run.runId)?.delivery).toMatchObject({
         status: expected.status,
         ...(expected.disposition ? { disposition: expected.disposition } : {}),
@@ -735,8 +750,9 @@ describe("subagent registry persistence resume", () => {
       const startupTrace = createGatewayStartupTrace(startupLog);
       try {
         await startupTrace.measure("sidecars.subagent-recovery", () =>
-          startupTrace.measure("sidecars.subagent-activation", () =>
-            mod.activateSubagentRegistry(resolveGatewayContext, startupTrace),
+          startupTrace.measure(
+            "sidecars.subagent-activation",
+            () => mod.activateSubagentRegistry(resolveGatewayContext, startupTrace).settled,
           ),
         );
         const summary = startupInfo.mock.calls.find(([message]) =>
@@ -751,7 +767,7 @@ describe("subagent registry persistence resume", () => {
         startupTrace.close();
         startupInfo.mockRestore();
       }
-      await mod.activateSubagentRegistry(resolveGatewayContext);
+      await mod.activateSubagentRegistry(resolveGatewayContext).settled;
       const restoredRun = mod.getSubagentRunByRunId(runningRun.runId);
       expect(restoredRun).toBeDefined();
       const restoredGatewayContextResolver = getGatewayContextResolver(restoredRun!);
@@ -799,8 +815,8 @@ describe("subagent registry persistence resume", () => {
         resolveGatewayContext: () => replacementGateway as never,
       };
       const resolveReplacementContext = () => replacementGateway as never;
-      await mod.activateSubagentRegistry(resolveReplacementContext);
-      await mod.activateSubagentRegistry(resolveReplacementContext);
+      await mod.activateSubagentRegistry(resolveReplacementContext).settled;
+      await mod.activateSubagentRegistry(resolveReplacementContext).settled;
       expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
       expect(wakeRequester).not.toHaveBeenCalled();
       expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
@@ -835,11 +851,14 @@ describe("subagent registry persistence resume", () => {
 
     await withRegistryState(async (stateDir) => {
       const endedAt = Date.now();
-      const restoredRuns = createRestoredRequesterWakeRuns({
-        activationSettlement: true,
-        requesterYielded: true,
-        endedAt,
-      });
+      const restoredRuns = createRestoredRequesterWakeRuns(endedAt);
+      for (const run of restoredRuns) {
+        run.completion = {
+          required: true,
+          resultText: "awaiting parent ".repeat(2_048),
+          terminalReply: { disposition: "visible", text: `Final reply for ${run.runId}` },
+        };
+      }
       saveRuns(...restoredRuns);
 
       await Promise.all(
@@ -878,6 +897,14 @@ describe("subagent registry persistence resume", () => {
       await mod.testing.runSweeperTickForTests();
       await settleWork();
       expect(wakeRequester).toHaveBeenCalledTimes(3);
+      expect(
+        wakeRequester.mock.calls.map(([params]) => params.settledEntry.runId).toSorted(),
+      ).toEqual(restoredRuns.map((run) => run.runId).toSorted());
+      for (const [params] of wakeRequester.mock.calls) {
+        expect(params.settledEntry.completion).toEqual(
+          restoredRuns.find((run) => run.runId === params.settledEntry.runId)?.completion,
+        );
+      }
     });
   });
 

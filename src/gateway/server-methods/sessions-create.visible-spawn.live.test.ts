@@ -119,7 +119,6 @@ describeLive("Gateway visible worktree spawn (live)", () => {
               model: { primary: modelRef },
               models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               sandbox: { mode: "off" },
               timeoutSeconds: RUN_TIMEOUT_MS / 1000,
               subagents: { model: modelRef, maxSpawnDepth: 1 },

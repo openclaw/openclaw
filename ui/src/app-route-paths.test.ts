@@ -18,6 +18,7 @@ import {
   pathForAgentPanel,
   pathForClawCatalogEntry,
   pathForPluginSettings,
+  pathForPluginCatalogEntry,
   pathForWorkboardBoard,
   pathForTerminalSession,
   terminalSessionIdFromPath,
@@ -31,10 +32,12 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import { createAgentSelectionCapability } from "./app/agent-selection.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import { createApplicationGatewaySnapshot } from "./test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 
 const DYNAMIC_STARTUP_CASES = [
+  ["plugins", pathForPluginCatalogEntry("calendar"), "?probe=1", "#catalog"],
   ["agents", pathForAgentPanel("team.writer", "tools"), "?probe=1", "#catalog"],
   ["dashboard", "/dashboard/main/01JSESSIONA", "?probe=1", "#dashboard"],
   ["chat", "/beam/0123456789ab", "", "#message"],
@@ -84,17 +87,11 @@ function createTestRouter(routeId: RouteId) {
 }
 
 function createStartupContext(basePath = ""): ApplicationContext {
-  const { gateway } = createApplicationGateway({
-    phase: "stopped",
-    client: null,
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      sessionKey: "agent:main:main",
+    }),
+  );
   return {
     basePath,
     gateway,
@@ -340,6 +337,29 @@ describe("Memory tab route paths", () => {
   });
 });
 
+describe("Plugin catalog mount inference", () => {
+  it.each(["/ui", "/portable/control"])(
+    "retains %s when starting a catalog detail",
+    async (basePath) => {
+      const pathname = pathForPluginCatalogEntry("calendar", basePath);
+      const inferredBase = inferBasePathFromPathname(pathname);
+      expect(inferredBase).toBe(basePath);
+      const history = createHistory(pathname, "?probe=1", "#catalog");
+      const { router, route } = createTestRouter("plugins");
+      route.loader = vi.fn(async () => null);
+      await startApplicationRouter(
+        router,
+        history,
+        inferredBase,
+        createStartupContext(inferredBase),
+      );
+      expect(router.getState().matches[0]?.routeId).toBe("plugins");
+      expect(history.location()).toEqual({ pathname, search: "?probe=1", hash: "#catalog" });
+      expect(history.replace).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("Plugin Settings route paths", () => {
   it("round-trips encoded plugin ids under a configured base path", () => {
     const pathname = pathForPluginSettings("@openclaw/calendar", "/ui");
@@ -365,7 +385,7 @@ describe("Claw detail route paths", () => {
     "round trips the public package identity %s",
     (packageName) => {
       const pathname = pathForClawCatalogEntry(packageName, "/ui");
-      expect(pathname).toBe(`/ui/agents/claws/packages/${encodeURIComponent(packageName)}`);
+      expect(pathname).toBe(`/ui/claws/packages/${encodeURIComponent(packageName)}`);
       expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
       expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
       expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
@@ -377,7 +397,7 @@ describe("Claw detail route paths", () => {
   );
 
   it("preserves existing official detail links", () => {
-    expect(clawCatalogPackageNameFromPath("/agents/claws/workflow-operator")).toBe(
+    expect(clawCatalogPackageNameFromPath("/claws/workflow-operator")).toBe(
       "@openclaw/workflow-operator",
     );
   });
@@ -387,17 +407,19 @@ describe("Claw detail route paths", () => {
     (packageName) => {
       expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
       expect(
-        clawCatalogPackageNameFromPath(`/agents/claws/packages/${encodeURIComponent(packageName)}`),
+        clawCatalogPackageNameFromPath(`/claws/packages/${encodeURIComponent(packageName)}`),
       ).toBeNull();
     },
   );
 
   it("rejects malformed or unencoded package routes", () => {
-    expect(clawCatalogPackageNameFromPath("/agents/claws/@openclaw/workflow-operator")).toBeNull();
-    expect(
-      clawCatalogPackageNameFromPath("/agents/claws/packages/@maker/travel-planner"),
-    ).toBeNull();
-    expect(clawCatalogPackageNameFromPath("/agents/claws/packages/%ZZ")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/@openclaw/workflow-operator/extra")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/packages/@maker/travel-planner")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/packages/%ZZ")).toBeNull();
+  });
+
+  it("does not expose the retired Agents overview route", () => {
+    expect(routeIdFromPath("/agents")).toBeNull();
   });
 });
 

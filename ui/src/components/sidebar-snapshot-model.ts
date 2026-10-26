@@ -38,6 +38,7 @@ export function snapshotSessions(
         archived: row.archived,
         boardFace: row.boardFace,
         childrenDisplayMode: display?.childrenDisplayMode,
+        childLoadParentKeys: row.childLoadParentKeys?.filter((key) => !isIncognitoSessionKey(key)),
         // Parent attention can summarize private descendants even after their rows are omitted.
         snapshotSubtitle: containsIncognito(row.children) ? undefined : display?.snapshotSubtitle,
         children: snapshotSessions(row.children, presentation),
@@ -72,7 +73,10 @@ export function snapshotSections(
   const retained = new Set<string>(sections.map((section) => section.id));
   return {
     sections,
-    collapsedSections: [...collapsedSections].filter((id) => id === "online" || retained.has(id)),
+    // Pinned and Online render outside the projected list sections.
+    collapsedSections: [...collapsedSections].filter(
+      (id) => id === "pinned" || id === "online" || retained.has(id),
+    ),
   };
 }
 
@@ -107,6 +111,7 @@ export function restoreSnapshotSession(
     unread: false,
     attention: { kind: "none" },
     childSessionKeys: row.children.map((child) => child.key),
+    childLoadParentKeys: row.childLoadParentKeys ?? [],
     children: row.children.map((child) => restoreSnapshotSession(child, selected)),
     loadingChildren: false,
     containsActiveDescendant: false,

@@ -11,6 +11,7 @@ import {
   resolveProviderTransportSsrFPolicy,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -22,7 +23,6 @@ import {
   type RuntimeConfig,
 } from "./config.js";
 import { EvaluationError, evaluationError } from "./errors.js";
-import { localInput, parseLocalResult } from "./local.js";
 import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
 
 const API_BASE_URL = `${HOSTED_ORIGIN}/v1`;
@@ -58,45 +58,6 @@ function httpError(response: Response): EvaluationError {
   return new EvaluationError("TypeSafe service rejected the evaluation request.", "transport");
 }
 
-async function readBody(response: Response, abortSignal?: AbortSignal): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    abortSignal?.throwIfAborted();
-    return Buffer.alloc(0);
-  }
-  // Keep the request owned until cancellation settles, even when a stream ignores its signal.
-  let cancellation: Promise<void> | undefined;
-  const cancel = () => {
-    cancellation ??= reader.cancel().catch(() => {});
-  };
-  abortSignal?.addEventListener("abort", cancel, { once: true });
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      abortSignal?.throwIfAborted();
-      const chunk = await reader.read();
-      abortSignal?.throwIfAborted();
-      if (chunk.done) {
-        break;
-      }
-      length += chunk.value.byteLength;
-      if (length > MAX_JSON_BYTES) {
-        throw new EvaluationError("TypeSafe response exceeds its limit.", "invalid-response");
-      }
-      chunks.push(chunk.value);
-    }
-    return Buffer.concat(chunks, length);
-  } catch (error) {
-    cancel();
-    throw error;
-  } finally {
-    abortSignal?.removeEventListener("abort", cancel);
-    await cancellation;
-    reader.releaseLock();
-  }
-}
-
 /** Evaluate explicit state without ambient credentials, retries, or vendor diagnostics. */
 export async function evaluate(
   input: unknown,
@@ -124,7 +85,26 @@ export async function evaluate(
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
   }
   try {
-    const wireInput = hosted ? parsed : localInput(parsed);
+    let wireInput = parsed;
+    if (!hosted) {
+      const questions: typeof parsed.questions = {};
+      for (const [id, question] of Object.entries(parsed.questions)) {
+        const instructions = question.instructions ?? null;
+        if (question.type === "score") {
+          questions[id] = {
+            ...question,
+            instructions,
+            // Send explicit text so the returned legend can be verified without reproducing Kev's renderer.
+            criteria: question.criteria.map((level) =>
+              typeof level === "string" ? level : level === null ? "" : JSON.stringify(level),
+            ),
+          };
+        } else {
+          questions[id] = { ...question, instructions };
+        }
+      }
+      wireInput = { ...parsed, questions };
+    }
     const baseUrl = config.providerConfig
       ? providerBaseUrl(config.providerConfig.baseUrl)
       : localBaseUrl(config.baseUrl);
@@ -252,7 +232,11 @@ export async function evaluate(
           await response.body?.cancel();
           throw httpError(response);
         }
-        const bytes = await readBody(response, signal);
+        const bytes = await readResponseWithLimit(response, MAX_JSON_BYTES, {
+          signal,
+          onOverflow: () =>
+            new EvaluationError("TypeSafe response exceeds its limit.", "invalid-response"),
+        });
         let text: string;
         try {
           text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -289,9 +273,33 @@ export async function evaluate(
       cleanup();
     }
     abortSignal?.throwIfAborted();
-    const evaluation = hosted
-      ? parseResult(responsePayload, parsed)
-      : parseLocalResult(responsePayload, wireInput, parsed);
+    if (!hosted) {
+      if (
+        !responsePayload ||
+        typeof responsePayload !== "object" ||
+        Array.isArray(responsePayload)
+      ) {
+        throw new Error("Invalid local System One response.");
+      }
+      if ("latency_ms" in responsePayload) {
+        const { latency_ms, ...payload } = responsePayload;
+        if (typeof latency_ms !== "number" || !Number.isFinite(latency_ms) || latency_ms < 0) {
+          throw new Error("Invalid local System One latency metadata.");
+        }
+        responsePayload = payload;
+      }
+    }
+    const evaluation = parseResult(responsePayload, wireInput);
+    if (!hosted) {
+      for (const [id, question] of Object.entries(parsed.questions)) {
+        const answer = evaluation.answers[id];
+        if (question.type === "score" && answer?.type === "score") {
+          answer.legend = Object.fromEntries(
+            question.criteria.map((level, index) => [String(index), level]),
+          );
+        }
+      }
+    }
     return { evaluation };
   } catch (error) {
     throw evaluationError(error, abortSignal?.aborted ?? false);

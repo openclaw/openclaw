@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type DiagnosticToolExecutionLiveness = Readonly<{ deadlineAtMs?: number }>;
@@ -13,7 +13,7 @@ type ToolExecutionDeadlineOwner = ((deadlineAtMs: number | undefined) => void) &
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.diagnosticToolExecutionLiveness"),
   () => ({
-    context: new AsyncLocalStorage<ToolExecutionDeadlineOwner>(),
+    context: new AsyncContext<ToolExecutionDeadlineOwner>(Symbol("toolExecutionDeadline")),
     events: new WeakMap<object, DiagnosticToolExecutionLiveness>(),
   }),
 );

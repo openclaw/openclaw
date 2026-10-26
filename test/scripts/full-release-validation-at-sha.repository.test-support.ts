@@ -31,6 +31,10 @@ type DispatchRepositoryOptions = {
   workflowSource?: string;
   targetSource?: Record<string, string>;
   targetAlreadyRemote?: boolean;
+  // Records a PR-branch head that the release branch only received as a squash.
+  unreachableContributionRecord?: boolean;
+  // Replaces the candidate-owned release-notes prose line.
+  releaseNotes?: string;
 };
 const repositoryTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
 const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDispatchRepository>>();
@@ -104,8 +108,35 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
   runGit(checkout, ["push", "-u", "origin", "main"]);
   runGit(checkout, ["tag", trustedWorkflowTag, workflowSha]);
   runGit(checkout, ["push", "origin", `refs/tags/${trustedWorkflowTag}`]);
+  let recordTarget = workflowSha;
+  if (options.unreachableContributionRecord) {
+    runGit(checkout, ["checkout", "-b", "pr-head"]);
+    write("squashed.txt", "pre-squash pull request head\n");
+    recordTarget = commit("test: pull request head");
+    runGit(checkout, ["checkout", "main"]);
+  }
   runGit(checkout, ["checkout", "-b", releaseRef]);
   write("target.txt", "release target\n");
+  if (options.unreachableContributionRecord) {
+    write("squashed.txt", "pre-squash pull request head\n");
+  }
+  if (options.candidateOwned) {
+    write(
+      "CHANGELOG.md",
+      `## 2026.8.1
+
+${options.releaseNotes ?? "Release notes for the selected candidate."}
+
+### Complete contribution record
+
+This audited record covers the complete ${oldWorkflowSha}..${recordTarget} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.
+
+#### Pull requests
+
+- **PR #1** fix: example.
+`,
+    );
+  }
   for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
     write(relativePath, content);
   }
@@ -125,6 +156,8 @@ export function prepareDispatchRepository(root: string, options: DispatchReposit
     options.targetSource ?? {},
     options.targetAlreadyRemote !== false,
     options.candidateOwned === true,
+    options.unreachableContributionRecord === true,
+    options.releaseNotes ?? null,
   ]);
   let template = dispatchRepositoryTemplates.get(key);
   if (!template) {

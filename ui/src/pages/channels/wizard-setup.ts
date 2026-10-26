@@ -1,15 +1,16 @@
-import { createSignal, createStore, onCleanup } from "solid-js";
+import { createSignal, createStore, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
-type WizardSetupDeps = {
+export function createChannelSetup(deps: {
   getContext: () => ApplicationContext;
   clearSelection: () => void;
-};
-
-export function createChannelSetup(deps: WizardSetupDeps) {
+  presentWizard: (pending: Promise<void>) => Promise<void>;
+  retire: () => void;
+  startWhatsApp: (force: boolean, accountId: string) => Promise<void>;
+}) {
   const [fields, setDraft] = createStore<{
     multiselect: unknown[];
     textValue: string;
@@ -39,7 +40,8 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     whatsappAccountId,
   }));
   publish = state.publish;
-  onCleanup(() => {
+  onSettled(() => () => {
+    deps.retire();
     disposed = true;
     // The Gateway retains an unfinished session, so teardown cancels it.
     void wizard.cancel();
@@ -55,12 +57,14 @@ export function createChannelSetup(deps: WizardSetupDeps) {
       return;
     }
     setBlockedByDirtyConfig(false);
+    deps.retire();
     whatsappAccountId = undefined;
     deps.clearSelection();
-    void wizard.start(channel);
+    void deps.presentWizard(wizard.start(channel));
   }
 
   function close(): void {
+    deps.retire();
     const wasActive = wizard.state.phase !== "idle";
     void wizard.cancel();
     if (wasActive) {
@@ -106,7 +110,7 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     if (whatsapp) {
       whatsappAccountId = whatsapp.accountId;
       publish();
-      await context.channels.startWhatsApp(false, whatsapp.accountId);
+      await deps.startWhatsApp(false, whatsapp.accountId);
     }
   }
 
@@ -122,7 +126,7 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     startSetup,
     close,
     answer: (value: unknown) => {
-      void wizard.answer(value);
+      void deps.presentWizard(wizard.answer(value));
     },
     toggleMultiselect: (value: unknown) =>
       setDraft((draft) => {

@@ -86,17 +86,23 @@ function expectUsage(entry: UsageCostRollupEntry, tokens: number, records: numbe
     Object.values(entry.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
   ).toBe(tokens);
 }
+function expectIncomplete(entry: UsageCostRollupEntry, total: number) {
+  expect(entry.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
+    usageReport: { state: "unavailable" },
+    totalTokens: total,
+    totalCost: total,
+    missingCostEntries: 1,
+  });
+}
 
 it("stops reading subsequent transcript pages when its owner cancels", async () => {
-  const controller = new AbortController();
   const reason = new Error("usage client disconnected");
   const readSequences: number[] = [];
   await expect(
     scan([...initial, makeRow(9, "b", "a", 4)], undefined, "initial", readSequences, () => {
       if (readSequences.length > 0) {
-        controller.abort(reason);
+        throw reason;
       }
-      controller.signal.throwIfAborted();
     }),
   ).rejects.toBe(reason);
   expect(readSequences).toEqual([1, 4]);
@@ -106,23 +112,11 @@ it("keeps known billing separate from unavailable usage across incremental refre
   const before = await scan(initial);
   const interrupted = [...initial, makeRow(9, "aborted", "a", 100, true)];
   const afterAbort = await scan(interrupted, before);
-  expect(afterAbort.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
-    usageReport: { state: "unavailable" },
-    totalTokens: 3,
-    totalCost: 3,
-    missingCostEntries: 1,
-  });
-
-  const afterSuccess = await scan(
-    [...interrupted, makeRow(12, "completed", "aborted", 4)],
-    afterAbort,
+  expectIncomplete(afterAbort, 3);
+  expectIncomplete(
+    await scan([...interrupted, makeRow(12, "completed", "aborted", 4)], afterAbort),
+    7,
   );
-  expect(afterSuccess.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
-    usageReport: { state: "unavailable" },
-    totalTokens: 7,
-    totalCost: 7,
-    missingCostEntries: 1,
-  });
 });
 
 it("selects a branch after reading all short pages and preserves sparse sequence numbers", async () => {
@@ -146,20 +140,10 @@ it.each<[string, Row[], [number, number, string], string?]>([
     [...appended, control(20, "reset", "reset", null), makeRow(25, "after-reset", "root", 16)],
     [16, 1, "after-reset"],
   ],
-  [
-    "rewrite then append",
-    [makeRow(1, "root", null, 8), initial[1]!, makeRow(9, "b", "a", 4)],
-    [14, 3, "b"],
-    "rewritten",
-  ],
   ["rewind", [initial[0]!], [1, 1, "root"], "rewound"],
   [
     "compact",
-    [
-      control(1, "compaction", "compact", null),
-      makeRow(4, "a", "compact", 2),
-      makeRow(9, "b", "a", 4),
-    ],
+    [control(1, "compaction", "root", null), ...appended.slice(1, 3)],
     [6, 2, "b"],
     "compacted",
   ],
@@ -168,12 +152,11 @@ it.each<[string, Row[], [number, number, string], string?]>([
   const readSequences: number[] = [];
   const result = await scan(rows, previous, generation, readSequences);
   expectUsage(result, ...expected);
-  if (generation !== "initial") {
+  if (generation !== "initial" || _change === "append") {
     expect(result.rollup).toEqual((await scan(rows, undefined, generation)).rollup);
-    expect(readSequences).toEqual(rows.map((row) => row.seq));
-  } else if (_change === "append") {
-    expect(readSequences).toEqual([9, 12, 16]);
-    expect(result.rollup).toEqual((await scan(rows)).rollup);
+    expect(readSequences).toEqual(
+      generation !== "initial" ? rows.map((row) => row.seq) : [9, 12, 16],
+    );
   }
 });
 

@@ -154,6 +154,7 @@ function buildManifestCatalogModel(
     ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
+    ...(model.family ? { family: model.family } : {}),
     maxTokens: model.maxTokens,
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
@@ -194,7 +195,10 @@ export function buildManifestModelProviderConfig(params: {
     ...(catalog.api ? { api: catalog.api } : {}),
     ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
     models: catalog.models.map((model) =>
-      buildManifestCatalogModel(model, { providerId: params.providerId }),
+      buildManifestCatalogModel(
+        catalog.family && !model.family ? { ...model, family: catalog.family } : model,
+        { providerId: params.providerId },
+      ),
     ),
   };
 }
@@ -276,6 +280,7 @@ export function buildManifestProviderCatalogFamily(params: {
           input: [...entry.input],
           contextWindow: entry.contextWindow,
           ...(entry.parameterCount !== undefined ? { parameterCount: entry.parameterCount } : {}),
+          ...(entry.family ? { family: entry.family } : {}),
         })),
       ),
   };

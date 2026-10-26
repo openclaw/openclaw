@@ -1,9 +1,9 @@
 import { createMemo, Show, useContext } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
-import "../../../components/tooltip.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   formatModelContextMeta,
@@ -13,15 +13,12 @@ import {
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import {
-  ChatModelSearchContext,
-  handleModelOptionMouseEnter,
-  type ChatModelSearchRow,
-} from "./chat-model-picker-search.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
+import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
 
 function ModelShortcut(props: { rowKey: string }) {
   const search = useContext(ChatModelSearchContext);
-  const number = () => search?.row(props.rowKey)?.shortcut;
+  const number = createMemo(() => search?.row(props.rowKey)?.shortcut);
   return (
     <kbd
       class="shortcut-kbd"
@@ -40,6 +37,13 @@ export function ChatModelProviderIcon(props: { provider: string }) {
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
 
+function optionNeedsAuth(entry: ModelPresentationProps["entry"]) {
+  return (
+    entry.disabled &&
+    (entry.unavailableReason === "missing-auth" || entry.unavailableReason === "auth-failed")
+  );
+}
+
 function optionPresentation(options: ModelPresentationProps) {
   const selected = isModelPickerOptionSelected(
     options.entry,
@@ -55,10 +59,7 @@ function optionPresentation(options: ModelPresentationProps) {
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
   // Resetting a recorded pin remains possible even when its default model is unavailable.
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
-  const needsAuth =
-    options.entry.disabled &&
-    (options.entry.unavailableReason === "missing-auth" ||
-      options.entry.unavailableReason === "auth-failed");
+  const needsAuth = optionNeedsAuth(options.entry);
   const onModelSetup = needsAuth ? options.onModelSetup : undefined;
   const modelMeta = needsAuth
     ? runtime?.detail !== undefined
@@ -89,19 +90,26 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
 }
 
 export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
-  const view = optionPresentation(options);
+  const selected = isModelPickerOptionSelected(
+    options.entry,
+    options.selectedModelValue,
+    options.selectedAgentRuntime,
+  );
+  const runtimeLabel =
+    formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId)?.label ?? "";
+  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const onModelSetup = optionNeedsAuth(options.entry) ? options.onModelSetup : undefined;
   return {
     key: modelPickerOptionKey(options.entry),
-    name: view.modelLabel.toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
+    name: formatModelLabel(options.entry).toLocaleLowerCase(),
+    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
     providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
     reference: options.entry.value,
-    selected: view.selected,
-    hasShortcut: !view.selected,
-    disabled:
-      options.disabled || Boolean(options.entry.disabled && !view.onModelSetup && !view.resetsPin),
+    selected,
+    hasShortcut: !selected,
+    disabled: options.disabled || Boolean(options.entry.disabled && !onModelSetup && !resetsPin),
   };
 }
 
@@ -111,8 +119,11 @@ function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
   const search = useContext(ChatModelSearchContext);
-  const key = () => modelPickerOptionKey(props.entry);
-  const row = () => search?.row(key());
+  const key = createMemo(() => modelPickerOptionKey(props.entry));
+  // Query changes should reach only rows whose displayed search facts changed.
+  const rank = createMemo(() => search?.row(key())?.rank);
+  const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
+  const highlighted = createMemo(() => search?.highlighted() === key());
   return (
     <button
       ref={search?.rowRef(key)}
@@ -125,9 +136,9 @@ function ModelOptionButton(
       ]}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
-      data-chat-model-rank={row()?.rank}
-      data-chat-model-highlighted={search?.highlighted() === key() ? "" : undefined}
-      style={{ "--chat-model-rank": row()?.rank }}
+      data-chat-model-rank={rank()}
+      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
@@ -143,7 +154,9 @@ function ModelOptionButton(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
-      hidden={row()?.hidden ?? false}
+      aria-posinset={search?.row(key())?.position}
+      aria-setsize={search?.row(key())?.size}
+      hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
       title={props.presentation.accessibleStatus || undefined}
       aria-label={[
@@ -227,17 +240,19 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
 
 export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
   const search = useContext(ChatModelSearchContext);
-  const key = () => `target:${props.groupId}:${props.entry.value}`;
-  const row = () => search?.row(key());
+  const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
+  const rank = createMemo(() => search?.row(key())?.rank);
+  const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
+  const highlighted = createMemo(() => search?.highlighted() === key());
   return (
     <button
       ref={search?.rowRef(key)}
       id={search?.optionId(key())}
-      hidden={row()?.hidden ?? false}
+      hidden={hidden()}
       data-chat-model-key={key()}
-      data-chat-model-rank={row()?.rank}
-      data-chat-model-highlighted={search?.highlighted() === key() ? "" : undefined}
-      style={{ "--chat-model-rank": row()?.rank }}
+      data-chat-model-rank={rank()}
+      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      style={{ "--chat-model-rank": rank() }}
       class="chat-controls__inline-select-option chat-controls__model-option"
       data-chat-model-option={`target:${props.groupId}:${props.entry.value}`}
       data-chat-model-target={props.entry.value}
@@ -245,6 +260,8 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-posinset={search?.row(key())?.position}
+      aria-setsize={search?.row(key())?.size}
       aria-selected="false"
       type="button"
       disabled={props.disabled}

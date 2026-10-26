@@ -26,6 +26,7 @@ import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-d
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:managed-media-order";
@@ -124,10 +125,19 @@ async function startProvider() {
 }
 
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 let provider: Awaited<ReturnType<typeof startProvider>>;
 const suite = createControlUiE2eSuite({
   name: "Managed image ordering through real chat.send and history",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     provider = await startProvider();
     const close = () =>
@@ -233,11 +243,10 @@ async function runCli(args: string[]) {
 }
 
 async function callGateway(method: string, params: Record<string, unknown>) {
-  return asOptionalRecord(
-    JSON.parse(
-      await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-    ),
-  );
+  if (!client) {
+    throw new Error("Gateway fixture client is not connected");
+  }
+  return asOptionalRecord(await client.request(method, params));
 }
 
 const writeEvidence = (name: string, value: unknown) =>
@@ -371,14 +380,29 @@ async function runManagedMediaScenario() {
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       // The recap belongs to a run the pane observed, not a terminal history row.
       await page.waitForFunction((expectedSessionKey) => {
-        const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+        const pane = document.querySelector<HTMLElement & { state?: ChatState }>(
           'openclaw-chat-pane[aria-hidden="false"]',
-        )?.state;
-        return state?.sessionKey === expectedSessionKey && Boolean(state.chatRunId);
+        );
+        const state = pane?.state;
+        if (!pane || state?.sessionKey !== expectedSessionKey || !state.chatRunId) {
+          return false;
+        }
+        // An existing indicator can precede projection of the acknowledged run.
+        return Array.from(pane.querySelectorAll(".chat-working-indicator")).some((indicator) => {
+          const runKey = indicator
+            .closest('[data-chat-row-key^="agent-run:"]')
+            ?.getAttribute("data-chat-row-key");
+          const streamKey = indicator
+            .closest('[data-chat-row-key^="stream-working:"]')
+            ?.getAttribute("data-chat-row-key");
+          return (
+            indicator.checkVisibility({ visibilityProperty: true }) &&
+            ((runKey && JSON.parse(runKey.slice("agent-run:".length))[0] === state.chatRunId) ||
+              streamKey ===
+                `stream-working:${JSON.stringify([expectedSessionKey, state.chatRunId])}`)
+          );
+        });
       }, sessionKey);
-      await page
-        .locator('openclaw-chat-pane[aria-hidden="false"] .chat-working-indicator')
-        .waitFor({ state: "visible" });
       provider.releaseEcho();
       const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
       const renderedImages = bubble.locator("img.chat-message-image");
@@ -439,8 +463,19 @@ async function runManagedMediaScenario() {
           )
           .toEqual([true, true]);
       };
-      // Read persisted history through its real owner, never pre-seed ordered content.
-      const history = await callGateway("chat.history", { sessionKey, limit: 20 });
+      // Text can settle before managed media; wait for the real history projection.
+      let history: Awaited<ReturnType<typeof callGateway>>;
+      await expect
+        .poll(async () => {
+          history = await callGateway("chat.history", { sessionKey, limit: 20 });
+          const messages = Array.isArray(history?.messages) ? history.messages : [];
+          const assistant = messages
+            .map(asOptionalRecord)
+            .find((entry) => entry?.role === "assistant");
+          const content = Array.isArray(assistant?.content) ? assistant.content : [];
+          return content.filter((block) => asOptionalRecord(block)?.type === "image").length;
+        })
+        .toBe(2);
       const messages = Array.isArray(history?.messages) ? history.messages : [];
       const assistants = messages
         .map(asOptionalRecord)
@@ -582,6 +617,14 @@ async function runManagedMediaScenario() {
                 recapPanePresent: Boolean(pane),
                 recapSessionMatches: state?.sessionKey === expectedSessionKey,
                 recapRunCleared: state?.chatRunId === null,
+                recapWorkingIndicatorCount:
+                  pane?.querySelectorAll(".chat-working-indicator").length ?? null,
+                recapPendingSendCount:
+                  state?.chatQueue.filter(
+                    (item) => item.sendState === "submitting" || item.sendState === "sending",
+                  ).length ?? null,
+                recapPendingSendMatchesAssistant:
+                  state?.chatQueue.some((item) => item.sendRunId === assistantRunId) ?? null,
                 recapCount: recaps.length,
                 recapVisibleCount: recaps.filter((element) =>
                   element.checkVisibility({ visibilityProperty: true }),

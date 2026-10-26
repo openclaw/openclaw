@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -9,49 +8,43 @@ import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js"
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
-import { createReadinessChecker } from "./readiness.js";
+import { createReadinessChecker, createStartupChecker } from "./readiness.js";
 
 const FIVE_MIN_MS = 5 * 60_000;
 const THIRTY_ONE_MIN_MS = 31 * 60_000;
 
-function snapshotWith(
-  accounts: Record<string, Partial<ChannelAccountSnapshot>>,
-): ChannelRuntimeSnapshot {
-  const channels: ChannelRuntimeSnapshot["channels"] = {};
-  const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
-
-  for (const [channelId, accountSnapshot] of Object.entries(accounts)) {
-    const resolved = { accountId: "default", ...accountSnapshot } as ChannelAccountSnapshot;
-    channels[channelId as ChannelId] = resolved;
-    channelAccounts[channelId as ChannelId] = { default: resolved };
+function snapshotWith(account?: Partial<ChannelAccountSnapshot>): ChannelRuntimeSnapshot {
+  if (!account) {
+    return { channels: {}, channelAccounts: {} };
   }
-
-  return { channels, channelAccounts };
-}
-
-function createManager(snapshot: ChannelRuntimeSnapshot) {
-  return {
-    getRuntimeSnapshot: vi.fn(() => snapshot),
-    getAutostartSuppression: vi.fn<ChannelManager["getAutostartSuppression"]>(() => null),
-    isAmbientAutostartSuppressed: vi.fn<ChannelManager["isAmbientAutostartSuppressed"]>(
-      () => false,
-    ),
+  const resolved = {
+    accountId: "default",
+    running: true,
+    connected: true,
+    enabled: true,
+    configured: true,
+    lastStartAt: Date.now() - FIVE_MIN_MS,
+    ...account,
   };
+  return { channels: { discord: resolved }, channelAccounts: { discord: { default: resolved } } };
 }
 
 type ReadinessOptions = Omit<
   Parameters<typeof createReadinessChecker>[0],
   "channelManager" | "startedAt"
 >;
-function createReadinessHarness({
-  startedAgoMs = FIVE_MIN_MS,
-  accounts = {},
-  ...options
-}: ReadinessOptions & {
-  startedAgoMs?: number;
-  accounts?: Record<string, Partial<ChannelAccountSnapshot>>;
-}) {
-  const manager = createManager(snapshotWith(accounts));
+function setup(
+  account?: Partial<ChannelAccountSnapshot>,
+  { startedAgoMs = FIVE_MIN_MS, ...options }: ReadinessOptions & { startedAgoMs?: number } = {},
+) {
+  const snapshot = snapshotWith(account);
+  const manager = {
+    getRuntimeSnapshot: vi.fn(() => snapshot),
+    getAutostartSuppression: vi.fn<ChannelManager["getAutostartSuppression"]>(() => null),
+    isAmbientAutostartSuppressed: vi.fn<ChannelManager["isAmbientAutostartSuppressed"]>(
+      () => false,
+    ),
+  };
   return {
     manager,
     readiness: createReadinessChecker({
@@ -60,29 +53,6 @@ function createReadinessHarness({
       ...options,
     }),
   };
-}
-
-function managedAccount(
-  overrides: Partial<ChannelAccountSnapshot> = {},
-): Partial<ChannelAccountSnapshot> {
-  return {
-    running: true,
-    connected: true,
-    enabled: true,
-    configured: true,
-    lastStartAt: Date.now() - FIVE_MIN_MS,
-    ...overrides,
-  };
-}
-
-const stoppedAccount = (overrides: Partial<ChannelAccountSnapshot> = {}) =>
-  managedAccount({ running: false, ...overrides });
-
-function discordHarness(
-  account: Partial<ChannelAccountSnapshot>,
-  options: ReadinessOptions & { startedAgoMs?: number } = {},
-) {
-  return createReadinessHarness({ accounts: { discord: managedAccount(account) }, ...options });
 }
 
 function readySnapshot(
@@ -106,12 +76,50 @@ describe("createReadinessChecker", () => {
     vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
   });
   afterEach(() => vi.useRealTimers());
+  it("reports deferred recovery per agent using required-agent readiness policy", () => {
+    let pending = ["owner"];
+    const { readiness } = setup(undefined, {
+      getPendingAgentInputRecovery: () => pending,
+      isRequiredAgent: (agentId) => agentId === "main",
+    });
+    expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { agentRecovery: ["owner"] }));
+    pending = ["owner", "main"];
+    expect(readiness()).toEqual({
+      ...failingSnapshot(["chat-recovery:main"]),
+      agentRecovery: ["owner", "main"],
+    });
+    pending = [];
+    expect(readiness()).toEqual(readySnapshot());
+  });
+  it("keeps traffic unready until saved input recovery releases chat admission", () => {
+    const unavailableMethods = new Set(["chat.send"]);
+    const deps = {
+      startedAt: Date.now() - FIVE_MIN_MS,
+      isChatSendAvailable: () => !unavailableMethods.has("chat.send"),
+    };
+    const { readiness, manager } = setup(undefined, deps);
+
+    // Startup completion releases recovery's background-work barrier; it cannot await recovery.
+    expect(createStartupChecker(deps)()).toEqual({
+      ok: true,
+      status: "started",
+      uptimeMs: FIVE_MIN_MS,
+    });
+    expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+    unavailableMethods.clear();
+    expect(readiness()).toEqual(readySnapshot());
+    unavailableMethods.add("chat.send");
+    expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
+  });
+
   it.each([
     ["startup-sidecars", "getStartupPending"],
     ["gateway-draining", "getGatewayDraining"],
   ] as const)("does not cache %s readiness", (reason, getter) => {
     let pending = true;
-    const { manager, readiness } = createReadinessHarness({
+    const { manager, readiness } = setup(undefined, {
       [getter]: () => pending,
     });
     expect(readiness()).toEqual(failingSnapshot([reason]));
@@ -123,7 +131,7 @@ describe("createReadinessChecker", () => {
 
   it("reports a terminal state database failure immediately and discards cached channel health", () => {
     let failure: Error | undefined;
-    const { manager, readiness } = createReadinessHarness({
+    const { manager, readiness } = setup(undefined, {
       getStateDatabaseFailure: () => failure,
     });
     expect(readiness()).toEqual(readySnapshot());
@@ -142,15 +150,13 @@ describe("createReadinessChecker", () => {
 
   it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
     let pluginReload: GatewayPluginReloadStatus | undefined;
-    const { manager, readiness } = discordHarness(
+    const { manager, readiness } = setup(
       { lastTransportActivityAt: Date.now() },
       { getPluginReloadStatus: () => pluginReload },
     );
     expect(readiness()).toEqual(readySnapshot());
 
-    manager.getRuntimeSnapshot.mockReturnValue(
-      snapshotWith({ discord: stoppedAccount({ connected: false }) }),
-    );
+    manager.getRuntimeSnapshot.mockReturnValue(snapshotWith({ running: false, connected: false }));
 
     pluginReload = {
       phase: "recovering",
@@ -183,39 +189,35 @@ describe("createReadinessChecker", () => {
   ])(
     "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed)",
     ({ skipChannels, channelFailed }) => {
-      const pending = createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
-        reason: "Startup inspection and preparation are still running.",
-        pending: true,
-      });
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
-        reason: "Session identities require migration before this agent can run.",
-      });
       let refusals: AgentDatabaseAdmissionRefusal[] = [];
-      const { readiness } = createReadinessHarness({
-        accounts: channelFailed ? { discord: stoppedAccount({ connected: false }) } : {},
-        shouldSkipChannelReadiness: () => skipChannels,
-        getAgentDatabaseAdmissionRefusals: () => refusals,
-      });
+      const { readiness } = setup(
+        channelFailed ? { running: false, connected: false } : undefined,
+        {
+          shouldSkipChannelReadiness: () => skipChannels,
+          getAgentDatabaseAdmissionRefusals: () => refusals,
+        },
+      );
       const channelReadiness = channelFailed
         ? failingSnapshot(["discord"], FIVE_MIN_MS, true)
         : readySnapshot();
       expect(readiness()).toEqual(channelReadiness);
 
-      refusals = [pending];
-      expect(readiness()).toEqual({
-        ...failingSnapshot(["agent-database:main"]),
-        agentDatabases: [pending],
-      });
-
-      refusals = [refusal];
-      expect(readiness()).toEqual({
-        ...failingSnapshot(["agent-database:main"]),
-        agentDatabases: [refusal],
-      });
+      for (const pending of [true, false]) {
+        refusals = [
+          createAgentDatabaseInspectionRefusal({
+            agentId: "main",
+            paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+            reason: pending
+              ? "Startup inspection and preparation are still running."
+              : "Session identities require migration before this agent can run.",
+            ...(pending ? { pending } : {}),
+          }),
+        ];
+        expect(readiness()).toEqual({
+          ...failingSnapshot(["agent-database:main"]),
+          agentDatabases: refusals,
+        });
+      }
 
       refusals = [];
       expect(readiness()).toEqual(channelReadiness);
@@ -225,7 +227,7 @@ describe("createReadinessChecker", () => {
   it.each([undefined, "ready"] as const)(
     "applies startup grace only before lifecycle readiness (%s)",
     (lifecycle) => {
-      const { readiness } = discordHarness(
+      const { readiness } = setup(
         {
           connected: false,
           lifecycle,
@@ -242,7 +244,7 @@ describe("createReadinessChecker", () => {
   it.each(["crash-loop", "ambient"] as const)(
     "reports %s suppressed stopped channels without failing readiness",
     (suppression) => {
-      const { manager, readiness } = discordHarness({
+      const { manager, readiness } = setup({
         running: false,
         restartPending: false,
         lastError: suppression === "crash-loop" ? "safe mode" : "ambient credentials suppressed",
@@ -261,32 +263,25 @@ describe("createReadinessChecker", () => {
     },
   );
 
-  it("keeps a dead-ingress channel ready while its restart backoff is still pending", () => {
-    const startedAt = Date.now() - FIVE_MIN_MS;
-    const { readiness } = discordHarness({
-      running: false,
+  it.each([
+    { name: "dead ingress in restart backoff", running: false, ready: true },
+    { name: "dead ingress while running", running: true, ready: false },
+  ])("checks $name independently of transport connectivity", ({ running, ready }) => {
+    const { readiness } = setup({
+      running,
       restartPending: true,
       ingressUnavailable: true,
       reconnectAttempts: 3,
-      lastStartAt: startedAt - 30_000,
+      lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
       lastStopAt: Date.now() - 5_000,
     });
-    expect(readiness()).toEqual(readySnapshot());
-  });
-
-  it("fails readiness for a running channel whose transport is up but ingress is dead", () => {
-    const { readiness } = discordHarness({
-      running: true,
-      connected: true,
-      restartPending: true,
-      ingressUnavailable: true,
-      lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
-    });
-    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
+    expect(readiness()).toEqual(
+      ready ? readySnapshot() : failingSnapshot(["discord"], FIVE_MIN_MS, true),
+    );
   });
 
   it("treats stale-socket channels as ready to avoid pulling healthy idle pods", () => {
-    const { readiness } = discordHarness(
+    const { readiness } = setup(
       {
         lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
         lastTransportActivityAt: Date.now() - THIRTY_ONE_MIN_MS,
@@ -297,7 +292,7 @@ describe("createReadinessChecker", () => {
   });
 
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
-    const { manager, readiness } = discordHarness({
+    const { manager, readiness } = setup({
       lastTransportActivityAt: Date.now() - 1_000,
     });
     expect(readiness()).toEqual(readySnapshot());
@@ -311,13 +306,11 @@ describe("createReadinessChecker", () => {
   });
 
   it("refreshes stopped channels when the clock moves behind cached readiness", () => {
-    const { manager, readiness } = createReadinessHarness({
-      accounts: { discord: managedAccount({ lifecycle: "ready" }) },
-    });
+    const { manager, readiness } = setup({ lifecycle: "ready" });
 
     expect(readiness()).toEqual(readySnapshot());
     manager.getRuntimeSnapshot.mockReturnValue(
-      snapshotWith({ discord: stoppedAccount({ connected: false, lifecycle: "stopped" }) }),
+      snapshotWith({ running: false, connected: false, lifecycle: "stopped" }),
     );
     vi.setSystemTime(Date.now() - 60_000);
 
@@ -336,7 +329,7 @@ describe("createReadinessChecker", () => {
       utilization: 0.991,
       cpuCoreRatio: 0.973,
     };
-    const { readiness } = createReadinessHarness({
+    const { readiness } = setup(undefined, {
       getEventLoopHealth: () => structuredClone(eventLoop),
     });
     expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { eventLoop }));

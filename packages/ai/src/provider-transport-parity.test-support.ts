@@ -1,8 +1,44 @@
-import type { Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  UserMessage,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, expect, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "./host.js";
 import type { AnthropicOptions } from "./provider-options.js";
+import { createZeroUsage } from "./usage.test-support.js";
+
+export function textBlock(text: string, cache_control?: { type: string; ttl?: string }) {
+  return { type: "text" as const, text, ...(cache_control ? { cache_control } : {}) };
+}
+
+export function userMessage(
+  content: UserMessage["content"],
+  overrides: Partial<UserMessage> = {},
+): UserMessage {
+  return { role: "user", content, timestamp: 1, ...overrides };
+}
+
+export function assistantMessage(
+  model: Model,
+  content: AssistantMessage["content"],
+  overrides: Partial<AssistantMessage> = {},
+): AssistantMessage {
+  return {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    timestamp: 1,
+    stopReason: "stop",
+    usage: createZeroUsage(),
+    content,
+    ...overrides,
+  };
+}
 
 export const anthropicModel = {
   id: "claude-sonnet-4-6",
@@ -86,7 +122,7 @@ export function registerParityHostLifecycle() {
   });
 }
 
-export async function captureAnthropicRequest(
+export async function captureAnthropicExchange(
   implementation: "provider" | "transport",
   options: {
     model?: Partial<Model<"anthropic-messages">>;
@@ -173,8 +209,18 @@ export async function captureAnthropicRequest(
           requestContext,
           streamOptions,
         );
-  const result = await stream.result();
-  expect(result.stopReason).toBe("stop");
+  const eventTrace = [];
+  for await (const event of stream) {
+    eventTrace.push(event);
+  }
+  return { requests, terminal: await stream.result(), eventTrace, warnings, info };
+}
+
+export async function captureAnthropicRequest(
+  ...args: Parameters<typeof captureAnthropicExchange>
+) {
+  const { requests, terminal, warnings, info } = await captureAnthropicExchange(...args);
+  expect(terminal.stopReason).toBe("stop");
   expect(requests).toHaveLength(1);
   const [request] = requests;
   if (!request) {

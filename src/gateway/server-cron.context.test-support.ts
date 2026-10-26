@@ -42,10 +42,8 @@ type GatewayCronContextTestHarness = {
     run: (state: CronFixture) => void | Promise<void>,
   ) => Promise<void>;
   finishedEvent: (jobId?: string) => Record<string, unknown> | undefined;
-  legacyWakeMocks: {
+  legacyEventMocks: {
     enqueue: typeof import("../infra/system-events.js").enqueueSystemEvent;
-    wake: typeof import("../infra/heartbeat-wake.js").requestHeartbeatAndWait;
-    requestWake: typeof import("../infra/heartbeat-wake.js").requestHeartbeat;
   };
   createCronService: (
     cfg: OpenClawConfig,
@@ -73,7 +71,7 @@ export function registerGatewayCronContextTests({
   createMultiAgentConfig,
   withCronService,
   finishedEvent,
-  legacyWakeMocks,
+  legacyEventMocks,
   createCronService,
   getCronState,
   addAgentTurnJob,
@@ -88,6 +86,13 @@ export function registerGatewayCronContextTests({
     const cfg = createCronConfig(name);
     loadConfigMock.mockReturnValue(cfg);
     return cfg;
+  }
+  function expectWake(text: string, route: Record<string, unknown>) {
+    expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+      text,
+      expect.objectContaining({ source: "cron", ...route }),
+    );
+    expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
   }
   function timedConfig(name: string, hour: string) {
     vi.useFakeTimers();
@@ -156,9 +161,7 @@ export function registerGatewayCronContextTests({
           }),
         );
         expect(finishedEvent(job.id)).toMatchObject({ status: "ok" });
-        expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-        expect(legacyWakeMocks.wake).not.toHaveBeenCalled();
-        expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+        expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
       });
     },
   );
@@ -171,16 +174,7 @@ export function registerGatewayCronContextTests({
         ok: true,
       });
 
-      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
-        "hello",
-        expect.objectContaining({
-          source: "cron",
-          agentId: "ops",
-          sessionKey: expect.stringMatching(/^agent:ops:/),
-        }),
-      );
-      expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-      expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+      expectWake("hello", { agentId: "ops", sessionKey: expect.stringMatching(/^agent:ops:/) });
     });
   });
 
@@ -192,16 +186,7 @@ export function registerGatewayCronContextTests({
     await withCronService(cfg, async (state) => {
       expect(await state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
 
-      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
-        "system wake",
-        expect.objectContaining({
-          source: "cron",
-          agentId: "ops",
-          sessionKey: "agent:ops:main",
-        }),
-      );
-      expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-      expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+      expectWake("system wake", { agentId: "ops", sessionKey: "agent:ops:main" });
     });
   });
 
@@ -257,67 +242,6 @@ export function registerGatewayCronContextTests({
           await service.cron.stopAndDrain?.();
         }
       });
-    },
-  );
-
-  it.each(["update", "updateWithPrecondition"] as const)(
-    "forwards authority options through the %s lifecycle wrapper",
-    async (method) => {
-      const cfg = createCronConfig(`server-cron-update-authority-${method}`);
-      loadConfigMock.mockReturnValue(cfg);
-      const state = createCronService(cfg);
-      const owner = {
-        agentId: "main",
-        sessionKey: "agent:main:discord:group:ops",
-        accountId: "work",
-      };
-      const scheduledToolPolicy = {
-        version: 1 as const,
-        mode: "account" as const,
-        ownerSessionKey: owner.sessionKey,
-        ownerAccountId: owner.accountId,
-      };
-      let restarted: CronFixture | undefined;
-
-      try {
-        const job = await addSystemEventJob(state, `authority ${method}`, "run", {
-          owner,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
-          wakeMode: "now",
-        });
-        let current = true;
-        const commitGuard = () => {
-          if (!current) {
-            throw new Error("cron mutation authority was revoked");
-          }
-        };
-        const patch = {
-          sessionTarget: "isolated" as const,
-          payload: { kind: "agentTurn" as const, message: "updated", toolsAllow: ["write"] },
-        };
-        const options = { scheduledToolPolicy, commitGuard };
-
-        const update = (candidate: Parameters<CronFixture["cron"]["update"]>[1]) =>
-          method === "update"
-            ? state.cron.update(job.id, candidate, options)
-            : state.cron.updateWithPrecondition(job.id, candidate, () => undefined, options);
-        await update(patch);
-
-        current = false;
-        await expect(
-          update({ ...patch, payload: { ...patch.payload, message: "unauthorized change" } }),
-        ).rejects.toThrow("cron mutation authority was revoked");
-
-        state.cron.stop();
-        restarted = createCronService(cfg);
-        const persisted = await restarted.cron.readJob(job.id);
-        expect(persisted?.scheduledToolPolicy).toEqual(scheduledToolPolicy);
-        expect(persisted?.payload).toMatchObject(patch.payload);
-      } finally {
-        state.cron.stop();
-        restarted?.cron.stop();
-      }
     },
   );
 

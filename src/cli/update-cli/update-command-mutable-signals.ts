@@ -1,3 +1,4 @@
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import {
   finishInterruptedUpdateBeforeActivation,
   getUpdateRun,
@@ -11,7 +12,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import {
-  exitAfterSignalExitBarriers,
   registerSignalExitBarrier,
   registerSignalExitGate,
   waitForSignalExitBarriers,
@@ -225,7 +225,12 @@ export async function withMutableUpdateSignals<T>(
       }
       assertCurrent();
       // Accepted worker writes have settled; the original interruption policy owns this row.
-      finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
+      finishInterruptedUpdateBeforeActivation(
+        expected,
+        assertCurrent,
+        { env },
+        (payload) => void sendUpdateResultTelemetry(payload, { env }),
+      );
     };
   };
   let settle: (() => void) | undefined;
@@ -295,12 +300,7 @@ export async function withMutableUpdateSignals<T>(
     } catch {
       defaultRuntime.error("Update interruption could not be recorded; history remains pending.");
     }
-    if (signal === "SIGHUP") {
-      // The shared CLI signal type covers INT/TERM; retain HUP as the same
-      // accepted process outcome instead of silently converting it to SIGINT.
-      exitAfterSignalExitBarriers(code);
-    }
-    shutdown = waitForSignalExitBarriers(signal === "SIGHUP" ? undefined : signal)
+    shutdown = waitForSignalExitBarriers(signal)
       .catch(() => {
         defaultRuntime.error("Update signal cleanup did not complete.");
       })

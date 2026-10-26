@@ -128,7 +128,11 @@ describe("worker ACK ownership and ordering", () => {
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {
     const applyTranscriptCommit = vi
       .fn<NonNullable<support.WorkerEnvironmentServiceOptions["applyTranscriptCommit"]>>()
-      .mockResolvedValueOnce({ ok: false, reason: "stale-base-leaf" })
+      .mockImplementationOnce(async ({ onCommitted }) => {
+        const outcome = { ok: false as const, reason: "stale-base-leaf" as const };
+        await onCommitted?.(outcome);
+        return outcome;
+      })
       .mockResolvedValueOnce({ ok: false, reason: "invalid-batch" });
     const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-placement-stale",

@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -78,6 +78,59 @@ async function writeCompletionCache(shell: CompletionShell, content = "# complet
 }
 
 const readProfile = (profilePath: string) => fs.readFile(profilePath, "utf8");
+
+it.skipIf(process.platform === "win32")(
+  "escapes terminal controls in installation messages without changing profile paths",
+  async () => {
+    await withCompletionHome(async ({ homeDir }) => {
+      const profileDir = path.join(
+        homeDir,
+        "profiles-café\u001b[31m\noperator-forged\tend\rrow\u0007",
+      );
+      await withEnvAsync({ ZDOTDIR: profileDir }, async () => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const cachePath = await writeCompletionCache("zsh");
+
+        await installCompletion("zsh", false);
+        const profilePath = path.join(profileDir, ".zshrc");
+        const installed = await readProfile(profilePath);
+        expect(installed).toContain(cachePath);
+        await installCompletion("zsh", false);
+        expect(await readProfile(profilePath)).toBe(installed);
+
+        const messages = [...warn.mock.calls, ...log.mock.calls].map((args) => args.join(" "));
+        expect(messages.some((message) => message.includes("Profile not found"))).toBe(true);
+        expect(messages.some((message) => message.includes("Installing completion"))).toBe(true);
+        expect(messages).toContain("Completion installed. Restart your shell to load it.");
+        expect(messages.some((message) => message.includes("already installed"))).toBe(true);
+        for (const message of messages) {
+          expect(message).not.toMatch(/\p{Cc}/u);
+        }
+        expect(messages.join("\n")).toContain("profiles-café\\noperator-forged\\tend\\rrow");
+      });
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")("rejects a special-device profile target", async () => {
+  await withCompletionHome(async ({ homeDir }) => {
+    await fs.symlink("/dev/null", path.join(homeDir, ".zshrc"));
+    await expect(isCompletionInstalled("zsh")).rejects.toThrow(/regular file/);
+  });
+});
+
+it.skipIf(process.platform === "win32")("rejects a FIFO profile without replacing it", async () => {
+  await withCompletionHome(async ({ homeDir }) => {
+    await writeCompletionCache("zsh");
+    const profilePath = path.join(homeDir, ".zshrc");
+    execFileSync("mkfifo", [profilePath]);
+    await expect(isCompletionInstalled("zsh")).rejects.toThrow(/regular file/);
+    await expect(usesSlowDynamicCompletion("zsh")).rejects.toThrow(/regular file/);
+    await expect(installCompletion("zsh", true)).rejects.toThrow(/regular file/);
+    expect((await fs.lstat(profilePath)).isFIFO()).toBe(true);
+  });
+});
 
 function expectProfileMode(profilePath: string) {
   return process.platform === "win32"
@@ -210,25 +263,6 @@ it("loads cached Bash completion from a literal path through the login profile",
     expect(shell.stdout).toContain("complete -W 'status' openclaw");
     expect(shell.stdout).toContain("<value >\n");
   }, "openclaw-completion-literal$dollar Ada's !42-");
-});
-
-it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
-  await withCompletionHome(async () => {
-    await writeCompletionCache("zsh");
-    const profilePath = await writeProfile("zsh", "");
-    await fs.chmod(profilePath, 0o640);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    try {
-      await installCompletion("zsh", false, "openclaw");
-      expect(log).toHaveBeenCalledWith(
-        "Completion installed. Restart your shell or run: source ~/.zshrc",
-      );
-      await expectProfileMode(profilePath);
-    } finally {
-      log.mockRestore();
-    }
-  });
 });
 
 it("preserves an existing profile when atomic publication fails", async () => {

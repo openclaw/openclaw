@@ -36,7 +36,6 @@ type MatrixDirectRoomPromotionResult =
   | {
       classifyAsDirect: true;
       repaired: boolean;
-      roomId: string;
       reason: "promoted" | "already-mapped" | "repair-failed";
     }
   | {
@@ -44,12 +43,6 @@ type MatrixDirectRoomPromotionResult =
       repaired: false;
       reason: "not-strict" | "local-explicit-false";
     };
-
-type MatrixDirectRoomMappingWriteResult = {
-  changed: boolean;
-  directContentBefore: MatrixDirectAccountData;
-  directContentAfter: MatrixDirectAccountData;
-};
 
 const directAccountDataWriteQueues = new WeakMap<MatrixClient, Promise<void>>();
 
@@ -70,7 +63,7 @@ async function writeMatrixDirectRoomMappings(params: {
   client: MatrixClient;
   remoteUserId: string;
   roomIds: readonly string[];
-}): Promise<MatrixDirectRoomMappingWriteResult> {
+}) {
   return await enqueueKeyedTask({
     tails: directAccountDataWriteQueues,
     key: params.client,
@@ -138,14 +131,12 @@ export async function promoteMatrixDirectRoomCandidate(params: {
     return {
       classifyAsDirect: true,
       repaired,
-      roomId: params.roomId,
       reason: repaired ? "promoted" : "already-mapped",
     };
   } catch {
     return {
       classifyAsDirect: true,
       repaired: false,
-      roomId: params.roomId,
       reason: "repair-failed",
     };
   }

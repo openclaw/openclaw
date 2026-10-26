@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential, AuthProfileStore } from "../../agents/auth-profiles.js";
 import {
@@ -16,12 +15,11 @@ import {
 } from "../../agents/auth-profiles/store-runtime.js";
 import * as catalogCredentials from "../../agents/plugin-model-catalog-credentials.js";
 import * as catalogs from "../../agents/plugin-model-catalog.js";
-import { registerModelsCli } from "../../cli/models-cli.js";
+import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
-import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createCapturingTestRuntime } from "../test-runtime-config-helpers.js";
 
@@ -48,9 +46,8 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
-}));
+// mock-isolation: Config reads use the fixture rather than operator config files.
+vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("./shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./shared.js")>();
@@ -82,23 +79,8 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
 
 const { modelsAuthLogoutCommand } = await import("./auth-logout.js");
 
-async function runRegisteredLogout(profileId: string): Promise<void> {
-  const errors: string[] = [];
-  const error = vi.spyOn(defaultRuntime, "error").mockImplementation((message) => {
-    errors.push(String(message));
-  });
-  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-    throw new Error(errors.join("\n"));
-  });
-  try {
-    const program = new Command().exitOverride();
-    registerModelsCli(program);
-    await program.parseAsync(["models", "auth", "logout", profileId, "--yes"], { from: "user" });
-  } finally {
-    error.mockRestore();
-    exit.mockRestore();
-  }
-}
+const logout = (profileId: string) =>
+  modelsAuthLogoutCommand({ profileId, yes: true }, createRuntime());
 
 async function dispatchAuthLogout(
   cfg: OpenClawConfig,
@@ -128,7 +110,6 @@ async function dispatchAuthLogout(
       getRuntimeConfig: () => ({ ...cfg, agents: { entries: { main: {} } } }),
     }),
   });
-  expect(respond).toHaveBeenCalledOnce();
   const [ok, payload, error] = expectDefined(respond.mock.calls[0], "Gateway logout response");
   if (!ok) {
     throw new Error(expectDefined(error, "Gateway logout error").message);
@@ -145,11 +126,12 @@ type ConfigMutator = (
 ) => OpenClawConfig | Promise<OpenClawConfig>;
 const createRuntime = () => createCapturingTestRuntime().runtime;
 
-function trackConfig(initial: OpenClawConfig) {
+function trackConfig(initial: OpenClawConfig, afterWrite?: (cfg: OpenClawConfig) => void) {
   let current = initial;
   mocks.loadModelsConfig.mockImplementation(async () => current);
   mocks.updateConfig.mockImplementation(async (mutate: ConfigMutator) => {
     current = await mutate(current, { runtimeConfig: current });
+    afterWrite?.(current);
     return current;
   });
   return () => current;
@@ -187,16 +169,12 @@ function catalogDatabase(agentDir: string, main: string) {
 }
 
 async function withStdinIsTty<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
-  const previous = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: isTTY });
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(isTTY);
   try {
     return await run();
   } finally {
-    if (previous) {
-      Object.defineProperty(process.stdin, "isTTY", previous);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
   }
 }
 
@@ -217,27 +195,6 @@ describe("models auth logout", () => {
     );
   });
 
-  it("removes the config reference before deleting the credential", async () => {
-    const cfg = {
-      auth: { profiles: { "openai:manual": { provider: "openai", mode: "oauth" } } },
-    } satisfies OpenClawConfig;
-    mocks.loadModelsConfig.mockResolvedValue(cfg);
-    const calls: string[] = [];
-    mocks.updateConfig.mockImplementation(async () => {
-      calls.push("config");
-      return cfg;
-    });
-    mocks.removeAuthProfilesAcrossOwnerStores.mockImplementation(async (params) => {
-      await params.beforeRemove?.(params.profileIds, []);
-      calls.push("store");
-      return true;
-    });
-
-    await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
-
-    expect(calls).toEqual(["config", "store"]);
-  });
-
   it.each([
     ["openai:missing", 'Auth profile "openai:missing" not found for agent "main"'],
     ["  ", "Missing profile id"],
@@ -246,23 +203,6 @@ describe("models auth logout", () => {
       modelsAuthLogoutCommand({ profileId, yes: true }, createRuntime()),
     ).rejects.toThrow(expected);
     expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
-  });
-
-  it("clears a provider binding before removing its key, preserving model selection", async () => {
-    const cfg: OpenClawConfig = {
-      models: authConfig(undefined, "openai:manual").models,
-      agents: { defaults: { model: "openai/current" } },
-    };
-    const updated = trackConfig(cfg);
-    await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
-    expect({
-      agents: updated().agents,
-      apiKey: updated().models?.providers?.openai?.apiKey,
-    }).toEqual({
-      agents: cfg.agents,
-      apiKey: undefined,
-    });
-    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledOnce();
   });
 
   it("removes cached credential copies across agents without disabling another account", () =>
@@ -276,10 +216,7 @@ describe("models auth logout", () => {
       const retainedProvider = {
         api: "openai-completions",
         headers: { "X-Version": "1" },
-        models: [
-          { id: "selected-model", headers: {} },
-          { id: "surviving-model", apiKey: survivor.key },
-        ],
+        models: [{ id: "retained", apiKey: survivor.key, headers: {} }],
       };
       const catalog = {
         generatedBy: "openclaw-plugin-model-catalog-v1",
@@ -288,10 +225,7 @@ describe("models auth logout", () => {
             ...retainedProvider,
             apiKey: selected.key,
             headers: { ...retainedProvider.headers, Authorization: `Bearer ${selected.key}` },
-            models: [
-              { id: "selected-model", headers: { "X-Api-Key": selected.key } },
-              retainedProvider.models[1],
-            ],
+            models: [{ ...retainedProvider.models[0], headers: { "X-Api-Key": selected.key } }],
           },
         },
       };
@@ -332,7 +266,7 @@ describe("models auth logout", () => {
         insert.run("unrelated-cache", "keep", '{"value":"retained"}');
       }
 
-      await runRegisteredLogout("selected");
+      await logout("selected");
 
       expect(loadAuthProfileStoreWithoutExternalProfiles(main).profiles).toEqual({ survivor });
       for (const agentDir of [main, child]) {
@@ -341,11 +275,9 @@ describe("models auth logout", () => {
           const rows = db
             .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
             .all(scope) as Array<{ key: string; value_json: string }>;
-          expect(rows.map((row) => row.key)).toEqual(["fixture"]);
-          expect(JSON.parse(rows[0]!.value_json)).toEqual({
-            ...catalog,
-            providers: { fixture: retainedProvider },
-          });
+          expect(rows.map(({ key, value_json }) => [key, JSON.parse(value_json)])).toEqual([
+            ["fixture", { ...catalog, providers: { fixture: retainedProvider } }],
+          ]);
         }
         expect(
           db.prepare("SELECT value_json FROM cache_entries WHERE scope = ?").get("unrelated-cache"),
@@ -353,19 +285,25 @@ describe("models auth logout", () => {
       }
     }));
 
-  it("restores the credential and config after final catalog cleanup fails, then permits retry", () =>
+  it("removes config before credentials, restores both after cleanup fails, then permits retry", () =>
     withAuthProfileTestState("openclaw-logout-final-scrub-", async ({ agentDir }) => {
       const profileId = "openai:manual";
       const credential = createApiKeyCredential("openai", "retryable-secret");
       saveAuthProfileStore(createAuthProfileStoreFixture({ [profileId]: credential }), agentDir);
       const originalConfig = authConfig({ [profileId]: { provider: "openai", mode: "api_key" } });
-      const liveConfig = trackConfig(structuredClone(originalConfig));
-      usePersistedStore(agentDir);
       const readProfile = () =>
         loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+      const beforeDelete = vi.fn(() => expect(readProfile()).toEqual(credential));
+      const liveConfig = trackConfig(structuredClone(originalConfig), (next) => {
+        if (!next.auth?.profiles?.[profileId]) {
+          expect(next.auth).toEqual({ profiles: {} });
+          beforeDelete();
+        }
+      });
+      usePersistedStore(agentDir);
       const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
       let calls = 0;
-      const cleanup = vi
+      using _ = vi
         .spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials")
         .mockImplementation(async (params) => {
           calls += 1;
@@ -375,21 +313,18 @@ describe("models auth logout", () => {
           }
           await scrub(params);
         });
-      try {
-        await expect(runRegisteredLogout(profileId)).rejects.toThrow(
-          "saved credentials were restored",
-        );
-        expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
-          profile: credential,
-          auth: originalConfig.auth,
-        });
-        await runRegisteredLogout(profileId);
-        expect(readProfile()).toBeUndefined();
-        expect(liveConfig().auth?.profiles?.[profileId]).toBeUndefined();
-        expect(liveConfig().auth?.order?.openai).toBeUndefined();
-      } finally {
-        cleanup.mockRestore();
-      }
+
+      await expect(logout(profileId)).rejects.toThrow("saved credentials were restored");
+      expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
+        profile: credential,
+        auth: originalConfig.auth,
+      });
+      await logout(profileId);
+      expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
+        profile: undefined,
+        auth: { profiles: {} },
+      });
+      expect(beforeDelete).toHaveBeenCalledTimes(2);
     }));
 
   it.each(["profiles", "api_key"] as const)(

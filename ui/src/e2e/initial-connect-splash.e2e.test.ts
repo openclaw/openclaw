@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -153,55 +153,14 @@ suite.define(() => {
     );
     const painted = await proofContentPainted(page, proof, skeleton);
     expect(painted, "connecting proof must contain the skeleton").toBe(true);
-    const highlight = skeleton.locator(".loading-skeleton__composer");
+    const composer = skeleton.locator(".loading-skeleton__composer");
     expect(await page.locator("html").getAttribute("data-theme")).toBe("rose");
-    const bounds = (await highlight.boundingBox())!;
-    const duration = await highlight.evaluate(
-      (element) => getComputedStyle(element, "::after").animationDuration,
+    expect(
+      await splash.evaluate((element) => element.getAnimations({ subtree: true }).length),
+    ).toBe(0);
+    expect(await composer.evaluate((element) => getComputedStyle(element, "::after").content)).toBe(
+      "none",
     );
-    const frames: number[][] = [];
-    const pose = await page.addStyleTag({
-      content: ".connect-splash .loading-skeleton__composer::after { animation-name: none; }",
-    });
-    try {
-      for (const progress of [0, 0.5]) {
-        await pose.evaluate(
-          (style, { duration: sweepDuration, fraction }) => {
-            const selector = ".connect-splash .loading-skeleton__composer::after";
-            // Restart through CSS so the sampled animation keeps its CSS-owned lifecycle.
-            style.textContent = `${selector} { animation-name: none; }`;
-            getComputedStyle(
-              document.querySelector(".loading-skeleton__composer")!,
-              "::after",
-            ).getPropertyValue("animation-name");
-            style.textContent = `${selector} {
-            animation-play-state: paused;
-            animation-delay: calc(-1 * ${sweepDuration} * ${fraction});
-          }`;
-          },
-          { duration, fraction: progress },
-        );
-        const frame = decodeProofPng(await page.screenshot());
-        const center =
-          (Math.floor(bounds.y + bounds.height / 2) * frame.width +
-            Math.floor(bounds.x + bounds.width / 2)) *
-          4;
-        frames.push([...frame.data.subarray(center, center + 3)]);
-      }
-    } finally {
-      await pose.evaluate((style) => style.parentNode?.removeChild(style));
-    }
-    // An animation name alone passed even when highlight and fill were identical.
-    expect(
-      Math.max(...frames[0]!.map((value, channel) => Math.abs(value - frames[1]![channel]!))),
-    ).toBeGreaterThan(12);
-    expect(
-      await highlight.evaluate((element) =>
-        element
-          .getAnimations({ subtree: true })
-          .some((animation) => animation.playState === "running"),
-      ),
-    ).toBe(true);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     expect(await splash.locator(".connect-splash__sidebar").isVisible()).toBe(false);
@@ -209,12 +168,12 @@ suite.define(() => {
       true,
     );
     expect(
-      await highlight.evaluate((element) =>
+      await composer.evaluate((element) =>
         Number.parseFloat(getComputedStyle(element, "::after").animationDuration),
       ),
     ).toBeLessThanOrEqual(0.00001);
     expect(
-      await highlight.evaluate((element) => element.getAnimations({ subtree: true }).length),
+      await splash.evaluate((element) => element.getAnimations({ subtree: true }).length),
     ).toBe(0);
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -225,24 +184,56 @@ suite.define(() => {
     expect(loginModuleRequests).toEqual([]);
   });
 
-  it("shows a shimmer skeleton until the chat route finishes loading", async () => {
-    const page = await createPage();
+  it("keeps the chat placeholder pixels stable through app and route loading", async () => {
+    const page = await createPage({ locale: "en-US", viewport, colorScheme: "light" });
     let chatModuleRequested = false;
+    const entryModule = createDeferredCore();
     const chatModule = createDeferredCore();
     await page.route(`${new URL(suite.server.baseUrl).origin}/**`, async (route) => {
-      if (new URL(route.request().url()).pathname.endsWith("/chat-page.tsx")) {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith("/src/main.ts")) {
+        await entryModule.promise;
+      }
+      if (pathname.endsWith("/chat-page.tsx")) {
         chatModuleRequested = true;
         await chatModule.promise;
       }
       await route.continue();
     });
     // The held chat module cannot publish the foreground readiness that releases the roster.
-    await installMockGateway(page, { awaitInitialRoster: false });
+    const gateway = await installMockGateway(page, {
+      awaitInitialRoster: false,
+      deferredMethods: ["connect"],
+    });
+    const artifactDir = createControlUiE2eArtifactDir("boot-placeholder-parity");
+    const placeholderFrame = async (root: Locator, phase: string) => {
+      const skeleton = root.locator(".loading-skeleton");
+      const label = root.locator(".connect-splash__status");
+      expect(await label.textContent()).toBe("Loading…");
+      const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton, label]);
+      await writeFile(path.join(artifactDir, `${phase}.png`), png);
+      const geometry = await skeleton.evaluate((element) =>
+        [element, ...element.querySelectorAll(".skeleton")].map((node) => {
+          const { x, y, width, height } = node.getBoundingClientRect();
+          return { x, y, width, height };
+        }),
+      );
+      return { png: decodeProofPng(png), geometry, label: await label.boundingBox() };
+    };
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat?session=main`, {
-        waitUntil: "domcontentloaded",
-      });
+      await page.goto(`${suite.server.baseUrl}chat?session=main`, { waitUntil: "commit" });
+      const initial = await placeholderFrame(page.locator("#openclaw-boot-shell"), "document");
+      entryModule.resolve();
+      await gateway.waitForRequest("connect");
+      const connecting = await placeholderFrame(page.locator(".connect-splash"), "connecting");
+      expect(connecting.geometry).toEqual(initial.geometry);
+      expect(connecting.label).toEqual(initial.label);
+      expect(
+        Buffer.from(connecting.png.data).equals(Buffer.from(initial.png.data)),
+        "connection loading preserves the document placeholder pixels",
+      ).toBe(true);
+      await gateway.resolveDeferred("connect");
       await page.locator("openclaw-app-shell").waitFor();
       await expect.poll(() => chatModuleRequested).toBe(true);
 
@@ -250,13 +241,23 @@ suite.define(() => {
       await loadingState.waitFor();
       expect(await loadingState.getAttribute("role")).toBe("status");
       expect(await loadingState.getAttribute("aria-label")).toBe("Loading…");
-      expect((await loadingState.textContent())?.trim()).toBe("");
+      expect((await loadingState.textContent())?.trim()).toBe("Loading…");
       expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
 
       const skeleton = loadingState.locator(".loading-skeleton");
       await skeleton.waitFor();
       expect(await loadingState.getAttribute("aria-busy")).toBeNull();
       expect(await loadingState.locator("openclaw-mascot").count()).toBe(0);
+      const routeLoading = await placeholderFrame(loadingState, "route");
+      expect(routeLoading.geometry).toEqual(initial.geometry);
+      expect(routeLoading.label).toEqual(initial.label);
+      expect(
+        Buffer.from(routeLoading.png.data).equals(Buffer.from(initial.png.data)),
+        "route loading preserves the document placeholder pixels",
+      ).toBe(true);
+      expect(
+        await skeleton.evaluate((element) => element.getAnimations({ subtree: true }).length),
+      ).toBe(0);
 
       for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
@@ -303,6 +304,7 @@ suite.define(() => {
       await page.locator("openclaw-chat-page").waitFor();
       expect(await loadingState.count()).toBe(0);
     } finally {
+      entryModule.resolve();
       chatModule.resolve();
     }
   });
@@ -313,10 +315,10 @@ suite.define(() => {
     const workspaceModules = new Set([
       "/src/components/app-sidebar.tsx",
       "/src/components/browser/browser-panel.ts",
-      "/src/components/assistant-panel-content.ts",
+      "/src/components/assistant-panel-content-solid.tsx",
       "/src/pages/debug/debug-overlay-content.ts",
-      "/src/components/desktop/desktop-panel.ts",
-      "/src/components/terminal/terminal-panel-registration.ts",
+      "/src/components/desktop/desktop-panel-solid.tsx",
+      "/src/components/terminal/terminal-panel-registration.tsx",
       "/src/pages/chat/chat-page.tsx",
     ]);
     const requestedWorkspaceModules = new Set<string>();
@@ -589,7 +591,9 @@ suite.define(() => {
     await page.waitForTimeout(300);
     const recording = page.video()!;
     await suite.closeBrowserContext(context);
-    const videoBytes = await readFile(await recording.path());
+    const recordingPath = path.join(proofDir, "finalized-recording.webm");
+    await recording.saveAs(recordingPath);
+    const videoBytes = await readFile(recordingPath);
     // Decode the finalized WebM in a separate, non-recording context. Seeking twice
     // per 25fps recorder frame catches short corruption without depending on host ffmpeg.
     const decoder = await createPageWithoutRecording();
@@ -790,12 +794,18 @@ suite.define(() => {
     }
 
     await regions[1]!.evaluate((element) => element.setAttribute("style", "visibility: hidden"));
-    await expect(
-      takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
-        elements: [regions[1]!],
-        animations: "disabled",
-      }),
-    ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+    // This target stays hidden; only the rejection needs a short readiness window.
+    vi.setConfig({ expect: { poll: { interval: 100, timeout: 1_000 } } });
+    try {
+      await expect(
+        takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
+          elements: [regions[1]!],
+          animations: "disabled",
+        }),
+      ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+    } finally {
+      vi.resetConfig();
+    }
 
     await pauseVirtualClock(page);
     const captureTime = await page.evaluate(() => Date.now());

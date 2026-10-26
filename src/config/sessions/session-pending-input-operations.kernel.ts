@@ -101,7 +101,12 @@ export function readPendingInput(database: OpenClawAgentDatabase, input: Pending
 
 export function mutatePendingInput(
   input: PendingInputMutation,
-  { writeTransaction, admit }: Pick<AgentWorkerOperationContext, "writeTransaction" | "admit">,
+  {
+    writeTransaction,
+    admit,
+  }: Pick<AgentWorkerOperationContext, "writeTransaction"> & {
+    admit: (stage: "transaction" | "commit", publication?: unknown) => void;
+  },
   publish: (database: OpenClawAgentDatabase["db"], receipt: PendingInputMutationReceipt) => void,
 ): PendingInputMutationReceipt {
   return writeTransaction(`session.pending-input.${input.kind}`, "Pending input", (current) =>

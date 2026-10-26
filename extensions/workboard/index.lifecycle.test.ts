@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -7,10 +9,61 @@ import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
+import {
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
+} from "./src/workspace-access.js";
 
 const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
 const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
 const closedStore = "workboard store is closed.";
+
+it("discovers tool schemas without creating storage and persists executed tools", () =>
+  withStateDirEnv("workboard-discovery-", async ({ stateDir }) => {
+    const databasePath = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+    const discover = () => {
+      const captured = createCapturedPluginRegistration({
+        id: plugin.id,
+        registrationMode: "tool-discovery",
+      });
+      const factories: Parameters<OpenClawPluginApi["registerTool"]>[0][] = [];
+      plugin.register({
+        ...captured.api,
+        runtimeSource,
+        registerTool: (factory) => factories.push(factory),
+      });
+      return {
+        tools: factories.flatMap(
+          (factory) =>
+            (typeof factory === "function"
+              ? factory({})
+              : "create" in factory
+                ? factory.create({ assertInvocationCurrent: () => {} })
+                : factory) ?? [],
+        ),
+        async [Symbol.asyncDispose]() {
+          for (const lifecycle of captured.runtimeLifecycles) {
+            await lifecycle.dispose?.();
+          }
+        },
+      };
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      await using inspection = discover();
+      expect(inspection.tools.map((tool) => tool.name).toSorted()).toEqual(
+        [...WORKBOARD_CARD_TOOL_NAMES, ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES].toSorted(),
+      );
+    }
+    expect(existsSync(databasePath)).toBe(false);
+
+    {
+      await using serving = discover();
+      const create = serving.tools.find((tool) => tool.name === "workboard_create")!;
+      await create.execute("create", { title: "Retained discovery card" });
+    }
+    await using reopened = openStore();
+    expect(await reopened.list()).toMatchObject([{ title: "Retained discovery card" }]);
+  }));
 
 function openStore() {
   const store = WorkboardStore.openSqlite(workerModuleUrl);

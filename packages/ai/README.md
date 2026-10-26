@@ -49,7 +49,7 @@ The pinned Mistral SDK chat client is bundled into the adapter; consumers do not
 need the SDK's full package tree. The SDK's Apache-2.0 license ships as
 `dist/mistral.LICENSE`.
 
-The explicit `@openclaw/ai/internal/anthropic`, `google-model-family`, `openai`,
+The explicit `@openclaw/ai/internal/anthropic`, `google`, `google-model-family`, `openai`,
 `openai-completions-compat`, `openai-responses-payload-policy`, `retry-after`, `runtime`, `shared`, and
 `tool-schema` subpaths exist for the OpenClaw application itself.
 They carry no semver guarantee and can change or disappear in any release; do

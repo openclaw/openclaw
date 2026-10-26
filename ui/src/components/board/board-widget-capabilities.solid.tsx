@@ -102,11 +102,16 @@ export function BoardGrantedCapabilities(props: {
         when={props.presentation === "details"}
         fallback={
           <openclaw-tooltip
+            open-on-click
             prop:content={`${t("board.widget.activeCapabilities")}\n${capabilities().join("\n")}`}
           >
-            <span class="board-widget__capabilities" data-test-id="board-capabilities-granted">
+            <button
+              type="button"
+              class="board-widget__capabilities"
+              data-test-id="board-capabilities-granted"
+            >
               {t("board.widget.granted")}
-            </span>
+            </button>
           </openclaw-tooltip>
         }
       >

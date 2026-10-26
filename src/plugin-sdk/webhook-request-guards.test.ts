@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -15,6 +14,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
+import { createMockIncomingRequest } from "./test-helpers/mock-incoming-request.js";
 import { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import {
   applyBasicWebhookRequestGuards,
@@ -26,38 +26,15 @@ import {
   runDetachedWebhookWork,
 } from "./webhook-request-guards.js";
 
-type MockIncomingMessage = IncomingMessage & {
-  destroyed?: boolean;
-  destroy: () => MockIncomingMessage;
-  pause: () => MockIncomingMessage;
-};
-
 function createMockRequest(params: {
   method?: string;
   headers?: Record<string, string>;
   chunks?: string[];
-}): MockIncomingMessage {
-  const req = new EventEmitter() as MockIncomingMessage;
-  req.method = params.method ?? "POST";
-  req.headers = params.headers ?? {};
-  req.socket = new Socket();
-  req.destroyed = false;
-  req.destroy = (() => {
-    req.destroyed = true;
-    return req;
-  }) as MockIncomingMessage["destroy"];
-  req.pause = (() => req) as MockIncomingMessage["pause"];
-
-  if (params.chunks) {
-    void Promise.resolve().then(() => {
-      for (const chunk of params.chunks ?? []) {
-        req.emit("data", Buffer.from(chunk, "utf-8"));
-      }
-      req.emit("end");
-    });
-  }
-
-  return req;
+}): IncomingMessage {
+  return Object.assign(createMockIncomingRequest(params.chunks ?? []), {
+    method: params.method ?? "POST",
+    headers: params.headers ?? {},
+  });
 }
 
 async function readJsonBody(chunks: string[]) {
@@ -106,13 +83,21 @@ it("rejects missing media types", () => {
 });
 
 describe("applyBasicWebhookRequestGuards", () => {
-  it("rejects disallowed HTTP methods", () => {
-    const req = createMockRequest({ method: "GET" });
+  it.each([
+    ["HTTP method", { method: "GET" }, { allowMethods: ["POST"] }, 405, "POST"],
+    [
+      "media type",
+      { headers: { "content-type": "text/plain" } },
+      { requireJsonContentType: true },
+      415,
+      undefined,
+    ],
+  ] as const)("rejects a disallowed %s", (_name, request, guards, statusCode, allow) => {
     const res = createMockServerResponse();
-    const ok = applyBasicWebhookRequestGuards({ req, res, allowMethods: ["POST"] });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(405);
-    expect(res.getHeader("allow")).toBe("POST");
+    expect(
+      applyBasicWebhookRequestGuards({ req: createMockRequest(request), res, ...guards }),
+    ).toBe(false);
+    expect([res.statusCode, res.getHeader("allow")]).toEqual([statusCode, allow]);
   });
 
   it("enforces rate limits", () => {
@@ -135,18 +120,6 @@ describe("applyBasicWebhookRequestGuards", () => {
     expect(guard(res2, 1_001)).toBe(false);
     expect(res2.statusCode).toBe(429);
   });
-
-  it("rejects non-json requests when required", () => {
-    const req = createMockRequest({ headers: { "content-type": "text/plain" } });
-    const res = createMockServerResponse();
-    const ok = applyBasicWebhookRequestGuards({
-      req,
-      res,
-      requireJsonContentType: true,
-    });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(415);
-  });
 });
 
 describe("readJsonWebhookBodyOrReject", () => {
@@ -156,8 +129,7 @@ describe("readJsonWebhookBodyOrReject", () => {
   ] as const)("handles %s JSON bodies", async (_name, chunk, expected, statusCode, body) => {
     const { result, res } = await readJsonBody([chunk]);
     expect(result).toEqual(expected);
-    expect(res.statusCode).toBe(statusCode);
-    expect(res.body).toBe(body);
+    expect([res.statusCode, res.body]).toEqual([statusCode, body]);
   });
 });
 

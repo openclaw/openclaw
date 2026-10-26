@@ -53,7 +53,6 @@ a.chat-details-people__row:focus-visible {
 }
 
 .chat-details-people__role,
-.chat-details-people__remaining,
 .chat-details-people__count {
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale));
@@ -63,10 +62,6 @@ a.chat-details-people__row:focus-visible {
 .chat-details-people__role {
   max-width: 96px;
   text-align: end;
-}
-
-.chat-details-people__remaining {
-  padding-block: 4px;
 }
 
 .chat-details-people__summary {

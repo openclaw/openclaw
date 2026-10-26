@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
@@ -54,6 +53,7 @@ import { abortControlledSubagents, descendantAbortError } from "./chat-abort-des
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { abortDormantSubagentSession } from "./chat-abort-runtime.js";
 import { abortedPartialPersistenceError } from "./chat-aborted-partial.js";
+import { respondError } from "./response.js";
 import { createSessionAbortPersistence } from "./session-abort-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -115,11 +115,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       agentId: requestedParamAgentId,
     });
     if (requestedKey && requestedParamAgentId && !scopedRequestedKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId");
       return;
     }
     const requestedKeyAgentId = scopedRequestedKey
@@ -271,11 +267,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
           );
         });
     if (!configuredTarget && existingTargets.length === 0 && !hasExactActiveRun) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `agent "${targetAgentId}" not found`),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, `agent "${targetAgentId}" not found`);
       return;
     }
     const admittedTarget = sessionMutationAuthorization?.admittedTarget;
@@ -286,11 +278,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         admittedTarget.agentId !== targetAgentId ||
         sessionEntry?.sessionId !== admittedTarget.sessionId)
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session target is unavailable"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "session target is unavailable");
       return;
     }
     const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
@@ -305,11 +293,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
           sessionEntry?.sessionId === embeddedRun.sessionId),
     );
     if (embeddedRun && !embeddedRunMatchesSession) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match session"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "runId does not match session");
       return;
     }
     const resolvedAbortSessionKey = resolveAbortSessionKey({
@@ -459,6 +443,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       captureYieldedMainSessionContinuation({
         entry: sessionEntry,
         requester: { agentId: targetAgentId, sessionKey: canonicalKey },
+        purpose: "stop",
       })
         ? {
             runId: yieldedRunId,

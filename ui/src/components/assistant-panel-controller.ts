@@ -26,11 +26,7 @@ import {
 } from "../pages/chat/chat-history-events.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
-import {
-  consumePluginHelpAutoOpen,
-  dismissPluginHelpAutoOpen,
-  subscribePluginHelp,
-} from "../pages/custodian/plugin-help-state.ts";
+import { subscribePluginHelp } from "../pages/custodian/plugin-help-state.ts";
 import { createDockLayout } from "./dock-layout.ts";
 import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -148,16 +144,6 @@ export function createAssistantPanel(
       }
       if (wasOpen && !dockLayout.open) {
         claimInput("page");
-      }
-      if (
-        typeof destination === "string" &&
-        context &&
-        props.custodianAvailable &&
-        !props.custodianSuppressed &&
-        window.innerWidth > 1100 &&
-        consumePluginHelpAutoOpen(context)
-      ) {
-        openDestination("custodian");
       }
       startHomeAfterPrimaryChat();
       dockLayout.syncReservation();
@@ -462,10 +448,6 @@ export function createAssistantPanel(
   }
 
   function setOpen(open: boolean): void {
-    const context = getContext();
-    if (!open && destination !== "home" && context) {
-      dismissPluginHelpAutoOpen(context);
-    }
     if (open && destination === "home") {
       homeStarted = true;
     }

@@ -5,12 +5,15 @@ import { MAX_PLUGIN_RELOAD_TARGETS } from "../../packages/gateway-protocol/src/s
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
 import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
+import * as index from "../plugins/installed-plugin-index-records.js";
 import type { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
+import type { PluginManifestSetupProvider } from "../plugins/manifest-types.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import {
   hasPluginLifecycleLease,
@@ -20,10 +23,14 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { stageClawAddHostRequirementsStateless } from "./add-stateless.js";
+import { createStatelessClawPackageReceipt } from "./package-stateless-receipt.js";
 import {
-  installClawPackages,
-  rollbackStatelessClawPackages,
+  installClawPackages as installClawPackagesCore,
   withPackageBoundaries,
+  testPackageLease,
+  testPluginProbe,
+  testPluginPackage,
+  withStagedInspection,
 } from "./packages.boundary.test-support.js";
 import { preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
@@ -40,27 +47,46 @@ vi.mock("../plugins/management-mutations.js", () => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const integrity = `sha256:${"a".repeat(64)}`;
-type InstallOptions = NonNullable<Parameters<typeof installClawPackages>[1]>;
+type InstallOptions = NonNullable<Parameters<typeof installClawPackagesCore>[1]>;
 const realPreflightPluginInstall = preflightPluginInstall;
+const pluginConsent = {
+  onCapabilityConsent: async (review: { reviewToken: string }) => ({
+    reviewToken: review.reviewToken,
+  }),
+};
+const pluginPackage = (id: string, version = "1.0.0") => ({
+  kind: "plugin" as const,
+  source: "clawhub" as const,
+  ref: `@owner/${id}`,
+  version,
+  integrity,
+});
+const demoPlan = () => packageInstallPlan([pluginPackage("demo")]);
+const inspectPluginCapabilities = (_rootDir: string, pluginId: string) => ({
+  ...emptyPluginCapabilityEvidence,
+  grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+});
 
-function testPackageLease(onRelease: () => void = () => {}) {
-  return {
-    identity: {
-      scope: "claw-package-lifecycle" as const,
-      key: "test-package",
-      owner: "test-owner",
-    },
-    assertCurrent: () => {},
-    release: onRelease,
+async function runtimeEnv(prefix: string, extra: NodeJS.ProcessEnv = {}) {
+  const root = dirs.make(prefix);
+  const env = {
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    ...extra,
   };
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+  return { root, env };
 }
 
 function packageDeps(
   root: string,
-  loadInstallRecords: () => Promise<Record<string, PluginInstallRecord>>,
+  load: () => Promise<Record<string, PluginInstallRecord>> = async () => ({}),
 ) {
   return {
-    preflightPlugin: (params) => realPreflightPluginInstall({ ...params, loadInstallRecords }),
+    preflightPlugin: async (params) => {
+      using _ = vi.spyOn(index, "loadInstalledPluginIndexInstallRecords").mockImplementation(load);
+      return await realPreflightPluginInstall(params);
+    },
     probePlugin: async (request) => {
       const { spec } = request;
       const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
@@ -69,88 +95,105 @@ function packageDeps(
         stagedArtifactDir: root,
         mode: "install",
       });
-      return {
-        ok: true,
+      return testPluginProbe({
         packageName: spec,
         pluginId,
         targetDir: root,
-        extensions: [],
-        clawhub: {
-          source: "clawhub",
-          clawhubFamily: "code-plugin",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: spec,
-          integrity,
-        },
-      };
+        clawhub: { ...testPluginProbe().clawhub, clawhubPackage: spec },
+      });
     },
-    inspectPluginCapabilities: (_rootDir, pluginId) => ({
-      ...emptyPluginCapabilityEvidence,
-      grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-    }),
+    inspectPluginCapabilities,
   } satisfies InstallOptions["deps"];
 }
 
+function packageOptions(
+  root: string,
+  env: NodeJS.ProcessEnv,
+  { deps, ...options }: InstallOptions = {},
+): InstallOptions {
+  return {
+    env,
+    pluginConsent,
+    ...options,
+    deps: { ...packageDeps(root), acquirePackageLease: async () => testPackageLease(), ...deps },
+  };
+}
+
 describe("Claw committed plugin requirement handoff", () => {
-  it("rolls back an unpublished plugin after runtime batch preparation fails", async () => {
-    const root = dirs.make("openclaw-claw-batch-rollback-");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
-    await withEnvAsync(env, async () => {
-      const batch = new PluginInstallRuntimeBatch({ env }, vi.fn());
-      const uninstallPlugin = vi.fn(
-        async (_params: Parameters<typeof uninstallPluginWithPolicy>[0]) => {},
-      );
-      const deps: NonNullable<InstallOptions["deps"]> = {
-        ...packageDeps(root, async () => ({})),
-        preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-        acquirePackageLease: async () => testPackageLease(),
-        readPackageRefs: vi.fn().mockResolvedValue([]),
-        installPlugin: vi.fn(async () => {}),
-        uninstallPlugin,
-        resolvePlugin: vi.fn().mockResolvedValue({
-          status: "found",
-          pluginId: "demo",
-          installedVersion: "1.0.0",
-          record: { source: "clawhub", integrity, installedAt: "2026-10-14T01:00:00.000Z" },
-        }),
-      };
-      const plan = packageInstallPlan([
-        { kind: "plugin", source: "clawhub", ref: "@owner/demo", version: "1.0.0", integrity },
-      ]);
-      await withPackageBoundaries(async () => {
-        const stage = await stageClawAddHostRequirementsStateless(plan, {
-          consentPlanIntegrity: plan.planIntegrity,
-          runtimeBatch: batch,
-          pluginConsent: {
-            onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-          },
-        });
-        expect(stage.kind).toBe("ready");
-        if (stage.kind !== "ready") {
-          return;
-        }
-
-        batch.retain("missing-plugin");
-        await withPluginLifecycleLease({ env }, async (lease) => {
-          await expect(batch.prepare(lease)).rejects.toThrow("no longer installed");
-        });
-        batch.close();
-        const result = await stage.failBeforeContinue(
-          new Error("batch preparation failed"),
-          "package_runtime_failed",
+  it.each(["unchanged", "reinstalled", "claimed"] as const)(
+    "compensates an unpublished %s plugin after runtime batch preparation fails",
+    async (ownership) => {
+      const { root, env } = await runtimeEnv("openclaw-claw-batch-rollback-");
+      await withEnvAsync(env, async () => {
+        const batch = new PluginInstallRuntimeBatch({ env }, vi.fn());
+        const uninstallPlugin = vi.fn(
+          async (_params: Parameters<typeof uninstallPluginWithPolicy>[0]) => {},
         );
+        let installedAt = "2026-10-14T01:00:00.000Z";
+        const deps = {
+          ...packageDeps(root),
+          preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
+          acquirePackageLease: async () => testPackageLease(),
+          readPackageRefs: vi.fn().mockResolvedValue([]),
+          installPlugin: vi.fn(async () => {}),
+          uninstallPlugin,
+          resolvePlugin: vi.fn(async () => ({
+            status: "found" as const,
+            pluginId: "demo",
+            installedVersion: "1.0.0",
+            record: { source: "clawhub" as const, integrity, installedAt },
+          })),
+        };
+        const plan = demoPlan();
+        await withPackageBoundaries(async () => {
+          const stage = await stageClawAddHostRequirementsStateless(plan, {
+            consentPlanIntegrity: plan.planIntegrity,
+            runtimeBatch: batch,
+            pluginConsent,
+          });
+          expect(stage.kind).toBe("ready");
+          if (stage.kind !== "ready") {
+            return;
+          }
+          if (ownership === "reinstalled") {
+            installedAt = "2026-10-14T01:00:01.000Z";
+          } else if (ownership === "claimed") {
+            deps.readPackageRefs.mockResolvedValue([
+              createStatelessClawPackageReceipt(plan, pluginPackage("demo"), {
+                status: "complete",
+                relationship: "referenced",
+                origin: "claw-introduced",
+                independentOwner: true,
+              }),
+            ]);
+          }
 
-        expect(result.error).toMatchObject({ code: "package_runtime_failed" });
-        expect(uninstallPlugin).toHaveBeenCalledWith(expect.objectContaining({ pluginId: "demo" }));
-        expect(uninstallPlugin.mock.calls[0]?.[0]).not.toHaveProperty("deferRuntime");
-        expect(result.packages[0]?.status).toBe("rolled_back");
-      }, deps);
-    });
-  });
+          batch.retain("missing-plugin");
+          await withPluginLifecycleLease({ env }, async (lease) => {
+            await expect(batch.prepare(lease)).rejects.toThrow("no longer installed");
+          });
+          batch.close();
+          const result = await stage.failBeforeContinue(
+            new Error("batch preparation failed"),
+            "package_runtime_failed",
+          );
+
+          expect(result.error).toMatchObject({ code: "package_runtime_failed" });
+          if (ownership === "unchanged") {
+            expect(uninstallPlugin).toHaveBeenCalledWith(
+              expect.objectContaining({ pluginId: "demo", clawManaged: true }),
+            );
+            expect(uninstallPlugin.mock.calls[0]?.[0]).not.toHaveProperty("deferRuntime");
+          } else {
+            expect(uninstallPlugin).not.toHaveBeenCalled();
+          }
+          expect(result.packages[0]?.status).toBe(
+            ownership === "unchanged" ? "rolled_back" : "complete",
+          );
+        }, deps);
+      });
+    },
+  );
 
   it("rejects an oversized external runtime batch before starting package work", async () => {
     const run = vi.fn(async () => "mutated");
@@ -169,12 +212,7 @@ describe("Claw committed plugin requirement handoff", () => {
   });
 
   it("rechecks reviewed access at a managed plugin's persistent install boundary", async () => {
-    const root = dirs.make("openclaw-claw-access-guard-");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const { root, env } = await runtimeEnv("openclaw-claw-access-guard-");
     let accessCurrent = true;
     const persistentMutation = vi.fn();
     const installPlugin = vi.fn(async (params: { beforePersistentApply?: () => void }) => {
@@ -185,28 +223,20 @@ describe("Claw committed plugin requirement handoff", () => {
 
     await withEnvAsync(env, async () => {
       await expect(
-        installClawPackages(
-          packageInstallPlan([
-            { kind: "plugin", source: "clawhub", ref: "@owner/demo", version: "1.0.0", integrity },
-          ]),
-          {
-            env,
+        installClawPackagesCore(
+          demoPlan(),
+          packageOptions(root, env, {
             assertForwardCurrent: () => {
               if (!accessCurrent) {
                 throw new Error("reviewed access changed");
               }
             },
-            pluginConsent: {
-              onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-              confirmInstall: async () => true,
-            },
+            pluginConsent: { ...pluginConsent, confirmInstall: async () => true },
             deps: {
-              ...packageDeps(root, async () => ({})),
               preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
               installPlugin,
-              acquirePackageLease: vi.fn(async () => testPackageLease()),
             },
-          },
+          }),
         ),
       ).rejects.toThrow("reviewed access changed");
     });
@@ -216,23 +246,12 @@ describe("Claw committed plugin requirement handoff", () => {
   });
 
   it("preserves the install owner's failure instead of a nested CLI exit", async () => {
-    const root = dirs.make("openclaw-claw-install-error-");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const { root, env } = await runtimeEnv("openclaw-claw-install-error-");
     installOwner.install.mockReset().mockRejectedValue(installOwner.failure);
     await withEnvAsync(env, async () => {
-      const result = await installClawPackages(
-        packageInstallPlan([
-          { kind: "plugin", source: "clawhub", ref: "@owner/demo", version: "1.0.0", integrity },
-        ]),
-        {
-          env,
-          pluginConsent: {
-            onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-          },
+      const result = await installClawPackagesCore(
+        demoPlan(),
+        packageOptions(root, env, {
           runtime: {
             log: () => {},
             error: () => {},
@@ -240,30 +259,23 @@ describe("Claw committed plugin requirement handoff", () => {
               throw new Error("unexpected outer exit");
             },
           },
-          deps: {
-            ...packageDeps(root, async () => ({})),
-            acquirePackageLease: async () => testPackageLease(),
-          },
-        },
+        }),
       ).catch((error: unknown) => error);
       expect(installOwner.install).toHaveBeenCalledOnce();
       expect(result).toMatchObject({
         code: "package_install_failed",
         message: installOwner.failure.message,
         cause: installOwner.failure,
+        installedPackages: [expect.objectContaining({ ref: "@owner/demo", status: "failed" })],
       });
     });
   });
   it.each([false, true])(
     "applies retained writes once after lease release (late failure=%s)",
     async (lateFailure) => {
-      const root = dirs.make("openclaw-claw-runtime-");
-      const env = {
-        OPENCLAW_STATE_DIR: root,
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
-      };
-      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+      const { root, env } = await runtimeEnv("openclaw-claw-runtime-");
+      Object.assign(env, { OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled") });
+      const workerEnv = { ...env };
       await withEnvAsync(env, async () => {
         let records: Record<string, PluginInstallRecord> = {};
         let heldPackages = 0;
@@ -287,9 +299,8 @@ describe("Claw committed plugin requirement handoff", () => {
         });
         const options: InstallOptions = {
           env,
-          pluginConsent: {
-            onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-          },
+          pluginConsent,
+          clawHubBaseUrl: "http://127.0.0.1:3323",
           runtime: {
             log,
             error: () => {},
@@ -312,6 +323,15 @@ describe("Claw committed plugin requirement handoff", () => {
                 throw new Error("Expected a pinned ClawHub plugin request");
               }
               const pluginId = params.request.expectedPluginId;
+              expect(params.request).toEqual({
+                source: "clawhub",
+                packageName: `@owner/${pluginId}`,
+                version: "1.0.0",
+                mode: "install",
+                expectedIntegrity: integrity,
+                expectedPluginId: pluginId,
+              });
+              expect(params.env).toEqual({ ...env, OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:3323" });
               const next = {
                 ...records,
                 [pluginId]: {
@@ -349,24 +369,26 @@ describe("Claw committed plugin requirement handoff", () => {
             },
           },
         };
-        const plan = packageInstallPlan(
-          ["first", "second"].map((id) => ({
-            kind: "plugin",
-            source: "clawhub",
-            ref: `@owner/${id}`,
-            version: "1.0.0",
-            integrity,
-          })),
-        );
-        const pending = installClawPackages(plan, options);
+        const plan = packageInstallPlan(["first", "second"].map((id) => pluginPackage(id)));
+        const pending = installClawPackagesCore(plan, options);
         if (lateFailure) {
           await expect(pending).rejects.toMatchObject({
             code: "package_install_failed",
             message: "postcommit metadata failure",
           });
         } else {
-          expect(await pending).toHaveLength(2);
+          expect(await pending).toMatchObject(
+            ["first", "second"].map((id) => ({
+              ref: `@owner/${id}`,
+              integrity,
+              status: "complete",
+              relationship: "referenced",
+              origin: "claw-introduced",
+              independentOwner: false,
+            })),
+          );
         }
+        expect(env).toEqual(workerEnv);
         expect(reloadPlugins).toHaveBeenCalledOnce();
         expect(log).toHaveBeenCalledWith("Previous plugin cleanup did not finish.");
         expect(cleanup).toHaveBeenCalledTimes(lateFailure ? 1 : 2);
@@ -374,106 +396,6 @@ describe("Claw committed plugin requirement handoff", () => {
       });
     },
   );
-});
-
-describe("stateless Claw plugin rollback", () => {
-  const pluginPackage = {
-    kind: "plugin",
-    source: "clawhub",
-    ref: "@owner/audit",
-    version: "2.0.1",
-    integrity,
-  } as const;
-
-  function rollbackDeps(installedAt: () => string) {
-    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
-    return {
-      uninstallPlugin,
-      installPlugin: vi.fn().mockResolvedValue(undefined),
-      preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-      probePlugin: vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
-        await request.onPluginArtifactInspect?.({
-          pluginId: "audit",
-          stagedArtifactDir: "/tmp/staged-audit",
-          mode: "install",
-        });
-        return {
-          ok: true as const,
-          pluginId: "audit",
-          packageName: "@owner/audit",
-          targetDir: "/tmp/plugin",
-          extensions: [],
-          clawhub: {
-            source: "clawhub" as const,
-            clawhubUrl: "https://clawhub.ai",
-            clawhubPackage: "@owner/audit",
-            clawhubFamily: "code-plugin" as const,
-            integrity,
-          },
-        };
-      }),
-      inspectPluginCapabilities: vi.fn((_rootDir: string, pluginId: string) => ({
-        ...emptyPluginCapabilityEvidence,
-        grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-      })),
-      resolvePlugin: vi.fn(async () => ({
-        status: "found" as const,
-        pluginId: "audit",
-        installedVersion: pluginPackage.version,
-        record: { source: "clawhub" as const, integrity, installedAt: installedAt() },
-      })),
-      readPackageRefs: vi.fn().mockResolvedValue([]),
-      acquirePackageLease: vi.fn(async () => testPackageLease()),
-    };
-  }
-
-  const pluginConsent = {
-    onCapabilityConsent: vi.fn(async (review: { reviewToken: string }) => ({
-      reviewToken: review.reviewToken,
-    })),
-    confirmInstall: vi.fn(async () => true),
-  };
-
-  it("removes an unchanged plugin introduced by an unpublished Add", async () => {
-    const deps = rollbackDeps(() => "2026-10-14T01:00:00.000Z");
-    const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
-      pluginConsent,
-      deps,
-    });
-
-    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
-    expect(deps.uninstallPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginId: "audit", clawManaged: true }),
-    );
-    expect(refs[0]?.status).toBe("rolled_back");
-  });
-
-  it("keeps an introduced plugin if its install identity changed", async () => {
-    let installedAt = "2026-10-14T01:00:00.000Z";
-    const deps = rollbackDeps(() => installedAt);
-    const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
-      pluginConsent,
-      deps,
-    });
-    installedAt = "2026-10-14T01:00:01.000Z";
-
-    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
-    expect(deps.uninstallPlugin).not.toHaveBeenCalled();
-    expect(refs[0]?.status).toBe("complete");
-  });
-
-  it("keeps an introduced plugin if a legacy owner claims it before rollback", async () => {
-    const deps = rollbackDeps(() => "2026-10-14T01:00:00.000Z");
-    const refs = await installClawPackages(packageInstallPlan([pluginPackage]), {
-      pluginConsent,
-      deps,
-    });
-    deps.readPackageRefs.mockResolvedValue(refs.map((ref) => ({ ...ref, independentOwner: true })));
-
-    expect(await rollbackStatelessClawPackages(refs, { deps })).toEqual([]);
-    expect(deps.uninstallPlugin).not.toHaveBeenCalled();
-    expect(refs[0]?.status).toBe("complete");
-  });
 });
 
 describe("Claw source-host plugin collision", () => {
@@ -487,7 +409,6 @@ describe("Claw source-host plugin collision", () => {
   const preflightPlugin = vi.fn(async () => ({
     ok: true as const,
     action: "install" as const,
-    request: {} as never,
   }));
   const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
     await request.onPluginArtifactInspect?.({
@@ -495,139 +416,366 @@ describe("Claw source-host plugin collision", () => {
       stagedArtifactDir: path.join(process.cwd(), "extensions", "memory-core"),
       mode: "install",
     });
-    return {
-      ok: true as const,
+    return testPluginProbe({
       pluginId: "memory-core",
       packageName: pinnedBundledPlugin.ref,
       targetDir: "/tmp/memory-core",
-      extensions: [],
       artifactInspection: { format: "openclaw" as const, mapped: ["plugin"], unavailable: [] },
-      clawhub: {
-        source: "clawhub" as const,
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: pinnedBundledPlugin.ref,
-        clawhubFamily: "code-plugin" as const,
-        integrity,
-      },
-    };
+      clawhub: { ...testPluginProbe().clawhub, clawhubPackage: pinnedBundledPlugin.ref },
+    });
   });
+  const sourceHostEnv = (prefix: string) =>
+    runtimeEnv(prefix, { OPENCLAW_DEV_SOURCE_ROOT: process.cwd() });
+  const collisionDeps = {
+    preflightPlugin,
+    probePlugin,
+    inspectPluginCapabilities,
+  };
+  it.each(["install-preview", "explicit-load-path", "upgrade-preview", "stale-apply"] as const)(
+    "enforces source-host selection at %s",
+    async (mode) => {
+      const { root, env } = await sourceHostEnv("claw-source-plugin-conflict-");
+      const extensionsDir = path.join(root, "extensions");
+      if (mode === "explicit-load-path") {
+        await fs.mkdir(extensionsDir);
+      }
+      await withEnvAsync(env, async () => {
+        const config =
+          mode === "explicit-load-path" ? { plugins: { load: { paths: [extensionsDir] } } } : {};
+        const deps = {
+          ...collisionDeps,
+          ...(mode === "upgrade-preview"
+            ? {
+                preflightPlugin: async () => ({
+                  ok: false as const,
+                  code: "plugin_version_conflict" as const,
+                  installedVersion: "2026.6.1",
+                }),
+              }
+            : {}),
+        };
+        const sql = mode === "install-preview" ? observeMainThreadSql() : undefined;
+        try {
+          if (mode === "stale-apply") {
+            const installPlugin = vi.fn(async () => {});
+            await expect(
+              installClawPackagesCore(
+                packageInstallPlan([pinnedBundledPlugin]),
+                packageOptions(root, env, {
+                  config,
+                  deps: { ...deps, installPlugin },
+                }),
+              ),
+            ).rejects.toMatchObject({ code: "plugin_source_host_conflict", installedPackages: [] });
+            expect(installPlugin).not.toHaveBeenCalled();
+          } else {
+            await expect(
+              preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
+                config,
+                env,
+                deps,
+              }),
+            ).resolves.toMatchObject(
+              mode === "explicit-load-path"
+                ? { ok: true, action: "install" }
+                : {
+                    ok: false,
+                    code: "plugin_source_host_conflict",
+                    message: expect.stringContaining("bundled plugin memory-core"),
+                  },
+            );
+          }
+          sql?.expectIdle();
+        } finally {
+          sql?.restore();
+        }
+      });
+    },
+  );
+});
 
-  function sourceHostEnv(root: string): NodeJS.ProcessEnv {
-    return {
-      OPENCLAW_DEV_SOURCE_ROOT: process.cwd(),
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
+describe("Claw package setup and consent", () => {
+  const consentPackage = testPluginPackage;
+  const pluginProbe = testPluginProbe;
+  const plan = packageInstallPlan;
+  const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+  const skillPackage = {
+    kind: "skill",
+    source: "clawhub",
+    ref: "@owner/triage",
+    version: "1.2.3",
+    integrity: skillIntegrity,
+  } as const;
+  const installedSkill = {
+    ok: true as const,
+    slug: "triage",
+    version: "1.2.3",
+    targetDir: "/tmp/incident-2/skills/triage",
+  };
+  function skillPlan(riskWarning: string) {
+    const planned = plan([skillPackage]);
+    planned.actions[0]!.details!.riskWarning = riskWarning;
+    return planned;
+  }
+  const consent = { ...pluginConsent, confirmInstall: async () => true };
+  async function installClawPackages(
+    packagePlan: Parameters<typeof installClawPackagesCore>[0],
+    deps: NonNullable<Parameters<typeof installClawPackagesCore>[1]>["deps"],
+    options: Omit<NonNullable<Parameters<typeof installClawPackagesCore>[1]>, "deps"> = {},
+  ) {
+    return await installClawPackagesCore(packagePlan, {
+      ...options,
+      pluginConsent: consent,
+      deps: { inspectPluginCapabilities, acquirePackageLease, ...deps },
+    });
+  }
+  const acquirePackageLease = vi.fn(async () => testPackageLease());
+  const preflightSkill = (warning?: string) =>
+    vi.fn().mockResolvedValue({ ok: true, action: "install", integrity: skillIntegrity, warning });
+  const preflightPlugin = (action = "install") => vi.fn().mockResolvedValue({ ok: true, action });
+  const reusePlugin = () =>
+    vi.fn().mockResolvedValue({
+      ok: true,
+      action: "reuse",
+      installedId: "audit",
+      installedIntegrity: integrity,
+    });
+  const extensionProbe = (mapped = ["skills"]) =>
+    vi
+      .fn()
+      .mockResolvedValue(
+        pluginProbe({ artifactInspection: { format: "claude", mapped, unavailable: ["agents"] } }),
+      );
+  function expectReceipt(
+    result: Awaited<ReturnType<typeof installClawPackages>>,
+    expected: { integrity: string; relationship: string; origin: string; extension?: unknown },
+  ) {
+    expect(result).toMatchObject([
+      { status: "complete", independentOwner: expected.origin === "pre-existing", ...expected },
+    ]);
   }
 
-  it("blocks the pinned ClawHub plugin before installation", async () => {
-    const root = dirs.make("claw-source-plugin-conflict-");
-    const env = sourceHostEnv(root);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
-    await withEnvAsync(env, async () => {
-      const sql = observeMainThreadSql();
-      try {
-        await expect(
-          preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
-            config: {},
-            env,
-            deps: {
-              preflightPlugin,
-              probePlugin,
-              inspectPluginCapabilities: (_rootDir, pluginId) => ({
-                ...emptyPluginCapabilityEvidence,
-                grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-              }),
+  describe("preflightClawPackage plugin setup requirements", () => {
+    const provider = {
+      id: "evidence",
+      authMethods: ["api-key"],
+      envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
+    };
+    const preflight = (providers: PluginManifestSetupProvider[], env: NodeJS.ProcessEnv = {}) =>
+      preflightClawPackage(consentPackage, "/tmp/workspace", {
+        env,
+        deps: {
+          preflightPlugin: preflightPlugin(),
+          probePlugin: withStagedInspection(
+            vi.fn().mockResolvedValue({
+              ok: true,
+              pluginId: "evidence",
+              setup: { providers },
+              clawhub: { integrity },
+              artifactInspection: { format: "openclaw", mapped: ["plugin"], unavailable: [] },
+            }),
+          ),
+          inspectPluginCapabilities,
+        },
+      });
+    it("reports plugin setup when no declared environment credential is present", async () => {
+      await expect(preflight([provider])).resolves.toEqual(
+        expect.objectContaining({
+          requirements: [
+            {
+              kind: "plugin-setup",
+              plugin: "evidence",
+              provider: "evidence",
+              envVars: provider.envVars,
+              authMethods: provider.authMethods,
             },
-          }),
-        ).resolves.toMatchObject({
-          ok: false,
-          code: "plugin_source_host_conflict",
-          message: expect.stringContaining("bundled plugin memory-core"),
-        });
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
+          ],
+        }),
+      );
+    });
+
+    it.each([
+      {
+        name: "any declared credential from any provider",
+        providers: [
+          { id: "first", envVars: ["FIRST_API_KEY"] },
+          { id: "second", envVars: ["SECOND_API_KEY", "SECOND_TOKEN"] },
+        ],
+        env: { SECOND_TOKEN: "configured" },
+      },
+      {
+        name: "an auth-method-only provider",
+        providers: [{ id: "oauth-only", authMethods: ["oauth"] }],
+        env: {},
+      },
+    ])("accepts $name", async ({ providers, env }) => {
+      await expect(preflight(providers, env)).resolves.not.toHaveProperty("requirements");
+    });
+
+    it("accepts declared local auth evidence", async () => {
+      const credentialsDir = dirs.make("claw-auth-evidence-");
+      const credentialsPath = path.join(credentialsDir, "credentials.json");
+      await fs.writeFile(credentialsPath, "{}", "utf8");
+      await expect(
+        preflight(
+          [
+            {
+              ...provider,
+              authEvidence: [
+                {
+                  type: "local-file-with-env",
+                  fileEnvVar: "EVIDENCE_CREDENTIALS",
+                  requiresAllEnv: ["EVIDENCE_PROJECT"],
+                  credentialMarker: "evidence-local-credentials",
+                },
+              ],
+            },
+          ],
+          { EVIDENCE_CREDENTIALS: credentialsPath, EVIDENCE_PROJECT: "project" },
+        ),
+      ).resolves.not.toHaveProperty("requirements");
     });
   });
 
-  it("allows an explicit load path to select the pending installed plugin", async () => {
-    const root = dirs.make("claw-configured-plugin-override-");
-    const env = sourceHostEnv(root);
-    const extensionsDir = path.join(root, "extensions");
-    await fs.mkdir(extensionsDir);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
-    await withEnvAsync(env, async () => {
-      await expect(
-        preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
-          config: { plugins: { load: { paths: [extensionsDir] } } },
-          env,
-          deps: {
-            preflightPlugin,
-            probePlugin,
-            inspectPluginCapabilities: (_rootDir, pluginId) => ({
-              ...emptyPluginCapabilityEvidence,
-              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-            }),
-          },
-        }),
-      ).resolves.toMatchObject({ ok: true, action: "install" });
-    });
-  });
+  describe("installClawPackages", () => {
+    const extension = {
+      id: "audit-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["skills"],
+      unavailable: ["agents"],
+      adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
+    };
 
-  it("blocks a shadowed plugin upgrade during preview", async () => {
-    const root = dirs.make("claw-source-plugin-upgrade-");
-    const env = sourceHostEnv(root);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
-    await withEnvAsync(env, async () => {
-      await expect(
-        preflightClawPackage(pinnedBundledPlugin, path.join(root, "workspace"), {
-          config: {},
-          env,
-          deps: {
-            preflightPlugin: async () => ({
-              ok: false,
-              code: "plugin_version_conflict",
-              request: {} as never,
-              installedVersion: "2026.6.1",
-              expectedVersion: pinnedBundledPlugin.version,
-            }),
-            probePlugin,
-            inspectPluginCapabilities: (_rootDir, pluginId) => ({
-              ...emptyPluginCapabilityEvidence,
-              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
-            }),
-          },
-        }),
-      ).resolves.toMatchObject({ ok: false, code: "plugin_source_host_conflict" });
-    });
-  });
+    it("rejects an unreviewed skill warning before recording a ref or installing bytes", async () => {
+      const planned = skillPlan("Review this skill.");
+      const installSkill = vi.fn();
 
-  it("rejects a stale plan before writing provenance or invoking the installer", async () => {
-    const root = dirs.make("claw-apply-plugin-conflict-");
-    const env = sourceHostEnv(root);
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}");
-    await withEnvAsync(env, async () => {
-      const deps = packageDeps(root, async () => ({}));
-      const installPlugin = vi.fn(async () => {});
       await expect(
-        installClawPackages(packageInstallPlan([pinnedBundledPlugin]), {
-          env,
-          config: {},
-          pluginConsent: {
-            onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
-          },
-          deps: {
-            ...deps,
-            installPlugin,
-            preflightPlugin,
-            probePlugin,
-            acquirePackageLease: async () => testPackageLease(),
-          },
+        installClawPackages(planned, {
+          preflightSkill: preflightSkill("Review this skill."),
+          installSkill,
         }),
-      ).rejects.toMatchObject({ code: "plugin_source_host_conflict", installedPackages: [] });
+      ).rejects.toMatchObject({ code: "skill_consent_required" });
+      expect(installSkill).not.toHaveBeenCalled();
+    });
+
+    it("accepts only the reviewed skill warning at the installer trust check", async () => {
+      const planned = skillPlan("Review this skill.");
+      const skillConsent = { assertApproved: vi.fn() };
+      const installSkill = vi.fn(
+        async (params: {
+          beforePersistentApply?: () => void;
+          confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
+        }) => {
+          params.beforePersistentApply?.();
+          expect(await params.confirmInstall?.("Review this skill.")).toBe(true);
+          expect(await params.confirmInstall?.("Changed trust warning.")).toBe(false);
+          return installedSkill;
+        },
+      );
+
+      const result = await installClawPackages(
+        planned,
+        {
+          preflightSkill: preflightSkill("Review this skill."),
+          installSkill,
+        },
+        { skillConsent },
+      );
+      expect(installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/incident-2",
+          slug: "@owner/triage",
+          version: "1.2.3",
+          expectedIntegrity: skillIntegrity,
+          clawManaged: true,
+          beforePersistentApply: expect.any(Function),
+        }),
+      );
+      expectReceipt(result, {
+        integrity: skillIntegrity,
+        relationship: "managed",
+        origin: "claw-introduced",
+      });
+      expect(skillConsent.assertApproved).toHaveBeenCalledWith({
+        ref: "@owner/triage",
+        version: "1.2.3",
+        integrity: skillIntegrity,
+        riskWarning: "Review this skill.",
+      });
+    });
+
+    it("records a dependency ref without reinstalling an exact reused plugin", async () => {
+      const installPlugin = vi.fn();
+      const probePluginForExtension = extensionProbe();
+
+      const result = await installClawPackages(plan([{ ...consentPackage, extension }], "reuse"), {
+        installPlugin,
+        probePlugin: withStagedInspection(probePluginForExtension),
+        preflightPlugin: reusePlugin(),
+      });
+
       expect(installPlugin).not.toHaveBeenCalled();
+      expectReceipt(result, {
+        integrity,
+        extension,
+        relationship: "referenced",
+        origin: "pre-existing",
+      });
+    });
+
+    it("rejects changed extension inspection before recording reused plugin provenance", async () => {
+      await expect(
+        installClawPackages(plan([{ ...consentPackage, extension }], "reuse"), {
+          installPlugin: vi.fn(),
+          probePlugin: withStagedInspection(extensionProbe(["skills", "commands"])),
+          preflightPlugin: reusePlugin(),
+        }),
+      ).rejects.toMatchObject({
+        code: "package_owner_state_changed",
+        message: expect.stringContaining("identity or trust state changed after planning"),
+      });
+    });
+
+    it("invalidates consent when plugin owner state changes after planning", async () => {
+      const installPlugin = vi.fn();
+
+      await expect(
+        installClawPackages(plan([consentPackage]), {
+          installPlugin,
+          preflightPlugin: preflightPlugin("reuse"),
+        }),
+      ).rejects.toMatchObject({ code: "package_owner_state_changed" });
+      expect(installPlugin).not.toHaveBeenCalled();
+    });
+
+    it("invalidates consent when a skill trust warning changes after planning", async () => {
+      const planned = skillPlan("review warning one");
+
+      await expect(
+        installClawPackages(planned, {
+          preflightSkill: preflightSkill("review warning two"),
+        }),
+      ).rejects.toMatchObject({ code: "package_owner_state_changed" });
+    });
+
+    it("invalidates consent when a plugin trust warning changes after planning", async () => {
+      const planned = plan([consentPackage]);
+      Object.assign(planned.actions[0]!.details!, { riskWarning: "review warning one" });
+
+      await expect(
+        installClawPackages(planned, {
+          probePlugin: withStagedInspection(
+            vi.fn().mockResolvedValue({
+              ok: true,
+              pluginId: "audit",
+              warning: "review warning two",
+              clawhub: { integrity },
+            }),
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "package_owner_state_changed" });
     });
   });
 });

@@ -1,11 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 // Preserve registry mocks before the cancellation entrypoints load.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import * as subagentKill from "../../agents/subagents/registry/subagent-control-kill.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -64,31 +63,23 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
 });
 
 const fixture = useChatAbortRegistryFixture();
-const abortSession = sessionAbortHandlers["sessions.abort"];
-if (!abortSession) {
-  throw new Error("sessions.abort handler is not registered");
-}
+const abortSession = expectDefined(sessionAbortHandlers["sessions.abort"], "sessions.abort");
 
 async function queueCollector(sessionKey: string, groupId: string, runId: string) {
-  enqueueSwarmRun({
+  fixture.queueRun({
     groupId,
     runId,
     start: vi.fn(async () => {}),
     activeRunIds: ["occupied-slot"],
-    maxConcurrent: 1,
-    onStartFailure: () => true,
   });
-  await registerSubagentRun({
+  await fixture.registerRun({
     runId,
     childSessionKey: sessionKey,
     childAgentId: "main",
     sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
     requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
     requesterDisplayKey: "main",
     task: "queued collector",
-    cleanup: "keep",
-    collect: true,
     queued: true,
     expectsCompletionMessage: false,
   });
@@ -118,6 +109,8 @@ it.each([false, true])(
       resolveSessionTargetForRunId: () => undefined,
       captureSessionCancellation: () => ({
         runIds: ["worker-run"],
+        settled: Promise.resolve(),
+        executing: false,
         cancel: (control) => {
           control?.assertCurrent?.();
           control?.onCancelled?.("worker-run");
@@ -129,7 +122,7 @@ it.each([false, true])(
     const context = createChatAbortContext({
       getRuntimeConfig,
       workerEnvironmentService: service,
-      sources: new Map([["worker-run", active]]),
+      sources: [["worker-run", active]],
     });
     const kill = vi
       .spyOn(subagentKill, "killSubagentRunAdmin")
@@ -218,7 +211,7 @@ it.each([
   const context = createChatAbortContext({
     getRuntimeConfig,
     getSessionEventSubscriberConnIds: () => new Set(),
-    sources: new Map([[runId, active]]),
+    sources: [[runId, active]],
     chatRunState: createAbortTestRunState([[runId, { buffer: "Already streamed reply" }]]),
   });
   const pending = invokeChatAbortHandler({

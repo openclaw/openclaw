@@ -17,6 +17,7 @@ import {
 } from "../../components/mcp-app-security.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
+import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { mcpAppMessageInput } from "../../lib/mcp-app-message.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -36,8 +37,8 @@ import {
   chatAttachmentBatchBytes,
 } from "./components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspacePreview } from "./components/chat-sidebar-content-types.ts";
-import type { ChatComposerScope } from "./composer-persistence.ts";
 
 registerMcpAppEnglish();
 
@@ -64,6 +65,12 @@ type ChatPaneMcpAppState = ChatComposerScope &
     | "hello"
     | "handleSendChat"
     | "handleOpenSidebar"
+    | "sessionWorkspaceState"
+    | "connectionEpoch"
+    | "sessions"
+    | "client"
+    | "connected"
+    | "sidebarContent"
   >;
 
 /** Read at delivery, not subscription time: retained panes can change presentation/connection. */
@@ -85,6 +92,7 @@ export function createChatPaneMcpApps(options: {
 }): () => void {
   let disposed = false;
   let openedLaunch: McpAppOpenDetail | undefined;
+  const retirementListeners = new Set<() => void>();
   function syncLaunch(): void {
     const owner = options.current();
     const launch = owner?.launch;
@@ -106,6 +114,35 @@ export function createChatPaneMcpApps(options: {
       kind: "mcp-app",
       title: launch.entrypoint.title,
       launch,
+      observeRetirement(retire) {
+        const workspace = sessionWorkspaceForHost(owner.state);
+        const check = () => {
+          const current = workspace.state;
+          const content = current?.previews.find(
+            (entry) => entry.id === current.activePreviewId,
+          )?.content;
+          if (
+            disposed ||
+            current?.sessionKey !== owner.state.sessionKey ||
+            current?.connectionEpoch !== owner.state.connectionEpoch ||
+            content?.kind !== "mcp-app" ||
+            content.launch !== launch ||
+            owner.context.gateway.snapshot.client !== launch.owner ||
+            owner.context.gateway.snapshot.phase !== "connected"
+          ) {
+            retire();
+          }
+        };
+        retirementListeners.add(retire);
+        const stopWorkspace = workspace.subscribe(check);
+        const stopGateway = owner.context.gateway.subscribe(check);
+        check();
+        return () => {
+          retirementListeners.delete(retire);
+          stopWorkspace();
+          stopGateway();
+        };
+      },
       fileTab: {
         id: `mcp-app:${launch.serverName}/${launch.entrypoint.toolName}:${launch.settings ? "settings" : "app"}${fileSuffix}`,
         label: launch.entrypoint.title,
@@ -284,6 +321,9 @@ export function createChatPaneMcpApps(options: {
   ];
   onCleanup(() => {
     disposed = true;
+    for (const retire of retirementListeners) {
+      retire();
+    }
     stopEvents.forEach((stop) => stop());
   });
   return syncLaunch;

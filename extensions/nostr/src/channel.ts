@@ -60,15 +60,6 @@ function normalizeNostrTarget(target: string): string {
   }
 }
 
-function inferNostrTargetChatType(target: string): "direct" | undefined {
-  try {
-    normalizePubkey(stripNostrTargetPrefix(target));
-    return "direct";
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveNostrOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const rawTarget = stripChannelTargetPrefix(params.target, "nostr");
   let target: string;
@@ -161,7 +152,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     messaging: {
       targetPrefixes: ["nostr"],
       normalizeTarget: normalizeNostrTarget,
-      inferTargetChatType: ({ to }) => inferNostrTargetChatType(to),
+      inferTargetChatType: ({ to }) => {
+        try {
+          normalizePubkey(stripNostrTargetPrefix(to));
+          return "direct";
+        } catch {
+          return undefined;
+        }
+      },
       targetResolver: {
         looksLikeId: (input, normalized) => {
           const trimmed = normalized?.trim() || stripNostrTargetPrefix(input);

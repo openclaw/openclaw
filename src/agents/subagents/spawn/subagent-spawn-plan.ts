@@ -39,7 +39,7 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 }) {
   return resolveNonNegativeIntegerOption(
     params.runTimeoutSeconds,
-    resolveNonNegativeIntegerOption(params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
+    resolveNonNegativeIntegerOption(params.cfg.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
   );
 }
 
@@ -67,14 +67,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   const { model: requestedModel, profile: authProfileId } =
     splitTrailingAuthProfile(rawResolvedModel);
 
-  const thinkingPlan = resolveSubagentThinkingOverride({
-    cfg: params.cfg,
-    requesterAgentConfig: params.requesterAgentConfig,
-    targetAgentConfig: params.targetAgentConfig,
-    thinkingOverrideRaw: params.thinkingOverrideRaw,
-    callerThinkingRaw: params.callerThinkingRaw,
-    callerThinkingExplicit: params.callerThinkingExplicit,
-  });
+  const thinkingPlan = resolveSubagentThinkingOverride(params);
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(requestedModel);
     // The hint is provider/model-specific because valid thinking levels vary by backend.

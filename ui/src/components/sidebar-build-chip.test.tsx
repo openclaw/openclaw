@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 
 vi.mock("../build-info.ts", async (importOriginal) => ({
@@ -35,16 +36,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 function mountBuildChip() {
@@ -74,6 +67,7 @@ describe("sidebar build commit copy", () => {
       expect(button.dataset.copied).toBeUndefined();
       pending.resolve();
       await vi.advanceTimersByTimeAsync(0);
+      flush();
       expect(writeText).toHaveBeenCalledExactlyOnceWith("0123456789ab");
       expect(button.getAttribute("aria-label")).toBe("Commit hash copied");
 
@@ -83,12 +77,14 @@ describe("sidebar build commit copy", () => {
       }
       button.click();
       await vi.advanceTimersByTimeAsync(0);
+      flush();
       expect(button.getAttribute("aria-label")).toBe(label);
       expect(button.dataset.copied).toBe(value);
       await vi.advanceTimersByTimeAsync(1_499);
       expect(button.getAttribute("aria-label")).toBe(label);
       expect(button.dataset.copied).toBe(value);
       await vi.advanceTimersByTimeAsync(1);
+      flush();
       expect(button.getAttribute("aria-label")).toBe("Copy full commit hash");
       expect(button.dataset.copied).toBeUndefined();
     },

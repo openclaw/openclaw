@@ -1,6 +1,7 @@
 import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { animateDetailsSection, DETAILS_SECTION_MOTION } from "./details-section-motion.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CardActivity, StepMarker, Steps } from "./session-progress-card-content.tsx";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
@@ -17,6 +18,7 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle, type MenuProps } from "./solid/menu.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+import { createTextOverflow } from "./solid/text-overflow.ts";
 import "./tooltip.ts";
 import "../styles/chat/task-progress-details.css";
 
@@ -357,7 +359,7 @@ function DetailsCard(props: CardProps) {
       }),
     );
   });
-  const currentOverflow = useScrollState(true, false);
+  const currentOverflow = createTextOverflow(() => [view().stepLabel, noteSummary()]);
   const disclosure = createComposerProgressDisclosure(() => [
     props.composerDisclosureContext?.sessionIdentity ?? props.card.sessionKey,
     !props.collapseComposerByDefault,
@@ -365,23 +367,37 @@ function DetailsCard(props: CardProps) {
   ]);
   let element: HTMLDetailsElement;
   let body: HTMLDivElement;
+  let content: HTMLDivElement;
   let animation: Animation | undefined;
+  let shellAnimation: Animation | undefined;
   const finishMotion = () => {
-    if (!animation) {
+    if (!props.desktopDetails) {
       return;
     }
-    animation.cancel();
+    animation?.cancel();
+    shellAnimation?.cancel();
     animation = undefined;
+    shellAnimation = undefined;
     element.removeAttribute("data-details-moving");
     body.inert = false;
+    body.style.height = "";
+    body.style.overflow = "";
+    body.style.opacity = "";
+    body.style.marginTop = "";
   };
   const toggle = (event: MouseEvent) => {
     if (!props.desktopDetails) {
       disclosure.onClick(event);
       return;
     }
-    const from = element.getBoundingClientRect().height;
+    const fromShell = element.getBoundingClientRect().height;
     const wasOpen = element.open;
+    const style = getComputedStyle(body);
+    const from = {
+      height: wasOpen || animation ? body.getBoundingClientRect().height : 0,
+      opacity: wasOpen || animation ? style.opacity : "0",
+      marginTop: wasOpen || animation ? style.marginTop : "0px",
+    };
     disclosure.onClick(event);
     if (element.open === wasOpen) {
       return;
@@ -392,18 +408,23 @@ function DetailsCard(props: CardProps) {
     if (event.detail === 0) {
       return;
     }
-    const to = element.getBoundingClientRect().height;
+    const expanded = element.open;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    element.setAttribute("data-details-moving", "");
+    body.inert = !expanded;
+    const height = expanded ? content.getBoundingClientRect().height : 0;
+    body.style.height = `${height}px`;
+    body.style.overflow = "hidden";
+    body.style.opacity = expanded ? "1" : "0";
+    body.style.marginTop = expanded ? "2px" : "0px";
     if (!reduced) {
-      element.setAttribute("data-details-moving", "");
-      body.inert = !element.open;
+      // The collapsed summary has a second row; include that change in the same layout motion.
+      shellAnimation = element.animate(
+        [{ height: `${fromShell}px` }, { height: `${element.getBoundingClientRect().height}px` }],
+        DETAILS_SECTION_MOTION,
+      );
     }
-    animation = element.animate(
-      reduced
-        ? [{ opacity: 0.7 }, { opacity: 1 }]
-        : [{ height: `${from}px` }, { height: `${to}px` }],
-      { duration: reduced ? 100 : 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
-    );
+    animation = animateDetailsSection(body, { from, height, expanded, reduced });
     animation.onfinish = finishMotion;
   };
   function PresentedMotion() {
@@ -496,8 +517,11 @@ function DetailsCard(props: CardProps) {
           disclosure.body(value);
         }}
         class="task-progress-details__body"
+        onFocusIn={finishMotion}
       >
-        <ProgressDetailsContent {...props} />
+        <div ref={(value) => (content = value)} class="task-progress-details__content">
+          <ProgressDetailsContent {...props} />
+        </div>
       </div>
     </details>
   );
@@ -551,7 +575,13 @@ function ComposerCard(props: CardProps) {
           />
         </span>
         <span class="session-progress-card__summary-collapsed">
-          <span class="session-progress-card__current">{view().stepLabel}</span>
+          <span
+            ref={createTextOverflow(() => view().stepLabel)}
+            class="session-progress-card__current"
+            title={view().stepLabel}
+          >
+            {view().stepLabel}
+          </span>
         </span>
         <Show when={view().counts}>
           <span

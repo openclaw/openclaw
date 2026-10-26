@@ -112,6 +112,7 @@ it("packs equal fields by their recipient rows without changing the input or wir
   ];
   const original = structuredClone(rows);
   const { rowsRevision, ...packed } = shareSidebarSessionRows(rows);
+  const packedBytes = wire(packed);
   expect(rowsRevision).toEqual(expect.any(String));
   expect(shareSidebarSessionRows(rows).sessions).toBe(packed.sessions);
   expect(shareSidebarSessionRows(rows, rowsRevision)).toEqual({
@@ -123,30 +124,24 @@ it("packs equal fields by their recipient rows without changing the input or wir
   expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
   // A changed page must not reuse the previous page's recipient groups or fact indexes.
   const changed = { ...rows[1]!, pinned: true, label: "Changed" };
-  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+  for (const page of [
+    [rows[0]!, changed, rows[2]!],
+    [rows[2]!, rows[0]!],
+    [rows[0]!, rows[0]!],
+    [...rows],
+  ]) {
     const next = shareSidebarSessionRows(page);
     expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+    expect(wire(packed)).toBe(packedBytes);
   }
-  expect(packed).toEqual({
-    sessions: [
-      {
-        key: "one",
-        kind: "direct",
-        updatedAt: 1,
-        lastMessagePreview: undefined,
-        sharedFacts: [0, 1],
-      },
-      {
-        key: "two",
-        kind: "direct",
-        updatedAt: 2,
-        lastMessagePreview: "Unique",
-        sharedFacts: [0, 1],
-      },
-      { key: "three", kind: "direct", updatedAt: 3, label: "Other", sharedFacts: [1] },
-    ],
-    sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
-  });
+  expect(packed.sharedFacts).toEqual([
+    { label: "Shared", origin: { provider: "fixture" } },
+    { pinned: false },
+  ]);
+  expect(packed.sessions.map((row) => row.sharedFacts)).toEqual([[0, 1], [0, 1], [1]]);
+  for (const row of packed.sessions) {
+    expectAbsent(row, row.key === "three" ? ["pinned"] : ["label", "origin", "pinned"]);
+  }
 });
 
 it.each(["sidebar", "dashboard"] as const)(
@@ -259,9 +254,7 @@ it.each(["sidebar", "dashboard"] as const)(
           }
           expect(result.sessions[0]).not.toHaveProperty("createdActor");
           expect(result.sharedFacts).toBeDefined();
-          const frame = JSON.parse(
-            serializeGatewayFrame({ type: "res", payload: result }).toString(),
-          );
+          const frame = JSON.parse(wire(result));
           expect(frame.payload).not.toHaveProperty("rowsFullReason");
           expect(
             JSON.stringify(

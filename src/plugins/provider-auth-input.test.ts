@@ -1,5 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { captureProviderApiKey } from "./provider-api-key-auth.js";
@@ -12,21 +12,16 @@ import {
 } from "./provider-auth-input.js";
 
 const acceptAnyApiKeyInput = () => undefined;
+const envRef = { source: "env", provider: "default", id: "MINIMAX_API_KEY" } as const;
 
 const resolveEnvApiKey = vi.hoisted(() =>
-  vi.fn(
-    (
-      provider: string,
-      env?: NodeJS.ProcessEnv,
-      _options?: { config?: OpenClawConfig; workspaceDir?: string },
-    ) => {
-      if (provider !== "minimax") {
-        return null;
-      }
-      const apiKey = env?.MINIMAX_API_KEY?.trim();
-      return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
-    },
-  ),
+  vi.fn<typeof import("../agents/model-auth-env.js").resolveEnvApiKey>((provider, env) => {
+    if (provider !== "minimax") {
+      return null;
+    }
+    const apiKey = env?.MINIMAX_API_KEY?.trim();
+    return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
+  }),
 );
 
 vi.mock("../agents/model-auth-env.js", () => ({
@@ -34,7 +29,7 @@ vi.mock("../agents/model-auth-env.js", () => ({
 }));
 
 type KeyParams = Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0];
-function inputFixture(params?: { confirmResult?: boolean; textResult?: string }) {
+function inputFixture(params?: { envKey?: string; confirmResult?: boolean; textResult?: string }) {
   const confirm = vi.fn(async () => params?.confirmResult ?? true);
   const note = vi.fn(async () => undefined);
   const text = vi.fn(async () => params?.textResult ?? "prompt-key");
@@ -42,10 +37,7 @@ function inputFixture(params?: { confirmResult?: boolean; textResult?: string })
   const prompter = { confirm, note, text } as unknown as WizardPrompter;
   const options: KeyParams = {
     config: {},
-    env: {
-      MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
-      MINIMAX_OAUTH_TOKEN: process.env.MINIMAX_OAUTH_TOKEN,
-    },
+    env: { MINIMAX_API_KEY: params?.envKey },
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -65,18 +57,13 @@ function inputFixture(params?: { confirmResult?: boolean; textResult?: string })
   };
 }
 
-function setMinimaxEnv(apiKey?: string) {
-  vi.stubEnv("MINIMAX_API_KEY", apiKey);
-  vi.stubEnv("MINIMAX_OAUTH_TOKEN", undefined);
-}
-
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
 it("retains the storage reference while resolving through the staged workspace and explicit env", async () => {
-  setMinimaxEnv("host-key");
+  vi.stubEnv("MINIMAX_API_KEY", "host-key");
   const workspaceDir = "/tmp/openclaw-provider-workspace";
   const config: OpenClawConfig = {
     agents: { entries: { main: {}, work: { workspace: workspaceDir } } },
@@ -104,21 +91,18 @@ it("retains the storage reference while resolving through the staged workspace a
 
   expect(captured).toEqual({
     apiKey: "workspace-env-key",
-    input: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+    input: envRef,
     mode: "ref",
   });
   expect(resolveEnvApiKey).toHaveBeenCalledWith("minimax", env, { config, workspaceDir });
   expect(text).not.toHaveBeenCalled();
 });
 
-describe("normalizeApiKeyInput", () => {
-  it("strips shell syntax, pasted line breaks, and non-header-safe artifacts", () => {
-    expect(normalizeApiKeyInput("export OPENAI_API_KEY='sk-\r\nabc│';")).toBe("sk-abc");
-  });
-
-  it("preserves ordinary interior spaces in bearer-style values", () => {
-    expect(normalizeApiKeyInput('TOKEN="Bearer demo token"')).toBe("Bearer demo token");
-  });
+it.each([
+  ["export OPENAI_API_KEY='sk-\r\nabc│';", "sk-abc"],
+  ['TOKEN="Bearer demo token"', "Bearer demo token"],
+])("normalizes pasted key %j without losing ordinary spaces", (input, expected) => {
+  expect(normalizeApiKeyInput(input)).toBe(expected);
 });
 
 it("rejects a pasted OpenClaw onboarding command", () => {
@@ -127,137 +111,96 @@ it("rejects a pasted OpenClaw onboarding command", () => {
   );
 });
 
-describe("ensureApiKeyFromEnvOrPrompt", () => {
-  it("falls back to prompt when env is declined", async () => {
-    setMinimaxEnv("env-key");
-    const { run, text, setCredential } = inputFixture({
-      confirmResult: false,
-      textResult: "  prompted-key  ",
-    });
-    const result = await run();
-
-    expect(result).toBe("prompted-key");
-    expect(setCredential).toHaveBeenCalledWith("prompted-key", "plaintext");
-    expect(text).toHaveBeenCalledWith({
-      message: "Enter key",
-      placeholder: "API key",
-      validate: acceptAnyApiKeyInput,
-      sensitive: true,
-    });
+it("falls back to prompt when env is declined", async () => {
+  const { run, text, setCredential } = inputFixture({
+    envKey: "env-key",
+    confirmResult: false,
+    textResult: "  prompted-key  ",
   });
+  const result = await run();
 
-  it("fails ref mode without select when fallback env var is missing", async () => {
-    setMinimaxEnv();
+  expect(result).toBe("prompted-key");
+  expect(setCredential).toHaveBeenCalledWith("prompted-key", "plaintext");
+  expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
+});
 
-    const { run, setCredential } = inputFixture();
+it("fails ref mode without select when fallback env var is missing", async () => {
+  const { run, setCredential } = inputFixture();
 
-    await expect(
-      run({
-        secretInputMode: "ref", // pragma: allowlist secret
-      }),
-    ).rejects.toThrow(
-      'Environment variable "MINIMAX_API_KEY" is required for --secret-input-mode ref in non-interactive setup.',
-    );
-    expect(setCredential).not.toHaveBeenCalled();
-  });
+  await expect(run({ secretInputMode: "ref" /* pragma: allowlist secret */ })).rejects.toThrow(
+    'Environment variable "MINIMAX_API_KEY" is required for --secret-input-mode ref in non-interactive setup.',
+  );
+  expect(setCredential).not.toHaveBeenCalled();
+});
 
-  it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
-    setMinimaxEnv("env-key");
+it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
+  const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
+  const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
+  const { run, options, text, note, setCredential } = inputFixture({ envKey: "env-key" });
+  text.mockResolvedValueOnce("/providers/minimax/apiKey").mockResolvedValueOnce("MINIMAX_API_KEY");
 
-    const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
-    const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
-    const { run, options, text, note, setCredential } = inputFixture();
-    text
-      .mockResolvedValueOnce("/providers/minimax/apiKey")
-      .mockResolvedValueOnce("MINIMAX_API_KEY");
-
-    const result = await run({
-      secretInputMode: "ref",
-      config: {
-        secrets: {
-          providers: {
-            filemain: {
-              source: "file",
-              path: "/tmp/does-not-exist-secrets.json",
-              mode: "json",
-            },
+  const result = await run({
+    secretInputMode: "ref",
+    config: {
+      secrets: {
+        providers: {
+          filemain: {
+            source: "file",
+            path: "/tmp/does-not-exist-secrets.json",
+            mode: "json",
           },
         },
       },
-      prompter: { ...options.prompter, select },
-    });
-
-    expect(result).toBe("env-key");
-    expect(setCredential).toHaveBeenCalledWith(
-      { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
-      "ref",
-    );
-    const noteMessages = note.mock.calls.map((call) => call.at(0) ?? "").join("\n");
-    expect(noteMessages).not.toContain("env-key");
-    for (const message of [
-      "Could not validate provider reference filemain:/providers/minimax/apiKey.",
-      "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
-      "Check your provider configuration and try again.",
-    ]) {
-      expect(note).toHaveBeenCalledWith(expect.stringContaining(message), "Reference check failed");
-    }
-    expect(note).toHaveBeenCalledWith(
-      "Validated environment variable MINIMAX_API_KEY. OpenClaw will store a reference, not the key value.",
-      "Reference validated",
-    );
-  });
-});
-
-describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
-  it("uses opts token and skips note/env/prompt", async () => {
-    const { options, confirm, note, text, setCredential } = inputFixture();
-
-    const result = await ensureApiKeyFromOptionEnvOrPrompt({
-      ...options,
-      token: "  opts-key  ",
-      tokenProvider: " DEMO-PROVIDER ",
-      expectedProviders: ["demo-provider"],
-      provider: "demo-provider",
-      envLabel: "DEMO_TOKEN",
-      noteMessage: "Demo note",
-      noteTitle: "Demo",
-    });
-
-    expect(result).toBe("opts-key");
-    expect(setCredential).toHaveBeenCalledWith("opts-key", undefined);
-    expect(note).not.toHaveBeenCalled();
-    expect(confirm).not.toHaveBeenCalled();
-    expect(text).not.toHaveBeenCalled();
+    },
+    prompter: { ...options.prompter, select },
   });
 
-  it("falls back to env flow and shows note when opts provider does not match", async () => {
-    setMinimaxEnv("env-key");
-
-    const { options, confirm, note, text, setCredential } = inputFixture();
-
-    const result = await ensureApiKeyFromOptionEnvOrPrompt({
-      ...options,
-      token: "opts-key",
-      tokenProvider: "other-provider",
-      expectedProviders: ["minimax"],
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      noteMessage: "Demo provider note",
-      noteTitle: "Demo provider",
-    });
-
-    expect(result).toBe("env-key");
-    expect(note).toHaveBeenCalledWith("Demo provider note", "Demo provider");
-    expect(confirm).toHaveBeenCalled();
-    expect(text).not.toHaveBeenCalled();
-    expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
-  });
+  expect(result).toBe("env-key");
+  expect(setCredential).toHaveBeenCalledWith(envRef, "ref");
+  const noteMessages = note.mock.calls.map((call) => call.at(0) ?? "").join("\n");
+  expect(noteMessages).not.toContain("env-key");
+  expect(note.mock.calls.map((call) => call.at(1))).toEqual([
+    "Reference check failed",
+    "Reference validated",
+  ]);
 });
 
 it.each([
+  [" DEMO-PROVIDER ", "demo-provider", "opts-key", undefined],
+  ["other-provider", "minimax", "env-key", "plaintext"],
+] as const)(
+  "resolves option provider %s before environment/prompt",
+  async (tokenProvider, provider, expected, mode) => {
+    const { options, confirm, note, text, setCredential } = inputFixture({
+      envKey: mode ? "env-key" : undefined,
+    });
+    expect(
+      await ensureApiKeyFromOptionEnvOrPrompt({
+        ...options,
+        token: "  opts-key  ",
+        tokenProvider,
+        provider,
+        expectedProviders: [provider],
+        envLabel: provider === "minimax" ? "MINIMAX_API_KEY" : "DEMO_TOKEN",
+        noteMessage: "Demo provider note",
+        noteTitle: "Demo provider",
+      }),
+    ).toBe(expected);
+    expect(setCredential).toHaveBeenCalledWith(expected, mode);
+    expect(text).not.toHaveBeenCalled();
+    if (mode) {
+      expect(note).toHaveBeenCalledWith("Demo provider note", "Demo provider");
+      expect(confirm).toHaveBeenCalled();
+    } else {
+      expect(note).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it.each([
   ["a😀b", "a…b"],
-  [`abc😀${"x".repeat(20)}`, "abc…xxxx"],
-  [`${"x".repeat(20)}😀abc`, "xxxx…abc"],
+  [`abc😀${"x".repeat(20)}😀abc`, "abc…abc"],
   ["😀".repeat(10), "😀😀…😀😀"],
 ])("redacts %p without splitting surrogate pairs", (value, expected) => {
   expect(formatApiKeyPreview(value)).toBe(expected);

@@ -28,10 +28,7 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: Detect source-module loading without importing real Hermes filesystem readers.
 vi.mock("./source.js", () =>
-  mocks.load("source", {
-    discoverHermesSource: mocks.discover,
-    hasHermesSource: mocks.hasSource,
-  }),
+  mocks.load("source", { discoverHermesSource: mocks.discover, hasHermesSource: mocks.hasSource }),
 );
 // mock-isolation: Track lazy memory-module loading without importing its runtime dependencies.
 vi.mock("./memory.js", () => mocks.load("memory", { isMemoryOnlyMigration: mocks.memoryOnly }));

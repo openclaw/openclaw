@@ -9,10 +9,14 @@ import { MessageGroup } from "./chat-message-group-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
 // mock-isolation: Text-only histories must not load media storage into jsdom; fail if used.
-vi.mock("../../../../../src/media/media-reference.js", () => ({
+vi.mock("../../../../../src/media/inbound-media-uri.js", () => ({
   parseInboundMediaUri: () => {
     throw new Error("Unexpected media URI in text-only context history");
   },
+}));
+
+// mock-isolation: Text-only histories must not attempt a local media path rewrite.
+vi.mock("../../../../../src/media/inbound-media-path.js", () => ({
   buildInboundMediaUriFromPath: () => {
     throw new Error("Unexpected media path in text-only context history");
   },

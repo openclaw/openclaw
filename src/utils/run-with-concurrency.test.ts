@@ -57,85 +57,79 @@ it("keeps pending promise allocation bounded when the task list grows", async ()
   expect(largeQueue).toBeLessThanOrEqual(smallQueue * 2);
 });
 
-it.each([false, true])(
-  "isolates task contexts when the error hook throws (throwOnError=%s)",
-  async (throwOnError) => {
-    const scope = new AsyncLocalStorage<string>();
-    async function runCaller(caller: string) {
-      const taskError = new Error("task failed");
-      const hookError = new Error("error hook failed");
-      const completed = createDeferred();
-      const taskContext = `${caller}/task`;
-      const contexts: Array<string | undefined> = [];
-      const onTaskError = vi.fn(() => {
-        contexts.push(scope.getStore());
-        scope.enterWith(`${caller}/hook`);
+it.each([
+  [false, false],
+  [true, false],
+  [true, true],
+])("isolates failures (%s, %s)", async (hookThrows, throwOnError) => {
+  const scope = new AsyncLocalStorage<string>();
+  async function runCaller(caller: string) {
+    const taskError = new Error("task failed");
+    const secondError = new Error("second failure");
+    const hookError = new Error("error hook failed");
+    const completed = createDeferred();
+    const taskContext = `${caller}/task`;
+    const contexts: Array<string | undefined> = [];
+    const onTaskError = vi.fn(() => {
+      contexts.push(scope.getStore());
+      scope.enterWith(`${caller}/hook`);
+      if (hookThrows) {
         throw hookError;
-      });
-      const run = scope.run(caller, () =>
-        runTasksWithConcurrency({
-          tasks: [
-            async () => {
-              contexts.push(scope.getStore());
-              scope.enterWith(taskContext);
-              await Promise.resolve();
-              contexts.push(scope.getStore());
-              throw taskError;
-            },
-            async () => {
-              contexts.push(scope.getStore());
-              completed.resolve();
-              return 20;
-            },
-          ],
-          limit: 1,
-          throwOnError,
-          onTaskError,
-        }),
-      );
-      const observed = scope.run(`${caller}/observer`, () =>
-        run.finally(() => expect(scope.getStore()).toBe(`${caller}/observer`)),
-      );
-      if (throwOnError) {
-        await expect(observed).rejects.toBe(hookError);
-      } else {
-        const expected = { results: [undefined, 20], firstError: taskError, hasError: true };
-        await expect(observed).resolves.toEqual(expected);
       }
-      await wait(completed.promise);
-      expect(contexts).toEqual([caller, taskContext, taskContext, caller]);
-      expect(onTaskError).toHaveBeenCalledExactlyOnceWith(taskError, 0);
+    });
+    const run = scope.run(caller, () =>
+      runTasksWithConcurrency({
+        tasks: [
+          async () => {
+            contexts.push(scope.getStore());
+            scope.enterWith(taskContext);
+            await Promise.resolve();
+            contexts.push(scope.getStore());
+            throw taskError;
+          },
+          failTask(secondError),
+          async () => {
+            contexts.push(scope.getStore());
+            completed.resolve();
+            return 20;
+          },
+        ],
+        limit: 1,
+        throwOnError,
+        onTaskError,
+      }),
+    );
+    const observed = scope.run(`${caller}/observer`, () =>
+      run.finally(() => expect(scope.getStore()).toBe(`${caller}/observer`)),
+    );
+    if (throwOnError) {
+      await expect(observed).rejects.toBe(hookError);
+    } else {
+      const result = await observed;
+      expect(result).toMatchObject({ results: [undefined, undefined, 20], hasError: true });
+      expect(result.firstError).toBe(taskError);
     }
-    try {
-      await Promise.all([runCaller("first"), runCaller("second")]);
-    } finally {
-      scope.disable();
-    }
-  },
-);
-
-it("retains the submitted factories when the caller changes its task array", async () => {
-  const first = heldTask(10);
-  const tasks = [first.run, async () => 20];
-  const run = runTasksWithConcurrency({ tasks, limit: 1 });
+    await wait(completed.promise);
+    expect(contexts).toEqual([caller, taskContext, taskContext, caller, caller]);
+    expect(onTaskError).toHaveBeenNthCalledWith(1, taskError, 0);
+    expect(onTaskError).toHaveBeenNthCalledWith(2, secondError, 1);
+  }
   try {
-    await wait(first.started);
-    tasks[1] = async () => 30;
-    tasks.push(async () => 40);
-    first.release();
-    expect((await run).results).toEqual([10, 20]);
+    await Promise.all([runCaller("first"), runCaller("second")]);
   } finally {
-    first.release();
-    await run;
+    scope.disable();
   }
 });
 
-it("preserves task order with bounded worker count", async () => {
+it("preserves submitted factories and task order with bounded worker count", async () => {
   const jobs = [heldTask(1), heldTask(2), heldTask(3), heldTask(4)] as const;
   const [first, second, third, fourth] = jobs;
-  const resultPromise = runTasksWithConcurrency({ tasks: jobs.map((job) => job.run), limit: 2 });
+  const tasks = jobs.map((job) => job.run);
+  const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
   await wait(Promise.all([first.started, second.started]));
   expect(jobs.map((job) => job.run.mock.calls.length)).toEqual([1, 1, 0, 0]);
+  tasks[2] = vi.fn(async () => 30);
+  tasks.push(vi.fn(async () => 50));
   second.release();
   await wait(third.started);
   expect(fourth.run).not.toHaveBeenCalled();
@@ -143,28 +137,8 @@ it("preserves task order with bounded worker count", async () => {
   await wait(fourth.started);
   third.release();
   fourth.release();
-  await expect(resultPromise).resolves.toEqual({
-    hasError: false,
-    firstError: undefined,
-    results: [1, 2, 3, 4],
-  });
-});
-
-it("continues after failures and reports the first one", async () => {
-  const firstErr = new Error("first");
-  const secondErr = new Error("second");
-  const onTaskError = vi.fn();
-  const result = await runTasksWithConcurrency({
-    tasks: [failTask(firstErr), async () => 20, failTask(secondErr), async () => 40],
-    limit: 1,
-    errorMode: "continue",
-    onTaskError,
-  });
-  expect(result).toMatchObject({ hasError: true, results: [undefined, 20, undefined, 40] });
-  expect(result.firstError).toBe(firstErr);
-  expect(onTaskError).toHaveBeenCalledTimes(2);
-  expect(onTaskError).toHaveBeenNthCalledWith(1, firstErr, 0);
-  expect(onTaskError).toHaveBeenNthCalledWith(2, secondErr, 2);
+  const { hasError, firstError, results } = await resultPromise;
+  expect([hasError, firstError, results]).toEqual([false, undefined, [1, 2, 3, 4]]);
 });
 
 it("rejects early and stops scheduling new work in stop mode", async () => {

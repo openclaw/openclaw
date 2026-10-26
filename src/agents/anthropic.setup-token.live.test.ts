@@ -17,7 +17,11 @@ import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
-import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
+import {
+  createSingleUserPromptMessage,
+  isLiveTestEnabled,
+  readLiveTestConfig,
+} from "./live-test-helpers.js";
 import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -220,13 +224,7 @@ describeLive("live anthropic setup-token", () => {
         const res = await completeSimple(
           model,
           {
-            messages: [
-              {
-                role: "user",
-                content: "Reply with the word ok.",
-                timestamp: Date.now(),
-              },
-            ],
+            messages: createSingleUserPromptMessage("Reply with the word ok."),
           },
           {
             apiKey,

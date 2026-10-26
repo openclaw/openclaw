@@ -6,6 +6,7 @@ import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets
 import type { RuntimeEnv } from "../runtime.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   root: "",
@@ -55,7 +56,7 @@ beforeEach(async () => {
   await fs.writeFile(path.join(mocks.root, "ui", "package.json"), "{}");
   mocks.ensureControlUiAssetsBuilt.mockImplementation(async (_runtime, opts) => {
     opts.onBuildStart?.();
-    return { ok: true, built: true };
+    return { ok: true };
   });
   mocks.runCommandWithTimeout.mockResolvedValue(
     createCommandResult({ stdout: "abc123 protocol schema changed\n" }),
@@ -69,12 +70,7 @@ afterEach(async () => {
 it("routes missing app-owned assets to the host without package or git commands", async () => {
   await fs.writeFile(
     path.join(mocks.root, "openclaw-install-owner.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      owner: "macos-app",
-      displayName: "OpenClaw.app",
-      updateHint: "Update OpenClaw.app to update this Gateway.",
-    }),
+    MACOS_APP_INSTALL_OWNER_MARKER,
   );
   await maybeRepairUiProtocolFreshness(runtime, prompter);
 
@@ -148,7 +144,6 @@ it.each(["incomplete", "markerless", "dev-build"])(
 it("reports owner-normalized build failures instead of claiming repair success", async () => {
   mocks.ensureControlUiAssetsBuilt.mockResolvedValueOnce({
     ok: false,
-    built: false,
     message: "Control UI build failed: spawn ENOENT",
   });
 

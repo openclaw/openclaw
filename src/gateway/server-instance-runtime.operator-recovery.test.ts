@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -10,8 +11,10 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -87,6 +90,36 @@ const recoveryRequest = (target: OperatorRecoveryTarget) => ({
   expectedExistingSessionId: target.sessionId,
   idempotencyKey: target.recoveryRunId,
 });
+const appendMessage = (
+  target: OperatorRecoveryTarget,
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+) => appendTranscriptMessage(target, { message });
+const appendAborted = (target: OperatorRecoveryTarget) =>
+  appendMessage(target, { role: "assistant", content: [], stopReason: "aborted" });
+const recover = (
+  target: OperatorRecoveryTarget,
+  stateDir: string,
+  runtime: ReturnType<typeof createRuntime>,
+  cfg: OpenClawConfig = {},
+  options: Pick<Parameters<typeof recoverStore>[0], "onSkipped"> = {},
+) =>
+  recoverStore({
+    cfg,
+    storePath: target.storePath,
+    stateDir,
+    handledSessionKeys: new Set(),
+    expectedTarget: target,
+    gatewayRuntime: runtime.recovery,
+    ...options,
+  });
+function expectRecovery(outcome: Awaited<ReturnType<typeof recoverStore>>, authorized: boolean) {
+  expect(outcome).toEqual({
+    started: authorized ? 1 : 0,
+    settled: authorized ? 0 : 1,
+    failed: 0,
+    skipped: 0,
+  });
+}
 function registerRecovery(
   target: OperatorRecoveryTarget,
   runId = target.recoveryRunId,
@@ -120,7 +153,7 @@ async function withRecovery(
       profileId: string;
     },
   ) => Promise<void>,
-  internal = false,
+  internal: boolean | "tui" = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     if (internal) {
@@ -133,6 +166,7 @@ async function withRecovery(
       context,
       profileId: profile.id,
       config: {},
+      clientInfo: internal === "tui" ? { id: "openclaw-tui", mode: "ui" } : undefined,
       ...(internal
         ? { sessionKey: "agent:main:dashboard:repeat-recovery", sourceIngress: "internal" as const }
         : {}),
@@ -141,118 +175,133 @@ async function withRecovery(
   });
 }
 
+function holdRecoveryTurn(
+  target: OperatorRecoveryTarget,
+  inspect: (
+    principal: Parameters<typeof startTurn>[0]["principal"],
+    runId: string,
+  ) => void = () => {},
+) {
+  const finish = createDeferred();
+  let registration: ReturnType<typeof registerRecovery> | undefined;
+  let release: (() => void) | undefined;
+  startTurn.mockImplementation(async ({ controllerInput, preflight, principal, io }) => {
+    const runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
+    inspect(principal, runId);
+    registration = registerRecovery(target, runId, controllerInput);
+    io.emitStartOwner?.(runId, registration.entry);
+    registration.initializeTiming();
+    release = await claimRpcSourceForTest(registration.entry);
+    expect(registration.markExecutionStarted()).toBe(true);
+    io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+    io.emitExecutionStarted?.();
+    await finish.promise;
+    io.emitFinal([true, { runId, status: "ok" }, undefined]);
+  });
+  const settle = async () => {
+    finish.resolve();
+    try {
+      await startTurn.mock.results.at(-1)?.value;
+    } finally {
+      release?.();
+      registration?.cleanup();
+      await registration?.entry.input.settlement.promise;
+    }
+  };
+  return Object.assign(settle, { [Symbol.asyncDispose]: settle });
+}
+
+function markRecovery(
+  target: OperatorRecoveryTarget,
+  context: ReturnType<typeof chatContext>,
+  stateDir: string,
+  runId: string,
+) {
+  return markRestartAbortedMainSessions({
+    resolveGatewayContext: () => context,
+    stateDir,
+    activeRuns: [
+      {
+        storePath: target.storePath,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      },
+    ],
+    isActiveRun: () => true,
+  });
+}
+
 describe("typed restart recovery operator admission", () => {
   it.each([false, true])(
     "retains an internal operator source across repeated restarts (revoked=%s)",
-    async (revoked) => {
-      await withRecovery(async ({ entry, target, stateDir, profileId }) => {
+    (revoked) =>
+      withRecovery(async ({ entry, target, stateDir, profileId }) => {
         const source = entry.restartRecoveryOperatorSource;
         let runId = target.recoveryRunId;
-        const { sessionKey, sessionId } = target;
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const context = chatContext();
           context.getRuntimeConfig = () => ({});
-          const generation = getAgentEventLifecycleGeneration();
-          await appendTranscriptMessage(target, {
-            message: {
-              role: "user",
-              content: "A reviewer has additional findings for the original task.",
-              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            },
+          await appendMessage(target, {
+            role: "user",
+            content: "A reviewer has additional findings for the original task.",
+            provenance: { kind: "inter_session", sourceTool: "sessions_send" },
           });
-          await appendTranscriptMessage(target, {
-            message: {
-              role: "assistant",
-              stopReason: "toolUse",
-              content: [{ type: "toolCall", id: "inspect-" + attempt, name: "read" }],
-            },
+          await appendMessage(target, {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "inspect-" + attempt, name: "read" }],
           });
-          await markRestartAbortedMainSessions({
-            resolveGatewayContext: () => context,
-            stateDir,
-            activeRuns: [
-              {
-                storePath: target.storePath,
-                agentId: target.agentId,
-                sessionKey,
-                sessionId,
-                runId,
-                lifecycleGeneration: generation,
-              },
-            ],
-            isActiveRun: () => true,
-          });
+          await markRecovery(target, context, stateDir, runId);
           rotateAgentEventLifecycleGeneration();
           if (revoked && attempt === 1) {
             setUserProfileRole(profileId, "changed-role");
           }
           const runtime = createRuntime(() => context);
-          const finish = createDeferred();
-          let registration: ReturnType<typeof registerChatAbortController> | undefined;
-          let execution: Promise<void> | undefined;
-          let releaseTurn: (() => void) | undefined;
-          startTurn.mockImplementation(({ controllerInput, preflight, principal, io }) => {
-            execution = (async () => {
-              runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
-              const authority = expectDefined(
-                principal?.internal?.operatorRunAuthority,
-                "restored source authority",
-              );
-              expect(authority.profileId).toBe(profileId);
-              expect(authority.assertCurrent).not.toThrow();
-              registration = registerRecovery(target, runId, controllerInput);
-              io.emitStartOwner?.(runId, registration.entry);
-              registration.initializeTiming();
-              releaseTurn = await claimRpcSourceForTest(registration.entry);
-              expect(registration.markExecutionStarted()).toBe(true);
-              io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-              io.emitExecutionStarted?.();
-              await finish.promise;
-              io.emitFinal([true, { runId, status: "ok" }, undefined]);
-            })();
-            return execution;
+          const finish = holdRecoveryTurn(target, (principal, recoveredRunId) => {
+            runId = recoveredRunId;
+            const authority = expectDefined(
+              principal?.internal?.operatorRunAuthority,
+              "restored source authority",
+            );
+            expect(authority.profileId).toBe(profileId);
+            expect(authority.assertCurrent).not.toThrow();
           });
           try {
             const denied = revoked && attempt === 1;
             const skipped: string[] = [];
-            const outcome = await recoverStore({
-              onSkipped: (reason) => skipped.push(reason),
-              cfg: {},
-              storePath: target.storePath,
+            const outcome = await recover(
+              target,
               stateDir,
-              handledSessionKeys: new Set(),
-              expectedTarget: target,
-              gatewayRuntime: runtime.recovery,
-            });
+              runtime,
+              {},
+              {
+                onSkipped: (reason) => skipped.push(reason),
+              },
+            );
             expect(skipped).toEqual([]);
-            expect(outcome).toEqual({
-              started: denied ? 0 : 1,
-              settled: 0,
-              failed: denied ? 1 : 0,
-              skipped: 0,
-            });
+            expectRecovery(outcome, !denied);
             expect(startTurn).toHaveBeenCalledTimes(denied ? 1 : attempt + 1);
             const retained = loadSessionEntry(target);
             expect(retained?.restartRecoveryOperatorSource).toEqual(source);
             expect(retained?.restartRecoveryDeliverySourceRunId).toBe(target.sourceRunId);
-            expect(retained?.mainRestartRecovery?.tombstone).toBeUndefined();
+            if (denied) {
+              expect(retained?.mainRestartRecovery?.tombstone?.reason).toContain("operator");
+              expect(retained?.status).toBe("failed");
+            } else {
+              expect(retained?.mainRestartRecovery?.tombstone).toBeUndefined();
+            }
           } finally {
             runtime.close();
-            finish.resolve();
-            try {
-              await execution;
-            } finally {
-              releaseTurn?.();
-              registration?.cleanup();
-              await registration?.entry?.input.settlement.promise;
-            }
+            await finish();
           }
         }
-      }, true);
-    },
+      }, true),
   );
-  it("resumes a retained channel requester after its child completion cohort is gone", async () => {
-    await withRecovery(async (fixture) => {
+  it("resumes a retained channel requester after its child completion cohort is gone", () =>
+    withRecovery(async (fixture) => {
       const { context, stateDir } = fixture;
       const target = {
         ...fixture.target,
@@ -275,88 +324,257 @@ describe("typed restart recovery operator admission", () => {
           "retained channel requester",
         ),
       });
-      await appendTranscriptMessage(target, {
-        message: {
-          role: "user",
-          content: "Use the completed child's findings to finish my original request.",
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "subagent_settle",
-            sourceSessionKey: "agent:main:subagent:completed-child",
-          },
+      await appendMessage(target, {
+        role: "user",
+        content: "Use the completed child's findings to finish my original request.",
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: "agent:main:subagent:completed-child",
         },
       });
-      await appendTranscriptMessage(target, {
-        message: { role: "assistant", content: [], stopReason: "aborted" },
-      });
-      const marked = await markRestartAbortedMainSessions({
-        resolveGatewayContext: () => context,
-        stateDir,
-        activeRuns: [
-          {
-            storePath: target.storePath,
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            sessionId: target.sessionId,
-            runId: target.recoveryRunId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        ],
-        isActiveRun: () => true,
-      });
+      await appendAborted(target);
+      const marked = await markRecovery(target, context, stateDir, target.recoveryRunId);
       expect(marked).toEqual({ marked: 1, skipped: 0 });
       rotateAgentEventLifecycleGeneration();
       expect(listSubagentRunsForRequester(target.sessionKey)).toEqual([]);
       using runtime = createRuntime(() => context);
-      const finish = createDeferred();
-      let registration: ReturnType<typeof registerChatAbortController> | undefined;
-      let releaseTurn: (() => void) | undefined;
-      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
-        const runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
-        registration = registerRecovery(target, runId, controllerInput);
-        io.emitStartOwner?.(runId, registration.entry);
-        registration.initializeTiming();
-        releaseTurn = await claimRpcSourceForTest(registration.entry);
-        expect(registration.markExecutionStarted()).toBe(true);
-        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-        io.emitExecutionStarted?.();
-        await finish.promise;
-        io.emitFinal([true, { runId, status: "ok" }, undefined]);
-      });
-      try {
-        const outcome = await recoverStore({
-          cfg: {},
-          storePath: target.storePath,
-          stateDir,
-          handledSessionKeys: new Set(),
-          expectedTarget: target,
-          gatewayRuntime: runtime.recovery,
-        });
-        expect(outcome).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
-        expect(startTurn).toHaveBeenCalledOnce();
-        const principal = expectDefined(
-          startTurn.mock.calls[0]?.[0].principal,
-          "recovered principal",
-        );
-        expect(principal.internal?.agentToolCaller?.requesterOrigin).toEqual(requesterOrigin);
-        expect(principal.internal?.operatorRunAuthority).toBeUndefined();
-      } finally {
-        finish.resolve();
-        try {
-          await startTurn.mock.results.at(-1)?.value;
-        } finally {
-          releaseTurn?.();
-          registration?.cleanup();
-          await registration?.entry?.input.settlement.promise;
+      await using _ = holdRecoveryTurn(target);
+      expectRecovery(await recover(target, stateDir, runtime), true);
+      expect(startTurn).toHaveBeenCalledOnce();
+      const principal = expectDefined(
+        startTurn.mock.calls[0]?.[0].principal,
+        "recovered principal",
+      );
+      expect(principal.internal?.agentToolCaller?.requesterOrigin).toEqual(requesterOrigin);
+      expect(principal.internal?.operatorRunAuthority).toBeUndefined();
+    }, true));
+
+  it.each([
+    "allowed",
+    "policy denied",
+    "missing",
+    "replaced",
+    "missing source",
+    "missing channel source",
+    "missing control-ui source",
+    "legacy cohort",
+    "missing lineage",
+    "operator only",
+    "direct human",
+    "direct TUI",
+    "internal self-origin",
+  ] as const)(
+    "recovers a later child turn under its exact cross-agent parent (%s)",
+    async (parentState) => {
+      const ingress = parentState === "direct TUI" ? "tui" : parentState !== "direct human";
+      await withRecovery(async (fixture) => {
+        const { context, stateDir } = fixture;
+        const directHuman = parentState === "direct human" || parentState === "direct TUI";
+        const selfOrigin = directHuman || parentState === "internal self-origin";
+        if (parentState === "direct TUI") {
+          expect(fixture.entry.restartRecoverySourceIngress).toBe("internal");
         }
-      }
-    }, true);
-  });
+        const target = {
+          ...fixture.target,
+          sourceRunId:
+            parentState === "legacy cohort"
+              ? "announce:requester-settle:main:historical-child:completed:yield-1"
+              : fixture.target.sourceRunId,
+        };
+        const missingSource =
+          parentState === "missing source" ||
+          parentState === "missing channel source" ||
+          parentState === "missing control-ui source" ||
+          parentState === "legacy cohort" ||
+          parentState === "missing lineage";
+        const config = (allowAgents: string[]): OpenClawConfig => ({
+          agents: { entries: { main: {}, requester: { subagents: { allowAgents } } } },
+        });
+        const cfg = config(parentState === "policy denied" ? [] : ["main"]);
+        fixture.setConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        const parent = {
+          agentId: "requester",
+          sessionKey: "agent:requester:slack:channel:original-parent",
+          sessionId: "original-parent",
+          storePath: path.join(stateDir, "agents", "requester", "sessions", "sessions.json"),
+        };
+        if (parentState !== "missing" && !selfOrigin && parentState !== "operator only") {
+          await replaceSessionEntry(parent, {
+            sessionId: parentState === "replaced" ? "replacement-parent" : parent.sessionId,
+            lifecycleRevision: "parent-revision",
+            updatedAt: 1,
+          });
+        }
+        const requesterOrigin = selfOrigin
+          ? { sessionKey: target.sessionKey, operatorProfileId: fixture.profileId }
+          : {
+              sessionKey: parent.sessionKey,
+              messageProvider: "slack",
+              senderId: "original-requester",
+            };
+        const entry = {
+          ...fixture.entry,
+          spawnDepth: 1,
+          spawnedBy: parentState === "missing lineage" ? undefined : parent.sessionKey,
+          spawnedBySessionId: parent.sessionId,
+          parentSessionKey: parent.sessionKey,
+          parentSessionId: parent.sessionId,
+          parentSessionLifecycleRevision: "parent-revision",
+          restartRecoveryDeliverySourceRunId: target.sourceRunId,
+          restartRecoverySourceIngress:
+            parentState === "missing source" || parentState === "missing lineage"
+              ? undefined
+              : parentState === "missing channel source"
+                ? ("channel" as const)
+                : parentState === "missing control-ui source"
+                  ? ("control-ui" as const)
+                  : fixture.entry.restartRecoverySourceIngress,
+          restartRecoveryOperatorSource:
+            selfOrigin || parentState === "operator only"
+              ? fixture.entry.restartRecoveryOperatorSource
+              : undefined,
+        };
+        await replaceSessionEntry(target, {
+          ...entry,
+          restartRecoveryRequesterSource:
+            missingSource || parentState === "operator only"
+              ? undefined
+              : createRestartRecoveryRequesterSource({
+                  ...target,
+                  entry,
+                  requesterOrigin,
+                }),
+        });
+        if (parentState === "internal self-origin") {
+          await appendMessage(target, {
+            role: "user",
+            content: "An earlier human request does not own the interrupted turn.",
+            idempotencyKey: "earlier-human-turn:user",
+            provenance: { kind: "external_user" },
+          });
+        }
+        await appendMessage(target, {
+          role: "user",
+          content: "Continue the requested child work.",
+          idempotencyKey: `${target.sourceRunId}:user`,
+          provenance:
+            parentState === "direct TUI"
+              ? undefined
+              : { kind: directHuman ? "external_user" : "inter_session" },
+          ...(selfOrigin
+            ? { __openclaw: { transport: { clients: [{ id: "openclaw-tui", mode: "ui" }] } } }
+            : {}),
+        });
+        await appendAborted(target);
+        expect(await markRecovery(target, context, stateDir, target.sourceRunId)).toEqual({
+          marked: 1,
+          skipped: 0,
+        });
+        rotateAgentEventLifecycleGeneration();
+        using runtime = createRuntime(() => context);
+        await using _ = holdRecoveryTurn(target);
+        const authorized = parentState === "allowed" || directHuman;
+        const outcome = await recover(target, stateDir, runtime, cfg);
+        if (
+          parentState === "missing source" ||
+          parentState === "missing channel source" ||
+          parentState === "missing control-ui source"
+        ) {
+          expect(outcome).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+        } else {
+          expectRecovery(outcome, authorized);
+        }
+        expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
+        if (parentState === "allowed") {
+          const recovered = expectDefined(startTurn.mock.calls[0]?.[0], "recovered turn");
+          const assertParent = expectDefined(
+            recovered.principal?.internal?.agentToolCaller?.assertCurrent,
+            "live parent authority",
+          );
+          expect(assertParent).not.toThrow();
+          expect(recovered.executionSource).not.toThrow();
+          const revoked = config([]);
+          fixture.setConfig(revoked);
+          setRuntimeConfigSnapshot(revoked);
+          expect(assertParent).toThrow();
+          expect(recovered.executionSource).toThrow();
+        } else if (!authorized) {
+          const retained = loadSessionEntry(target);
+          const notice = JSON.stringify(await loadTranscriptEvents(target));
+          if (parentState === "missing lineage") {
+            expect(retained?.status).toBe("interrupted");
+            expect(retained?.mainRestartRecovery).toBeUndefined();
+            expect(notice).toContain("Send a new authenticated message to continue.");
+          } else {
+            expect(retained).toMatchObject({ status: "failed", abortedLastRun: false });
+            expect(retained?.mainRestartRecovery?.tombstone).toBeDefined();
+            expect(notice).toContain("In WebChat, use Resume");
+          }
+          if (
+            parentState === "policy denied" ||
+            (missingSource && parentState !== "missing lineage")
+          ) {
+            expect(JSON.stringify(await loadTranscriptEvents(parent))).toContain(
+              `Child session ${target.sessionKey} could not resume`,
+            );
+          }
+        }
+      }, ingress);
+    },
+  );
+
+  it.each(["matching", "missing", "different", "stale requester"] as const)(
+    "settles or resumes an interrupted requester (source: %s)",
+    (source) =>
+      withRecovery(async ({ context, target, entry, stateDir, profileId }) => {
+        const requesterOrigin = {
+          sessionKey: target.sessionKey,
+          operatorProfileId: source === "different" ? "another-requester" : profileId,
+        };
+        await replaceSessionEntry(target, {
+          ...entry,
+          restartRecoveryOperatorSource:
+            source === "missing" ? undefined : entry.restartRecoveryOperatorSource,
+          restartRecoveryRequesterSource: createRestartRecoveryRequesterSource({
+            ...target,
+            sourceRunId: source === "stale requester" ? "previous-turn" : target.sourceRunId,
+            entry,
+            requesterOrigin,
+          }),
+        });
+        await appendMessage(target, { role: "user", content: "Finish the interrupted request." });
+        await appendAborted(target);
+        await markRecovery(target, context, stateDir, target.sourceRunId);
+        rotateAgentEventLifecycleGeneration();
+        using runtime = createRuntime(() => context);
+        await using _ = holdRecoveryTurn(target);
+        const recoverAgain = () => recover(target, stateDir, runtime);
+        const authorized = source === "matching";
+        expectRecovery(await recoverAgain(), authorized);
+        expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
+        if (!authorized) {
+          const retained = loadSessionEntry(target);
+          expect(retained?.sessionId).toBe(target.sessionId);
+          expect(retained?.status).toBe("interrupted");
+          expect(retained?.mainRestartRecovery).toBeUndefined();
+          expect(retained?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
+          const transcript = await loadTranscriptEvents(target);
+          expect(JSON.stringify(transcript)).toContain(
+            "Send a new authenticated message to continue.",
+          );
+          await recoverAgain();
+          expect(startTurn).not.toHaveBeenCalled();
+          expect(await loadTranscriptEvents(target)).toEqual(transcript);
+        }
+      }, true),
+  );
 
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
-    async (field) => {
-      await withRecovery(async ({ target, context }) => {
+    (field) =>
+      withRecovery(async ({ target, context }) => {
         using runtime = createRuntime(() => context);
         const request = recoveryRequest(target);
         request[field] = "another-claim";
@@ -366,42 +584,21 @@ describe("typed restart recovery operator admission", () => {
           }),
         ).rejects.toThrow("dispatch does not match its source claim");
         expect(startTurn).not.toHaveBeenCalled();
-      });
-    },
+      }),
   );
 
   it.each([
-    { source: "authenticated operator", operator: true, requester: "absent", expected: "accepted" },
-    { source: "legacy claim", operator: false, requester: "absent", expected: "scope refusal" },
-    { source: "matching requester", operator: true, requester: "matching", expected: "accepted" },
-    {
-      source: "native queued requester",
-      operator: true,
-      requester: "matching",
-      expected: "accepted",
-    },
-    {
-      source: "native queued mismatched requester",
-      operator: true,
-      requester: "different",
-      expected: "identity refusal",
-    },
-    {
-      source: "mismatched requester",
-      operator: true,
-      requester: "different",
-      expected: "identity refusal",
-    },
-    {
-      source: "requester without operator authority",
-      operator: false,
-      requester: "matching",
-      expected: "identity refusal",
-    },
+    ["authenticated operator", true, "absent", "accepted"],
+    ["legacy claim", false, "absent", "scope refusal"],
+    ["matching requester", true, "matching", "accepted"],
+    ["native queued requester", true, "matching", "accepted"],
+    ["native queued mismatched requester", true, "different", "identity refusal"],
+    ["mismatched requester", true, "different", "identity refusal"],
+    ["requester without operator authority", false, "matching", "identity refusal"],
   ] as const)(
-    "applies recovery admission and the actual admin-method fence to $source",
-    async ({ source, operator, requester, expected }) => {
-      await withRecovery(async (fixture) => {
+    "applies recovery admission and the actual admin-method fence to %s",
+    (source, operator, requester, expected) =>
+      withRecovery(async (fixture) => {
         const { target, context, entry, profileId } = fixture;
         const queued = source.startsWith("native queued");
         const requesterOrigin = {
@@ -479,8 +676,7 @@ describe("typed restart recovery operator admission", () => {
         } finally {
           retained?.release();
         }
-      });
-    },
+      }),
   );
 
   it.each([
@@ -490,8 +686,8 @@ describe("typed restart recovery operator admission", () => {
     "lifecycle rotated",
     "Gateway closed",
     "Gateway context replaced",
-  ] as const)("refuses retained operator work after its exact %s", async (boundary) => {
-    await withRecovery(async ({ target, context, entry, profileId }) => {
+  ] as const)("refuses retained operator work after its exact %s", (boundary) =>
+    withRecovery(async ({ target, context, entry, profileId }) => {
       let activeContext = context;
       const registration = registerRecovery(target);
       using runtime = createRuntime(() => activeContext);
@@ -618,6 +814,6 @@ describe("typed restart recovery operator admission", () => {
           await registration.entry.input.settlement.promise;
         }
       }
-    });
-  });
+    }),
+  );
 });

@@ -109,7 +109,12 @@ process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
     );
     fs.writeFileSync(
       path.join(seed, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.4.0" }),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: "pnpm@12.4.0",
+        openclaw: { updateAdmissionProtocol: 1 },
+      }),
     );
     fs.writeFileSync(
       path.join(seed, ".gitignore"),
@@ -133,7 +138,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
 fs.mkdirSync('dist/control-ui', {recursive:true});
-fs.writeFileSync('dist/entry.js', '// synthetic runtime\n');
+fs.writeFileSync('dist/entry.js', 'console.log(' + JSON.stringify(JSON.stringify({protocol:1, verdict:'admit', reasons:[], warnings:[], facts:{candidateVersion:'2026.9.1', installedVersion:'2026.9.1', checks:[]}})) + ');\n');
 fs.writeFileSync('dist/control-ui/index.html', 'ready');
 fs.writeFileSync('dist/build-info.json', JSON.stringify({commit:head,buildId:'fixture-'+head}));
 for (const name of ['.buildstamp','.runtime-postbuildstamp']) fs.writeFileSync(path.join('dist',name),JSON.stringify({head}));

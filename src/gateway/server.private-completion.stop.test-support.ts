@@ -344,7 +344,6 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         scheduler: createTestGatewayScheduler(clock.clock),
         logHealth: { info: vi.fn(), error: vi.fn() },
         runDeliveryQueueMediaGc: async () => undefined,
-        runManagedOutgoingMediaGc: async () => undefined,
       });
       try {
         await clock.advanceBy(60_000);

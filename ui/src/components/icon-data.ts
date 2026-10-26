@@ -1,6 +1,11 @@
 import { brandIconData } from "./icon-data-brand.ts";
+import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
+
+const ZAP_POINTS = "13 2 3 14 12 14 11 22 21 10 12 10 13 2";
+const SOFT_ZAP_PATH =
+  "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z";
 
 export const iconData = {
   share: strokeIconData([
@@ -187,7 +192,34 @@ export const iconData = {
     "M22 12h-6",
     "m19.07 10.93-4.24 4.24",
   ),
-  zap: strokeIconData([["polygon", { points: "13 2 3 14 12 14 11 22 21 10 12 10 13 2" }]]),
+  zap: strokeIconData([["polygon", { points: ZAP_POINTS }]]),
+  zapDouble: {
+    ...strokeIconData([
+      [
+        "path",
+        {
+          d: SOFT_ZAP_PATH,
+          transform: "translate(0 6.55)",
+          fill: "var(--icon-secondary, currentColor)",
+          stroke: "var(--icon-secondary, currentColor)",
+        },
+      ],
+      [
+        "path",
+        {
+          d: SOFT_ZAP_PATH,
+          transform: "translate(4.36 0)",
+          fill: "var(--icon-primary, currentColor)",
+          stroke: "var(--icon-primary, currentColor)",
+        },
+      ],
+    ]),
+    attributes: {
+      ...strokeIconData([]).attributes,
+      viewBox: "0 0 28.36 30.55",
+      "stroke-width": "1.4",
+    },
+  },
   monitor: strokeIconData([
     ["rect", { width: "20", height: "14", x: "2", y: "3", rx: "2" }],
     ["line", { x1: "8", x2: "16", y1: "21", y2: "21" }],
@@ -330,7 +362,18 @@ export const iconData = {
     ["line", { x1: "4", x2: "20", y1: "6", y2: "6" }],
     ["line", { x1: "4", x2: "20", y1: "18", y2: "18" }],
   ]),
-  x: strokePathData("M18 6 6 18", "m6 6 12 12"),
+  x: strokePathData(...statusIconPaths.x),
+  // Lucide circle-dashed (ISC).
+  circleDashed: strokePathData(
+    "M10.1 2.182a10 10 0 0 1 3.8 0",
+    "M13.9 21.818a10 10 0 0 1-3.8 0",
+    "M17.609 3.721a10 10 0 0 1 2.69 2.7",
+    "M2.182 13.9a10 10 0 0 1 0-3.8",
+    "M20.279 17.609a10 10 0 0 1-2.7 2.69",
+    "M21.818 10.1a10 10 0 0 1 0 3.8",
+    "M3.721 6.391a10 10 0 0 1 2.7-2.69",
+    "M6.391 20.279a10 10 0 0 1-2.69-2.7",
+  ),
   check: strokePathData("M20 6 9 17l-5-5"),
   info: strokeIconData([
     ["circle", { cx: "12", cy: "12", r: "10" }],
@@ -365,11 +408,7 @@ export const iconData = {
     ["path", { d: "m9 15 3-3 3 3" }],
     ["path", { d: "M12 12v6" }],
   ]),
-  alertTriangle: strokePathData(
-    "m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
-    "M12 9v4",
-    "M12 17h.01",
-  ),
+  alertTriangle: strokePathData(...statusIconPaths.alertTriangle),
   globeOff: strokePathData(
     "M10.114 4.462A14.5 14.5 0 0 1 12 2a10 10 0 0 1 9.313 13.643",
     "M15.557 15.556A14.5 14.5 0 0 1 12 22 10 10 0 0 1 4.929 4.929",

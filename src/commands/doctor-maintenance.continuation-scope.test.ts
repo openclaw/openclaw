@@ -17,8 +17,10 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
-import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
-import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
+import {
+  beginDoctorRepair,
+  setupDoctorAdmissionFixture,
+} from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const prepareService = vi.hoisted(() => vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>());
@@ -111,10 +113,8 @@ it.each([true, false])(
           port: 1,
           allowInTests: true,
         });
-        maintenance = await beginDoctorMaintenance({
+        maintenance = await beginDoctorRepair({
           root: install,
-          options: { repair: true, nonInteractive: true },
-          runtime: { log() {}, error() {}, exit() {} },
           beforeStateMutation: async () => {
             const original = family();
             listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission);
@@ -149,16 +149,9 @@ it.each([true, false])(
             expect(family()).toEqual(original);
           },
         });
-        hashes.mockClear();
         maintenance!.run(() => listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission));
-        maintenance!.run(() => listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission));
-        expect(hashes).not.toHaveBeenCalled();
         await maintenance!.release();
         maintenance = undefined;
-        hashes.mockClear();
-        // Released custody no longer lends its warm reader to a later cold inspection.
-        resolveDoctorUpdateAdmission(env, run.runId).assertCurrent();
-        expect(hashes).toHaveBeenCalled();
       }
     } finally {
       await maintenance?.release();

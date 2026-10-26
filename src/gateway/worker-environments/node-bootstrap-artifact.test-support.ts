@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach } from "vitest";
+import * as tar from "tar";
+import { afterEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+
+// mock-isolation: archive fixtures have synthetic registry dependencies; install-lock tests own npm I/O.
+vi.mock("./node-bootstrap-install-lock.js", () => ({
+  prepareNodeBootstrapInstallLock: async () => undefined,
+}));
 
 export const buildId = "fixture-source-build";
 export const version = "2026.8.1";
@@ -16,10 +22,35 @@ export async function write(root: string, relative: string, contents: string | o
   await fs.writeFile(target, typeof contents === "string" ? contents : JSON.stringify(contents));
 }
 
-async function writeFiles(root: string, files: Record<string, string | object>) {
+export async function writeFiles(root: string, files: Record<string, string | object>) {
   for (const [relative, contents] of Object.entries(files)) {
     await write(root, relative, contents);
   }
+}
+
+export const readText = (root: string, relative: string) =>
+  fs.readFile(path.join(root, relative), "utf8");
+
+export async function expectFiles(root: string, files: Record<string, string>) {
+  for (const [relative, text] of Object.entries(files)) {
+    expect(await readText(root, relative), relative).toBe(text);
+  }
+}
+
+export async function expectMissing(root: string, files: string[]) {
+  for (const relative of files) {
+    await expect(fs.access(path.join(root, relative)), relative).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+  }
+}
+
+export async function extract(root: string, artifact: { tarballPath: string }) {
+  const installed = path.join(root, "node");
+  await fs.mkdir(installed);
+  await tar.extract({ file: artifact.tarballPath, cwd: installed });
+  return path.join(installed, "package");
 }
 
 export type OwnedRuntimeChunk = { source: string; extensions: readonly string[] };
@@ -101,13 +132,26 @@ export function useNodeBootstrapArtifactFixtures() {
       version,
       type: "module",
       files: [
+        "openclaw.mjs",
+        "node-version.mjs",
+        "node-sqlite.mjs",
+        "node-runtime-update.mjs",
+        "node-runtime-recovery.mjs",
+        "cli-parent-lifetime.mjs",
+        "node-runtime-env.mjs",
+        "cli-invocation.mjs",
+        "cli-root-options.mjs",
+        "gateway-run-argv.mjs",
+        "gateway-shutdown-budget.mjs",
+        "node-host-launcher.mjs",
+        "node-compile-cache.mjs",
         "dist/",
         "!dist/extensions/remote-runtime/**",
         "scripts/preinstall.mjs",
         "scripts/postinstall.mjs",
       ],
       dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
-      ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
+      bundleDependencies: mode === "source" ? false : ["@fixture/ai"],
       devDependencies: { "typescript-only": "workspace:*" },
       scripts: {
         prepare: "exit 91",
@@ -126,6 +170,7 @@ export function useNodeBootstrapArtifactFixtures() {
       "cli-invocation.mjs",
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
+      "node-runtime-env.mjs",
     ]) {
       await fs.copyFile(filename, path.join(packageRoot, filename));
     }
@@ -134,7 +179,6 @@ export function useNodeBootstrapArtifactFixtures() {
       "node-sqlite.mjs": "export const probe = true;",
       "node-runtime-update.mjs": "export const update = true;",
       "node-runtime-recovery.mjs": "export const recovery = true;",
-      "node-runtime-env.mjs": "export {};",
       "cli-root-options.mjs": "export {};",
       "gateway-run-argv.mjs": "export {};",
       "node-host-launcher.mjs": "export const launcher = true;",
@@ -171,13 +215,10 @@ export function useNodeBootstrapArtifactFixtures() {
         : mode === "linked-package"
           ? path.join(root, "node_modules/linked-project/ai-source")
           : path.join(packageRoot, "node_modules/@fixture/ai");
-    await write(aiRoot, "package.json", {
-      name: "@fixture/ai",
-      version,
-      type: "module",
-      exports: "./dist/index.js",
+    await writeFiles(aiRoot, {
+      "package.json": { name: "@fixture/ai", version, type: "module", exports: "./dist/index.js" },
+      "dist/index.js": 'export const name = "local-ai";',
     });
-    await write(aiRoot, "dist/index.js", 'export const name = "local-ai";');
     if (mode === "source" || mode === "linked-package") {
       await write(aiRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
       await write(aiRoot, "src/private.ts", "source-only");

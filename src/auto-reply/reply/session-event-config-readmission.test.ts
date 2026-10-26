@@ -14,11 +14,6 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  resolveEmbeddedAttemptToolConstructionPlan,
-} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
@@ -36,6 +31,7 @@ import {
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
+import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
@@ -57,6 +53,7 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
+import { createEventManagedTools } from "./session-event.test-support.js";
 // mock-isolation: Synthetic model decisions; admission, queue and real tool writes stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -115,38 +112,10 @@ async function attemptRealWrite(
     pluginId: "openclaw",
   });
   try {
-    const toolRunContext = buildEmbeddedAttemptToolRunContext({
-      ...params,
-      model:
-        params.provider && params.model
-          ? { provider: params.provider, id: params.model }
-          : undefined,
-    });
-    const construction = resolveEmbeddedAttemptToolConstructionPlan({
-      toolsAllow: toolRunContext.runtimeToolAllowlist,
-    });
-    const tools = applyEmbeddedAttemptToolsAllow(
-      expectDefined(
-        host.capabilities.createToolSurface,
-        "managed tool surface",
-      )({
-        ...toolRunContext,
-        config: params.config,
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: workspace.effectiveWorkspace,
-        cwd: workspace.effectiveCwd,
-        sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-        toolConstructionPlan: {
-          ...construction.codingToolConstructionPlan,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
-      }),
-      construction.runtimeToolAllowlist,
+    const tools = createEventManagedTools(
+      params,
+      workspace,
+      expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
     );
     const write = tools.find((tool) => tool.name === "write");
     if (write) {
@@ -380,6 +349,7 @@ it.for([
             ...(scenario.startsWith("scheduled-")
               ? {
                   scheduledAutomation: {
+                    ...TEST_SCHEDULED_TURN,
                     job: {
                       id: "scheduled-readmission",
                       name: "Scheduled readmission",
@@ -410,7 +380,6 @@ it.for([
                       state: {},
                       inferenceBinding,
                     },
-                    admissionSource: "operator-schedule" as const,
                     onLaneWait: ({ waiting }) => laneStates.push(waiting),
                     operatorAuthority,
                     assertCurrent: () => {
@@ -667,6 +636,7 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
           signal,
         );
         scheduled = runCronSessionTurn({
+          ...TEST_SCHEDULED_TURN,
           ...scope,
           cfg: config,
           job: makeCronJob({
@@ -677,10 +647,8 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
             payload: { kind: "agentTurn", message: "Summarize this synthetic email." },
           }),
           text: "Summarize this synthetic email.",
-          admissionSource: "operator-schedule",
           deliveryAttemptFence: null,
           abortSignal: signal,
-          assertCurrent() {},
           onLaneWait(info) {
             if (info?.waiting) {
               queued.resolve();
@@ -838,6 +806,7 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
             signal,
           );
           scheduled = runCronSessionTurn({
+            ...TEST_SCHEDULED_TURN,
             ...scope,
             cfg: config,
             job: makeCronJob({
@@ -845,10 +814,8 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
               delivery: { mode: scenario === "no-delivery" ? "none" : "announce" },
             }),
             text: "Send the scheduled report",
-            admissionSource: "operator-schedule",
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
             abortSignal: signal,
-            assertCurrent() {},
             onLaneWait(info) {
               if (info?.waiting) {
                 queued.resolve();
@@ -961,9 +928,8 @@ it.for(["transport", "agent", "context-overflow"] as const)(
           abortSignal: signal,
           deliver: failureKind === "transport",
           scheduledAutomation: {
+            ...TEST_SCHEDULED_TURN,
             job: makeCronJob({ sessionTarget: `session:${scope.sessionKey}` }),
-            admissionSource: "operator-schedule",
-            assertCurrent() {},
           },
         });
         try {

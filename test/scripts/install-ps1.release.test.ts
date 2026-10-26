@@ -53,22 +53,6 @@ function toPowerShellSingleQuotedLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function createFailingNodeFixture(scriptSource: string): string {
-  const scriptWithoutEntryPoint = scriptSource.replace(ENTRYPOINT_RE, "");
-  const entrypointLines = extractEntrypointLines(scriptSource);
-  expect(scriptWithoutEntryPoint).not.toBe(scriptSource);
-
-  return [
-    scriptWithoutEntryPoint,
-    "",
-    "function Check-Node { return $false }",
-    "function Install-Node { return $false }",
-    "",
-    ...entrypointLines,
-    "",
-  ].join("\n");
-}
-
 function createNativeUpgradeEnvironment(root: string, usableCommand: boolean): NodeJS.ProcessEnv {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
@@ -200,8 +184,6 @@ describe("install.ps1 failure handling", () => {
     "portable-git-layout",
     "portable-node-tar-fallback",
     "package-manager-node-command-failures",
-    "package-manager-node-next-manager-success",
-    "package-manager-node-entrypoint-refusal",
   ];
   const batchedPowerShellResults = new Map<string, { error: string; ok: boolean }>();
 
@@ -233,12 +215,12 @@ function Invoke-NpmCommand { throw 'unexpected npm invocation' }
 function Invoke-RestMethod {
     param([string]$Uri, [int]$TimeoutSec)
     if ($Uri -ne 'https://nodejs.org/dist/index.json') { throw "unexpected metadata URL: $Uri" }
-    return @([pscustomobject]@{ version = 'v26.1.0'; files = @('win-x64-zip', 'win-arm64-zip') })
+    return @([pscustomobject]@{ version = 'v26.12.1'; files = @('win-x64-zip', 'win-arm64-zip') })
 }
 function Save-InstallerDownload {
     param([string]$Uri, [string]$OutFile)
     if ($script:Scenario -eq 'download') { throw 'fixture download failure' }
-    if ($Uri -eq 'https://nodejs.org/dist/v26.1.0/SHASUMS256.txt') {
+    if ($Uri -eq 'https://nodejs.org/dist/v26.12.1/SHASUMS256.txt') {
         $archive = Get-ChildItem -LiteralPath (Split-Path -Parent $OutFile) -Filter '*.zip' | Select-Object -First 1
         $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash
         if ($script:Scenario -eq 'checksum') { $hash = '0' * 64 }
@@ -246,7 +228,7 @@ function Save-InstallerDownload {
         [IO.File]::WriteAllText($OutFile, "$hash  $name")
         return
     }
-    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.12\.1/node-v26\.12\.1-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
     [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
 }
 function Expand-PortableNodeArchive {
@@ -462,10 +444,12 @@ try {
       "  if ($Arguments[0] -eq 'uninstall') { $script:OldOwnerRemoved = $true; $global:LASTEXITCODE = 0; return }",
       "  throw 'unexpected npm command'",
       "}",
-      "function Install-OpenClawFromGit { return $false }",
+      "function Install-OpenClawFromGit { Write-Output 'pnpm stdout before failure'; return $false }",
+      "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
       "$InstallMethod = 'git'",
       "$NoOnboard = $true",
       "$null = Main",
+      'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
       "if ($script:OldOwnerRemoved) { throw 'failed candidate retired the working npm owner' }",
     ),
     "node-versions": installerFixture(
@@ -483,8 +467,8 @@ try {
     "node-capabilities": installerFixture(
       `$cases = ${toPowerShellSingleQuotedLiteral(
         JSON.stringify([
-          ["v24.19.0", "3.51.3", true, true],
-          ["v24.19.0", "3.51.3", false, false],
+          ["v24.22.1", "3.51.3", true, true],
+          ["v24.22.1", "3.51.3", false, false],
           ["v24.15.0+vendor.1", "3.51.3", true, false],
           ["v26.0.0+vendor.1", "3.51.3", true, false],
           ["v24.15.0", "3.51.3", false, false],
@@ -499,7 +483,7 @@ try {
             "3.51.3": true,
             "3.53.1": true,
             unavailable: false,
-          }).map(([sqlite, expected]) => ["v26.1.0", sqlite, true, expected]),
+          }).map(([sqlite, expected]) => ["v26.12.1", sqlite, true, expected]),
         ]),
       )} | ConvertFrom-Json`,
       String.raw`
@@ -514,7 +498,7 @@ function Get-Command {
   return [pscustomobject]@{ Source = 'Invoke-FixtureNode' }
 }
 foreach ($script:nodeCapabilityCase in $cases) {
-  $script:explicit = $script:nodeCapabilityCase[0] -eq 'v26.1.0'
+  $script:explicit = $script:nodeCapabilityCase[0] -eq 'v26.12.1'
   $actual = if ($script:explicit) { Check-Node -NodePath 'Invoke-FixtureNode' } else { Check-Node }
   if ($actual -ne $script:nodeCapabilityCase[3]) { throw "Node/SQLite case failed: $script:nodeCapabilityCase actual=$actual" }
 }
@@ -718,31 +702,46 @@ foreach ($script:nodeCapabilityCase in $cases) {
 function Get-Command {
     [CmdletBinding()]
     param([string]$Name)
-    if ($Name -eq $script:manager) { return $true }
+    if ($Name -eq $script:manager -or ($script:manager -eq 'all' -and $Name -in @('winget', 'choco', 'scoop'))) { return $true }
     return $null
 }
 filter Out-Host { }
 function Invoke-FixtureManager {
+    param([string]$Name)
     $script:attempts += 1
+    $script:events.Add($Name)
     Write-Output 'package-manager output must not become a success result'
+    if ($script:manager -eq 'all') {
+        if ($Name -eq 'scoop') { throw 'Scoop must not run after supported Node is found' }
+        $script:portableReady = $Name -eq 'choco'
+        $global:LASTEXITCODE = if ($script:portableReady) { 0 } else { 17 }
+        return
+    }
     if ($script:failure -eq 'throw') { throw 'fixture package-manager failure' }
     $global:LASTEXITCODE = if ($script:failure -eq 'exit') { 17 } else { 0 }
 }
-function winget { Invoke-FixtureManager }
-function choco { Invoke-FixtureManager }
-function scoop { Invoke-FixtureManager }
-function Refresh-ProcessPath { $script:refreshes += 1 }
-function Add-InstalledNodeToProcessPath { $script:discoveries += 1; return $true }
-function Check-Node { return $script:portableReady }
-function Install-PortableNode { $script:portableCalls += 1; $script:portableReady = $true }
+function winget { Invoke-FixtureManager 'winget' }
+function choco { Invoke-FixtureManager 'choco' }
+function scoop { Invoke-FixtureManager 'scoop' }
+function Refresh-ProcessPath { $script:refreshes += 1; $script:events.Add('refresh') }
+function Add-InstalledNodeToProcessPath { $script:discoveries += 1; $script:events.Add('discover'); return ($script:manager -ne 'all') }
+function Check-Node { $script:events.Add('check'); return $script:portableReady }
+function Install-PortableNode {
+    $script:portableCalls += 1
+    if ($script:manager -eq 'all') { throw 'portable fallback must not run after supported Node is found' }
+    if ($script:portableFailure -eq 'throw') { throw 'fixture portable failure' }
+    $script:portableReady = $script:portableFailure -ne 'unsupported'
+}
+function Reset-ManagerFixture {
+    $script:events = New-Object System.Collections.Generic.List[string]
+    $script:attempts = $script:refreshes = $script:discoveries = $script:portableCalls = 0
+    $script:portableReady = $false
+    $script:portableFailure = ''
+    $script:InstallExitCode = $global:LASTEXITCODE = 0
+}
 foreach ($script:manager in @('winget', 'choco', 'scoop')) {
     foreach ($script:failure in @('exit', 'throw', 'unsupported')) {
-        $script:attempts = 0
-        $script:refreshes = 0
-        $script:discoveries = 0
-        $script:portableCalls = 0
-        $script:portableReady = $false
-        $global:LASTEXITCODE = 0
+        Reset-ManagerFixture
         $result = @(Install-Node)
         if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) {
             throw "manager=$script:manager failure=$script:failure result=$result"
@@ -755,55 +754,23 @@ foreach ($script:manager in @('winget', 'choco', 'scoop')) {
         if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
     }
 }
-`,
-    ),
-    "package-manager-node-next-manager-success": installerFixture(
-      String.raw`
-$script:events = New-Object System.Collections.Generic.List[string]
-$script:ready = $false
-function Get-Command {
-    [CmdletBinding()]
-    param([string]$Name)
-    if ($Name -in @('winget', 'choco', 'scoop')) { return $true }
-    return $null
-}
-filter Out-Host { }
-function winget { $script:events.Add('winget'); $global:LASTEXITCODE = 17; Write-Output 'winget failed' }
-function choco { $script:events.Add('choco'); $global:LASTEXITCODE = 0; $script:ready = $true; Write-Output 'choco success' }
-function scoop { throw 'Scoop must not run after supported Node is found' }
-function Refresh-ProcessPath { $script:events.Add('refresh') }
-function Add-InstalledNodeToProcessPath { $script:events.Add('discover'); return $false }
-function Check-Node { $script:events.Add('check'); return $script:ready }
-function Install-PortableNode { throw 'portable fallback must not run after supported Node is found' }
+Reset-ManagerFixture
+$script:manager = 'all'
 $result = @(Install-Node)
 if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) { throw "result=$result" }
 if (($script:events -join '|') -ne 'winget|refresh|discover|check|choco|refresh|check') {
     throw "events=$($script:events -join '|')"
 }
-`,
-    ),
-    "package-manager-node-entrypoint-refusal": installerFixture(
-      String.raw`
+${installerFunctions(["Add-InstalledNodeToProcessPath"])}
+Reset-ManagerFixture
+$script:manager = 'choco'
+$script:failure = 'exit'
 $NodeOnly = $false
 $NodePrefix = ''
 $DryRun = $false
 $InstallMethod = 'npm'
 $NoOnboard = $true
 function Check-ExistingOpenClaw { return $false }
-function Get-Command {
-    [CmdletBinding()]
-    param([string]$Name)
-    if ($Name -eq 'choco') { return $true }
-    return $null
-}
-filter Out-Host { }
-function choco { $global:LASTEXITCODE = 17; Write-Output 'fixture choco failure' }
-function Refresh-ProcessPath { }
-function Check-Node { return $false }
-function Install-PortableNode {
-    $script:portableCalls += 1
-    if ($script:portableFailure -eq 'throw') { throw 'fixture portable failure' }
-}
 function Install-OpenClaw { throw 'package install must not run without a supported Node' }
 foreach ($script:portableFailure in @('throw', 'unsupported')) {
     $script:InstallExitCode = 0
@@ -823,21 +790,6 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
     if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
 }
 `,
-    ),
-    "noisy-git-failure": installerFixture(
-      "function Check-Node { return $true }",
-      "function Check-ExistingOpenClaw { return $false }",
-      "function Get-NpmCommandPath { return $null }",
-      "function Install-OpenClawFromGit {",
-      "  Write-Output 'pnpm stdout before failure'",
-      "  return $false",
-      "}",
-      "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
-      "$InstallMethod = 'git'",
-      "$GitDir = 'C:\\\\openclaw-test'",
-      "$NoOnboard = $true",
-      "$null = Main",
-      'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
     ),
     "quiet-main-success": installerFixture(
       "function Check-Node { return $true }",
@@ -1242,28 +1194,18 @@ try {
     }
   });
 
-  const fixtureGroups: Record<string, string[]> = {
-    "package-manager-node-command-failures": [
-      "package-manager-node-command-failures",
-      "package-manager-node-next-manager-success",
-      "package-manager-node-entrypoint-refusal",
-    ],
-  };
-  const groupedNames = new Set(Object.values(fixtureGroups).flatMap((names) => names.slice(1)));
-  for (const name of Object.keys(cases).filter((fixtureName) => !groupedNames.has(fixtureName))) {
+  for (const name of Object.keys(cases)) {
     const test =
       windowsOnlyFixtures.has(name) && process.platform !== "win32" ? it.skip : runIfPowerShell;
     test(name, () => {
-      for (const fixtureName of fixtureGroups[name] ?? [name]) {
-        expect(batchedPowerShellResults.get(fixtureName)).toEqual({ error: "", ok: true });
-        if (legacyFixtureNames.includes(fixtureName) && process.platform === "win32") {
-          expect(bootstrapShells).toContain("powershell");
-          for (const engine of bootstrapShells.filter((candidate) => candidate !== powershell)) {
-            expect(batchedPowerShellResults.get(`${fixtureName}:${engine}`)).toEqual({
-              error: "",
-              ok: true,
-            });
-          }
+      expect(batchedPowerShellResults.get(name)).toEqual({ error: "", ok: true });
+      if (legacyFixtureNames.includes(name) && process.platform === "win32") {
+        expect(bootstrapShells).toContain("powershell");
+        for (const engine of bootstrapShells.filter((candidate) => candidate !== powershell)) {
+          expect(batchedPowerShellResults.get(`${name}:${engine}`)).toEqual({
+            error: "",
+            ok: true,
+          });
         }
       }
     });
@@ -1430,9 +1372,7 @@ try {
     "fails install when interactive onboarding exits non-zero",
     async () => {
       const result = await runFixtureFile(
-        [
-          source.replace(ENTRYPOINT_RE, ""),
-          "",
+        installerFixture(
           "function Check-Node { return $true }",
           "function Check-ExistingOpenClaw { return $false }",
           "function Get-NpmCommandPath { return 'npm.cmd' }",
@@ -1451,10 +1391,8 @@ try {
           "}",
           "$InstallMethod = 'npm'",
           "$NoOnboard = $false",
-          "",
-          ...extractEntrypointLines(source),
-          "",
-        ].join("\n"),
+          ...entrypointLines,
+        ),
       );
       expect(result.status).toBe(1);
       expect(`${result.stdout}\n${result.stderr}`).toContain(
@@ -1464,7 +1402,13 @@ try {
   );
 
   runConcurrentIfPowerShell("exits non-zero when run as a script file", async () => {
-    const result = await runFixtureFile(createFailingNodeFixture(source));
+    const result = await runFixtureFile(
+      installerFixture(
+        "function Check-Node { return $false }",
+        "function Install-Node { return $false }",
+        ...entrypointLines,
+      ),
+    );
     expect(result.status).toBe(1);
   });
 
@@ -1512,7 +1456,8 @@ try {
         );
         const preflight = runNative(["-File", preflightPath], preflightRoot);
         const prerequisite = `${engine} requires usable Node/SQLite: ${preflight.stdout}\n${preflight.stderr}`;
-        expect(preflight, prerequisite).toMatchObject({ error: undefined, status: 0 });
+        expect(preflight.error, prerequisite).toBeUndefined();
+        expect(preflight.status, prerequisite).toBe(0);
         for (const usableCommand of [false, true]) {
           for (const mode of ["file", "scriptblock"]) {
             const root = harness.createTempDir("openclaw-native-upgrade-é-");
@@ -1692,7 +1637,7 @@ function Get-Command {
 function Invoke-FixtureNode {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '-v') {
-        return 'v26.1.0'
+        return 'v26.12.1'
     }
     $probe = @($input) -join [Environment]::NewLine
     if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {

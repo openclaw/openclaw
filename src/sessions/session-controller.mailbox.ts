@@ -235,8 +235,6 @@ type SessionControllerSourceReservation = {
   policy: QueueSettings;
   adapter?: SessionControllerSourceAdapter;
   target?: SessionTarget;
-  /** Runs when the mailbox claims a newly created input; it owns and must release that claim. */
-  start?: (claim: SessionControllerMailboxClaim) => void;
 };
 
 /** Reserves identity/custody before attachment or prompt preparation, without owning a turn. */
@@ -346,10 +344,6 @@ export function reserveOrJoinSessionControllerSource(
     abort();
   } else {
     signal.addEventListener("abort", abort, { once: true });
-  }
-  if (params.start) {
-    // Retirement before the claim settles custody; the rejected claim request has no other observer.
-    void claimSessionControllerTask(input, params.start).catch(() => {});
   }
   return { input, created: true };
 }

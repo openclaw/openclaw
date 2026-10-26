@@ -85,15 +85,13 @@ export function createChatPaneSendActions(
   };
 }
 
-type SelectedSessionProjectionState = {
-  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
-  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
-  selectedChatSessionArchived: boolean;
-  selectedChatSessionIncognito: boolean;
-};
-
 export function applySelectedSessionProjection(
-  state: SelectedSessionProjectionState,
+  state: {
+    chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
+    chatQueueModeOverride?: GatewaySessionRow["queueMode"];
+    selectedChatSessionArchived: boolean;
+    selectedChatSessionIncognito: boolean;
+  },
   session: GatewaySessionRow | undefined,
 ): session is GatewaySessionRow {
   if (!session) {
@@ -170,11 +168,13 @@ export function chatSubmitState(
     ? chatSendPendingReason({ client: state.client, connected: state.connected }, state.sessionKey)
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
+  const routePending = state.isRouteSessionPending?.() === true;
   return {
-    ...(connectionPendingReason && !controlCommand ? { canSend: false } : {}),
+    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
     submitDisabledReason:
-      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
-    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending:
+      routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
     },

@@ -25,6 +25,20 @@ import { waitForCronExecutionIdle } from "./service/execution-idle.js";
 import { createCronServiceState } from "./service/state.js";
 
 const operations: ReplyOperation[] = [];
+function reply(
+  sessionKey: string,
+  sessionId: string,
+  turnKind: "visible" | "queued_followup" = "visible",
+) {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    resetTriggered: false,
+    turnKind,
+  });
+  operations.push(operation);
+  return operation;
+}
 afterEach(() => {
   resetCronActiveJobs();
   for (const operation of operations.splice(0)) {
@@ -44,27 +58,14 @@ describe("idle-only execution admission", () => {
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       isExecutionIdle: (job, ownSessionKey, ownReplyOperation) =>
         isCronExecutionIdle({}, job, "main", ownSessionKey, ownReplyOperation),
     });
-    const foreground = createReplyOperation({
-      sessionKey: "agent:main:foreground",
-      sessionId: "foreground",
-      resetTriggered: false,
-      turnKind: "visible",
-    });
-    operations.push(foreground);
+    const foreground = reply("agent:main:foreground", "foreground");
     const owners = ["first", "second"].map((id) => {
       const sessionKey = `agent:main:on-exit:${id}`;
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: id,
-        resetTriggered: false,
-        turnKind: "queued_followup",
-      });
-      operations.push(operation);
+      const operation = reply(sessionKey, id, "queued_followup");
       const job = makeCronJob({
         id,
         agentId: "main",
@@ -164,19 +165,8 @@ describe("idle-only execution admission", () => {
   it.for(["peer", "own"] as const)(
     "keeps a %s successor at a waiting session key visible to idle admission",
     async (replacement) => {
-      const own = createReplyOperation({
-        sessionKey: "agent:main:own-wait",
-        sessionId: "own-wait",
-        resetTriggered: false,
-        turnKind: "queued_followup",
-      });
-      const peer = createReplyOperation({
-        sessionKey: "agent:main:peer-wait",
-        sessionId: "peer-wait",
-        resetTriggered: false,
-        turnKind: "queued_followup",
-      });
-      operations.push(own, peer);
+      const own = reply("agent:main:own-wait", "own-wait", "queued_followup");
+      const peer = reply("agent:main:peer-wait", "peer-wait", "queued_followup");
       const ownMarker = markCronJobActive(idleJob.id, { agentId: "main" });
       const peerMarker = markCronJobActive("peer", { agentId: "main" });
       const endOwnWait = markCronJobWaitingForIdle(ownMarker, own);
@@ -185,14 +175,7 @@ describe("idle-only execution admission", () => {
         expect(isCronExecutionIdle({}, idleJob, "main", own.key, own)).toBe(true);
         const previous = replacement === "own" ? own : peer;
         previous.complete();
-        operations.push(
-          createReplyOperation({
-            sessionKey: previous.key,
-            sessionId: `foreground-${replacement}`,
-            resetTriggered: false,
-            turnKind: "visible",
-          }),
-        );
+        reply(previous.key, `foreground-${replacement}`);
         expect(isCronExecutionIdle({}, idleJob, "main", own.key, own)).toBe(false);
         expect(hasActiveCronJobsForAgent("main")).toBe(true);
       } finally {
@@ -201,20 +184,6 @@ describe("idle-only execution admission", () => {
       }
     },
   );
-
-  it("observes foreground admission before backend registration, including another conversation", () => {
-    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(true);
-    operations.push(
-      createReplyOperation({
-        sessionKey: "agent:main:chat:foreground",
-        sessionId: "foreground",
-        resetTriggered: false,
-        turnKind: "visible",
-      }),
-    );
-    expect(isCronExecutionIdle({}, idleJob, "main")).toBe(false);
-    expect(operations[0]!.abortSignal.aborted).toBe(false);
-  });
 
   it("waits for other same-agent automation work without treating itself or siblings as busy", () => {
     const own = markCronJobActive(idleJob.id, { agentId: "main" });
@@ -242,30 +211,11 @@ describe("idle-only execution admission", () => {
 
   it("excludes only its own controller operation at the runner-entry recheck", () => {
     const ownSessionKey = "agent:main:cron:check:run:one";
-    const own = createReplyOperation({
-      sessionKey: ownSessionKey,
-      sessionId: "native-own",
-      resetTriggered: false,
-      turnKind: "visible",
-    });
-    operations.push(
-      own,
-      createReplyOperation({
-        sessionKey: "agent:other:main",
-        sessionId: "native-other",
-        resetTriggered: false,
-        turnKind: "visible",
-      }),
-    );
+    const own = reply(ownSessionKey, "native-own");
+    reply("agent:other:main", "native-other");
     expect(isCronExecutionIdle({}, idleJob, "main", ownSessionKey, own)).toBe(true);
-    operations.push(
-      createReplyOperation({
-        sessionKey: "agent:main:chat:foreground",
-        sessionId: "native-foreground",
-        resetTriggered: false,
-        turnKind: "visible",
-      }),
-    );
+    const foreground = reply("agent:main:chat:foreground", "native-foreground");
     expect(isCronExecutionIdle({}, idleJob, "main", ownSessionKey, own)).toBe(false);
+    expect(foreground.abortSignal.aborted).toBe(false);
   });
 });

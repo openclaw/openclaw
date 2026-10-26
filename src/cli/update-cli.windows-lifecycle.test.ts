@@ -58,10 +58,7 @@ import {
   updateFinalizeCommand,
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
-import {
-  recoveryVerificationStep,
-  registerFailureSelectorTests,
-} from "./update-cli/update-cli-failure-recovery.test-support.js";
+import { registerFailureSelectorTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
   writeNpmPackageInstall,
@@ -392,25 +389,31 @@ describe("update-cli", () => {
         version: "1.0.0",
       });
       expect(serviceRestart).not.toHaveBeenCalled();
+      expect(freshRestartCalls()).toEqual([]);
       expect(triageCommand).toHaveBeenCalledOnce();
       expect(reportedError).toEqual(new ExitError(1));
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(triageCommand.mock.calls[0]?.[1]?.recovery).toMatchObject({
+      const recovery = triageCommand.mock.calls[0]?.[1]?.recovery;
+      // Native preparation failed before a service stop or package activation;
+      // triage retains the autostart error without claiming verified readiness.
+      expect(recovery).toHaveProperty("updateFailure.result.verification", {});
+      expect(recovery).toMatchObject({
         target,
         updateFailure: {
           result: {
             status: "error",
             recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-            verification: {
-              runningVersion: "1.0.0",
-              versionMatch: true,
-              readyz: true,
-              settled: true,
-            },
             steps: [
               expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
               expect.objectContaining({ stderrTail: expect.stringContaining("enable denied") }),
-              recoveryVerificationStep(undefined, root),
+              {
+                name: "gateway recovery observation",
+                command: "gateway verification",
+                cwd: root,
+                durationMs: 0,
+                exitCode: 0,
+                diagnostics: [expect.stringContaining("No service was stopped or started.")],
+              },
             ],
           },
         },
@@ -709,7 +712,7 @@ describe("update-cli", () => {
         async (
           _env,
           options: Parameters<
-            typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate
+            typeof import("../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate
           >[1],
         ) => {
           await options?.beforeMutation?.();

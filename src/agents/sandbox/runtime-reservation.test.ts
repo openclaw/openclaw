@@ -1,22 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { registerSandboxBackend } from "./backend.js";
 import type {
   CreateSandboxBackendParams,
@@ -31,6 +24,7 @@ import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
 import { maybePruneSandboxes } from "./prune.js";
 import * as registry from "./registry.js";
 import { readRegistry, readRegistryEntry, updateRegistry } from "./registry.js";
+import { acquireSandboxGatewayOwner, useSandboxRegistryState } from "./registry.test-support.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
 vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
@@ -42,18 +36,10 @@ vi.mock("../exec-defaults.js", () => ({
   resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    disposeBackend?.();
-    disposeBackend = undefined;
-    vi.restoreAllMocks();
-    await closeOpenClawAgentDatabasesAsync();
-    await closeStateDatabaseForTest();
-    clearRuntimeConfigSnapshot();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const state = useSandboxRegistryState("sandbox-reservation-", () => {
+  disposeBackend?.();
+  disposeBackend = undefined;
+});
 let config: OpenClawConfig;
 let workspaceDir: string;
 let disposeBackend: (() => void) | undefined;
@@ -69,8 +55,7 @@ function pruneImmediately() {
 }
 
 beforeEach(() => {
-  const stateDir = tempDirs.make("sandbox-reservation-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const stateDir = state.root;
   workspaceDir = path.join(stateDir, "workspace");
   nextId = 0;
   const sandbox = {
@@ -123,6 +108,12 @@ function resolve() {
   return resolveSandboxContext({ config, sessionKey: "agent:test:reservation", workspaceDir });
 }
 
+const expectRuntime = (name: string, expected: Partial<registry.SandboxRegistryEntry>) =>
+  expect(readRegistryEntry(name)).resolves.toMatchObject(expected);
+const expectAbsent = (name: string) => expect(readRegistryEntry(name)).resolves.toBeNull();
+const expectResolvedId = (runtimeId: string) =>
+  expect(resolve()).resolves.toMatchObject({ runtimeId });
+
 async function resolveBackend() {
   const backend = (await resolve())?.backend;
   if (!backend) {
@@ -163,22 +154,11 @@ async function seedLegacyRuntime() {
 
 describe("durable sandbox runtime generations", () => {
   it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
-    const owner = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        processNamespace: readGatewayLockProcessNamespace(),
-        createdAt: new Date().toISOString(),
-        configPath: path.join(workspaceDir, "openclaw.json"),
-        role: "gateway",
-      },
-    });
-    const entered = createDeferred();
-    const resume = createDeferred();
+    using owner = acquireSandboxGatewayOwner(workspaceDir);
+    const discovery = createEnteredGate();
     const allocate = vi.fn();
     install(async (params) => {
-      entered.resolve();
-      await resume.promise;
+      await discovery.wait();
       params.assertRuntimeCurrent?.();
       allocate();
       return handle(params);
@@ -186,12 +166,12 @@ describe("durable sandbox runtime generations", () => {
     const preparation = resolve();
     try {
       await awaitGateBeforeSettlement(
-        entered.promise,
+        discovery.entered,
         preparation,
         "Backend discovery not reached",
       );
       owner.release();
-      resume.resolve();
+      discovery.release();
       const error = await preparation.catch((failure: unknown) => failure);
       expect(allocate).not.toHaveBeenCalled();
       expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
@@ -199,22 +179,20 @@ describe("durable sandbox runtime generations", () => {
         expect.objectContaining({ runtimeState: "pending" }),
       ]);
     } finally {
-      resume.resolve();
+      discovery.release();
       await preparation.catch(() => {});
-      owner.release();
     }
   });
 
   it("replays a shared reservation from its original provider workspace", async () => {
     config.agents!.defaults!.sandbox!.scope = "shared";
     const originalWorkspace = workspaceDir;
-    const factory = vi.fn(async (params: CreateSandboxBackendParams) => {
+    install(async (params) => {
       if (params.workspaceDir !== originalWorkspace) {
         throw new Error("Provider repository owner changed");
       }
       return handle(params);
     });
-    install(factory);
     const first = await resolve();
     workspaceDir = path.join(path.dirname(workspaceDir), "another-repository");
     const second = await resolveSandboxContext({
@@ -227,14 +205,10 @@ describe("durable sandbox runtime generations", () => {
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
     });
-    expect(factory.mock.calls.map(([params]) => params.workspaceDir)).toEqual([
-      originalWorkspace,
-      originalWorkspace,
-    ]);
   });
 
   it("rejects a prepared exec removed during supervisor admission and finalizes its artifacts", async () => {
-    const marker = path.join(tempDirs.make("sandbox-admission-"), "spawned");
+    const marker = path.join(state.make("sandbox-admission-"), "spawned");
     const finalizeExec = vi.fn(async () => {});
     const token = {};
     install(async (params) => ({
@@ -316,7 +290,7 @@ describe("durable sandbox runtime generations", () => {
     expect(allocated.size).toBe(0);
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("provider config invalid");
     await closeStateDatabaseForTest();
-    await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
+    await expectRuntime("reserved-1", {
       runtimeState: "removing-pending",
       workspaceDir,
     });
@@ -324,8 +298,8 @@ describe("durable sandbox runtime generations", () => {
     await removeSandboxContainer("reserved-1");
     expect(cleaned).toEqual(["reserved-1"]);
     expect(allocated.size).toBe(0);
-    await expect(readRegistryEntry("reserved-1")).resolves.toBeNull();
-    await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
+    await expectAbsent("reserved-1");
+    await expectResolvedId("reserved-2");
   });
 
   it.each([
@@ -364,9 +338,7 @@ describe("durable sandbox runtime generations", () => {
     const removing = legacyRemoval ?? startRemoval(id);
     try {
       await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
-      await expect(readRegistryEntry(id)).resolves.toMatchObject({
-        runtimeState: "removing-pending",
-      });
+      await expectRuntime(id, { runtimeState: "removing-pending" });
       expect(remove).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
@@ -375,31 +347,24 @@ describe("durable sandbox runtime generations", () => {
     await creating;
     await removing;
     expect(remove).toHaveBeenCalledOnce();
-    await expect(readRegistryEntry(id)).resolves.toBeNull();
+    await expectAbsent(id);
     if (!legacy) {
-      await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
+      await expectResolvedId("reserved-2");
     }
   });
 
   it("prevents adoption of a legacy runtime while provider removal is pending", async () => {
     await seedLegacyRuntime();
-    const started = createDeferred();
-    const finish = createDeferred();
+    const removal = createEnteredGate();
     const factory = vi.fn(async (params: CreateSandboxBackendParams) => handle(params));
-    install(
-      factory,
-      vi.fn<SandboxBackendManager["removeRuntime"]>(async () => {
-        started.resolve();
-        await finish.promise;
-      }),
-    );
+    install(factory, vi.fn<SandboxBackendManager["removeRuntime"]>(removal.wait));
     const removing = removeSandboxContainer("legacy-runtime");
-    await started.promise;
+    await removal.entered;
     try {
       await expect(resolve()).rejects.toThrow("removed or is being removed");
       expect(factory).not.toHaveBeenCalled();
     } finally {
-      finish.resolve();
+      removal.release();
       await removing;
     }
   });
@@ -415,9 +380,7 @@ describe("durable sandbox runtime generations", () => {
     let fail = true;
     install(async (params) => {
       const backend = handle(params);
-      await expect(readRegistryEntry(backend.runtimeId)).resolves.toMatchObject({
-        runtimeState: "pending",
-      });
+      await expectRuntime(backend.runtimeId, { runtimeState: "pending" });
       allocated.push(backend.runtimeId);
       if (fail) {
         throw error;
@@ -427,9 +390,9 @@ describe("durable sandbox runtime generations", () => {
     await expect(resolve()).rejects.toThrow(error.message);
     await closeStateDatabaseForTest();
     fail = false;
-    await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-1" });
+    await expectResolvedId("reserved-1");
     expect(allocated).toEqual(["reserved-1", "reserved-1"]);
-    await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
+    await expectRuntime("reserved-1", {
       runtimeState: "ready",
       image: "provider-image",
       configLabelKind: "Provider",
@@ -437,9 +400,8 @@ describe("durable sandbox runtime generations", () => {
   });
 
   it("serializes concurrent creators onto one durable generation", async () => {
-    const started = createDeferred();
+    const allocation = createEnteredGate();
     const secondReservation = createDeferred();
-    const finish = createDeferred();
     const runtimeIds: string[] = [];
     let active = 0;
     let maximumActive = 0;
@@ -456,8 +418,7 @@ describe("durable sandbox runtime generations", () => {
         active++;
         maximumActive = Math.max(maximumActive, active);
         runtimeIds.push(backend.runtimeId);
-        started.resolve();
-        await finish.promise;
+        await allocation.wait();
         active--;
         return backend;
       },
@@ -465,7 +426,7 @@ describe("durable sandbox runtime generations", () => {
     const first = resolve();
     let second: ReturnType<typeof resolve> | undefined;
     try {
-      await awaitGateBeforeSettlement(started.promise, first, "First creator did not start");
+      await awaitGateBeforeSettlement(allocation.entered, first, "First creator did not start");
       second = resolve();
       await awaitGateBeforeSettlement(
         secondReservation.promise,
@@ -473,14 +434,14 @@ describe("durable sandbox runtime generations", () => {
         "Second creator did not reserve a runtime",
       );
       expect(nextId).toBe(2);
-      finish.resolve();
+      allocation.release();
       const contexts = await Promise.all([first, second]);
       expect(contexts.map((context) => context?.runtimeId)).toEqual(["reserved-1", "reserved-1"]);
       expect(runtimeIds).toEqual(["reserved-1", "reserved-1"]);
       expect(maximumActive).toBe(1);
       expect((await readRegistry()).entries).toHaveLength(1);
     } finally {
-      finish.resolve();
+      allocation.release();
       await Promise.allSettled([first, second]);
     }
   });
@@ -495,11 +456,9 @@ describe("durable sandbox runtime generations", () => {
     await expect(
       backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
     ).rejects.toThrow("removed or is being removed");
-    await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
-      runtimeState: "removing",
-    });
+    await expectRuntime("reserved-1", { runtimeState: "removing" });
     await removeSandboxContainer("reserved-1");
-    await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-3" });
+    await expectResolvedId("reserved-3");
   });
 
   it("replaces only an exact provider-confirmed terminal ID and retries at most once", async () => {

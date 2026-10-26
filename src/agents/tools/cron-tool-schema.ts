@@ -1,6 +1,10 @@
 /** Model-facing schema and input validation for the cron tool. */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { Type, type TSchema } from "typebox";
+import {
+  AutomationOutcomeSchema,
+  AutomationResultSummarySchema,
+} from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
@@ -12,6 +16,7 @@ import {
   optionalStringEnum,
   stringEnum,
 } from "../schema/typebox.js";
+import { CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
 export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
@@ -32,12 +37,10 @@ const CRON_ACTIONS = [
   "run",
   "runs",
   "wake",
+  "bind",
 ] as const;
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
-
-// Scheduler status exposes global metadata; recovery inspects caller-visible records only.
-export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs"];
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
@@ -54,6 +57,7 @@ type CronToolSchemaOptions = {
   readOnly?: boolean;
   agentSessionKey?: string;
   management?: "only" | "also";
+  allowCommandJobs?: boolean;
   selfRemoveOnly?: boolean;
   activeRun?: boolean;
   nextCheckEnabled?: boolean;
@@ -366,6 +370,7 @@ const cronToolSchemas = createCachedToolSchema({
     JSON.stringify([
       options?.triggersEnabled !== false,
       options?.management ?? null,
+      options?.allowCommandJobs !== false,
       options?.selfRemoveOnly === true,
       options?.readOnly === true,
       options?.activeRun === true,
@@ -410,7 +415,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             { additionalProperties: false },
           ),
         ),
-        schedule: createCronScheduleSchema({ triggersEnabled, management }),
+        schedule: createCronScheduleSchema({
+          triggersEnabled,
+          management: management && options?.allowCommandJobs !== false,
+        }),
         pacing: createCronPacingSchema(),
         activeHours: Type.Optional(
           Type.Union([
@@ -433,7 +441,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
-        payload: createCronPayloadSchema({ triggersEnabled, management }),
+        payload: createCronPayloadSchema({
+          triggersEnabled,
+          management: management && options?.allowCommandJobs !== false,
+        }),
         delivery: createCronDeliverySchema(),
         // Session-scoped updates reject retargeting; do not advertise it to the model.
         ...(management || !options?.agentSessionKey?.trim()
@@ -493,8 +504,8 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       id: Type.Optional(Type.String()),
       content: Type.Optional(Type.Union([Type.String({ maxLength: 262144 }), Type.Null()])),
       expectedRevision: optionalNonNegativeIntegerSchema(),
-      outcome: optionalStringEnum(["no_change", "progress", "done", "blocked", "needs_attention"]),
-      summary: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+      outcome: Type.Optional(AutomationOutcomeSchema),
+      summary: Type.Optional(AutomationResultSummarySchema),
       in: Type.Optional(
         Type.String({
           description: 'Relative duration for action="next_check" (for example, "15m")',

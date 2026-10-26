@@ -24,17 +24,12 @@ import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import { SessionWorkStartChangedError } from "./work-start-error.js";
-export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
 export { persistCompactionBoundaryWithSessionEntryAsync } from "./session-accessor.sqlite-compaction-runtime.js";
 export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
-export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-exact-read.js";
 export { resolveSessionKeyBySessionIdAsync as resolveTranscriptSessionKeyBySessionIdAsync } from "./session-accessor.transcript-target.js";
 export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
-export {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationAtSync,
-  readTranscriptMutationStateSync,
-} from "./session-accessor.sqlite-metadata-read.js";
+export { readTranscriptMutationAtSync } from "./session-accessor.sqlite-transcript-admitted-read.js";
 export {
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,

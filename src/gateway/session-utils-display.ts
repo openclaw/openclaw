@@ -18,7 +18,10 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../config/sessions.js";
 import { buildGroupDisplayName, buildGroupDisplayTitle } from "../config/sessions/group-display.js";
-import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
+import {
+  type prepareProjectedAgentRunProgressState,
+  resolveProjectedAgentRunProgressState,
+} from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
@@ -42,6 +45,19 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
     return groupTitle;
   }
   const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
+  const origin = sessionDeliveryOrigin(entry);
+  const privateTelegramTopicTitle =
+    channel === "telegram" &&
+    !isGroupSession &&
+    origin?.provider === "telegram" &&
+    origin.chatType === "direct" &&
+    origin.threadId != null &&
+    normalizeOptionalString(entry?.topicName) !== undefined
+      ? buildGroupDisplayTitle({ topicName: entry?.topicName })
+      : undefined;
+  if (privateTelegramTopicTitle !== undefined) {
+    return privateTelegramTopicTitle;
+  }
   const id = parsed?.id;
   const compactGroupFallback =
     isGroupSession && channel
@@ -70,7 +86,6 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   if (parseAgentSessionKey(key)?.rest.startsWith("dashboard:")) {
     return undefined;
   }
-  const origin = sessionDeliveryOrigin(entry);
   const originLabel = origin?.label;
   const normalizedOriginFrom = normalizeOptionalString(origin?.from);
   const routeIdentityTail = normalizedOriginFrom?.split(":").at(-1);
@@ -99,6 +114,7 @@ export function resolveGatewaySessionKind(key: string, entry?: SessionEntry) {
 
 export function projectGatewaySessionRunState(params: {
   key: string;
+  projectRunProgress?: ReturnType<typeof prepareProjectedAgentRunProgressState>;
   parsedKey?: ReturnType<typeof parseAgentSessionKey>;
   entry?: SessionEntry;
   now: number;
@@ -120,14 +136,16 @@ export function projectGatewaySessionRunState(params: {
     subagentRuns.countActiveDescendantRuns(key) > 0 ||
     ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
       rowContext?.projectedAgentRuns !== undefined &&
-      resolveProjectedAgentRunProgressState({
-        sessionKeys: [key],
-        sessionId: entry?.sessionId,
-        agentId:
-          (params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey)
-            ?.agentId ?? "",
-        index: rowContext.projectedAgentRuns,
-      }) !== undefined) ||
+      (params.projectRunProgress
+        ? params.projectRunProgress(rowContext.projectedAgentRuns)
+        : resolveProjectedAgentRunProgressState({
+            sessionKeys: [key],
+            sessionId: entry?.sessionId,
+            agentId:
+              (params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey)
+                ?.agentId ?? "",
+            index: rowContext.projectedAgentRuns,
+          })) !== undefined) ||
     rowContext?.projectedSubagentActivity?.has(key) === true;
   const fields: Pick<
     GatewaySessionRow,

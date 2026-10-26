@@ -23,7 +23,7 @@ import { isRecord } from "./string-coerce-runtime.js";
 
 type Context = Parameters<DecisionProviderV2["evaluate"]>[1];
 // Wire limits shared by native and router transports.
-const maxQuestions = 200;
+const maxQuestions = 400;
 const maxChoiceAlternatives = 255;
 
 function text(value: DecisionEntry | undefined): string {

@@ -31,9 +31,11 @@ export type {
 export { detectSetupInference, listManualSetupInferenceOptions } from "./setup-inference-detect.js";
 export { activateSetupInference } from "./setup-inference-activate.js";
 export {
-  completeSetupInference,
-  completeSetupInferenceConfig,
   resolvePersistentApplyInference,
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
+export {
+  completeSetupInference,
+  completeSetupInferenceConfig,
+} from "./setup-inference-completion.js";

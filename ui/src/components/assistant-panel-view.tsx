@@ -14,7 +14,7 @@ import { LazyViewError } from "./solid/lazy-view-error.tsx";
 import { askBrandLabel } from "./theme-brand-label.ts";
 
 // Reuse the resolved renderer across context-only remounts of the same host.
-const Content = lazy(() => import("./assistant-panel-content.ts"), {
+const Content = lazy(() => import("./assistant-panel-content-solid.tsx"), {
   export: "AssistantPanelContent",
 });
 

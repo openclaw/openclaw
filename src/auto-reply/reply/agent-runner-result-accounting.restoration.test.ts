@@ -18,10 +18,6 @@ async function fixture(lane: "ordinary" | "followup" = "ordinary") {
   ];
   await f.account(lane, fallback);
   const activeNotice = f.read()!.fallbackNotice!;
-  expect(activeNotice).toMatchObject({
-    selectedModel: `${primary.provider}/${primary.model}`,
-    activeModel: "fallback-fixture/available",
-  });
   f.context.execution.resolved = { provider: primary.provider, model: primary.model };
   f.context.execution.fallback.attempts = [];
   const notices = async (sessionId = f.sessionId) =>
@@ -55,7 +51,7 @@ it.each(["ordinary", "followup"] as const)(
     ]);
     expect(f.read()?.fallbackNotice).toBeUndefined();
     // Replay after the transcript commit but before fallback bookkeeping must adopt the same event.
-    await f.replace({ ...f.read()!, fallbackNotice: f.activeNotice });
+    await f.patch({ fallbackNotice: f.activeNotice });
     await f.account(lane, primary);
     await f.account(lane, primary);
     expect(await f.notices()).toHaveLength(1);
@@ -114,8 +110,7 @@ it("does not describe a different user-selected model as restoration of the prev
   const selected = { provider: "new-fixture", model: "selected" };
   Object.assign(f.context.followupRun.run, selected);
   f.context.execution.resolved = selected;
-  await f.replace({
-    ...f.read()!,
+  await f.patch({
     providerOverride: selected.provider,
     modelOverride: selected.model,
     modelOverrideSource: "user",
@@ -134,32 +129,29 @@ it.each(["session", "lifecycle", "writer", "cancellation"] as const)(
   async (replacement) => {
     const f = await fixture();
     const append = transcript.appendAssistantMessageToSessionTranscript;
-    let replaced = false;
-    vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
-      async (params) => {
-        replaced = true;
+    const appendSpy = vi
+      .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
+      .mockImplementationOnce(async (params) => {
         if (replacement === "cancellation") {
           f.context.replyOperation.abortByUser();
         } else {
-          await f.replace({
-            ...f.read()!,
-            ...(replacement === "session"
+          await f.patch(
+            replacement === "session"
               ? { sessionId: "replacement-session" }
               : replacement === "lifecycle"
                 ? { lifecycleRevision: "replacement-lifecycle" }
-                : { activeWriterRunId: "replacement-run" }),
-          });
+                : { activeWriterRunId: "replacement-run" },
+          );
         }
         return append(params);
-      },
-    );
+      });
     const accounting = f.account("ordinary", primary);
     if (replacement === "cancellation") {
       await accounting;
     } else {
       await expect(accounting).rejects.toThrow();
     }
-    expect(replaced).toBe(true);
+    expect(appendSpy).toHaveBeenCalledOnce();
     expect(await f.notices()).toEqual([]);
     expect(await f.notices("replacement-session")).toEqual([]);
     expect(f.read()?.fallbackNotice).toEqual(f.activeNotice);

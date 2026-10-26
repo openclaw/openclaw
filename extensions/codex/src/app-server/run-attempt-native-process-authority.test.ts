@@ -11,6 +11,7 @@ import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/sessi
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { consumeCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
 import {
   createCodexTestHostCapabilities,
@@ -52,6 +53,7 @@ import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
+import { writeNativeCatalogFixture } from "./thread-lifecycle.test-fixtures.js";
 
 setupRunAttemptTestHooks();
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -90,6 +92,10 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const sessionFile = path.join(tempDir, "native-owner-session.jsonl");
   const workspaceDir = path.join(tempDir, "workspace");
+  const agentDir = path.join(tempDir, "wire-agent");
+  const codexHome = resolveCodexAppServerHomeDir(agentDir);
+  const rolloutPath = path.join(codexHome, "sessions", "native-owner.jsonl");
+  let nativeTools: unknown;
   const threadId = "qualification-shared-thread";
   const sessionScope = {
     agentId: "main",
@@ -177,16 +183,21 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
         return {};
       }
       if (method === "thread/start" || method === "thread/resume") {
+        if (method === "thread/start") {
+          nativeTools = input.dynamicTools;
+        }
         if (method === "thread/resume") {
           expect(input.threadId).toBe(threadId);
         }
-        return threadStartResult(threadId, { cwd: "/workspace" });
+        const result = threadStartResult(threadId, { cwd: "/workspace" });
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
       }
       if (method === "thread/read") {
         const requestedThreadId = typeof input.threadId === "string" ? input.threadId : threadId;
         return { thread: { ...threadStartResult(requestedThreadId).thread, turns: [] } };
       }
       if (method === "turn/start") {
+        await writeNativeCatalogFixture(rolloutPath, threadId, nativeTools);
         expect(input.threadId).toBe(threadId);
         expect(input.environments).toEqual([
           { environmentId: expect.stringMatching(/^openclaw-sandbox-/), cwd: "/workspace" },
@@ -230,7 +241,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       }
       return undefined;
     },
-    { persistedThreads: [threadId] },
+    { persistedThreads: [threadId], codexHome },
   );
 
   const begin = async (
@@ -248,6 +259,7 @@ async function fixture(options: { failSettlement?: boolean } = {}) {
       runId: `${actor}-run-${attemptId}`,
       prompt: `${actor} qualification turn`,
     });
+    params.agentDir = agentDir;
     params.sessionTarget = { ...sessionScope, sessionId: params.sessionId };
     params.hostCapabilities = createSourceBoundHostCapabilities(source.signal);
     params.senderId = actor;

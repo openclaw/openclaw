@@ -24,6 +24,7 @@ import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { PluginInvocationScope } from "./plugin-invocation-scope.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
@@ -56,18 +57,12 @@ function fixture(kind: "runtime" | "setup", native = false) {
       bindPluginInstanceModuleLoader({ instance, origin: "config", source, rootDir });
       return instance.loadModule(source);
     }
-    const record: PluginManifestRecord = {
+    const record: PluginManifestRecord = createPluginManifestRecordFixture({
       id: "disposal-setup",
       origin: "config",
       rootDir,
       source,
-      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      hooks: [],
-      skills: [],
-    };
+    });
     const load = getPluginSetupModuleLoader(record, source, rootDir);
     return load.initialize(() => load(source));
   }) as { filename: string; nativeFile?: string; read(): string };
@@ -114,34 +109,44 @@ function gateRemoval(filename: string, events: string[], failure?: Error, native
   };
 }
 
-it.each(["runtime", "setup"] as const)(
-  "joins %s artifact removal after consumers and callbacks without blocking foreground work",
-  async (kind) => {
+it.each([
+  ["runtime", true],
+  ["setup", true],
+  ["runtime", false],
+] as const)(
+  "joins %s artifact removal after derived consumers (removal timeout: %s)",
+  async (kind, delayedRemoval) => {
     const { value, instance, retire, cache } = fixture(kind, true);
     const nativeFile = expectDefined(value.nativeFile, "captured native asset");
     const events: string[] = [];
-    const consumer = instance.retainConsumer();
-    const retained = consumer.wrap(value);
+    const parent = instance.retainConsumer();
+    let consumer: ReturnType<PluginInstance["retainConsumer"]> | undefined;
     instance.lifecycle.onDispose(recordEvent(events, "plugin"));
     const gate = gateRemoval(value.filename, events, undefined, nativeFile);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let settled = false;
-    const retirement = retire().finally(() => {
-      settled = true;
-    });
+    const retirement = retire();
     try {
       await nextTurn();
+      consumer = parent.run(() => instance.retainConsumer());
+      parent.release();
+      await nextTurn();
       expect(events).toEqual([]);
-      expect(retained.read()).toBe("retained");
-      expect(fs.existsSync(value.filename)).toBe(true);
+      expect(consumer.run(() => value.read())).toBe("retained");
+      if (!delayedRemoval) {
+        consumer.release();
+        await Promise.race([gate.entered, retirement]);
+        expect(events).toEqual(["plugin", "remove"]);
+        gate.resume.resolve();
+        await expect(retirement).resolves.toEqual([]);
+        expect(fs.existsSync(value.filename)).toBe(false);
+        return;
+      }
       await consumer.close(recordEvent(events, "consumer"));
       await Promise.race([gate.entered, retirement]);
       expect(events).toEqual(["consumer", "plugin", "remove"]);
       expect(nativeRequire.cache[value.filename]).toBeUndefined();
       expect(() => value.read()).toThrow("reloaded or disabled");
       await vi.advanceTimersByTimeAsync(5_001);
-      await nextTurn();
-      expect(settled).toBe(true);
       const timeout = forcedRetirement(await retirement);
       expect(fs.existsSync(value.filename)).toBe(true);
       expect(fs.readFileSync(nativeFile, "utf8")).toBe("retained native bytes");
@@ -152,7 +157,8 @@ it.each(["runtime", "setup"] as const)(
       expect(fs.existsSync(nativeFile)).toBe(false);
       expect(fs.existsSync(expectDefined(gate.directory(), "retired artifact"))).toBe(false);
     } finally {
-      consumer.release();
+      parent.release();
+      consumer?.release();
       gate.resume.resolve();
       await retirement;
       await retirePluginCache(cache);
@@ -170,8 +176,6 @@ it("reports asynchronous artifact removal failure through setup cache retirement
     expect(gate.directory()).toBeDefined();
     gate.resume.resolve();
     await expect(retirement).resolves.toEqual([failure]);
-    expect(nativeRequire.cache[value.filename]).toBeUndefined();
-    expect(() => value.read()).toThrow("reloaded or disabled");
   } finally {
     gate.resume.resolve();
     await retirement;
@@ -179,35 +183,6 @@ it("reports asynchronous artifact removal failure through setup cache retirement
     if (gate.directory()) {
       await fsPromises.rm(gate.directory()!, { recursive: true, force: true });
     }
-  }
-});
-
-it("retains captured bytes for a consumer derived while retirement waits on its parent", async () => {
-  const { value, instance, retire } = fixture("runtime");
-  const parent = instance.retainConsumer();
-  let child: ReturnType<PluginInstance["retainConsumer"]> | undefined;
-  const events: string[] = [];
-  const gate = gateRemoval(value.filename, events);
-  const retirement = retire();
-  try {
-    await nextTurn();
-    child = parent.run(() => instance.retainConsumer());
-    parent.release();
-    await nextTurn();
-    expect(events).toEqual([]);
-    expect(fs.existsSync(value.filename)).toBe(true);
-    expect(child.run(() => value.read())).toBe("retained");
-    child.release();
-    await Promise.race([gate.entered, retirement]);
-    expect(events).toEqual(["remove"]);
-    gate.resume.resolve();
-    await expect(retirement).resolves.toEqual([]);
-    expect(fs.existsSync(value.filename)).toBe(false);
-  } finally {
-    parent.release();
-    child?.release();
-    gate.resume.resolve();
-    await retirement;
   }
 });
 

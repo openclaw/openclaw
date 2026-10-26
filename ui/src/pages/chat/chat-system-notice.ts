@@ -1,20 +1,96 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notice-kinds.ts";
+
+registerChatSessionEnglish();
+
+type SubmittedModel = { provider: string; model: string };
+
+function readSubmittedModel(value: unknown): SubmittedModel | undefined {
+  const model = asRecord(value);
+  return typeof model?.provider === "string" &&
+    model.provider.length > 0 &&
+    typeof model.model === "string" &&
+    model.model.length > 0
+    ? { provider: model.provider, model: model.model }
+    : undefined;
+}
+
+/** Compare committed inputs, not draft picker changes or model fallback responses. */
+export function createSubmittedModelNoticeProjector() {
+  let previous: SubmittedModel | undefined;
+  let hasConversation = false;
+  return (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
+    const raw = asRecord(item.message);
+    const metadata = asRecord(raw?.["__openclaw"]);
+    if (metadata?.kind === "reset") {
+      previous = undefined;
+      hasConversation = false;
+      return undefined;
+    }
+    if (
+      !raw ||
+      raw.display === false ||
+      raw.excludeFromContext === true ||
+      metadata?.lateMedia === true
+    ) {
+      return undefined;
+    }
+    if (raw.role === "assistant") {
+      hasConversation = true;
+      return undefined;
+    }
+    if (raw.role !== "user") {
+      return undefined;
+    }
+    const selection = asRecord(metadata?.modelSelection);
+    const selected = readSubmittedModel(selection);
+    if (!selected) {
+      hasConversation = true;
+      return undefined;
+    }
+    // A page beginning mid-queue has no preceding selection to compare safely.
+    const from =
+      previous ?? (hasConversation ? readSubmittedModel(selection?.previous) : undefined);
+    previous = selected;
+    hasConversation = true;
+    if (!from || (from.provider === selected.provider && from.model === selected.model)) {
+      return undefined;
+    }
+    return {
+      kind: "notice",
+      key: `model-selection:${item.key}`,
+      timestamp: safeNormalizeMessage(item.message)?.timestamp ?? 0,
+      icon: "brain",
+      label: t("chat.systemNotice.modelChanged", {
+        from: `${from.provider}/${from.model}`,
+        to: `${selected.provider}/${selected.model}`,
+      }),
+      text: "",
+    };
+  };
+}
 
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
   normalized?: NormalizedMessage | null,
-  pending?: { status: PendingInputStatus; key: string; timestamp: number },
+  pending?: {
+    status: PendingInputStatus;
+    key: string;
+    timestamp: number;
+    retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
+  },
 ): ChatItem[] {
   const raw = asRecord(item.message);
   if (raw?.role === "custom" && raw.customType === "session-send-recovery-blocked") {
@@ -28,6 +104,21 @@ export function projectChatSystemNotice(
         text: extractTextCached(item.message) ?? "",
       },
     ];
+  }
+  if (raw?.role === "custom" && raw.customType === "session-model-change") {
+    const details = asRecord(raw.details);
+    if (typeof details?.from === "string" && typeof details.to === "string") {
+      return [
+        {
+          kind: "notice",
+          key: item.key,
+          timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+          icon: "brain",
+          label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
+          text: "",
+        },
+      ];
+    }
   }
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
@@ -45,6 +136,7 @@ export function projectChatSystemNotice(
             key: pending.key,
             timestamp: pending.timestamp,
             text: pendingText,
+            ...(pending.retired ? { retiredPendingInput: pending.retired } : {}),
           },
         ]
       : [];
@@ -63,10 +155,29 @@ export function projectChatSystemNotice(
       ...pendingItems,
     ];
   }
-  const skillNoticeMessage = skillChanges && (normalized ?? safeNormalizeMessage(item.message));
-  if (skillChanges && skillNoticeMessage) {
+  // Persisted notices from before structured skill markers still carry the
+  // Workshop writer's idempotency key. Keep their original text, not a guessed
+  // skill/Undo payload, outside assistant answer ownership and Worked rollups.
+  const noticeKey = raw?.idempotencyKey ?? asRecord(raw?.["__openclaw"])?.idempotencyKey;
+  const legacySkillNotice =
+    isOpenClawDeliveryMirrorAssistantMessage(item.message) &&
+    typeof noticeKey === "string" &&
+    noticeKey.startsWith("skill-workshop-notice:") &&
+    noticeKey.length > "skill-workshop-notice:".length;
+  const skillNoticeMessage =
+    (skillChanges || legacySkillNotice) && (normalized ?? safeNormalizeMessage(item.message));
+  if (skillNoticeMessage) {
     const { timestamp } = skillNoticeMessage;
-    return [{ kind: "notice", key: item.key, text: "", timestamp, skillChanges }, ...pendingItems];
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        text: skillChanges ? "" : (extractTextCached(item.message) ?? ""),
+        timestamp,
+        ...(skillChanges ? { skillChanges } : {}),
+      },
+      ...pendingItems,
+    ];
   }
   if (provenance?.kind !== "internal_system") {
     return [item, ...pendingItems];
@@ -110,6 +221,7 @@ export function projectChatSystemNotice(
       text,
       timestamp: message.timestamp,
       ...optionalBoundaryIdentity(userTurnRunId(item.message)),
+      ...(pendingSummaryKey && pending?.retired ? { retiredPendingInput: pending.retired } : {}),
     },
     ...(pendingSummaryKey ? [] : pendingItems),
   ];

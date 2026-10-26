@@ -1,7 +1,6 @@
 import path from "node:path";
 import { assert, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import {
@@ -15,17 +14,12 @@ import { createDirectPendingFinalCustody } from "../../channels/turn/direct-deli
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { inspectOpenClawAgentDatabaseOwner } from "../../state/openclaw-agent-db.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
-import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
+import { installRecoveryHooks, markFinal } from "./delivery-completion.shard-test-support.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import {
-  createRecoveryLog,
-  createPendingFinalFixture,
-  loadPendingDeliveries,
-  installDeliveryCompletionHooks,
-} from "./delivery-queue.test-helpers.js";
+import { createPendingFinalFixture, loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 describe("pending-final durable delivery completion", () => {
-  const { tmpDir, deliver: deliverOutboundPayloads } = installDeliveryCompletionHooks(true);
+  const { tmpDir, deliver: deliverOutboundPayloads, recover } = installRecoveryHooks();
   const destination = { channel: "matrix", to: "!room:example" } as const;
 
   function pendingFinal(
@@ -59,24 +53,6 @@ describe("pending-final durable delivery completion", () => {
     await replaceSessionEntry(scope, entry);
     return { scope, entry, authority };
   }
-  function markFinal(
-    scope: { agentId: string; sessionKey: string; storePath: string },
-    entry: NonNullable<ReturnType<typeof loadSessionEntry>>,
-    payloads: Parameters<typeof persistPendingFinalDeliveryMarker>[0]["payloads"],
-  ) {
-    return persistPendingFinalDeliveryMarker({
-      ...scope,
-      sessionEntry: entry,
-      sessionStore: { [scope.sessionKey]: entry },
-      payloads,
-      deliver: true,
-      suppressVisibleSessionEffects: false,
-      sessionReboundDuringRun: false,
-      deliveryContext: destination,
-      runOwnedSessionId: entry.sessionId,
-    });
-  }
-
   it.each(["global", "unknown"])(
     "retains the selected owner through a queued %s final, settlement, and repeat suppression",
     async (sessionKey) => {
@@ -89,8 +65,7 @@ describe("pending-final durable delivery completion", () => {
       const entry = loadSessionEntry(ops);
       assert(entry, "Expected the selected agent's session");
       const payloads = [{ text: "the selected agent's final" }];
-      const marker = await markFinal(ops, entry, payloads);
-      expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
+      await markFinal(ops, entry, payloads, destination);
       const completion = resolvePendingFinalDeliveryCompletion(payloads);
       assert(completion, "Expected a durable completion from the marker");
       const sendMatrix = vi.fn(async () => {
@@ -132,7 +107,7 @@ describe("pending-final durable delivery completion", () => {
       { text: "original final" },
       { sessionWriterDeliveryAuthority: authority },
     );
-    await markFinal(scope, entry, [payload]);
+    await markFinal(scope, entry, [payload], destination);
     const custody = await createDirectPendingFinalCustody(payload, scope.storePath);
     const completion = resolvePendingFinalDeliveryCompletion([payload]);
     if (!custody || !completion) {
@@ -216,12 +191,7 @@ describe("pending-final durable delivery completion", () => {
       "agentId",
     );
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "legacy-message" });
-    await recoverPendingDeliveries({
-      cfg: {},
-      stateDir: tmpDir(),
-      log: createRecoveryLog(),
-      deliver: (params) => deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
-    });
+    await recover((params) => deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }));
     expect(sendMatrix).toHaveBeenCalledOnce();
     expect(loadSessionEntry(main)?.pendingFinalDelivery?.deliveries).toEqual([
       { id: completion.deliveryId, state: "delivered" },

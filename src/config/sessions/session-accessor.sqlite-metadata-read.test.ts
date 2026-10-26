@@ -8,6 +8,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as metadata from "./session-accessor.sqlite-metadata-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptMutationAtSync } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import * as mutations from "./session-accessor.sqlite-transcript-state.js";
 import * as statistics from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
@@ -123,8 +124,16 @@ function createFixture(env: NodeJS.ProcessEnv, agentId = "main") {
     scope,
     transaction: (run: Parameters<typeof agentDb.runOpenClawAgentWriteTransaction>[0]) =>
       agentDb.runOpenClawAgentWriteTransaction(run, options),
-    read: (id = "hot") => metadata.readTranscriptMutationStateSync(scope(id)),
-    present: (id = "hot") => metadata.hasSessionTranscriptEventsSync(scope(id)),
+    read: (id = "hot") =>
+      mutations.readTranscriptMutationStateInTransaction(
+        agentDb.openOpenClawAgentDatabase(options),
+        id,
+      ),
+    present: (id = "hot") =>
+      metadata.readSessionTranscriptMetadataInDatabase(
+        agentDb.openOpenClawAgentDatabase(options),
+        id,
+      ).present,
     batchStats: (ids: string[], includeGeneration = false) =>
       includeGeneration
         ? statistics.readTranscriptStatsBatchFromDatabase(database, ids, {
@@ -185,7 +194,7 @@ it.for(["presence", "mutation"] as const)(
       expect(readRows()).toEqual([false, true, true, false]);
     } else {
       expect(read("hot")).toEqual(mutation(null, 50));
-      expect(metadata.readTranscriptMutationAtSync(scope("hot"))).toBe(50);
+      expect(readTranscriptMutationAtSync(scope("hot"))).toBe(50);
     }
     expect(compile).not.toHaveBeenCalled();
   },
@@ -218,7 +227,7 @@ it("reads fence advances and restores them on rollback", ({ store }) => {
     }),
   ).toThrow("rollback fixture");
   expect(read()).toEqual(mutation(10, 20));
-  expect(metadata.readTranscriptMutationAtSync(scope("hot"))).toBe(20);
+  expect(readTranscriptMutationAtSync(scope("hot"))).toBe(20);
   transaction(() => advance("hot", 1, true));
   expect(read()).toEqual(mutation(10, 21));
 });

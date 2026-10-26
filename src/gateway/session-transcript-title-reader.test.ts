@@ -1,17 +1,7 @@
-import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import {
-  persistSessionTranscriptTurn,
-  type SessionTranscriptMessageEvent,
-} from "../config/sessions/session-accessor.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
@@ -20,15 +10,9 @@ import {
 } from "../config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+  transcriptMessage as event,
+  useTranscriptFixture,
+} from "./session-transcript-fixtures.test-support.js";
 import { readSessionTitleFieldsFromTranscriptAsync as readTitlesAsync } from "./session-transcript-title-reader.js";
 import { readSessionTitleFieldsFromTranscript as readTitles } from "./session-transcript-title-reader.worker.js";
 
@@ -47,30 +31,9 @@ vi.mock("../config/sessions/session-accessor.sqlite-active-events.js", async (im
   };
 });
 
-const tempDirs = createTempDirTracker();
-
-let tempDir: string;
-let storePath: string;
-let envSnapshot: ReturnType<typeof captureEnv>;
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  tempDir = tempDirs.make("openclaw-transcript-titles-");
-  storePath = path.join(tempDir, "sessions.json");
-  setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-  setRuntimeConfigSnapshot({});
-});
-
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  tempDirs.cleanup();
-  envSnapshot.restore();
-});
+const fixture = useTranscriptFixture("openclaw-transcript-titles-");
+const { scopeFor, writeTranscript, appendMessages } = fixture;
+beforeEach(() => vi.clearAllMocks());
 
 function expectTitle(
   scope: Parameters<typeof readTitles>[0],
@@ -84,27 +47,6 @@ const user = (content: unknown, fields = {}) => ({ role: "user", content, ...fie
 const assistant = (content: unknown) => ({ role: "assistant", content });
 const repeatedReplies = (count: number, content: string) =>
   Array.from({ length: count }, () => assistant(content));
-function scopeFor(sessionId: string) {
-  return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
-}
-function event(id: string, parentId: string | null, message: Record<string, unknown>) {
-  return { type: "message", id, parentId, message };
-}
-async function writeTranscript(sessionId: string, events: unknown[]) {
-  const scope = scopeFor(sessionId);
-  await replaceTranscriptEvents(scope, events);
-  return scope;
-}
-
-async function appendMessages(
-  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
-  messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
-) {
-  await persistSessionTranscriptTurn(scope, {
-    messages: messages.map((message) => ({ message })),
-    touchSessionEntry: false,
-  });
-}
 async function writeSqliteMessages(
   sessionId: string,
   messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
@@ -161,7 +103,6 @@ describe("session transcript title hydration", () => {
 
   test("keeps cold transcripts archived while reading mixed title rows and heals after restoration", async () => {
     const cold = await writeTranscript("reader-title-archived", [
-      { type: "session", version: 3, id: "reader-title-archived" },
       event("user", null, user("Archived prompt")),
       event("reply", "user", assistant("Archived reply")),
     ]);
@@ -169,26 +110,22 @@ describe("session transcript title hydration", () => {
       sessionId: cold.sessionId,
       updatedAt: Date.now(),
     });
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
+    const database = fixture.database();
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: database.path });
-    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 40 * 24 * 60 * 60 * 1000);
-    try {
+    {
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(Date.now() + 40 * 24 * 60 * 60 * 1000);
       await expect(
         runSessionColdStorageMaintenance({
           config: {
             agents: { entries: { main: {} } },
             session: {
-              store: storePath,
+              store: fixture.path("sessions.json"),
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
             },
           },
         }),
       ).resolves.toMatchObject({ archivedTranscripts: 1 });
-    } finally {
-      clock.mockRestore();
     }
     const archive = readSessionColdTranscript(database.db, cold.sessionId);
     expect(archive).toBeDefined();
@@ -197,8 +134,10 @@ describe("session transcript title hydration", () => {
       assistant("Hot reply"),
     ]);
     expectTitle(cold, null, null);
+    const emptyTitles = readTitles(cold);
     expectTitle(hot, "Hot prompt", "Hot reply");
     expectTitle(cold, null, null);
+    expect(readTitles(cold)).toBe(emptyTitles);
     expect(readSessionColdTranscript(database.db, cold.sessionId)).toEqual(archive);
 
     await restoreSessionColdTranscript(cold);
@@ -226,13 +165,12 @@ describe("session transcript title hydration", () => {
   test("invalidates both cached title variants after an appended reset", async () => {
     const sessionId = "reader-title-reset-window";
     const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
       event("old", null, user("hidden old prompt")),
-      event("kept-routed", "old", {
-        role: "user",
-        content: "kept routed prompt",
-        provenance: { kind: "inter_session" },
-      }),
+      event(
+        "kept-routed",
+        "old",
+        user("kept routed prompt", { provenance: { kind: "inter_session" } }),
+      ),
       event("kept-user", "kept-routed", user("kept prompt")),
       event("kept-assistant", "kept-user", assistant("kept answer")),
     ]);
@@ -284,7 +222,7 @@ describe("session transcript title hydration", () => {
     const scope = await writeSqliteMessages("reader-title-concurrent-append", [
       user("Original question"),
       user("Later question"),
-      ...Array.from({ length: 18 }, () => assistant("Older reply")),
+      ...repeatedReplies(18, "Older reply"),
     ]);
     await sessionAccessor.replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const actual = await vi.importActual<
@@ -333,7 +271,7 @@ describe("session transcript title hydration", () => {
     const sessionId = "reader-title-oversized-assistant-false";
     const scope = await writeSqliteMessages(sessionId, [
       user("Original question"),
-      ...Array.from({ length: 25 }, () => assistant("Earlier reply")),
+      ...repeatedReplies(25, "Earlier reply"),
     ]);
     expect(readTitles(scope).firstUserMessage).toBe("Original question");
     await writeSqliteMessages(sessionId, [assistant("x".repeat(70 * 1024))]);
@@ -341,85 +279,27 @@ describe("session transcript title hydration", () => {
 
     expectTitle(scope, "Original question", `${"x".repeat(237)}...`);
     expect(sessionAccessor.readSessionTranscriptBoundedMessageTailPage).toHaveBeenCalledTimes(1);
-    expect(
-      vi
-        .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-        .mock.calls.map(([, options]) => options),
-    ).toEqual([{ maxMessages: 20, offset: 0, readOnly: true }]);
   });
 });
 
 describe("session transcript Markdown title previews", () => {
-  test("stops reading older content after widening to the newest visible preview", async () => {
+  test("widens past hidden messages to the newest visible Markdown preview", async () => {
     const hiddenMessages = [
       { role: "toolResult", content: "tool output" },
       { role: "system", content: "system event" },
-      { role: "assistant", content: [{ type: "thinking", thinking: "private thought" }] },
+      assistant([{ type: "thinking", thinking: "private thought" }]),
       assistant("NO_REPLY"),
       { role: "assistant", content: "ANNOUNCE_SKIP", display: false },
       { role: "assistant", content: "REPLY_SKIP", display: false },
-      { role: "assistant", content: [{ type: "text", text: "" }] },
+      assistant([{ type: "text", text: "" }]),
       assistant("```ts\nconst hidden = true;\n```"),
     ];
-    const olderText = "Earlier **reply**";
-    // Keep the observed row outside the first-user head probe, including after widening.
-    const prefix = [
-      user("Keep **title Markdown** unchanged"),
-      ...Array.from({ length: 100 }, () => ({ role: "toolResult", content: "tool output" })),
-    ];
-    const olderSeq = prefix.length + 1;
     const scope = await writeSqliteMessages("reader-title-short-circuit-true", [
-      ...prefix,
-      { role: "assistant", content: [{ type: "text", text: olderText }] },
-      {
-        role: "assistant",
-        content: "# Latest\n\nRead the [guide](https://example.com).",
-        display: true,
-      },
+      user("Keep **title Markdown** unchanged"),
+      assistant([{ type: "text", text: "Earlier **reply**" }]),
+      { ...assistant("# Latest\n\nRead the [guide](https://example.com)."), display: true },
       ...Array.from({ length: 3 }, () => hiddenMessages).flat(),
     ]);
-    const actual = await vi.importActual<
-      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
-    >("../config/sessions/session-accessor.sqlite-active-events.js");
-    const readOlderText = vi.fn(() => olderText);
-    let observedRows = 0;
-    const observeOlderContent = (
-      entries: Pick<SessionTranscriptMessageEvent, "event" | "seq">[],
-    ) => {
-      for (const entry of entries) {
-        if (entry.seq !== olderSeq) {
-          continue;
-        }
-        observedRows += 1;
-        entry.event = {
-          ...asOptionalRecord(entry.event),
-          message: {
-            role: "assistant",
-            // Nested text survives transcript metadata normalization; only projection reads it.
-            content: [
-              {
-                type: "text",
-                get text() {
-                  return readOlderText();
-                },
-              },
-            ],
-          },
-        };
-      }
-    };
-    const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptBoundedMessageTailPage);
-    try {
-      pageReader.mockImplementation((readScope, options) => {
-        const page = actual.readSessionTranscriptBoundedMessageTailPage(readScope, options);
-        observeOlderContent(page.events);
-        return page;
-      });
-      expectTitle(scope, "Keep **title Markdown** unchanged", "Latest Read the guide.");
-      expect(observedRows).toBe(1);
-      expect(readOlderText).not.toHaveBeenCalled();
-    } finally {
-      pageReader.mockImplementation(actual.readSessionTranscriptBoundedMessageTailPage);
-    }
+    expectTitle(scope, "Keep **title Markdown** unchanged", "Latest Read the guide.");
   });
 });

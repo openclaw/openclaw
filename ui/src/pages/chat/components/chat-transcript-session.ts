@@ -117,6 +117,15 @@ export function createTranscriptPresentation(
 
   const presentation = {
     measureRows: () => readConnectedRows()?.() ?? false,
+    measureRowsWithoutScrollAdjustment() {
+      const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
+      virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+      try {
+        return presentation.measureRows();
+      } finally {
+        virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
+      }
+    },
     queueRowMeasure() {
       const element = scrollElement();
       scheduleLayout(presentation, () =>

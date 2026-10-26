@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, onSettled, untrack } from "solid-js";
+import { createMemo, For, Show, onSettled } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -8,18 +8,14 @@ import {
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
-  SIDEBAR_NAV_ROUTES,
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import {
-  beginNativeWindowDrag,
-  beginNativeWindowDragFromTopInset,
-} from "../app/native-window-drag.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -28,23 +24,16 @@ import {
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
   renderAppSidebarPluginTab,
-  renderAppSidebarPageEntry,
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
-import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
-import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
-import {
-  SessionGlyph,
-  renderSessionUnreadBadge,
-  renderSessionOwnerAvatar,
-} from "./solid/session-presentation.tsx";
+import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -59,8 +48,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
-    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
-      (entry) => parseSidebarEntry(entry)!,
+    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).filter(
+      (entry) => !entry.startsWith("session:"),
     ),
   );
   const views = ["pages", "sessions", "online"] as const;
@@ -192,13 +181,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDragLeave={(event) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
-        <For each={pins()} keyed={serializeSidebarEntry}>
-          {(entry) => {
-            // The serialized entry is this pin's key; its live row facts come from zone.
-            const initialEntry = untrack(entry);
-            return renderRailPin(host, initialEntry, zone);
-          }}
-        </For>
+        <For each={pins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>
@@ -272,7 +255,7 @@ function renderRailPin(
             </Show>
           }
         >
-          {(user) => renderSessionOwnerAvatar(user())}
+          {(user) => <SessionOwnerAvatar owner={user()} />}
         </Show>
       </a>
     ) : entry.type === "route" ? (
@@ -308,12 +291,9 @@ function renderRailPin(
             href={host.sidebarSessionHref(row())}
             aria-label={label()}
             aria-current={row().active ? "page" : undefined}
-            onClick={(event) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                host.selectSession(row().key, undefined, row());
-              }
-            }}
+            onClick={(event) =>
+              handleNavigationClick(event, () => host.selectSession(row().key, undefined, row()))
+            }
           >
             <RailSessionGlyph session={row()} label={label()} />
           </a>
@@ -483,103 +463,5 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
       }
       badge={props.session.unread ? renderSessionUnreadBadge() : undefined}
     />
-  );
-}
-
-/** Pages is the accessible destination catalog, not another favorites list. */
-export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
-  const zone = createMemo(() => host.reconciledSidebarZone());
-  const dashboards = () => host.navigationCatalog.dashboards;
-  const dashboardRows = createMemo(() =>
-    host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages
-          .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
-      : (dashboards()?.result?.sessions ?? []).map((row) =>
-          host.getSessionNavigationState().toSidebarSession(row),
-        ),
-  );
-  const rows = createMemo(() => {
-    const result = new Map(zone().sessionRows);
-    for (const row of dashboardRows()) {
-      result.set(row.key, row);
-    }
-    return result;
-  });
-  const entries = createMemo(() => {
-    const result: SidebarZoneEntry[] = SIDEBAR_NAV_ROUTES.filter((route) =>
-      host.sidebarMenus.isRouteEnabled(route),
-    ).map((route) => ({ type: "route", route }));
-    for (const key of new Set([
-      ...zone().pluginTabs.keys(),
-      ...host.pluginNavigation().map((entry) => entry.key),
-    ])) {
-      result.push({ type: "plugin", key });
-    }
-    for (const row of dashboardRows()) {
-      result.push({ type: "session", key: row.key });
-    }
-    return result;
-  });
-  return (
-    <nav
-      class="sidebar-pages"
-      aria-label={t("nav.pages")}
-      onDragOver={(event) => host.sessionOrganizer.handleSessionListDragOver(event)}
-      onDrop={(event) => host.sessionOrganizer.handleSessionListDrop(event)}
-    >
-      <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <span>{t("nav.pages")}</span>
-        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
-      </div>
-      <McpAppCatalog surface="sidebar" />
-      <For each={entries()} keyed={serializeSidebarEntry}>
-        {(entry) => {
-          // The For key is the complete serialized identity; labels stay live in the renderer.
-          const initialEntry = untrack(entry);
-          const key = serializeSidebarEntry(initialEntry);
-          // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = renderAppSidebarPageEntry(
-            host,
-            initialEntry,
-            rows,
-            () => zone().pluginTabs,
-          );
-          return (
-            <div class="sidebar-pages__entry">
-              {content}
-              <button
-                type="button"
-                class={[
-                  "sidebar-pages__pin",
-                  { "sidebar-pages__pin--pinned": host.sidebarEntries.includes(key) },
-                ]}
-                disabled={Boolean(host.sidebarSnapshot)}
-                aria-label={t(host.sidebarEntries.includes(key) ? "nav.unpin" : "nav.pin")}
-                onClick={() => {
-                  if (host.sidebarEntries.includes(key)) {
-                    host.sessionOrganizer.removeSidebarEntry(key);
-                  } else {
-                    host.sessionOrganizer.writeSidebarEntryAt(key, undefined, undefined);
-                  }
-                }}
-              >
-                <Icon name="pin" />
-              </button>
-            </div>
-          );
-        }}
-      </For>
-      <Show when={dashboards()?.error}>{(error) => <span role="alert">{error()}</span>}</Show>
-      <Show when={dashboards()?.result?.hasMore}>
-        <button
-          type="button"
-          class="btn btn--sm"
-          onClick={() => host.navigationCatalog.loadMoreDashboards()}
-        >
-          {t("chat.selectors.loadMoreSessions")}
-        </button>
-      </Show>
-    </nav>
   );
 }

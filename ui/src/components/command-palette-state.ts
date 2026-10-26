@@ -15,12 +15,11 @@ import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-sear
 import {
   createHumanMentionMenu,
   type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.tsx";
+} from "../pages/chat/components/chat-composer-mention-menu-state.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
 import {
   getCommandPaletteModelItems,
-  getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
@@ -33,7 +32,7 @@ import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
 } from "./command-palette-session-search.ts";
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.tsx";
 
 const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
@@ -122,11 +121,14 @@ export class CommandPaletteState {
   readonly draft: PaletteSessionDraft;
 
   private searchQuery = "";
-  private promptMode = false;
+  private textPromptMode = false;
+  private get promptMode(): boolean {
+    return this.textPromptMode || this.draft.attachmentMode;
+  }
   private activeId: string | null = null;
   private sessionItems: readonly CommandPaletteItem[] = [];
   private catalogItems: readonly CommandPaletteItem[] = [];
-  private sessionSearchPending = false;
+  private sessionSearchRead: { promise: Promise<void> } | undefined;
   private sessionSearchFailed = false;
   private sessionSearchPartial = false;
   private archivedTranscriptsExcluded = 0;
@@ -141,15 +143,21 @@ export class CommandPaletteState {
     loadedAt?: number;
   };
   private modelItems: readonly CommandPaletteItem[] = [];
-  private readonly modelReader = new ModelCatalogReader(() => {
-    const snapshot = this.modelReader.snapshot;
-    if (snapshot.hasSnapshot) {
-      this.settledModels = snapshot;
-      // Project accepted catalog publications, not every rendering/selection read.
-      this.modelItems = getCommandPaletteModelItems(snapshot);
-    }
-    this.changed();
-  });
+  private modelSearchRead: { promise: Promise<unknown> } | undefined;
+  private readonly modelReader = new ModelCatalogReader(
+    () => {
+      const snapshot = this.modelReader.snapshot;
+      if (snapshot.hasSnapshot) {
+        this.settledModels = snapshot;
+        // Project accepted catalog publications, not every rendering/selection read.
+        this.modelItems = getCommandPaletteModelItems(snapshot);
+      }
+      this.changed();
+    },
+    {
+      onRead: (read) => (this.modelSearchRead = { promise: read.catch(() => undefined) }),
+    },
+  );
   private settledModels = this.modelReader.snapshot;
   private readonly gateway: GatewayPageBinding;
 
@@ -168,14 +176,15 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
+        onAttachmentModeChange: () => this.scheduleSessionSearch(this.draft.message),
         onMessageChange: (query) => {
           const text = query.trim();
           const length = Array.from(text).length;
           // Separate entry/exit thresholds keep edits near the boundary from
           // repeatedly collapsing and reopening search. Draft resets pass here too.
-          this.promptMode =
+          this.textPromptMode =
             text.includes("\n") ||
-            (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
+            (this.textPromptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
           if (!text) {
             this.filter = "all";
           }
@@ -187,9 +196,10 @@ export class CommandPaletteState {
       getGateway: () => this.context?.gateway,
       invalidateRequests: (change) => {
         this.invalidateSessionSearch();
-        this.sessionSearchPending = false;
+        this.sessionSearchRead = undefined;
         this.catalogLoad = undefined;
         this.modelReader.clear();
+        this.modelSearchRead = undefined;
         if (change.identityChanged) {
           this.clearSessionSearch();
           this.clearCatalogSearch();
@@ -378,8 +388,8 @@ export class CommandPaletteState {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
       this.mentionMenu.update(element, "trigger");
     }
-    if (input.imageFiles?.length) {
-      this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
+    if (input.attachmentFiles?.length) {
+      this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);
     } else if (input.submitRequested) {
       this.draft.submitCold();
     }
@@ -397,7 +407,7 @@ export class CommandPaletteState {
   private clearSessionSearch() {
     this.invalidateSessionSearch();
     this.sessionItems = [];
-    this.sessionSearchPending = false;
+    this.sessionSearchRead = undefined;
     this.sessionSearchFailed = false;
     this.sessionSearchPartial = false;
     this.archivedTranscriptsExcluded = 0;
@@ -406,6 +416,7 @@ export class CommandPaletteState {
 
   private clearCatalogSearch() {
     this.modelReader.clear();
+    this.modelSearchRead = undefined;
     this.modelItems = [];
     this.settledModels = this.modelReader.snapshot;
     this.catalogLoad = undefined;
@@ -468,7 +479,7 @@ export class CommandPaletteState {
             this.pluginIcons.load(pluginId);
           }
         }
-        this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
+        this.catalogLoad.loadedAt = Date.now();
         this.changed();
       }
     });
@@ -510,12 +521,10 @@ export class CommandPaletteState {
       if (search.length < SESSION_SEARCH_MIN_CHARS) {
         return;
       }
-      this.sessionSearchPending = Boolean(
-        this.props.onSelectSession && this.context?.sessions && this.gateway.connected,
-      );
       void this.ensureCatalogItems();
       if (this.props.onSelectSession) {
-        void this.searchSessions(search);
+        this.sessionSearchRead = { promise: this.searchSessions(search) };
+        this.changed();
       }
     };
     if (immediate) {
@@ -529,7 +538,6 @@ export class CommandPaletteState {
     const { sessions, gateway } = this.context;
     const client = gateway.snapshot.client;
     if (!sessions || gateway?.snapshot.phase !== "connected" || !client) {
-      this.sessionSearchPending = false;
       return;
     }
     const requestId = ++this.sessionSearchId;
@@ -585,26 +593,20 @@ export class CommandPaletteState {
       }
     } finally {
       if (isCurrent()) {
-        this.sessionSearchPending = false;
         this.changed();
       }
     }
   }
 
   readonly handleGlobalKeydown = (event: Event) => {
-    if (
-      !(event instanceof KeyboardEvent) ||
-      !this.element.isConnected ||
-      event.defaultPrevented ||
-      this.composing ||
-      event.isComposing ||
-      event.keyCode === 229
-    ) {
+    if (!(event instanceof KeyboardEvent) || !this.element.isConnected || this.composing) {
       return;
     }
-    if (isCommandPaletteShortcut(event)) {
+    if (!event.defaultPrevented && isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
     }
   };
 
@@ -694,20 +696,16 @@ export class CommandPaletteState {
       modelSearchError:
         this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
-      catalogItems: [
-        ...getStaticCommandPaletteCatalogItems(
-          hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
-          this.context?.nativeDeviceSettings,
-        ),
-        ...this.catalogItems,
-        ...this.modelItems,
-      ],
-      sessionSearchPending: this.sessionSearchPending,
-      catalogSearchPending: Boolean(
-        normalizeOptionalString(this.searchQuery) &&
-        !this.promptMode &&
-        ((this.catalogLoad && this.catalogLoad.loadedAt === undefined) || this.modelReader.pending),
-      ),
+      canAdmin: hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+      nativeDeviceSettings: this.context?.nativeDeviceSettings ?? null,
+      catalogItems: this.catalogItems,
+      modelItems: this.modelItems,
+      sessionSearchRead: this.sessionSearchRead,
+      catalogSearchRead: this.catalogLoad,
+      modelSearchRead: this.modelSearchRead,
+      catalogSearchPending:
+        Boolean(this.catalogLoad && this.catalogLoad.loadedAt === undefined) ||
+        this.modelReader.pending,
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,

@@ -5,11 +5,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntry,
-  loadTranscriptEvents,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import * as sessions from "../../config/sessions/session-accessor.js";
+import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { prepareConsumedSessionSendSource } from "../../gateway/session-send-recovery-source.js";
@@ -49,8 +46,23 @@ function peerFixture(state: OpenClawTestState) {
     lifecycleRevision: `${name}-generation`,
     storePath,
   });
-  const prepare = (target: ReturnType<typeof endpoint>, sourceRunId: string) =>
-    prepareConsumedSessionSendSource({ config: cfg, target, sourceRunId, assertCurrent() {} });
+  const prepare = (
+    target: Parameters<typeof prepareConsumedSessionSendSource>[0]["target"],
+    sourceRunId: string,
+  ) => prepareConsumedSessionSendSource({ config: cfg, target, sourceRunId, assertCurrent() {} });
+  const seed = async (
+    runId: string,
+    options: Partial<Omit<Parameters<typeof seedConsumedPeerRestartInput>[0], "cfg">> = {},
+  ) => {
+    const params = {
+      cfg,
+      source: endpoint("source"),
+      target: endpoint("target"),
+      runId,
+      ...options,
+    };
+    return { ...params, ...(await seedConsumedPeerRestartInput(params)) };
+  };
   const restart = async () => {
     await cleanupSessionStateForTest({ stateDir: state.stateDir });
     rotateAgentEventLifecycleGeneration();
@@ -68,7 +80,7 @@ function peerFixture(state: OpenClawTestState) {
       gatewayRuntime,
       ...options,
     });
-  return { cfg, stateDir: state.stateDir, endpoint, prepare, restart, recover };
+  return { cfg, stateDir: state.stateDir, endpoint, seed, prepare, restart, recover };
 }
 
 const withPeerState = (run: (fixture: ReturnType<typeof peerFixture>) => Promise<void>) =>
@@ -76,6 +88,7 @@ const withPeerState = (run: (fixture: ReturnType<typeof peerFixture>) => Promise
 
 function idleRuntime(): GatewayRecoveryRuntime {
   return {
+    prepareFailedWorkerPlacement: async () => undefined,
     resumeChatInput: vi.fn(),
     prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
@@ -88,22 +101,22 @@ function idleRuntime(): GatewayRecoveryRuntime {
 it.each(["exact", "legacy"] as const)(
   "restores the %s peer source when the recovery run ID is also a legacy transcript key",
   (selected) =>
-    withPeerState(async ({ cfg, endpoint, prepare }) => {
+    withPeerState(async ({ endpoint, seed, prepare }) => {
       const legacy = endpoint("legacy-source");
       const exact = endpoint("exact-source");
       const target = endpoint("collision-target");
-      await seedConsumedPeerRestartInput({ cfg, source: legacy, target, runId: "foo" });
+      await seed("foo", { source: legacy, target });
       if (selected === "exact") {
-        await seedConsumedPeerRestartInput({ cfg, source: exact, target, runId: "foo:user" });
+        await seed("foo:user", { source: exact, target });
       }
       const recovered = expectDefined(await prepare(target, "foo:user"), "selected peer source");
       try {
         if (selected === "exact") {
-          await updateSessionEntry(legacy, () => ({ communication: { send: "never" } }));
+          await sessions.updateSessionEntry(legacy, () => ({ communication: { send: "never" } }));
           expect(() => recovered.source()).not.toThrow();
-          await updateSessionEntry(legacy, () => ({ communication: { send: "always" } }));
+          await sessions.updateSessionEntry(legacy, () => ({ communication: { send: "always" } }));
         }
-        await updateSessionEntry(selected === "exact" ? exact : legacy, () => ({
+        await sessions.updateSessionEntry(selected === "exact" ? exact : legacy, () => ({
           communication: { send: "never" },
         }));
         expect(() => recovered.source()).toThrow();
@@ -117,16 +130,11 @@ it.each(["exact", "legacy"] as const)(
 it.each(["permission", "replacement"] as const)(
   "keeps consumed peer authority through committed compaction without bypassing %s revocation",
   (revocation) =>
-    withPeerState(async ({ cfg, endpoint, prepare }) => {
-      const source = endpoint("compaction-source");
-      const target = endpoint("compaction-target");
-      await seedConsumedPeerRestartInput({ cfg, source, target, runId: "compacting-peer-input" });
-      const recovered = expectDefined(
-        await prepare(target, "compacting-peer-input"),
-        "consumed peer source",
-      );
+    withPeerState(async ({ seed, prepare }) => {
+      const { cfg, source, target, runId } = await seed("compacting-peer-input");
+      const recovered = expectDefined(await prepare(target, runId), "consumed peer source");
       try {
-        const entry = expectDefined(loadSessionEntry(target), "compaction target");
+        const entry = expectDefined(sessions.loadSessionEntry(target), "compaction target");
         const compacted = await acceptCompactionSuccessor({
           currentTarget: target,
           expectedEntry: {
@@ -145,9 +153,11 @@ it.each(["permission", "replacement"] as const)(
         expect(compacted.sessionId).toBe("compacted-peer-session");
         expect(() => recovered.source()).not.toThrow();
         if (revocation === "permission") {
-          await updateSessionEntry(source, () => ({ communication: { send: "never" } }));
+          await sessions.updateSessionEntry(source, () => ({ communication: { send: "never" } }));
         } else {
-          await updateSessionEntry(target, () => ({ sessionId: "replacement-peer-session" }));
+          await sessions.updateSessionEntry(target, () => ({
+            sessionId: "replacement-peer-session",
+          }));
         }
         expect(() => recovered.source()).toThrow();
       } finally {
@@ -159,17 +169,10 @@ it.each(["permission", "replacement"] as const)(
 it.each(["reset", "archive", "deny"] as const)(
   "settles a consumed peer input once when its sender changes before recovery: %s",
   (change) =>
-    withPeerState(async ({ cfg, endpoint, restart, recover }) => {
-      const source = endpoint("revoked-source");
-      const target = endpoint("revoked-target");
-      const { originalTranscript } = await seedConsumedPeerRestartInput({
-        cfg,
-        source,
-        target,
-        runId: "revoked-peer-input",
-      });
+    withPeerState(async ({ seed, restart, recover }) => {
+      const { source, target, originalTranscript } = await seed("revoked-peer-input");
       await restart();
-      await updateSessionEntry(source, () =>
+      await sessions.updateSessionEntry(source, () =>
         change === "reset"
           ? { sessionId: "replacement-source-session", lifecycleRevision: "replacement-generation" }
           : change === "archive"
@@ -179,29 +182,27 @@ it.each(["reset", "archive", "deny"] as const)(
       const runtime = idleRuntime();
       expect(await recover(runtime)).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
       expect(runtime.dispatchAgent).not.toHaveBeenCalled();
-      const settledTranscript = await loadTranscriptEvents(target);
+      const settledTranscript = await sessions.loadTranscriptEvents(target);
       expect(settledTranscript).toHaveLength(originalTranscript.length + 1);
       expect(JSON.stringify(settledTranscript.at(-1))).toContain(
         "This interrupted turn could not resume after the Gateway restarted",
       );
-      expect(loadSessionEntry(target)).toMatchObject({ status: "interrupted" });
-      expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
+      expect(sessions.loadSessionEntry(target)).toMatchObject({ status: "interrupted" });
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
       expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-      expect(await loadTranscriptEvents(target)).toEqual(settledTranscript);
+      expect(await sessions.loadTranscriptEvents(target)).toEqual(settledTranscript);
     }),
 );
 
 it("leaves authenticated consumed inputs to their private requester recovery owner", () =>
-  withPeerState(async ({ cfg, endpoint, prepare }) => {
+  withPeerState(async ({ endpoint, seed, prepare }) => {
     for (const kind of ["channel", "operator"] as const) {
       const source = endpoint(`authenticated-source-${kind}`);
       const target = endpoint(`authenticated-target-${kind}`);
       const runId = `authenticated-peer-${kind}`;
-      const { receiver, originalTranscript } = await seedConsumedPeerRestartInput({
-        cfg,
+      const { receiver, originalTranscript } = await seed(runId, {
         source,
         target,
-        runId,
         requesterOrigin: {
           sessionKey: source.sessionKey,
           ...(kind === "channel"
@@ -211,20 +212,72 @@ it("leaves authenticated consumed inputs to their private requester recovery own
       });
       expect(await prepare(target, runId)).toBeUndefined();
       expect(receiver).toHaveBeenCalledOnce();
-      expect(await loadTranscriptEvents(target)).toEqual(originalTranscript);
+      expect(await sessions.loadTranscriptEvents(target)).toEqual(originalTranscript);
     }
   }));
 
+it.each(["peer", "requester-settle", "parent-notice-retry"] as const)(
+  "keeps a denied %s child continuation resumable and records the action for its parent",
+  (kind) =>
+    withPeerState(async ({ endpoint, seed, restart, recover }) => {
+      const { source, target } = await seed(
+        kind === "requester-settle"
+          ? "announce:requester-settle:main:child:missing-cohort"
+          : "denied-child-input",
+        {
+          target: endpoint("subagent:child"),
+        },
+      );
+      await sessions.updateSessionEntry(target, () => ({
+        spawnedBy: source.sessionKey,
+        spawnedBySessionId: source.sessionId,
+        parentSessionLifecycleRevision: source.lifecycleRevision,
+      }));
+      await restart();
+      await sessions.updateSessionEntry(source, () => ({ communication: { send: "never" } }));
+      const runtime = idleRuntime();
+      if (kind === "parent-notice-retry") {
+        const parentBefore = await sessions.loadTranscriptEvents(source);
+        const append = transcript.appendAssistantMessageToSessionTranscript;
+        const failedWrite = vi
+          .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
+          .mockImplementation(async (params) => {
+            if (params.sessionKey === source.sessionKey) {
+              throw new Error("Synthetic parent notice write failed");
+            }
+            return await append(params);
+          });
+        try {
+          expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+          expect(sessions.loadSessionEntry(target)).toMatchObject({ abortedLastRun: true });
+          expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
+          expect(await sessions.loadTranscriptEvents(source)).toEqual(parentBefore);
+        } finally {
+          failedWrite.mockRestore();
+        }
+      }
+      expect(await recover(runtime)).toEqual({
+        started: 0,
+        settled: kind === "requester-settle" ? 1 : 0,
+        failed: 0,
+        skipped: kind === "requester-settle" ? 0 : 1,
+      });
+      expect(runtime.dispatchAgent).not.toHaveBeenCalled();
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeDefined();
+      const parentTranscript = await sessions.loadTranscriptEvents(source);
+      expect(JSON.stringify(parentTranscript.at(-1))).toContain("use Resume");
+      expect(JSON.stringify(parentTranscript.at(-1))).toContain(target.sessionKey);
+      await restart();
+      expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+      expect(runtime.dispatchAgent).not.toHaveBeenCalled();
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeDefined();
+      expect(await sessions.loadTranscriptEvents(source)).toEqual(parentTranscript);
+    }),
+);
+
 it("recovers a consumed peer input through two process losses without replaying the input", () =>
-  withPeerState(async ({ cfg, stateDir, endpoint, restart, recover }) => {
-    const source = endpoint("peer-source");
-    const target = endpoint("peer-target");
-    const { receiver, originalTranscript } = await seedConsumedPeerRestartInput({
-      cfg,
-      source,
-      target,
-      runId: "accepted-peer-input",
-    });
+  withPeerState(async ({ cfg, stateDir, seed, restart, recover }) => {
+    const { target, receiver, originalTranscript } = await seed("accepted-peer-input");
 
     const dispatchGate = createDeferred();
     const finalDispatchGate = createDeferred();
@@ -256,7 +309,7 @@ it("recovers a consumed peer input through two process losses without replaying 
       await restart();
       expect(await recoverCurrent()).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
       expect(skipped).toEqual([]);
-      expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
       // The admitted continuation vanishes without a terminal owner receipt.
       current = false;
       dispatchGate.resolve();
@@ -273,10 +326,10 @@ it("recovers a consumed peer input through two process losses without replaying 
       expect(receiver).toHaveBeenCalledOnce();
       finalDispatchGate.resolve();
       await vi.waitFor(() => {
-        expect(loadSessionEntry(target)).toMatchObject({ abortedLastRun: false });
+        expect(sessions.loadSessionEntry(target)).toMatchObject({ abortedLastRun: false });
       });
-      expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
-      expect(await loadTranscriptEvents(target)).toEqual(originalTranscript);
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
+      expect(await sessions.loadTranscriptEvents(target)).toEqual(originalTranscript);
     } finally {
       current = false;
       dispatchGate.resolve();

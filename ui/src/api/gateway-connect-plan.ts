@@ -1,4 +1,3 @@
-import { etc } from "@noble/ed25519";
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
@@ -26,6 +25,7 @@ import type {
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
 import { i18n } from "../i18n/index.ts";
+import { bytesToHex } from "../lib/bytes-hex.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
 
 export type GatewayBrowserConnectOptions = {
@@ -81,7 +81,7 @@ export async function deriveLegacyV4RecoveryScope(material: string | undefined):
   }
   try {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return etc.bytesToHex(new Uint8Array(digest));
+    return bytesToHex(new Uint8Array(digest));
   } catch {
     return "";
   }

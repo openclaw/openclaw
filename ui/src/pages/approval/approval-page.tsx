@@ -1,7 +1,16 @@
 import "../../styles/approval.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX } from "@solidjs/web";
-import { onCleanup, Show, For } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  For,
+} from "solid-js";
 import {
   validateApprovalGetResult,
   validateApprovalResolveResult,
@@ -10,25 +19,18 @@ import {
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
-import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import {
-  approvalTitle,
-  decisionLabel,
-  renderApprovalPresentation,
-  terminalDescription,
-  terminalTitle,
-  type ResolutionOrigin,
-} from "./approval-presentation.tsx";
+import { ApprovalContent, approvalTitle, type ResolutionOrigin } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
@@ -59,18 +61,6 @@ function appliedDecisionMatches(
     : result.approval.status === "allowed" && result.approval.decision === decision;
 }
 
-function ApprovalChip(props: { kind: "plugin" | "tool" | "agent"; value?: string | null }) {
-  return (
-    <Show when={props.value?.trim()}>
-      {(value) => (
-        <span class="approval-page__chip mono" data-approval-chip={props.kind}>
-          {value()}
-        </span>
-      )}
-    </Show>
-  );
-}
-
 type ApprovalPageProps = { approvalId: string };
 
 const approvalIdHandlers = new WeakMap<HTMLElement, () => void>();
@@ -87,7 +77,6 @@ function createApprovalPage(
     connected: boolean;
     approvalsAccess: boolean;
     approvalGrantAccess: boolean;
-    loading: boolean;
     resolvingDecision: ApprovalDecision | null;
     requestError: ApprovalRequestError;
     resolutionOrigin: ResolutionOrigin;
@@ -96,13 +85,44 @@ function createApprovalPage(
     connected: false,
     approvalsAccess: true,
     approvalGrantAccess: false,
-    loading: true,
     resolvingDecision: null,
     requestError: null,
     resolutionOrigin: "observed",
   };
+  // Observe admitted foreground reads without starting requests from a computation.
+  let completion = Promise.withResolvers<void>();
+  const [request, setRequest] = createSignal({ completion: completion.promise });
+  function beginRead() {
+    completion.resolve();
+    completion = Promise.withResolvers<void>();
+    setRequest({ completion: completion.promise });
+  }
+  const [optimisticDecision, setOptimisticDecision] = createOptimistic<ApprovalDecision | null>(
+    null,
+  );
+  let presentationLifetime = Promise.withResolvers<void>();
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
+  }
+  const presentDecision = action(function* (
+    decision: ApprovalDecision,
+    pending: Promise<void>,
+    retired: Promise<void>,
+    isCurrent: () => boolean,
+  ) {
+    if (isCurrent() && state.resolvingDecision !== null) {
+      setOptimisticDecision(decision);
+    }
+    // Retiring the UI does not cancel an already admitted Gateway decision.
+    yield Promise.race([pending, retired]);
+  });
   let clientOwner: GatewayBrowserClient | null = null;
   let operationGeneration = 0;
+  // Refreshes during an in-flight approval.get queue one follow-up instead of another request.
+  let activeLookup:
+    | { client: GatewayBrowserClient; id: string; generation: number; followUp: boolean }
+    | undefined;
   let pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let boundApprovalId: string | undefined;
   let heading: HTMLHeadingElement | undefined;
@@ -133,9 +153,13 @@ function createApprovalPage(
       }
       boundApprovalId = id;
       operationGeneration += 1;
+      retirePresentation();
       clearPollTimer();
       state.approval = null;
-      state.loading = Boolean(id);
+      beginRead();
+      if (!id) {
+        completion.resolve();
+      }
       state.resolvingDecision = null;
       state.requestError = id ? null : "unavailable";
       state.resolutionOrigin = "observed";
@@ -171,6 +195,8 @@ function createApprovalPage(
         approvalGrantAccessChanged
       ) {
         operationGeneration += 1;
+        retirePresentation();
+        completion.resolve();
         clearPollTimer();
         state.resolvingDecision = null;
       }
@@ -181,19 +207,19 @@ function createApprovalPage(
       }
       if (snapshot.phase !== "connected" || !snapshot.client) {
         if (approvalId()) {
-          state.loading = false;
+          completion.resolve();
           state.requestError =
             !state.approval || state.approval.status === "pending" ? "connection" : null;
         }
         return;
       }
       if (!state.approvalsAccess) {
-        state.loading = false;
+        completion.resolve();
         state.requestError = null;
         return;
       }
       if (!approvalId()) {
-        state.loading = false;
+        completion.resolve();
         state.requestError = "unavailable";
         return;
       }
@@ -223,12 +249,25 @@ function createApprovalPage(
     if (!client || !state.connected || !id || !hasApprovalAccess()) {
       return;
     }
+    if (
+      activeLookup?.generation === operationGeneration &&
+      activeLookup.client === client &&
+      activeLookup.id === id
+    ) {
+      activeLookup.followUp = true;
+      if (!options.background) {
+        beginRead();
+        notify();
+      }
+      return;
+    }
     const generation = ++operationGeneration;
+    const lookup = (activeLookup = { client, id, generation, followUp: false });
     const previousStatus = state.approval?.status;
     let shouldFocusTerminal = false;
     clearPollTimer();
     if (!options.background) {
-      state.loading = true;
+      beginRead();
     }
     notify();
     try {
@@ -260,11 +299,19 @@ function createApprovalPage(
         state.requestError = "connection";
       }
     } finally {
+      if (activeLookup === lookup) {
+        activeLookup = undefined;
+      }
       if (isCurrentOperation(client, generation, id)) {
-        state.loading = false;
+        // Retry can attach a foreground read receipt to this same lookup.
+        completion.resolve();
         schedulePoll();
         notify();
       }
+    }
+    // Stale lookups returned above; a queued follow-up replaces the poll just armed.
+    if (lookup.followUp && pollTimer !== undefined) {
+      void loadApproval({ background: true });
     }
     if (shouldFocusTerminal && isCurrentOperation(client, generation, id)) {
       await focusTerminalState();
@@ -288,56 +335,73 @@ function createApprovalPage(
     }
     const kind = approval.presentation.kind;
     const generation = ++operationGeneration;
+    completion.resolve();
     const isCurrentDecision = () =>
       isCurrentOperation(client, generation, id) && hasApprovalGrantAccess();
+    const retired = presentationLifetime.promise;
     let shouldFocusTerminal = false;
     let shouldRecoverCanonicalState = false;
     clearPollTimer();
     state.resolvingDecision = decision;
     state.requestError = null;
     notify();
+    const pending = applyDecision(client);
+    // Publish the owner's admission before opening its optimistic transition.
+    await Promise.resolve();
     try {
-      const result = await client.request<ApprovalResolveResult>("approval.resolve", {
-        id,
-        kind,
-        decision,
-      });
-      if (!isCurrentDecision()) {
-        return;
-      }
-      if (
-        !validateApprovalResolveResult(result) ||
-        result.approval.id !== id ||
-        result.approval.presentation.kind !== kind ||
-        !appliedDecisionMatches(result, decision)
-      ) {
-        // The write outcome is unknown. Keep every decision disabled until a
-        // fresh, strictly validated read establishes canonical Gateway truth.
-        state.requestError = "connection";
-        shouldRecoverCanonicalState = true;
-      } else {
-        state.approval = result.approval;
-        state.resolutionOrigin = result.applied ? "here" : "elsewhere";
-        shouldFocusTerminal = true;
-      }
+      await presentDecision(decision, pending, retired, isCurrentDecision);
     } catch (error) {
-      if (!isCurrentDecision()) {
-        return;
-      }
-      state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
-    } finally {
       if (isCurrentDecision()) {
-        state.resolvingDecision = null;
-        schedulePoll();
+        state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
         notify();
       }
     }
+
     if (shouldRecoverCanonicalState && isCurrentDecision()) {
       await loadApproval({ background: true });
       return;
     }
     if (shouldFocusTerminal && isCurrentDecision()) {
       await focusTerminalState();
+    }
+
+    async function applyDecision(admittedClient: GatewayBrowserClient) {
+      try {
+        const result = await admittedClient.request<ApprovalResolveResult>("approval.resolve", {
+          id,
+          kind,
+          decision,
+        });
+        if (!isCurrentDecision()) {
+          return;
+        }
+        if (
+          !validateApprovalResolveResult(result) ||
+          result.approval.id !== id ||
+          result.approval.presentation.kind !== kind ||
+          !appliedDecisionMatches(result, decision)
+        ) {
+          // The write outcome is unknown. Keep every decision disabled until a
+          // fresh, strictly validated read establishes canonical Gateway truth.
+          state.requestError = "connection";
+          shouldRecoverCanonicalState = true;
+        } else {
+          state.approval = result.approval;
+          state.resolutionOrigin = result.applied ? "here" : "elsewhere";
+          shouldFocusTerminal = true;
+        }
+      } catch (error) {
+        if (!isCurrentDecision()) {
+          return;
+        }
+        state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
+      } finally {
+        if (isCurrentDecision()) {
+          state.resolvingDecision = null;
+          schedulePoll();
+          notify();
+        }
+      }
     }
   }
 
@@ -396,19 +460,23 @@ function createApprovalPage(
     }
   };
 
-  const stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
-  bindApprovalId(true);
-  // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
-  const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
-  applyGatewaySnapshot(context.gateway.snapshot);
-  approvalIdHandlers.set(host, () => bindApprovalId());
-  onCleanup(() => {
-    approvalIdHandlers.delete(host);
-    stopVisibility();
-    stopGateway();
-    operationGeneration += 1;
-    clearPollTimer();
-    clientOwner = null;
+  onSettled(() => {
+    const stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
+    bindApprovalId(true);
+    // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
+    const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
+    applyGatewaySnapshot(context.gateway.snapshot);
+    approvalIdHandlers.set(host, () => bindApprovalId());
+    return () => {
+      approvalIdHandlers.delete(host);
+      stopVisibility();
+      stopGateway();
+      operationGeneration += 1;
+      retirePresentation();
+      completion.resolve();
+      clearPollTimer();
+      clientOwner = null;
+    };
   });
   createDocumentTitle(() => {
     const current = view.read();
@@ -426,6 +494,8 @@ function createApprovalPage(
   });
   return {
     read: view.read,
+    resolvingDecision: () => optimisticDecision() ?? view.read().resolvingDecision,
+    request,
     hasGatewayConnection: () => hasGatewayConnection(view.read()),
     hasApprovalAccess: () => hasApprovalAccess(view.read()),
     hasApprovalGrantAccess: () => hasApprovalGrantAccess(view.read()),
@@ -437,121 +507,151 @@ function createApprovalPage(
   };
 }
 
-defineSolidBridge<ApprovalPageProps>(
+export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
   (_props, host) => {
     const context = useApplication();
     const page = createApprovalPage(context, host);
-    const read = page.read;
-    const missingScope = () => read().connected && !read().approvalsAccess;
-    const disconnected = () => read().requestError === "connection" && !read().approval;
-    const documentState = () =>
-      missingScope()
-        ? "missing-scope"
-        : read().requestError === "unavailable"
-          ? "unavailable"
-          : disconnected()
-            ? "connection-error"
-            : (read().approval?.status ?? "loading");
-    const severity = () => {
-      const active = read().approval?.presentation;
-      const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
-      return active?.kind === "exec" || raw === "warning" || raw === "warn"
-        ? "warning"
-        : raw === "danger" || raw === "critical" || raw === "error"
-          ? "danger"
-          : "info";
-    };
-    const retry = (className: string) => (
-      <button
-        type="button"
-        class={className}
-        disabled={!page.hasGatewayConnection() || !page.hasApprovalAccess() || read().loading}
-        onClick={() => void page.loadApproval()}
-      >
-        {t("approvalPage.retry")}
-      </button>
-    );
-    const renderState = (kind: "loading" | "unavailable" | "missing-scope" | "connection") => {
-      const title = {
-        loading: "approvalPage.loadingTitle",
-        unavailable: "approvalPage.unavailableTitle",
-        "missing-scope": "common.disabled",
-        connection: "approvalPage.connectionErrorTitle",
-      }[kind];
-      const description = {
-        loading: "approvalPage.loadingDescription",
-        unavailable: "approvalPage.unavailableDescription",
-        connection: "approvalPage.connectionErrorDescription",
+    const initialRead = createMemo(() => (page.read().approval ? null : page.request()));
+    function ReadyFrame() {
+      const ready = createMemo(() => page.request().completion);
+      const read = () => {
+        if (!page.read().approval) {
+          ready();
+          return page.read();
+        }
+        latest(ready);
+        return page.read();
+      };
+      const loading = () => {
+        read();
+        return isPending(ready);
+      };
+      return <Frame read={read} loading={loading()} />;
+    }
+    function Frame(props: { loading: boolean; read?: typeof page.read }) {
+      const read = () => (props.read ?? page.read)();
+      const approvals = () => {
+        const approval = read().approval;
+        return approval ? [approval] : [];
+      };
+      const missingScope = () => read().connected && !read().approvalsAccess;
+      const disconnected = () => read().requestError === "connection" && !read().approval;
+      const documentState = () =>
+        missingScope()
+          ? "missing-scope"
+          : read().requestError === "unavailable"
+            ? "unavailable"
+            : disconnected()
+              ? "connection-error"
+              : (read().approval?.status ?? "loading");
+      const severity = () => {
+        const active = read().approval?.presentation;
+        const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
+        return active?.kind === "exec" || raw === "warning" || raw === "warn"
+          ? "warning"
+          : raw === "danger" || raw === "critical" || raw === "error"
+            ? "danger"
+            : "info";
+      };
+      const retry = (className: string) => (
+        <button
+          type="button"
+          class={className}
+          disabled={!page.hasGatewayConnection() || !page.hasApprovalAccess() || props.loading}
+          onClick={() => void page.loadApproval()}
+        >
+          {t("approvalPage.retry")}
+        </button>
+      );
+      const renderState = (kind: "loading" | "unavailable" | "missing-scope" | "connection") => {
+        const title = {
+          loading: "approvalPage.loadingTitle",
+          unavailable: "approvalPage.unavailableTitle",
+          "missing-scope": "common.disabled",
+          connection: "approvalPage.connectionErrorTitle",
+        }[kind];
+        const description = {
+          loading: "approvalPage.loadingDescription",
+          unavailable: "approvalPage.unavailableDescription",
+          connection: "approvalPage.connectionErrorDescription",
+        };
+        return (
+          <div
+            class={[
+              "approval-page__state",
+              `approval-page__state--${kind === "missing-scope" ? "unavailable" : kind}`,
+            ]}
+            role={kind === "loading" ? "status" : "alert"}
+          >
+            {kind === "loading" ? (
+              <div class="approval-page__spinner" aria-hidden="true" />
+            ) : (
+              <div class="approval-page__state-mark" aria-hidden="true">
+                !
+              </div>
+            )}
+            <h1 ref={page.setHeading} id="approval-page-title">
+              {t(title)}
+            </h1>
+            <p>
+              {kind === "missing-scope" ? (
+                <code>{APPROVAL_REQUIRED_SCOPE}</code>
+              ) : (
+                t(description[kind])
+              )}
+            </p>
+            {kind === "connection" ? retry("btn") : null}
+          </div>
+        );
       };
       return (
-        <div
-          class={[
-            "approval-page__state",
-            `approval-page__state--${kind === "missing-scope" ? "unavailable" : kind}`,
-          ]}
-          role={kind === "loading" ? "status" : "alert"}
-        >
-          {kind === "loading" ? (
-            <div class="approval-page__spinner" aria-hidden="true" />
-          ) : (
-            <div class="approval-page__state-mark" aria-hidden="true">
-              !
+        <main class="approval-page" data-state={documentState()}>
+          <div class="approval-page__backdrop" aria-hidden="true" />
+          <section
+            class={["approval-page__card", `approval-page__card--severity-${severity()}`]}
+            aria-labelledby="approval-page-title"
+            aria-busy={props.loading || page.resolvingDecision() !== null ? "true" : "false"}
+          >
+            <header class="approval-page__brand">
+              <img
+                class="approval-page__logo"
+                src={controlUiPublicAssetPath("apple-touch-icon.png", context.resourceBasePath)}
+                alt=""
+              />
+              <div>
+                <div class="approval-page__eyebrow">{t("approvalPage.eyebrow")}</div>
+                <div class="approval-page__brand-name">{t("approvalPage.brandName")}</div>
+              </div>
+            </header>
+            <div class="approval-page__content">
+              {missingScope() ? (
+                renderState("missing-scope")
+              ) : props.loading && !read().approval ? (
+                renderState("loading")
+              ) : disconnected() ? (
+                renderState("connection")
+              ) : read().requestError === "unavailable" || !read().approval ? (
+                renderState("unavailable")
+              ) : (
+                <For each={approvals()} keyed={(approval) => approval.id}>
+                  {(approval) => (
+                    <ApprovalContent approval={approval()} page={page} retry={retry} />
+                  )}
+                </For>
+              )}
             </div>
-          )}
-          <h1 ref={page.setHeading} id="approval-page-title">
-            {t(title)}
-          </h1>
-          <p>
-            {kind === "missing-scope" ? (
-              <code>{APPROVAL_REQUIRED_SCOPE}</code>
-            ) : (
-              t(description[kind])
-            )}
-          </p>
-          {kind === "connection" ? retry("btn") : null}
-        </div>
+          </section>
+          <a class="approval-page__back-link" href={`${context.basePath}/chat`}>
+            {t("approvalPage.openControlUi")}
+          </a>
+        </main>
       );
-    };
+    }
     return (
-      <main class="approval-page" data-state={documentState()}>
-        <div class="approval-page__backdrop" aria-hidden="true" />
-        <section
-          class={["approval-page__card", `approval-page__card--severity-${severity()}`]}
-          aria-labelledby="approval-page-title"
-          aria-busy={read().loading || read().resolvingDecision !== null ? "true" : "false"}
-        >
-          <header class="approval-page__brand">
-            <img
-              class="approval-page__logo"
-              src={controlUiPublicAssetPath("apple-touch-icon.png", context.resourceBasePath)}
-              alt=""
-            />
-            <div>
-              <div class="approval-page__eyebrow">{t("approvalPage.eyebrow")}</div>
-              <div class="approval-page__brand-name">{t("approvalPage.brandName")}</div>
-            </div>
-          </header>
-          <div class="approval-page__content">
-            {missingScope() ? (
-              renderState("missing-scope")
-            ) : read().loading && !read().approval ? (
-              renderState("loading")
-            ) : disconnected() ? (
-              renderState("connection")
-            ) : read().requestError === "unavailable" || !read().approval ? (
-              renderState("unavailable")
-            ) : (
-              <Show when={read().approval}>
-                {(approval) => <ApprovalContent approval={approval()} page={page} retry={retry} />}
-              </Show>
-            )}
-          </div>
-        </section>
-        <a class="approval-page__back-link" href={`${context.basePath}/chat`}>
-          {t("approvalPage.openControlUi")}
-        </a>
-      </main>
+      <Loading on={initialRead()} fallback={<Frame loading={true} />}>
+        <ReadyFrame />
+      </Loading>
     );
   },
   {
@@ -559,117 +659,3 @@ defineSolidBridge<ApprovalPageProps>(
     propertyChanged: (host) => approvalIdHandlers.get(host)?.(),
   },
 );
-
-function ApprovalContent(props: {
-  approval: ApprovalSnapshot;
-  page: ReturnType<typeof createApprovalPage>;
-  retry: (className: string) => JSX.Element;
-}) {
-  const pending = () => props.approval.status === "pending";
-  const presentation = () => props.approval.presentation;
-  const origin = () => props.page.read().resolutionOrigin;
-  const pluginPresentation = () => {
-    const value = presentation();
-    return value.kind === "plugin" ? value : null;
-  };
-  const resolvedAt = () => {
-    const approval = props.approval;
-    return approval.status === "pending" ? approval.expiresAtMs : approval.resolvedAtMs;
-  };
-  return (
-    <>
-      <div class="approval-page__status" aria-live="polite" aria-atomic="true">
-        <span
-          class={[
-            "approval-page__status-dot",
-            `approval-page__status-dot--${props.approval.status}`,
-          ]}
-          aria-hidden="true"
-        />
-        {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
-      </div>
-      <div class="approval-page__heading">
-        <h1
-          ref={props.page.setHeading}
-          id="approval-page-title"
-          tabindex={pending() ? undefined : -1}
-        >
-          {approvalTitle(props.approval, origin())}
-        </h1>
-        <div class="approval-page__chips">
-          <Show when={pluginPresentation()}>
-            {(value) => (
-              <>
-                <ApprovalChip kind="plugin" value={value().pluginId} />
-                <ApprovalChip kind="tool" value={value().toolName} />
-              </>
-            )}
-          </Show>
-          <ApprovalChip kind="agent" value={presentation().agentId} />
-        </div>
-        <p>
-          {pending()
-            ? t(
-                props.page.hasApprovalGrantAccess()
-                  ? "approvalPage.pendingDescription"
-                  : "execApproval.reviewOnly",
-              )
-            : terminalDescription(props.approval, origin())}
-        </p>
-      </div>
-      {renderApprovalPresentation(presentation())}
-      <div class="approval-page__timing">
-        <span>{pending() ? t("approvalPage.expiresLabel") : t("approvalPage.resolvedLabel")}</span>
-        <time datetime={new Date(resolvedAt()).toISOString()}>
-          {formatDateTimeMs(resolvedAt(), { dateStyle: "medium", timeStyle: "short" })}
-        </time>
-      </div>
-      <Show when={props.page.read().requestError === "connection"}>
-        <div class="approval-page__callout" role="alert">
-          <div>
-            <strong>{t("approvalPage.connectionErrorTitle")}</strong>
-            <span>{t("approvalPage.connectionErrorDescription")}</span>
-          </div>
-          {props.retry("btn btn--sm")}
-        </div>
-      </Show>
-      <Show
-        when={pending()}
-        fallback={
-          <div class="approval-page__terminal" role="status">
-            {t("approvalPage.safeToClose")}
-          </div>
-        }
-      >
-        <div
-          class="approval-page__actions"
-          role="group"
-          aria-label={t("approvalPage.actionsLabel")}
-        >
-          <For each={presentation().allowedDecisions} keyed={(decision) => decision}>
-            {(decision) => (
-              <button
-                type="button"
-                class={["btn approval-page__action", `approval-page__action--${decision()}`]}
-                data-decision={decision()}
-                disabled={
-                  props.page.read().resolvingDecision !== null ||
-                  !props.page.hasGatewayConnection() ||
-                  !props.page.hasApprovalGrantAccess() ||
-                  props.page.read().requestError !== null
-                }
-                onClick={() => void props.page.resolveApproval(decision())}
-              >
-                {props.page.read().resolvingDecision === decision()
-                  ? t("approvalPage.resolvingDecision", {
-                      decision: decisionLabel(decision(), presentation()),
-                    })
-                  : decisionLabel(decision(), presentation())}
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
-    </>
-  );
-}

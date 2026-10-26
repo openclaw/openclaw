@@ -33,8 +33,13 @@ vi.mock("./gateway-child.js", () => ({
 // mock-isolation: Provider startup and failure are controlled by the lifecycle fixture.
 vi.mock("./providers/server-runtime.js", () => ({ startQaProviderServer }));
 
-// mock-isolation: Synthetic transport cleanup is observed without loading live adapters.
+// mock-isolation: Synthetic cleanup and settle waits need neither live adapters nor real timers.
 vi.mock("./qa-transport-registry.js", () => ({ createQaTransportAdapter }));
+
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: async () => {},
+}));
 
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
@@ -45,7 +50,6 @@ function runLane(overrides: Partial<Parameters<typeof runQaManualLane>[0]> = {})
     primaryModel: "mock-openai/gpt-5.6-luna",
     alternateModel: "mock-openai/gpt-5.6-luna-alt",
     message: "check the kickoff file",
-    replySettleMs: 0,
     ...overrides,
   });
 }
@@ -107,12 +111,7 @@ describe("runQaManualLane", () => {
     });
 
     startQaProviderServer.mockImplementation(async (providerMode: string) =>
-      providerMode === "mock-openai"
-        ? {
-            baseUrl: "http://127.0.0.1:44080",
-            stop: mockStop,
-          }
-        : null,
+      providerMode === "mock-openai" ? { baseUrl: "http://127.0.0.1:44080", stop: mockStop } : null,
     );
   });
 
@@ -153,19 +152,19 @@ describe("runQaManualLane", () => {
   );
 
   it.each([
-    {
-      label: "failed run despite a stale reply",
-      waited: { status: "error", error: "authentication failed" },
-      reply: "stale assistant reply",
-      error: "authentication failed",
-    },
-    {
-      label: "timed-out run without an outbound reply",
-      waited: { status: "timeout", error: "provider stalled" },
-      reply: null,
-      error: "manual lane did not produce a successful reply",
-    },
-  ])("rejects a $label after resource cleanup", async ({ waited, reply, error }) => {
+    [
+      "failed run despite a stale reply",
+      { status: "error", error: "authentication failed" },
+      "stale assistant reply",
+      "authentication failed",
+    ],
+    [
+      "timed-out run without an outbound reply",
+      { status: "timeout", error: "provider stalled" },
+      null,
+      "manual lane did not produce a successful reply",
+    ],
+  ] as const)("rejects a %s after resource cleanup", async (_label, waited, reply, error) => {
     outboundReply = reply;
     gatewayCall.mockReset().mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce(waited);
 

@@ -50,18 +50,8 @@ const {
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => {
-    const headers = new Headers(params.defaultHeaders);
-    new Headers(params.headers).forEach((value, key) => headers.set(key, value));
-    return {
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: Boolean(
-        params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork,
-      ),
-      headers,
-      dispatcherPolicy: undefined,
-    };
-  }),
+  resolveProviderHttpRequestConfigMock:
+    vi.fn<typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig>(),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
   logInfoMock: vi.fn(),
 }));
@@ -77,16 +67,20 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
-  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  resolveProviderHttpRequestConfigMock.mockImplementation(actual.resolveProviderHttpRequestConfig);
+  return {
+    ...actual,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+    readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   createSubsystemLogger: vi.fn(() => ({

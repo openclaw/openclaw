@@ -1,14 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { classifyGatewaySecret } from "../../ui/src/lib/gateway-secret-shape.ts";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
-  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE as FULL_ACCESS,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE as LIMITED_ACCESS,
 } from "../shared/device-bootstrap-profile.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   encodePairingSetupCode,
-  resolvePairingGatewayUrl,
+  resolvePairingGatewayUrl as resolveUrl,
   resolvePairingSetupFromConfig,
 } from "./setup-code.js";
 
@@ -21,109 +21,69 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-const options = { env: {}, networkInterfaces: () => ({}) };
-const localPassword = "synthetic-local-password";
+const publicOrigin = "https://gw.test";
+const funnel = { tailscale: { mode: "funnel" }, remote: { url: "wss://remote.test" } } as const;
+const tailnet = { code: 0, stdout: '{"Self":{"DNSName":"gw.ts.net"}}' };
+const funnelOptions = { runCommandWithTimeout: async () => tailnet };
+const lan = makeNetworkInterfacesSnapshot({
+  en0: [{ address: "192.168.1.20", family: "IPv4", netmask: "255.255.255.0" }],
+});
+beforeEach(() => vi.mocked(issueDevicePairSetupBootstrapToken).mockClear());
 
 type OriginCase = [
-  NonNullable<Parameters<typeof resolvePairingGatewayUrl>[0]["gateway"]>,
-  Awaited<ReturnType<typeof resolvePairingGatewayUrl>>,
-  Parameters<typeof resolvePairingGatewayUrl>[1]["networkInterfaces"]?,
+  NonNullable<Parameters<typeof resolveUrl>[0]["gateway"]>,
+  string,
+  string?,
+  Partial<Parameters<typeof resolveUrl>[1]>?,
 ];
 it.each<OriginCase>([
+  [{ publicOrigin: `${publicOrigin}/gw` }, "wss://gw.test/gw", "gateway.publicOrigin"],
+  [{ publicOrigin: `${publicOrigin}:notaport` }, "Configured gateway.publicOrigin is invalid."],
   [
-    { bind: "loopback", publicOrigin: "https://gateway.example.test/openclaw-gw" },
-    { url: "wss://gateway.example.test/openclaw-gw", source: "gateway.publicOrigin" },
+    { bind: "lan", port: 19001 },
+    "ws://192.168.1.20:19001",
+    "gateway.bind=lan",
+    { networkInterfaces: () => lan },
   ],
+  [funnel, "wss://gw.ts.net", "gateway.tailscale.mode=funnel", funnelOptions],
   [
-    { bind: "loopback", publicOrigin: "https://gateway.example.test:notaport" },
-    { error: "Configured gateway.publicOrigin is invalid." },
+    funnel,
+    "wss://pair.test",
+    "plugins.entries.device-pair.config.publicUrl",
+    { ...funnelOptions, preferRemoteUrl: true, publicUrl: "https://pair.test" },
   ],
-  [
-    { bind: "lan", port: 19001, publicOrigin: "https://gateway.example.test" },
-    { url: "ws://192.168.1.20:19001", source: "gateway.bind=lan" },
-    () =>
-      makeNetworkInterfacesSnapshot({
-        en0: [{ address: "192.168.1.20", family: "IPv4", netmask: "255.255.255.0" }],
-      }),
-  ],
-])(
-  "resolves public-origin fallback for %j",
-  async (gateway, expected, networkInterfaces = options.networkInterfaces) => {
-    await expect(
-      resolvePairingGatewayUrl({ gateway }, { ...options, networkInterfaces }),
-    ).resolves.toEqual(expected);
-  },
-);
-
-it("preserves Tailscale Funnel ahead of publicOrigin for device pairing", async () => {
-  const config = {
-    gateway: {
-      bind: "loopback",
-      publicOrigin: "https://gateway.example.test",
-      remote: { url: "wss://remote.example.test" },
-      tailscale: { mode: "funnel" },
-    },
-  } satisfies Parameters<typeof resolvePairingGatewayUrl>[0];
-  const runCommandWithTimeout = vi.fn(async () => ({
-    code: 0,
-    stdout: '{"Self":{"DNSName":"gateway.tailnet.ts.net"}}',
-  }));
-  const resolveOptions = { ...options, runCommandWithTimeout };
-  await expect(resolvePairingGatewayUrl(config, resolveOptions)).resolves.toEqual({
-    url: "wss://gateway.tailnet.ts.net",
-    source: "gateway.tailscale.mode=funnel",
-  });
+])("resolves public-origin precedence for %j", async (gateway, expected, source, overrides) => {
   await expect(
-    resolvePairingGatewayUrl(config, {
-      ...resolveOptions,
-      preferRemoteUrl: true,
-      publicUrl: "https://pairing.example.test",
-    }),
-  ).resolves.toEqual({
-    url: "wss://pairing.example.test",
-    source: "plugins.entries.device-pair.config.publicUrl",
-  });
-  expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+    resolveUrl(
+      { gateway: { bind: "loopback", publicOrigin, ...gateway } },
+      { env: {}, networkInterfaces: () => ({}), ...overrides },
+    ),
+  ).resolves.toEqual(source ? { url: expected, source } : { error: expected });
 });
 
-describe("trusted-proxy pairing setup", () => {
-  beforeEach(() => vi.mocked(issueDevicePairSetupBootstrapToken).mockClear());
-
-  it.each<[string, NodeJS.ProcessEnv, string | undefined, boolean]>([
-    ["TLS without shared secret", {}, undefined, false],
-    ["ambient password", { OPENCLAW_GATEWAY_PASSWORD: localPassword }, undefined, false],
-    ["configured password", {}, localPassword, false],
-    ["limited plaintext LAN", {}, undefined, true],
-  ])("preserves trusted-proxy setup: %s", async (_name, env, password, limited) => {
-    const url = limited ? "ws://192.168.1.20:18789" : "wss://gateway.example.test";
-    const result = await resolvePairingSetupFromConfig(
-      {
-        gateway: {
-          bind: "custom",
-          customBindHost: "127.0.0.1",
-          auth: { mode: "trusted-proxy", ...(password ? { password } : {}) },
-        },
-      },
-      { env, publicUrl: url },
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      authLabel: "trusted-proxy",
-      setupId: "setup-123",
-      expiresAtMs: 123,
-      urlSource: "plugins.entries.device-pair.config.publicUrl",
-      access: limited ? "limited" : "full",
-      accessDowngraded: limited,
-    });
-    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith({
-      baseDir: undefined,
-      profile: limited
-        ? PAIRING_SETUP_BOOTSTRAP_PROFILE
-        : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-    if (result.ok) {
-      expect(result.payload).toEqual({ url, bootstrapToken: "bootstrap-123", expiresAtMs: 123 });
-    }
+it.each<[string, NodeJS.ProcessEnv, string | undefined, boolean]>([
+  ["TLS without shared secret", {}, undefined, false],
+  ["ambient password", { OPENCLAW_GATEWAY_PASSWORD: "password" }, undefined, false],
+  ["configured password", {}, "password", false],
+  ["limited plaintext LAN", {}, undefined, true],
+])("preserves trusted-proxy setup: %s", async (_name, env, password, limited) => {
+  const url = limited ? "ws://192.168.1.20:18789" : "wss://gw.test";
+  const result = await resolvePairingSetupFromConfig(
+    { gateway: { auth: { mode: "trusted-proxy", ...(password ? { password } : {}) } } },
+    { env, publicUrl: url },
+  );
+  expect(result).toEqual({
+    ok: true,
+    authLabel: "trusted-proxy",
+    setupId: "setup-123",
+    expiresAtMs: 123,
+    urlSource: "plugins.entries.device-pair.config.publicUrl",
+    access: limited ? "limited" : "full",
+    accessDowngraded: limited,
+    payload: { url, bootstrapToken: "bootstrap-123", expiresAtMs: 123 },
+  });
+  expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith({
+    profile: limited ? LIMITED_ACCESS : FULL_ACCESS,
   });
 });
 

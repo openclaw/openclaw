@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/import-side-effects.js";
 
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const getLoadedChannelPlugin = vi.hoisted(() =>
@@ -25,41 +24,29 @@ const HOT_RUNTIME_IMPORT_CASES = [
     "src/plugin-sdk/approval-reference-runtime.ts",
     () => import("../../plugin-sdk/approval-reference-runtime.js"),
   ],
-  ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
+  ["src/plugins/runtime/runtime-base.ts", () => import("../runtime/runtime-base.js")],
   ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
   ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],
 ] as const;
 
 function mockChannelRegistry() {
-  vi.doMock("../../channels/plugins/index.js", async () => ({
-    ...(await vi.importActual<typeof import("../../channels/plugins/index.js")>(
-      "../../channels/plugins/index.js",
-    )),
+  vi.doMock("../../channels/plugins/index.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
     normalizeChannelId: (raw?: string | null) => raw ?? null,
   }));
-  vi.doMock("../../channels/plugins/registry.js", async () => ({
-    ...(await vi.importActual<typeof import("../../channels/plugins/registry.js")>(
-      "../../channels/plugins/registry.js",
-    )),
+  vi.doMock("../../channels/plugins/registry.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../channels/plugins/registry.js")>()),
     listChannelPlugins,
     getLoadedChannelPlugin,
   }));
-  vi.doMock("../../plugins/runtime.js", async () => ({
-    ...(await vi.importActual<typeof import("../../plugins/runtime.js")>(
-      "../../plugins/runtime.js",
-    )),
+  vi.doMock("../../plugins/runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../plugins/runtime.js")>()),
     getActivePluginChannelRegistryVersion,
   }));
 }
 
 function expectNoChannelRegistryDuringImport(moduleId: string) {
-  assertNoImportTimeSideEffects({
-    moduleId,
-    forbiddenSeam: "listChannelPlugins()",
-    calls: listChannelPlugins.mock.calls,
-    why: "hot runtime/config imports must not boot active channel metadata",
-    fixHint: "keep registry work behind a lazy getter/runtime boundary",
-  });
+  expect(listChannelPlugins, `${moduleId} must not boot channel metadata`).not.toHaveBeenCalled();
   expect(getActivePluginChannelRegistryVersion).not.toHaveBeenCalled();
   expect(getLoadedChannelPlugin).not.toHaveBeenCalled();
 }
@@ -88,8 +75,6 @@ describe("runtime import side-effect contracts", () => {
     expectNoChannelRegistryDuringImport("src/config/markdown-tables.ts");
 
     expect(resolve()).toBe("bullets");
-    expect(getActivePluginChannelRegistryVersion).not.toHaveBeenCalled();
-    expect(listChannelPlugins).not.toHaveBeenCalled();
     getLoadedChannelPlugin.mockReturnValueOnce({
       id: "telegram",
       messaging: { defaultMarkdownTableMode: "block" },

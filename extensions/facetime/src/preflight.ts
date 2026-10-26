@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
+import { firstLine } from "./command-output.js";
 import type { FaceTimeConfig } from "./config.js";
 import { agentIdFromSessionKey, resolveFaceTimeRealtimeProvider } from "./talk-driver-config.js";
 
@@ -61,10 +62,6 @@ export type FaceTimePreflightResult = {
   checks: FaceTimePreflightCheck[];
 };
 
-function firstLine(value: unknown) {
-  return typeof value === "string" ? value.trim().split(/\r?\n/u)[0] || undefined : undefined;
-}
-
 function pushCheck(
   checks: FaceTimePreflightCheck[],
   check: Omit<FaceTimePreflightCheck, "required"> & { required?: boolean },
@@ -118,25 +115,14 @@ async function checkCallApp(params: {
   runCommandWithTimeout: RunCommandWithTimeout;
   checks: FaceTimePreflightCheck[];
 }) {
-  for (const app of ["FaceTime", "Phone"]) {
-    const result = await params.runCommandWithTimeout(["/usr/bin/pgrep", "-x", app], {
-      timeoutMs: 5_000,
-    });
-    if (result.code === 0) {
-      pushCheck(params.checks, {
-        id: "call-app-running",
-        label: "FaceTime or Phone process",
-        ok: true,
-        message: app,
-      });
-      return;
-    }
-  }
+  const result = await params.runCommandWithTimeout(["/usr/bin/pgrep", "-x", "FaceTime"], {
+    timeoutMs: 5_000,
+  });
   pushCheck(params.checks, {
     id: "call-app-running",
-    label: "FaceTime or Phone process",
-    ok: false,
-    message: "open FaceTime for video calls or Phone for FaceTime audio calls",
+    label: "FaceTime process",
+    ok: result.code === 0,
+    message: result.code === 0 ? "FaceTime" : "open FaceTime for audio or video calls",
   });
 }
 

@@ -1,7 +1,6 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import {
   createChatChannelPlugin,
   type ChannelPlugin,
@@ -224,164 +223,6 @@ const signalMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-function resolveSignalOutboundSessionRoute(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  agentId: string;
-  accountId?: string | null;
-  target: string;
-  resolvedTarget?: { to: string };
-}) {
-  const target = params.resolvedTarget?.to ?? params.target;
-  const resolved = resolveSignalOutboundTarget(target);
-  if (!resolved) {
-    return null;
-  }
-  const normalizedTarget = target.replace(/^signal:/i, "").trim();
-  const recipientSessionExact: true | "direct-alias" =
-    resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget) ? true : "direct-alias";
-  const baseSessionKey = buildOutboundBaseSessionKey({
-    channel: "signal",
-    cfg: params.cfg,
-    agentId: params.agentId,
-    accountId: params.accountId,
-    peer: resolved.peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    recipientSessionExact,
-    ...resolved,
-  };
-}
-
-async function sendFormattedSignalText(
-  ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendFormattedText"]>>[0],
-) {
-  const send = await createSignalOutboundSender(ctx);
-  const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
-    fallbackLimit: 4000,
-  });
-  const to = resolveSignalSendTarget(ctx);
-  const tableMode = resolveMarkdownTableMode({
-    cfg: ctx.cfg,
-    channel: "signal",
-    accountId: ctx.accountId ?? undefined,
-  });
-  let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
-    tableMode,
-    chunkMode: ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "signal", ctx.accountId),
-  });
-  if (chunks.length === 0 && ctx.text) {
-    chunks = [{ text: ctx.text, styles: [] }];
-  }
-  const effectiveReplyToMode =
-    ctx.replyToMode ??
-    resolveSignalReplyToMode({
-      cfg: ctx.cfg,
-      accountId: ctx.accountId,
-      chatType: inferSignalTargetChatType(to),
-    });
-  const nextReplyToId = createReplyToFanout({
-    replyToId: ctx.replyToId,
-    replyToIdSource: ctx.replyToIdSource,
-    replyToMode: effectiveReplyToMode,
-  });
-  const results = [];
-  for (const chunk of chunks) {
-    ctx.abortSignal?.throwIfAborted();
-    const result = await send(to, chunk.text, {
-      replyToId: nextReplyToId(),
-      textMode: "plain",
-      textStyles: chunk.styles,
-    });
-    const deliveryResult = attachChannelToResult(
-      "signal",
-      attachSignalVisibleText(result, chunk.text),
-    );
-    results.push(deliveryResult);
-    await ctx.onDeliveryResult?.(deliveryResult);
-  }
-  return results;
-}
-
-async function sendFormattedSignalMedia(
-  ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendFormattedMedia"]>>[0],
-) {
-  ctx.abortSignal?.throwIfAborted();
-  const send = await createSignalOutboundSender(ctx);
-  const to = resolveSignalSendTarget(ctx);
-  const tableMode = resolveMarkdownTableMode({
-    cfg: ctx.cfg,
-    channel: "signal",
-    accountId: ctx.accountId ?? undefined,
-  });
-  const formatted = markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, {
-    tableMode,
-  })[0] ?? {
-    text: ctx.text,
-    styles: [],
-  };
-  const result = await send(to, formatted.text, {
-    replyToId: ctx.replyToId,
-    mediaUrl: ctx.mediaUrl,
-    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
-    mediaLocalRoots: ctx.mediaLocalRoots,
-    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
-    textMode: "plain",
-    textStyles: formatted.styles,
-  });
-  return attachChannelToResult("signal", attachSignalVisibleText(result, formatted.text));
-}
-
-async function registerDeliveredSignalApprovalPayloadForReactions(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-) {
-  const account = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.target.accountId ?? undefined,
-  });
-  const targetAuthor = normalizeOptionalString(account.config.account);
-  const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
-  if (!targetAuthor && !targetAuthorUuid) {
-    return;
-  }
-  const { registerSignalApprovalReactionTargetForDeliveredPayload } =
-    await loadSignalApprovalReactionsModule();
-  await registerSignalApprovalReactionTargetForDeliveredPayload({
-    cfg: params.cfg,
-    target: { ...params.target, accountId: account.accountId },
-    payload: params.payload,
-    results: params.results,
-    targetAuthor,
-    targetAuthorUuid,
-  });
-}
-
-async function renderSignalApprovalPayloadForReactions(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
-) {
-  const account = resolveSignalAccount({
-    cfg: params.ctx.cfg,
-    accountId: params.ctx.accountId ?? undefined,
-  });
-  const targetAuthor = normalizeOptionalString(account.config.account);
-  const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
-  if (!targetAuthor && !targetAuthorUuid) {
-    return null;
-  }
-  const { addSignalApprovalReactionHintToStructuredPayload } =
-    await loadSignalApprovalReactionsModule();
-  const payload = materializeSignalPresentationFallback(params.payload, params.presentation);
-  return addSignalApprovalReactionHintToStructuredPayload({
-    cfg: params.ctx.cfg,
-    accountId: params.ctx.accountId ?? undefined,
-    to: params.ctx.to,
-    payload,
-    targetAuthor,
-    targetAuthorUuid,
-  });
-}
-
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
   createChatChannelPlugin({
     base: {
@@ -414,7 +255,31 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         targetPrefixes: ["signal"],
         normalizeTarget: normalizeSignalMessagingTarget,
         inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
-        resolveOutboundSessionRoute: resolveSignalOutboundSessionRoute,
+        resolveOutboundSessionRoute: (params) => {
+          const target = params.resolvedTarget?.to ?? params.target;
+          const resolved = resolveSignalOutboundTarget(target);
+          if (!resolved) {
+            return null;
+          }
+          const normalizedTarget = target.replace(/^signal:/i, "").trim();
+          const recipientSessionExact: true | "direct-alias" =
+            resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget)
+              ? true
+              : "direct-alias";
+          const baseSessionKey = buildOutboundBaseSessionKey({
+            channel: "signal",
+            cfg: params.cfg,
+            agentId: params.agentId,
+            accountId: params.accountId,
+            peer: resolved.peer,
+          });
+          return {
+            sessionKey: baseSessionKey,
+            baseSessionKey,
+            recipientSessionExact,
+            ...resolved,
+          };
+        },
         targetResolver: {
           looksLikeId: looksLikeSignalTargetId,
           hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
@@ -621,10 +486,126 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             payload,
             hint,
           }),
-        afterDeliverPayload: registerDeliveredSignalApprovalPayloadForReactions,
-        renderPresentation: renderSignalApprovalPayloadForReactions,
-        sendFormattedText: sendFormattedSignalText,
-        sendFormattedMedia: sendFormattedSignalMedia,
+        afterDeliverPayload: async (params) => {
+          const account = resolveSignalAccount({
+            cfg: params.cfg,
+            accountId: params.target.accountId ?? undefined,
+          });
+          const targetAuthor = normalizeOptionalString(account.config.account);
+          const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
+          if (!targetAuthor && !targetAuthorUuid) {
+            return;
+          }
+          const { registerSignalApprovalReactionTargetForDeliveredPayload } =
+            await loadSignalApprovalReactionsModule();
+          await registerSignalApprovalReactionTargetForDeliveredPayload({
+            cfg: params.cfg,
+            target: { ...params.target, accountId: account.accountId },
+            payload: params.payload,
+            results: params.results,
+            targetAuthor,
+            targetAuthorUuid,
+          });
+        },
+        renderPresentation: async (params) => {
+          const account = resolveSignalAccount({
+            cfg: params.ctx.cfg,
+            accountId: params.ctx.accountId ?? undefined,
+          });
+          const targetAuthor = normalizeOptionalString(account.config.account);
+          const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
+          if (!targetAuthor && !targetAuthorUuid) {
+            return null;
+          }
+          const { addSignalApprovalReactionHintToStructuredPayload } =
+            await loadSignalApprovalReactionsModule();
+          const payload = materializeSignalPresentationFallback(
+            params.payload,
+            params.presentation,
+          );
+          return addSignalApprovalReactionHintToStructuredPayload({
+            cfg: params.ctx.cfg,
+            accountId: params.ctx.accountId ?? undefined,
+            to: params.ctx.to,
+            payload,
+            targetAuthor,
+            targetAuthorUuid,
+          });
+        },
+        sendFormattedText: async (ctx) => {
+          const send = await createSignalOutboundSender(ctx);
+          const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
+            fallbackLimit: 4000,
+          });
+          const to = resolveSignalSendTarget(ctx);
+          const tableMode = resolveMarkdownTableMode({
+            cfg: ctx.cfg,
+            channel: "signal",
+            accountId: ctx.accountId ?? undefined,
+          });
+          let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
+            tableMode,
+            chunkMode:
+              ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "signal", ctx.accountId),
+          });
+          if (chunks.length === 0 && ctx.text) {
+            chunks = [{ text: ctx.text, styles: [] }];
+          }
+          const effectiveReplyToMode =
+            ctx.replyToMode ??
+            resolveSignalReplyToMode({
+              cfg: ctx.cfg,
+              accountId: ctx.accountId,
+              chatType: inferSignalTargetChatType(to),
+            });
+          const nextReplyToId = createReplyToFanout({
+            replyToId: ctx.replyToId,
+            replyToIdSource: ctx.replyToIdSource,
+            replyToMode: effectiveReplyToMode,
+          });
+          const results = [];
+          for (const chunk of chunks) {
+            ctx.abortSignal?.throwIfAborted();
+            const result = await send(to, chunk.text, {
+              replyToId: nextReplyToId(),
+              textMode: "plain",
+              textStyles: chunk.styles,
+            });
+            const deliveryResult = attachChannelToResult(
+              "signal",
+              attachSignalVisibleText(result, chunk.text),
+            );
+            results.push(deliveryResult);
+            await ctx.onDeliveryResult?.(deliveryResult);
+          }
+          return results;
+        },
+        sendFormattedMedia: async (ctx) => {
+          ctx.abortSignal?.throwIfAborted();
+          const send = await createSignalOutboundSender(ctx);
+          const to = resolveSignalSendTarget(ctx);
+          const tableMode = resolveMarkdownTableMode({
+            cfg: ctx.cfg,
+            channel: "signal",
+            accountId: ctx.accountId ?? undefined,
+          });
+          const formatted = markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, {
+            tableMode,
+          })[0] ?? {
+            text: ctx.text,
+            styles: [],
+          };
+          const result = await send(to, formatted.text, {
+            replyToId: ctx.replyToId,
+            mediaUrl: ctx.mediaUrl,
+            ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+            textMode: "plain",
+            textStyles: formatted.styles,
+          });
+          return attachChannelToResult("signal", attachSignalVisibleText(result, formatted.text));
+        },
       },
       attachedResults: {
         channel: "signal",

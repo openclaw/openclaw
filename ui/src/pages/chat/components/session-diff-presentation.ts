@@ -92,7 +92,8 @@ export function totalDiffStat(files: readonly SessionDiffFile[]) {
   return total;
 }
 export function splitPath(filePath: string) {
-  const normalized = filePath.replaceAll("\\", "/");
+  // Git reports an untracked nested repository with a trailing directory separator.
+  const normalized = filePath.replaceAll("\\", "/").replace(/\/$/, "");
   const separator = normalized.lastIndexOf("/");
   return separator < 0
     ? { directory: "", name: normalized }

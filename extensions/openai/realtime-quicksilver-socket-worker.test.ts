@@ -1,8 +1,12 @@
 import { once } from "node:events";
+import { createServer } from "node:http";
 import { createRequire } from "node:module";
+import { connect, type AddressInfo, type Socket } from "node:net";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { describe, expect, it } from "vitest";
+import { rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
+import { describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { closeOpenAILiveSocket } from "./realtime-quicksilver-protocol.js";
 import { OpenAIQuicksilverWorkerSocket } from "./realtime-quicksilver-socket.js";
 
@@ -103,6 +107,147 @@ describe("GPT-Live socket worker", () => {
     expect(socket.readyState).toBe(3);
   }, 10_000);
 });
+
+// Managed proxy hooks live only in the Gateway isolate; the media worker sees the env.
+describe("GPT-Live socket worker managed proxy", () => {
+  it.each([true, false])(
+    "exchanges audio only when the managed proxy admits the tunnel (%s)",
+    async (admit) => {
+      const target = await startAudioEchoTarget();
+      const proxy = await startForwardProxy(admit);
+      // Success requires the proxy's DNS; refusal uses a directly reachable target
+      // so an unauthorized direct fallback would be observable.
+      stubManagedProxyEnv(proxy.url, admit ? "gateway-only" : "proxy");
+      const authority = `${admit ? "gpt-live.openai.test" : "127.0.0.1"}:${target.port}`;
+      const audio: Buffer[] = [];
+      const errors: Error[] = [];
+      const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<void>();
+      const socket = OpenAIQuicksilverWorkerSocket.create(
+        `ws://${authority}`,
+        { maxPayload: admit ? 1024 * 1024 : 1024 },
+        { model: "gpt-live-1", paced: true },
+        {
+          onAudio: (chunk) => {
+            audio.push(chunk);
+            echoed();
+          },
+        },
+      );
+      socket.on("error", (error) => errors.push(error));
+      try {
+        const startup = await settleStartup(socket);
+        expect(proxy.connects).toEqual([authority]);
+        if (!admit) {
+          expect(startup).toBe("close");
+          expect(errors).toHaveLength(1);
+          expect(target.connections()).toBe(0);
+          return;
+        }
+        expect(startup).toBe("open");
+        socket.sendAudio(Buffer.alloc(960, 1));
+        socket.startAudio();
+        await firstAudio;
+        expect(audio[0]).toEqual(Buffer.alloc(960, 1));
+        const closed = once(socket, "close");
+        socket.close();
+        await closed;
+        expect(errors).toEqual([]);
+      } finally {
+        socket.close();
+        await Promise.all([target.close(), proxy.close()]);
+      }
+    },
+    10_000,
+  );
+});
+
+// Mirrors the env startProxy exports for runtimes that cannot share its hooks.
+function stubManagedProxyEnv(proxyUrl: string, loopbackMode: "gateway-only" | "proxy"): void {
+  for (const key of ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]) {
+    vi.stubEnv(key, proxyUrl);
+  }
+  vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+  vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", loopbackMode);
+  vi.stubEnv("OPENCLAW_PROXY_CA_FILE", undefined);
+  for (const key of ["no_proxy", "NO_PROXY"]) {
+    vi.stubEnv(
+      key,
+      loopbackMode === "gateway-only" ? "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8" : "",
+    );
+  }
+}
+
+function settleStartup(socket: OpenAIQuicksilverWorkerSocket): Promise<"open" | "close"> {
+  return new Promise((resolve) => {
+    socket.once("open", () => resolve("open"));
+    socket.once("close", () => resolve("close"));
+  });
+}
+
+async function startAudioEchoTarget() {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  let connections = 0;
+  server.on("connection", (socket) => {
+    connections += 1;
+    socket.on("message", (data) => {
+      const event = JSON.parse(rawDataToString(data)) as { type: string; audio?: string };
+      if (event.type === "session.input_audio.append") {
+        socket.send(JSON.stringify({ type: "session.output_audio.delta", delta: event.audio }));
+      }
+    });
+  });
+  await once(server, "listening");
+  return {
+    port: (server.address() as AddressInfo).port,
+    connections: () => connections,
+    close: async () => {
+      for (const client of server.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
+}
+
+async function startForwardProxy(admit: boolean) {
+  const connects: string[] = [];
+  const sockets = new Set<Socket>();
+  const server = createServer((_request, response) => response.writeHead(405).end());
+  server.on("connection", (socket) => sockets.add(socket));
+  server.on("connect", (request, client: Socket, head: Buffer) => {
+    const authority = request.url ?? "";
+    connects.push(authority);
+    if (!admit) {
+      client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      return;
+    }
+    const upstream = connect(Number(authority.split(":").at(-1)), "127.0.0.1", () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      upstream.write(head);
+      upstream.pipe(client);
+      client.pipe(upstream);
+    });
+    sockets.add(upstream);
+    upstream.on("error", () => client.destroy());
+    client.on("error", () => upstream.destroy());
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    connects,
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
+}
 
 async function waitForPackets(count: Int32Array, minimum: number): Promise<void> {
   const deadline = Date.now() + 10_000;

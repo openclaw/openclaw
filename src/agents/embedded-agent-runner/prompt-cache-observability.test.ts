@@ -6,6 +6,7 @@ import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
 import { withEnv } from "../../test-utils/env.js";
+import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { normalizeUsage } from "../usage.js";
 import {
   beginPromptCacheObservation,
@@ -19,6 +20,11 @@ import {
 } from "./prompt-cache-observability.test-support.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
+import {
+  persistSessionSystemPrompt,
+  prepareSessionSystemPrompt,
+  retainEmbeddedSessionPromptState,
+} from "./session-prompt-state.js";
 
 let testScope = 0;
 
@@ -28,6 +34,49 @@ function scopedKey(value: string): string {
 
 describe("prompt cache observability", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("reports the bounded personal-profile restart reason and subsequent pinned reuse on drops", async () => {
+    const sessionId = scopedKey("personal-profile-series");
+    using lease = retainEmbeddedSessionPromptState(sessionId);
+    const entries: SessionEntry[] = [];
+    const model = { provider: "openai", id: "gpt-5.4", api: "openai-responses" as const };
+    let status: ReturnType<typeof prepareSessionSystemPrompt>["seriesStatus"];
+    const observer = createPromptCacheRequestObserver(
+      { sessionId, streamStrategy: "test", getSystemPromptSeries: () => status },
+      () => {},
+    );
+    for (const [profile, cacheRead, expected] of [
+      ["selected-human", 10_000, "restarted:new"],
+      [undefined, 7_000, "restarted:route:personalProfile"],
+      [undefined, 3_000, "pinned"],
+    ] as const) {
+      const prepared = prepareSessionSystemPrompt({
+        state: lease.state,
+        routeKey: JSON.stringify([model.provider, model.id, model.api, null, true, profile]),
+        systemPrompt: "Synthetic instructions",
+        entries,
+      });
+      status = prepared.seriesStatus;
+      prepared.commit();
+      await persistSessionSystemPrompt(lease.state, (customType, data) => {
+        entries.push({
+          type: "custom",
+          customType,
+          data,
+          id: `checkpoint-${entries.length}`,
+          parentId: null,
+          timestamp: "2026-10-01T00:00:00Z",
+        });
+      });
+      await observer.onModelRequest(model, { systemPrompt: prepared.systemPrompt, messages: [] });
+      observer.onModelUsage({ cacheRead });
+      expect(observer.getObservation()).toMatchObject({
+        broke: cacheRead < 10_000,
+        systemPromptSeries: expected,
+      });
+      expect(JSON.stringify(observer.getObservation())).not.toContain("selected-human");
+    }
+  });
 
   it("bounds field details while detecting later item and tail changes", () => {
     const identity = { sessionId: scopedKey("bounded-wire-tail") };
@@ -312,7 +361,7 @@ describe("prompt cache observability", () => {
     ["# Project Context\n## MEMORY.md\n## Skills", "Project Context", "prefix"],
     ["## Runtime", "Runtime", "suffix"],
     ["## Temporal Context", "Temporal Context", "suffix"],
-    ["## private-plugin-heading", "Other", "suffix"],
+    ["## private-plugin-heading", "## private-plugin-heading", "suffix"],
   ] as const)("attributes changed %s content in the %s section (%s)", (heading, section, side) => {
     const sessionId = scopedKey("changed-prompt-section");
     const prompt = (content: string) => {
@@ -335,28 +384,50 @@ describe("prompt cache observability", () => {
     ]);
   });
 
-  it("bounds section metadata and excludes arbitrary headings and contents", () => {
+  it("names unrecognized headings while bounding section keys and excluding contents", () => {
     const sessionId = scopedKey("bounded-prompt-sections");
     const unknown = Array.from(
       { length: 100 },
-      (_, index) => `## private-heading-${index}\nprivate-content-${index}`,
+      (_, index) => `## heading-${index}\nprivate-content-${index}`,
     ).join("\n");
     const first = beginOpenAIObservation({
       sessionId,
       systemPrompt: `${unknown}\n## Skills\nprivate-skill\n`,
     });
-    expect(first.snapshot.systemPromptSections).toEqual({
-      Other: expect.stringMatching(/^[a-f0-9]{64}$/),
-      Skills: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
+    const keys = Object.keys(first.snapshot.systemPromptSections ?? {});
+    expect(keys).toHaveLength(50);
+    expect(keys.slice(0, 2)).toEqual(["## heading-0", "## heading-1"]);
+    expect(keys.slice(-2)).toEqual(["Other", "Skills"]);
     const changed = beginOpenAIObservation({
       sessionId,
       systemPrompt: `${unknown.replace("private-content-0", "private-replaced")}\n## Skills\nprivate-skill\n`,
     });
     expect(changed.changes).toEqual([
-      { code: "systemPrompt", detail: "system prompt digest changed (sections: Other)" },
+      { code: "systemPrompt", detail: "system prompt digest changed (sections: ## heading-0)" },
     ]);
     expect(JSON.stringify([first.snapshot, changed])).not.toContain("private-");
+  });
+
+  it("names the unrecognized suffix sections that changed or disappeared", () => {
+    const sessionId = scopedKey("named-suffix-sections");
+    const observe = (dynamic: string) =>
+      beginOpenAIObservation({
+        sessionId,
+        systemPrompt: `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamic}`,
+      });
+    const runtime = "## Runtime\nchannel=webchat\n";
+    observe(`## Silent Replies\nreply NO_REPLY\n## Control UI Embed\nembeds\n${runtime}`);
+    expect(observe(`## Silent Replies\nreply quietly\n${runtime}`).changes).toEqual([
+      {
+        code: "systemPromptSuffix",
+        detail:
+          "system prompt suffix digest changed (sections: ## Silent Replies, ## Control UI Embed)",
+      },
+    ]);
+    const many = Array.from({ length: 10 }, (_, index) => `## Extra ${index}\nx\n`).join("");
+    expect(observe(`${many}${runtime}`).changes?.[0]?.detail).toBe(
+      "system prompt suffix digest changed (sections: ## Extra 0, ## Extra 1, ## Extra 2, ## Extra 3, ## Extra 4, ## Extra 5, ## Extra 6, ## Extra 7, +3 more)",
+    );
   });
 
   it("reuses section digests when only the other side of the cache boundary changes", () => {

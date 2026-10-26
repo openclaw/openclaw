@@ -9,7 +9,6 @@ import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import {
   cronSourceIdentity,
-  cronSourceScheduleKey,
   createCronSourceIdentity,
   setCronSourceIdentity,
 } from "../source-schedule.js";
@@ -26,11 +25,8 @@ import {
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
-import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
-
-/** Skip reason recorded when a main-session heartbeat run is disabled. */
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
 /** A new timer receipt owns continuation; never reopen the interrupted occurrence. */
 export function resolveCronRestartRetryAtMs(
@@ -45,7 +41,12 @@ export function resolveCronRestartRetryAtMs(
   ) {
     return undefined;
   }
-  return Math.max(nowMs, startedAtMs) + MIN_REFIRE_GAP_MS;
+  // Publish the same retry floor that recurring-run admission will enforce.
+  const delay =
+    job.schedule.kind === "at"
+      ? MIN_REFIRE_GAP_MS
+      : errorBackoffMs(normalizeConsecutiveErrors(job.state.consecutiveErrors));
+  return Math.max(nowMs, startedAtMs) + delay;
 }
 
 const STAGGER_OFFSET_CACHE_MAX = 4096;
@@ -153,6 +154,10 @@ export function errorBackoffMs(
   return expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)");
 }
 
+export function normalizeConsecutiveErrors(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 /** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */
 export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
@@ -165,11 +170,7 @@ export function resolveJobErrorBackoffUntilMs(
   if (lastEndedAtMs === undefined) {
     return undefined;
   }
-  const consecutiveErrorsRaw = job.state.consecutiveErrors;
-  const consecutiveErrors =
-    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-      : 1;
+  const consecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
   return asDateTimestampMs(lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs));
 }
 
@@ -374,7 +375,11 @@ export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
 }
 
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+export function computeJobNextRunAtMs(
+  job: CronJob,
+  nowMs: number,
+  opts?: { preserveEveryAnchor?: boolean },
+): number | undefined {
   if (!isJobEnabled(job)) {
     return undefined;
   }
@@ -395,7 +400,8 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
       schedule: job.schedule,
       fallbackAnchorMs,
     });
-    const lastRunAtMs = job.state.lastRunAtMs;
+    // A retry must not become a new anchor for the authored interval.
+    const lastRunAtMs = opts?.preserveEveryAnchor ? undefined : job.state.lastRunAtMs;
     if (isFiniteTimestamp(lastRunAtMs) && lastRunAtMs >= anchorMs) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
       if (!isFiniteTimestamp(nextFromLastRun)) {
@@ -483,7 +489,10 @@ function normalizeJobTickState(params: {
     changed = true;
   }
 
-  if (cronSourceScheduleKey(job.schedule) !== undefined && !cronSourceIdentity(job)?.trim()) {
+  if (
+    (job.schedule.kind === "stream" || job.schedule.kind === "event") &&
+    !cronSourceIdentity(job)?.trim()
+  ) {
     // Identity is store-owned state. A hand-imported or pre-identity row must
     // not reach the watcher (which fails closed on a missing identity) or
     // admission (which would reject every batch); assign one like any other

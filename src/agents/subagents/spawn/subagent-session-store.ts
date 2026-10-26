@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../../../config/sessions/internal-session-key.js";
@@ -22,6 +21,7 @@ import {
 import { assertAgentSessionWriteAdmission } from "../../../sessions/session-agent-work-admission.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { AsyncContext } from "../../../shared/async-context.js";
 import {
   resolveExplicitIncognitoAgentSqliteTarget,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -45,7 +45,7 @@ type PersistedSessionCapabilityEntry = Pick<
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;
-};
+} & { clientCapabilities?: string[] };
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {
@@ -208,14 +208,14 @@ class SessionCapabilityReadRequired extends Error {
   }
 }
 
-const preparedReads = new AsyncLocalStorage<{
+const preparedReads = new AsyncContext<{
   entries: Map<string, () => SessionCapabilityEntry | undefined>;
   retain: boolean;
   onRead?: (snapshot: SessionCapabilitySnapshot) => void;
-}>();
-const legacyReader = new AsyncLocalStorage<
+}>(Symbol("preparedSessionCapabilityReads"));
+const legacyReader = new AsyncContext<
   (query: SessionCapabilityRead) => SessionCapabilityEntry | undefined
->();
+>(Symbol("legacySessionCapabilityReader"));
 const readKey = (query: SessionCapabilityRead) => JSON.stringify(query);
 
 /** Only deprecated synchronous SDK adapters may install their compatibility reader. */

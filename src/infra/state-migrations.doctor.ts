@@ -5,7 +5,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   rewriteRegistryWorktreePathsForMigration,
@@ -13,6 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { resolveDoctorAgentMigrationTargets } from "../commands/doctor-relative-session-store-paths.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -171,6 +171,7 @@ import {
 } from "./state-migrations.session-store.js";
 import {
   detectSharedAuthStoreMigration,
+  resolveSharedAuthMigrationSources,
   migrateSharedAuthStore,
 } from "./state-migrations.shared-auth-store.js";
 import {
@@ -399,6 +400,7 @@ export async function detectLegacyStateMigrations(params: {
   const sharedAuthStore = detectSharedAuthStoreMigration({
     stateDir,
     env,
+    config: params.sourceConfigBeforeMigrations ?? params.cfg,
     doctorOnlyStateMigrations:
       stateSchemaMigrations.length === 0 && params.doctorOnlyStateMigrations === true,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
@@ -1667,12 +1669,10 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   const outsideSharedAuthSources =
     params.mode === "doctor"
       ? listMigrationEndpointsOutsideRoot(
-          [
-            {
-              kind: "sqlite",
-              path: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
-            },
-          ],
+          resolveSharedAuthMigrationSources(configBefore.config, env).map(({ sourcePath }) => ({
+            kind: "sqlite" as const,
+            path: sourcePath,
+          })),
           snapshot.stateDir,
         )
       : [];
@@ -2053,7 +2053,6 @@ export async function runLegacyStateMigrations(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  doctorOnlyStateMigrations?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<
@@ -2507,13 +2506,11 @@ async function executeLegacyStateMigrations(
           params.cfg,
           stateEnv,
         );
-        // Preflight inspects custom session stores without binding their migration owners.
-        agentDatabaseTargets = hasCustomAgentDirOverride(env)
-          ? []
-          : resolveConfiguredAgentDatabaseTargets(params.cfg, {
-              env: stateEnv,
-              registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
-            });
+        agentDatabaseTargets = resolveDoctorAgentMigrationTargets(params.cfg, stateEnv, {
+          registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
+          mode,
+          skipConfigured: hasCustomAgentDirOverride(env),
+        });
         return { changes: [], warnings: [] };
       } catch (error) {
         if (mode === "automatic") {

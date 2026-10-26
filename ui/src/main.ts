@@ -9,9 +9,29 @@ import {
   installStaleChunkReloadListener,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
+import { listen } from "./lib/reactive/listener.ts";
 import kbdStyles from "./components/kbd.css?inline";
 
-if (!unsupportedControlUiBrowser) {
+async function startControlUi(): Promise<void> {
+  // HTML paints the critical frame without waiting for CSS. The interactive
+  // application still needs its stylesheet, just as it did with a blocking link.
+  const bootStyles = document.getElementById("openclaw-boot-styles");
+  if (bootStyles instanceof HTMLLinkElement && bootStyles.media === "print") {
+    // A stricter embedder CSP can block the inline activation script. Its sheet
+    // may already have loaded by the time this module runs.
+    if (!bootStyles.sheet && document.readyState !== "complete") {
+      await new Promise<void>((resolve) => {
+        const ready = () => {
+          stopLoad();
+          stopError();
+          resolve();
+        };
+        const stopLoad = listen(bootStyles, "load", ready);
+        const stopError = listen(bootStyles, "error", ready);
+      });
+    }
+    bootStyles.media = "all";
+  }
   const themeColors: HTMLMetaElement[] = [];
   for (const id of ["openclaw-theme-color-light", "openclaw-theme-color-dark"]) {
     const meta = document.getElementById(id);
@@ -101,4 +121,8 @@ if (!unsupportedControlUiBrowser) {
       }
     });
   }
+}
+
+if (!unsupportedControlUiBrowser) {
+  void startControlUi();
 }

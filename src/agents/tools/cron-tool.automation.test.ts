@@ -17,12 +17,13 @@ import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const runId = "automation-result-run";
 const jobId = "automation-result-job";
+let ownedClaim: string | undefined;
 type Invocation =
   NonNullable<AgentRunContext["cronRunsByJobId"]> extends Map<string, infer T> ? T : never;
 
-function createInvocation() {
-  const invocation: Invocation = { nextCheckEnabled: false, assertCurrent: () => {} };
-  const claim = claimAgentRunContext(
+function createInvocation(nextCheckEnabled = false) {
+  const invocation: Invocation = { nextCheckEnabled, assertCurrent: () => {} };
+  ownedClaim = claimAgentRunContext(
     runId,
     {
       sessionKey: "agent:main:main",
@@ -32,7 +33,6 @@ function createInvocation() {
   );
   return {
     invocation,
-    claim,
     tool: createTestCronTool({
       runId,
       selfRemoveOnlyJobId: jobId,
@@ -43,15 +43,25 @@ function createInvocation() {
 
 describe("automation invocation tools", () => {
   installCronToolTestFixture();
-  let ownedClaim: string | undefined;
   afterEach(() => {
     releaseAgentRunContext(runId, ownedClaim);
     clearAgentRunContext(runId);
+    ownedClaim = undefined;
   });
 
+  it.each(["inactive", "active", "paced"] as const)(
+    "describes available invocation actions for a %s automation",
+    (state) => {
+      const invocation = state === "inactive" ? undefined : createInvocation(state === "paced");
+      const tool = invocation?.tool ?? createTestCronTool({ runId, selfRemoveOnlyJobId: jobId });
+      expect(tool.description.includes("scratch_get")).toBe(state !== "inactive");
+      expect(tool.description.includes("record_result")).toBe(state !== "inactive");
+      expect(tool.description.includes("next_check")).toBe(state === "paced");
+    },
+  );
+
   it("accepts one concise structured result without dispatching another turn", async () => {
-    const { invocation, claim, tool } = createInvocation();
-    ownedClaim = claim;
+    const { invocation, tool } = createInvocation();
     await expect(
       tool.execute("result", {
         action: "record_result",
@@ -72,27 +82,32 @@ describe("automation invocation tools", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("accepts no_change without boilerplate and rejects invalid meaningful summaries", async () => {
+    const { invocation, tool } = createInvocation();
+    for (const summary of [undefined, "   ", "x".repeat(2001)]) {
+      await expect(
+        tool.execute("invalid", { action: "record_result", outcome: "progress", summary }),
+      ).rejects.toThrow();
+      expect(invocation.result).toBeUndefined();
+    }
+    await expect(
+      tool.execute("quiet", { action: "record_result", outcome: "no_change" }),
+    ).resolves.toMatchObject({ details: { ok: true, outcome: "no_change" } });
+    expect(invocation.result).toEqual({ outcome: "no_change" });
+  });
+
   it.each(["closed", "replacement", "released"] as const)(
     "retires retained result and scratch tools when the invocation is %s",
     async (reason) => {
-      const { invocation, claim, tool } = createInvocation();
-      ownedClaim = claim;
+      const { invocation, tool } = createInvocation();
       if (reason === "closed") {
         invocation.closed = true;
       } else if (reason === "replacement") {
         registerAgentRunContext(runId, {
-          cronRunsByJobId: new Map([
-            [
-              jobId,
-              {
-                nextCheckEnabled: false,
-                assertCurrent: () => {},
-              },
-            ],
-          ]),
+          cronRunsByJobId: new Map([[jobId, { ...invocation }]]),
         });
       } else {
-        releaseAgentRunContext(runId, claim);
+        releaseAgentRunContext(runId, ownedClaim);
       }
       await expect(
         tool.execute("stale-result", {
@@ -114,8 +129,7 @@ describe("automation invocation tools", () => {
   );
 
   it("carries the exact invocation fence and caller revision to the scratch owner", async () => {
-    const { invocation, claim, tool } = createInvocation();
-    ownedClaim = claim;
+    const { invocation, tool } = createInvocation();
     let receiptAuthority: (() => boolean | void) | undefined;
     callGatewayMock.mockImplementationOnce(async () => {
       receiptAuthority = getGatewayToolCallerIdentity()?.receiptAuthority;

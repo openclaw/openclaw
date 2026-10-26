@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigWriteNotification } from "../config/config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -8,7 +9,7 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayPluginReloadResult,
   GatewayHotReloadPublication,
@@ -89,7 +90,6 @@ export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): G
     reloadHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -119,21 +119,7 @@ export function createValidConfigSnapshot(
   config: OpenClawConfig,
   hash: string,
 ): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: JSON.stringify(config),
-    parsed: config,
-    sourceConfig: config,
-    resolved: config,
-    valid: true,
-    runtimeConfig: config,
-    config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-    hash,
-  };
+  return createSnapshot({ sourceConfig: config, hash, raw: JSON.stringify(config) });
 }
 
 export function createConfigWriteNotification(
@@ -206,7 +192,6 @@ export function createDefaultGatewayReloadState(
   return {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
     ...overrides,
   };

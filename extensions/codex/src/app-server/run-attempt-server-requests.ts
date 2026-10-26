@@ -23,7 +23,7 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
@@ -40,7 +40,7 @@ const DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES = [
 ] as const;
 
 export function createCodexAttemptServerRequestController(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   waitForNativeItems: CodexAttemptNotificationController["waitForNativeTerminalItems"],
@@ -201,11 +201,13 @@ export function createCodexAttemptServerRequestController(
         name: call.tool,
         arguments: call.arguments,
       });
+      const hideFromChannelProgress = toolBridge.hideFromChannelProgressForTool(call.tool);
       projector?.recordDynamicToolCall({
         callId: call.callId,
         namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
+        hideFromChannelProgress,
       });
       emitExecutionPhaseOnce(`tool:${call.callId}`, {
         phase: "tool_execution_started",
@@ -217,7 +219,8 @@ export function createCodexAttemptServerRequestController(
       });
       const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
-      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
+      const shouldEmitDynamicToolProgress =
+        shouldEmitTranscriptToolProgress(call.tool) && hideFromChannelProgress !== true;
       if (shouldEmitDynamicToolProgress) {
         const activity = projectAgentToolActivity({
           toolCallId: call.callId,

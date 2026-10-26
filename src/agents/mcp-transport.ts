@@ -4,12 +4,11 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import type { SSEClientTransportOptions, FetchLike, Transport } from "@modelcontextprotocol/client";
+import type { SSEClientTransportOptions, FetchLike } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
-import { withMcpEnterpriseBearer } from "./mcp-enterprise-fetch.js";
 import {
   buildMcpHttpFetch,
   buildMcpOAuthHttpFetch,
@@ -26,15 +25,16 @@ import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 type ResolvedMcpTransport = {
-  transport: Transport;
   description: string;
-  transportType: "stdio" | "sse" | "streamable-http";
   connectionTimeoutMs: number;
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
-  enterpriseAuth?: boolean;
   detachStderr?: () => void;
-};
+} & (
+  | { transportType: "stdio"; transport: OpenClawStdioClientTransport }
+  | { transportType: "sse"; transport: OpenClawSSEClientTransport }
+  | { transportType: "streamable-http"; transport: OpenClawStreamableHTTPClientTransport }
+);
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
@@ -100,11 +100,9 @@ export function resolveMcpTransport(
   }
   const metadata = {
     description: resolved.description,
-    transportType: resolved.transportType,
     connectionTimeoutMs: resolved.connectionTimeoutMs,
     requestTimeoutMs: resolved.requestTimeoutMs,
     supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-    enterpriseAuth: resolved.kind === "http" && resolved.auth === "enterprise",
   };
   if (resolved.kind === "stdio") {
     const transport = new OpenClawStdioClientTransport({
@@ -116,12 +114,10 @@ export function resolveMcpTransport(
     });
     return {
       transport,
+      transportType: "stdio",
       ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
-  }
-  if (resolved.auth === "enterprise" && !resolved.enterprise) {
-    return null;
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);
   const requesterScope = options?.requesterScope;
@@ -132,7 +128,7 @@ export function resolveMcpTransport(
     }
     oauthIdentity = requesterMcpOAuthIdentity(serverName, resolved.url, requesterScope);
   } else {
-    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url, options?.cfg);
   }
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.
@@ -145,7 +141,7 @@ export function resolveMcpTransport(
     beforeRequest: options?.beforeRequest,
   });
   const headers =
-    resolved.auth === "oauth" || resolved.auth === "enterprise" || authProfileId
+    resolved.auth === "oauth" || authProfileId
       ? withoutMcpAuthorizationHeader(resolved.headers)
       : resolved.headers;
   const resourceFetch = withSameOriginMcpHttpHeaders({
@@ -182,46 +178,10 @@ export function resolveMcpTransport(
           identity: oauthIdentity,
           config: resolved.oauth,
         })
-      : resolved.auth === "enterprise" && resolved.enterprise
-        ? withMcpEnterpriseBearer({
-            resourceUrl: resolved.url,
-            config: resolved.enterprise,
-            fetchFn: resourceFetch,
-            createAuthenticatedFetches: (assertCurrent) => {
-              const beforeRequest = () => {
-                options?.beforeRequest?.();
-                assertCurrent();
-              };
-              const guardedResourceFetch = withSameOriginMcpHttpHeaders({
-                fetchFn: buildMcpHttpFetch({
-                  sslVerify: resolved.sslVerify,
-                  clientCert: resolved.clientCert,
-                  clientKey: resolved.clientKey,
-                  resourceUrl: resolved.url,
-                  requestTimeoutMs: resolved.requestTimeoutMs,
-                  beforeRequest,
-                }),
-                headers,
-                resourceUrl: resolved.url,
-              });
-              const authFetch = buildMcpOAuthHttpFetch({
-                sslVerify: resolved.sslVerify,
-                clientCert: resolved.clientCert,
-                clientKey: resolved.clientKey,
-                resourceUrl: resolved.url,
-                timeoutMs: resolved.requestTimeoutMs,
-                beforeRequest,
-                headers,
-              });
-              return { resourceFetch: guardedResourceFetch, authFetch };
-            },
-          })
-        : baseFetch;
+      : baseFetch;
   if (resolved.transportType === "streamable-http") {
     let requestInit: RequestInit | undefined =
-      resolved.auth === "oauth" || resolved.auth === "enterprise" || !headers
-        ? undefined
-        : { headers };
+      resolved.auth === "oauth" || !headers ? undefined : { headers };
     if (options?.requestHeaders) {
       const requestHeaders = new Headers(requestInit?.headers);
       for (const [name, value] of Object.entries(options.requestHeaders)) {
@@ -234,6 +194,7 @@ export function resolveMcpTransport(
         requestInit,
         fetch: httpFetch,
       }),
+      transportType: "streamable-http",
       ...metadata,
     };
   }
@@ -241,18 +202,13 @@ export function resolveMcpTransport(
   const hasHeaders = Object.keys(sseHeaders).length > 0;
   return {
     transport: new OpenClawSSEClientTransport(new URL(resolved.url), {
-      requestInit:
-        resolved.auth === "oauth" || resolved.auth === "enterprise" || !hasHeaders
-          ? undefined
-          : { headers: sseHeaders },
+      requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
       fetch: httpFetch,
       eventSourceInit: {
-        fetch: buildSseEventSourceFetch(
-          resolved.auth === "oauth" || resolved.auth === "enterprise" ? {} : sseHeaders,
-          httpFetch,
-        ),
+        fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
     }),
+    transportType: "sse",
     ...metadata,
   };
 }

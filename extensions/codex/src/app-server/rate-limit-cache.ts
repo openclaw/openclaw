@@ -59,14 +59,15 @@ export function readCodexRateLimitsRevision(client: CodexAppServerClient): numbe
 }
 
 /** Reads one physical client's cached rate-limit payload within the max-age window. */
-export function readRecentCodexRateLimits(client: CodexAppServerClient): JsonValue | undefined {
+export function readRecentCodexRateLimits(
+  client: CodexAppServerClient,
+  maxAgeMs = DEFAULT_CODEX_RATE_LIMIT_CACHE_MAX_AGE_MS,
+): JsonValue | undefined {
   const state = rateLimitsByClient.get(client);
   if (!state) {
     return undefined;
   }
-  return Date.now() - state.updatedAtMs > DEFAULT_CODEX_RATE_LIMIT_CACHE_MAX_AGE_MS
-    ? undefined
-    : state.value;
+  return maxAgeMs <= 0 || Date.now() - state.updatedAtMs >= maxAgeMs ? undefined : state.value;
 }
 
 function mergeRateLimitUpdate(current: JsonValue | undefined, update: JsonObject): JsonObject {

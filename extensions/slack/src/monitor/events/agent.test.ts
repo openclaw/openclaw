@@ -152,6 +152,29 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
   };
 }
 
+function expectSessionOwner(type: string, sessionKey: string, last = false) {
+  const mock =
+    type === "agent_session_stopped" ? slashMocks.dispatchMock : prepareSessionEntryPatch;
+  const expected = expect.objectContaining(
+    type === "agent_session_stopped"
+      ? { ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }) }
+      : { sessionKey },
+  );
+  if (last) {
+    expect(mock).toHaveBeenLastCalledWith(expected);
+  } else {
+    expect(mock).toHaveBeenCalledWith(expected);
+  }
+}
+
+function expectNoSessionMutation(harness: ReturnType<typeof createSessionEventHarness>) {
+  expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
+  expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
+  expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
+  expect(markSlackStreamsStopped).not.toHaveBeenCalled();
+  expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+}
+
 describe("registerSlackAgentEvents", () => {
   beforeEach(() => {
     tempDir = sessionDirs.make();
@@ -336,30 +359,9 @@ describe("registerSlackAgentEvents", () => {
         ok: true,
         messages: [{ metadata: { event_type: "assistant_thread_context", event_payload: {} } }],
       });
-      await harness.getHandler(type)?.({
-        event: {
-          type,
-          channel: "D123",
-          thread_ts: "1712345678.000001",
-          user: "U123",
-          event_ts: "1712345679.000001",
-          title: "Assistant session",
-          streaming_message_ts: [],
-        },
-        body: {},
-      });
+      await harness.emit(type, { title: "Assistant session" });
       const sessionKey = "agent:main:main:thread:1712345678.000001";
-      if (type === "agent_session_stopped") {
-        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
-          }),
-        );
-      } else {
-        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
-          expect.objectContaining({ sessionKey }),
-        );
-      }
+      expectSessionOwner(type, sessionKey);
     },
   );
 
@@ -402,17 +404,7 @@ describe("registerSlackAgentEvents", () => {
           });
         }
         await harness.getHandler(type)?.({ event, body: {} });
-        if (type === "agent_session_stopped") {
-          expect(slashMocks.dispatchMock).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
-            }),
-          );
-        } else {
-          expect(prepareSessionEntryPatch).toHaveBeenLastCalledWith(
-            expect.objectContaining({ sessionKey }),
-          );
-        }
+        expectSessionOwner(type, sessionKey, true);
       }
       expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
     },
@@ -444,11 +436,7 @@ describe("registerSlackAgentEvents", () => {
         }));
       }
       await harness.emit(type, { title: "Assistant title must not rename the ordinary DM" });
-      expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
-      expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
-      expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
-      expect(markSlackStreamsStopped).not.toHaveBeenCalled();
-      expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+      expectNoSessionMutation(harness);
       if (type === "agent_session_stopped") {
         expect(harness.postEphemeral).toHaveBeenCalledWith(
           expect.objectContaining({ text: "Sorry, something went wrong handling that command." }),
@@ -818,17 +806,7 @@ describe("registerSlackAgentEvents", () => {
         client: harness.ctx.app.client,
       });
       const sessionKey = "agent:main:main:account:default:team:t_other";
-      if (type === "agent_session_stopped") {
-        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
-          }),
-        );
-      } else {
-        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
-          expect.objectContaining({ sessionKey }),
-        );
-      }
+      expectSessionOwner(type, sessionKey);
     },
   );
 
@@ -840,11 +818,7 @@ describe("registerSlackAgentEvents", () => {
 
       await harness.getHandler(type)?.({ event: { type }, body: {} });
 
-      expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
-      expect(markSlackStreamsStopped).not.toHaveBeenCalled();
-      expect(prepareSessionEntryPatch).not.toHaveBeenCalled();
-      expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
-      expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+      expectNoSessionMutation(harness);
     },
   );
 });

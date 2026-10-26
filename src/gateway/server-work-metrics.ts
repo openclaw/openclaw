@@ -12,7 +12,6 @@ import {
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -68,7 +67,7 @@ export function startGatewayWorkMetrics(params: {
         now: Date.now(),
         metadataPrepared: true,
       });
-      const selection = runSynchronousWork(selectSessionEntries(filters));
+      const selection = selectSessionEntries(filters);
       const sessions = { running: 0, queued: 0 };
       for (const [key] of selection.entries) {
         const target = prepared.getTarget(key)!;

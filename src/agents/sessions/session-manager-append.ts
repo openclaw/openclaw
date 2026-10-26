@@ -567,7 +567,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         entries: this.byId,
         parentId: this.appendParentId,
         remainingAncestors: includeOmitted
-          ? (this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size)
+          ? this.boundedContextLimits && "maxEvents" in this.boundedContextLimits
+            ? this.boundedContextLimits.maxEvents
+            : this.byId.size + this.opaqueParentsById.size
           : this.byId.size,
         isInterruptedTail,
       },
@@ -589,7 +591,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           entries: this.byId,
           parentId: this.appendParentId,
           remainingAncestors:
-            this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
+            this.boundedContextLimits && "maxEvents" in this.boundedContextLimits
+              ? this.boundedContextLimits.maxEvents
+              : this.byId.size + this.opaqueParentsById.size,
           isInterruptedTail,
           pendingDeliberateAppend: this.pendingDeliberateAppend,
         };
