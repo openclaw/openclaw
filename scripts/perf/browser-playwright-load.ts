@@ -124,8 +124,9 @@ type Snapshot = {
   gcMs: number;
   playwrightModules: string[];
 };
+type GatewayClient = ReturnType<typeof createGatewayWsClient>;
 let child: ChildProcess | undefined;
-let client: ReturnType<typeof createGatewayWsClient> | undefined;
+let client: GatewayClient | undefined;
 const abort = new AbortController();
 const interrupt = () => abort.abort(new Error("Browser load probe interrupted"));
 process.once("SIGINT", interrupt);
@@ -325,7 +326,7 @@ try {
   for (let index = 0; index < samples; index++) {
     abort.signal.throwIfAborted();
     const at = performance.now();
-    const result = await client.request(
+    const response: Awaited<ReturnType<GatewayClient["request"]>> = await client.request(
       "browser.request",
       {
         method: "GET",
@@ -336,15 +337,15 @@ try {
       30_000,
     );
     timings.push(performance.now() - at);
-    assert(result.ok, JSON.stringify(result.error));
-    assert(isRecord(result.payload), "browser response must be an object");
+    assert(response.ok, JSON.stringify(response.error));
+    assert(isRecord(response.payload), "browser response must be an object");
     if (index % 2 === 0) {
-      assert.equal(result.payload.cdpReady, true, JSON.stringify(result.payload));
+      assert.equal(response.payload.cdpReady, true, JSON.stringify(response.payload));
     }
   }
   const elapsedMs = performance.now() - started;
   const after = await snapshot();
-  assert(commands["Browser.getVersion"] > 0, "No CDP health commands observed");
+  assert((commands["Browser.getVersion"] ?? 0) > 0, "No CDP health commands observed");
   assert.deepEqual(unexpected, [], "Probe attempted a browser session or unsupported command");
   const result = {
     entry,
