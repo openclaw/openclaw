@@ -34,7 +34,7 @@ if (isMainThread && process.argv.includes("gateway") && process.env.OPENCLAW_STA
   const cpu = process.threadCpuUsage();
   const start = performance.now();
   const hostLoad = loadavg();
-  process.once("SIGUSR2", async () => {
+  const capture = async () => {
     const cpuUsed = process.threadCpuUsage(cpu);
     const elapsedMs = performance.now() - start;
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -73,5 +73,8 @@ if (isMainThread && process.argv.includes("gateway") && process.env.OPENCLAW_STA
       }),
     );
     inspector.disconnect();
+  };
+  process.once("SIGUSR2", () => {
+    void capture();
   });
 }
