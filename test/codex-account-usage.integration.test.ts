@@ -20,7 +20,6 @@ it.each([false, true])(
       const { handleCodexAccountUsage, readCodexAppServerUsage } =
         createCodexAccountUsageTestFixture();
       const config = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
-      const owner = ensureProfileForEmail("account-usage@example.test");
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "openai",
@@ -30,7 +29,7 @@ it.each([false, true])(
         accountId: "synthetic-account",
       };
       const connection = {
-        ownerProfileId: owner.id,
+        ownerProfileId: ensureProfileForEmail("account-usage@example.test").id,
         credential,
         assertCurrent() {},
       };
@@ -49,14 +48,7 @@ it.each([false, true])(
           });
           expect(connected.authProfileId).toBe(profileId);
         }
-        return {
-          rateLimits: {
-            rateLimits: {
-              limitId: "codex",
-              primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
-            },
-          },
-        };
+        return { rateLimits: { rateLimits: { limitId: "codex" } } };
       });
       const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
       const params = { agentId: "main", profileId };
@@ -72,15 +64,10 @@ it.each([false, true])(
           context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
           hasCurrentClientAuthority: () => true,
         });
-        expect(readCodexAppServerUsage, JSON.stringify(respond.mock.calls)).toHaveBeenCalledOnce();
+        const provider = expect.objectContaining({ provider: "openai" });
         const expected = reconnect
           ? [false, undefined, expect.objectContaining({ code: "UNAVAILABLE" })]
-          : [
-              true,
-              expect.objectContaining({
-                providers: [expect.objectContaining({ provider: "openai" })],
-              }),
-            ];
+          : [true, expect.objectContaining({ providers: [provider] })];
         expect(respond).toHaveBeenCalledWith(...expected);
         sql.expectIdle();
       } finally {

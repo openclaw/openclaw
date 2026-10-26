@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
 const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
-const BUZZ_SUT_PRIVATE_KEY = "02".repeat(32);
 const BUZZ_DRIVER_NSEC = "nsec1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqstywftw";
 
 const telegramUser = {
@@ -11,32 +10,25 @@ const telegramUser = {
   tdlibArchiveSha256: "a".repeat(64),
   tdlibVersion: "1.8.67",
 };
-const telegramPayload = {
-  schemaVersion: 1,
-  environment: "test",
-  groupId: "-1001",
-  forumGroupId: "-1002",
-  forumTopicId: 42,
-  sutToken: "test-token",
-  sutUsername: "test_bot",
-  sutBotId: "700000001",
-  ...telegramUser,
-  participants: [{ ...telegramUser, alias: "guest", testerUserId: "700000003" }],
-};
-
 const payloads = {
   buzz: {
     relayUrl: "wss://relay.qa.example",
     roomId: "123e4567-e89b-42d3-a456-426614174000",
     driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
-    sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+    sutPrivateKey: "02".repeat(32),
   },
-  "telegram-test-userbot": telegramPayload,
+  "telegram-test-userbot": {
+    schemaVersion: 1,
+    environment: "test",
+    groupId: "-1001",
+    forumGroupId: "-1002",
+    forumTopicId: 42,
+    sutBotId: "700000001",
+    ...telegramUser,
+  },
   whatsapp: {
     driverPhoneE164: "+15550000001",
     sutPhoneE164: "+15550000001",
-    driverAuthArchiveBase64: "driver-archive",
-    sutAuthArchiveBase64: "sut-archive",
   },
 };
 
@@ -61,11 +53,7 @@ it.each([
   ["telegram-test-userbot", { forumTopicId: 0 }, /invalid forumTopicId/u],
   [
     "telegram-test-userbot",
-    {
-      participants: [
-        { ...telegramPayload.participants[0], testerUserId: telegramUser.testerUserId },
-      ],
-    },
+    { participants: [{ ...telegramUser, alias: "guest" }] },
     /distinct participant identities/u,
   ],
   ["telegram-test-userbot", { environment: "production" }, /telegram-test-userbot/u],

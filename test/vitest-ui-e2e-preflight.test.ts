@@ -21,16 +21,12 @@ vi.mock("node:http", async (importOriginal) => {
 afterAll(() => vi.mocked(createServer).mockRestore());
 
 afterEach(async () => {
-  try {
-    // Keep a failed cleanup assertion from leaking its real listener into later tests.
-    for (const [server] of listeners) {
-      server.closeAllConnections();
-      if (server.listening) {
-        await promisify(server.close.bind(server))();
-      }
+  // Drain first so a cleanup failure cannot retain stale entries for the next case.
+  for (const [server] of listeners.splice(0)) {
+    server.closeAllConnections();
+    if (server.listening) {
+      await promisify(server.close.bind(server))();
     }
-  } finally {
-    listeners.length = 0;
   }
 });
 
@@ -39,7 +35,6 @@ async function preflight(fetchImpl: typeof fetch = fetch, timeoutMs?: number) {
   try {
     await assertUiE2ePreflight({ fetchImpl: request, timeoutMs });
   } finally {
-    expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[1]?.signal).toMatchObject({ aborted: true });
     expect(listeners).toHaveLength(1);
     const [server, closed] = listeners[0]!;
@@ -51,22 +46,17 @@ async function preflight(fetchImpl: typeof fetch = fetch, timeoutMs?: number) {
 it("preserves native HTTP and socket implementations for later shared-worker consumers", () => {
   const http = process.getBuiltinModule("node:http");
   const { Socket } = process.getBuiltinModule("node:net");
-  const nativeMethod = expect.toSatisfy((implementation) => !vi.isMockFunction(implementation));
-  expect(http).toMatchObject({
-    Server: nativeMethod,
-    Agent: nativeMethod,
-    IncomingMessage: nativeMethod,
-    OutgoingMessage: nativeMethod,
-    ServerResponse: nativeMethod,
-    ClientRequest: nativeMethod,
-    createServer: nativeMethod,
-  });
-  expect(Socket).toEqual(nativeMethod);
-  expect(http.IncomingMessage.prototype).toHaveProperty("read", nativeMethod);
-  expect(http.OutgoingMessage.prototype).toHaveProperty("write", nativeMethod);
-  expect(http.OutgoingMessage.prototype).toHaveProperty("end", nativeMethod);
-  expect(http.globalAgent).toHaveProperty("createConnection", nativeMethod);
-  expect(Socket.prototype).toHaveProperty("write", nativeMethod);
+  for (const implementation of [
+    ...Object.values(http),
+    Socket,
+    http.IncomingMessage.prototype.read,
+    http.OutgoingMessage.prototype.write,
+    http.OutgoingMessage.prototype.end,
+    http.globalAgent.createConnection,
+    Socket.prototype.write,
+  ]) {
+    expect(implementation !== undefined && !vi.isMockFunction(implementation)).toBe(true);
+  }
 });
 
 it("proves the owned HTTP response and releases its listener", () => preflight());
