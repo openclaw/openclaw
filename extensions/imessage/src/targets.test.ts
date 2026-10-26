@@ -24,37 +24,21 @@ describe("imessage targets", () => {
     expect(normalizeIMessageHandle("auto:chatident:AbC")).toBe("chat_identifier:AbC");
   });
 
-  it("does not check allowFrom against conversation targets", () => {
-    for (const [entry, context] of [
-      ["chat_id:9", { chatId: 9 }],
-      ["imessage:chat_id:9", { chatId: 9 }],
-      ["chat_guid:team-thread", { chatGuid: "team-thread" }],
-      ["chat_identifier:team", { chatIdentifier: "team" }],
-    ] as const) {
-      expect(isAllowedIMessageSender({ sender: "+1555", ...context, allowFrom: [entry] })).toBe(
-        false,
-      );
-    }
-    expect(
-      isAllowedIMessageSender({
-        sender: "+1555",
-        chatId: 9,
-        allowFrom: ["chat_id:9"],
-        allowConversationTargets: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("checks reply context allowFrom against conversation targets", () => {
-    for (const [entry, context] of [
-      ["chat_id:9", { chatId: 9 }],
-      ["imessage:chat_guid:team-thread", { chatGuid: "team-thread" }],
-      ["chat_identifier:team", { chatIdentifier: "team" }],
-    ] as const) {
-      expect(
-        isAllowedIMessageReplyContextSender({ sender: "+1555", ...context, allowFrom: [entry] }),
-      ).toBe(true);
-    }
+  it.each([
+    ["chat_id:9", { chatId: 9 }],
+    ["imessage:chat_id:9", { chatId: 9 }],
+    ["chat_guid:team-thread", { chatGuid: "team-thread" }],
+    ["imessage:chat_guid:team-thread", { chatGuid: "team-thread" }],
+    ["chat_identifier:team", { chatIdentifier: "team" }],
+  ] as const)("only permits conversation allowFrom %s for reply context", (entry, context) => {
+    const params = {
+      sender: "+1555",
+      ...context,
+      allowFrom: [entry],
+      allowConversationTargets: true,
+    };
+    expect(isAllowedIMessageSender(params)).toBe(false);
+    expect(isAllowedIMessageReplyContextSender(params)).toBe(true);
   });
 
   it.each([
@@ -88,14 +72,11 @@ describe("imessage targets", () => {
     const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
     expect(normalizeIMessageHandle(hex)).toBe(`chat_identifier:${hex}`);
     expect(normalizeIMessageHandle(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
-    expect(parseIMessageTarget(hex)).toEqual({
-      kind: "chat_identifier",
-      chatIdentifier: hex,
-    });
-    expect(parseIMessageTarget(`imessage:${hex.toUpperCase()}`)).toEqual({
-      kind: "chat_identifier",
-      chatIdentifier: hex,
-    });
+    const parsed = { kind: "chat_identifier", chatIdentifier: hex };
+    expect([hex, `imessage:${hex.toUpperCase()}`].map(parseIMessageTarget)).toEqual([
+      parsed,
+      parsed,
+    ]);
     expect(inferIMessageTargetChatType(hex)).toBeUndefined();
   });
 });

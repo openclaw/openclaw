@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IMessageAccountConfig } from "./account-types.js";
 import {
@@ -73,60 +73,49 @@ describe("iMessage duplicate-source watcher ownership", () => {
 });
 
 describe("iMessage local database account ownership", () => {
-  function createLocalFixture() {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-account-db-"));
-    const cliPath = path.join(root, "imsg");
-    const firstDbPath = path.join(root, "first.db");
-    const secondDbPath = path.join(root, "second.db");
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let root: string, cliPath: string, firstDbPath: string, secondDbPath: string;
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-imessage-account-db-");
+    cliPath = path.join(root, "imsg");
+    firstDbPath = path.join(root, "first.db");
+    secondDbPath = path.join(root, "second.db");
     fs.writeFileSync(cliPath, Buffer.from("cafebabe", "hex"));
     fs.writeFileSync(firstDbPath, "");
     fs.writeFileSync(secondDbPath, "");
-    return { root, cliPath, firstDbPath, secondDbPath };
-  }
-
-  let fixture: ReturnType<typeof createLocalFixture>;
-
-  beforeEach(() => {
-    fixture = createLocalFixture();
-  });
-
-  afterEach(() => {
-    fs.rmSync(fixture.root, { recursive: true, force: true });
   });
 
   function hasExclusiveDatabase(otherAccounts: Record<string, IMessageAccountConfig>) {
     const cfg = config({
-      work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+      work: { cliPath, dbPath: firstDbPath },
       ...otherAccounts,
     });
     return hasExclusiveIMessageLocalDatabase({
       cfg,
       account: resolveIMessageAccount({ cfg, accountId: "work" }),
-      cliPath: fixture.cliPath,
-      dbPath: fixture.firstDbPath,
+      cliPath,
+      dbPath: firstDbPath,
     });
   }
 
   it("rejects hard-linked paths to the same database", () => {
-    const linkedDbPath = path.join(fixture.root, "linked.db");
-    fs.linkSync(fixture.firstDbPath, linkedDbPath);
-    expect(hasExclusiveDatabase({ home: { cliPath: fixture.cliPath, dbPath: linkedDbPath } })).toBe(
-      false,
-    );
+    const linkedDbPath = path.join(root, "linked.db");
+    fs.linkSync(firstDbPath, linkedDbPath);
+    expect(hasExclusiveDatabase({ home: { cliPath, dbPath: linkedDbPath } })).toBe(false);
   });
 
   it("accepts distinct proven local databases and ignores explicit remote accounts", () => {
     expect(
       hasExclusiveDatabase({
-        home: { cliPath: fixture.cliPath, dbPath: fixture.secondDbPath },
+        home: { cliPath, dbPath: secondDbPath },
         remote: { cliPath: "/usr/local/bin/remote-imsg", remoteHost: "qa@example.invalid" },
       }),
     ).toBe(true);
   });
 
   it("fails closed when another local account source cannot be attested", () => {
-    expect(
-      hasExclusiveDatabase({ unknown: { cliPath: path.join(fixture.root, "unknown-imsg") } }),
-    ).toBe(false);
+    expect(hasExclusiveDatabase({ unknown: { cliPath: path.join(root, "unknown-imsg") } })).toBe(
+      false,
+    );
   });
 });
