@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
@@ -34,6 +35,33 @@ function clientWith(
     },
   };
 }
+const methods = (request: ReturnType<typeof vi.fn>) => request.mock.calls.map(([method]) => method);
+const start = (
+  request: ReturnType<typeof vi.fn>,
+  mode: Parameters<typeof startSessionPlacementInitialTurn>[1]["mode"] = params.mode,
+  current = () => true,
+) => startSessionPlacementInitialTurn(clientWith(request), { ...params, mode }, current);
+function placementRequest(read: () => unknown) {
+  return sessionRequest({
+    "agents.list": () => catalog,
+    "sessions.describe": read,
+    "chat.send": () => ({ runId: "first-turn", status: "started" }),
+    "sessions.reclaim": () => ({}),
+  });
+}
+function restore(overrides: Partial<SessionPlacementRecovery> = {}) {
+  const { key: sessionKey, mode: _mode, ...draft } = params;
+  const recovery: SessionPlacementRecovery = {
+    ...draft,
+    sessionKey,
+    gatewayUrl: "ws://gateway.example",
+    recoveryScope: "principal",
+    phase: "sending",
+    ...overrides,
+  };
+  expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+  return readSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, sessionKey)!;
+}
 afterEach(() => {
   vi.useRealTimers();
   sessionStorage.clear();
@@ -42,23 +70,14 @@ afterEach(() => {
 it("waits for server-started placement and sends exactly once without dispatch", async () => {
   vi.useFakeTimers();
   let state = "provisioning";
-  const request = vi.fn(async (method: string) =>
-    method === "agents.list"
-      ? catalog
-      : method === "sessions.describe"
-        ? { session: { placement: { state } } }
-        : { runId: "first-turn", status: "started" },
-  );
-  const pending = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+  const request = placementRequest(() => ({ session: { placement: { state } } }));
+  const pending = start(request);
   await vi.advanceTimersByTimeAsync(0);
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "agents.list",
-    "sessions.describe",
-  ]);
+  expect(methods(request)).toEqual(["agents.list", "sessions.describe"]);
   state = "active";
   await vi.advanceTimersByTimeAsync(250);
   expect(await pending).toEqual({ status: "started", messageId: "first-turn" });
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
+  expect(methods(request)).toEqual([
     "agents.list",
     "sessions.describe",
     "sessions.describe",
@@ -69,25 +88,9 @@ it("waits for server-started placement and sends exactly once without dispatch",
 it.each(["failed", "reclaimed", "local"])(
   "admits explicit Retry from %s through the server run owner, not admin dispatch",
   async (state) => {
-    const request = vi.fn(async (method: string) =>
-      method === "agents.list"
-        ? catalog
-        : method === "sessions.describe"
-          ? { session: { placement: { state } } }
-          : { runId: "first-turn", status: "started" },
-    );
-    expect(
-      await startSessionPlacementInitialTurn(
-        clientWith(request),
-        { ...params, mode: "retry" },
-        () => true,
-      ),
-    ).toEqual({ status: "started", messageId: "first-turn" });
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "agents.list",
-      "sessions.describe",
-      "chat.send",
-    ]);
+    const request = placementRequest(() => ({ session: { placement: { state } } }));
+    expect(await start(request, "retry")).toEqual({ status: "started", messageId: "first-turn" });
+    expect(methods(request)).toEqual(["agents.list", "sessions.describe", "chat.send"]);
   },
 );
 
@@ -101,9 +104,7 @@ it.each([undefined, "replacement"])(
           : undefined,
       },
     }));
-    expect(
-      await startSessionPlacementInitialTurn(clientWith(request), params, () => true),
-    ).toMatchObject({ status: "dispatch-rejected" });
+    expect(await start(request)).toMatchObject({ status: "dispatch-rejected" });
     expect(request.mock.calls).toHaveLength(1);
   },
 );
@@ -112,46 +113,20 @@ it("Stop fences a late active placement reply and retains the existing reclaim o
   const active = createDeferred<unknown>();
   const read = createDeferred();
   let current = true;
-  const request = vi.fn(async (method: string) => {
-    if (method === "agents.list") {
-      return catalog;
-    }
-    if (method === "sessions.describe") {
-      read.resolve();
-      return active.promise;
-    }
-    return {};
+  const request = placementRequest(() => {
+    read.resolve();
+    return active.promise;
   });
-  const pending = startSessionPlacementInitialTurn(clientWith(request), params, () => current);
+  const pending = start(request, "dispatch", () => current);
   await read.promise;
   current = false;
   active.resolve({ session: { placement: { state: "active" } } });
   expect(await pending).toEqual({ status: "cancelled" });
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "agents.list",
-    "sessions.describe",
-    "sessions.reclaim",
-  ]);
+  expect(methods(request)).toEqual(["agents.list", "sessions.describe", "sessions.reclaim"]);
 });
 
 it("restores a required first input by resending its original key without placement changes", async () => {
-  const recovery: SessionPlacementRecovery = {
-    sessionKey: params.key,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    target,
-    message: params.message,
-    messageId: params.messageId,
-    gatewayUrl: "ws://gateway.example",
-    recoveryScope: "principal",
-    phase: "sending",
-  };
-  expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-  const restored = readSessionPlacementRecovery(
-    recovery.gatewayUrl,
-    recovery.recoveryScope,
-    recovery.sessionKey,
-  )!;
+  const restored = restore();
   expect(restored.target).toEqual(target);
   const request = vi.fn(async (_method: string) => ({ runId: params.messageId, status: "ok" }));
   const result = await advanceSessionPlacementDraft({
@@ -165,7 +140,7 @@ it("restores a required first input by resending its original key without placem
     cleanupOnCancellation: () => false,
   });
   expect(result).toEqual({ status: "started", messageId: params.messageId });
-  expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
+  expect(methods(request)).toEqual(["chat.send"]);
   expect(request).toHaveBeenCalledWith(
     "chat.send",
     expect.objectContaining({ idempotencyKey: params.messageId, message: params.message }),
@@ -174,28 +149,20 @@ it("restores a required first input by resending its original key without placem
 });
 
 it("retains an explicit native runtime while a required create is restored", () => {
-  const recovery: SessionPlacementRecovery = {
-    sessionKey: params.key,
+  const createParams = {
+    key: params.key,
     agentId: params.agentId,
-    target,
-    message: params.message,
-    messageId: params.messageId,
-    gatewayUrl: "ws://gateway.example",
-    recoveryScope: "principal",
-    phase: "creating",
-    createParams: {
-      key: params.key,
-      agentId: params.agentId,
-      message: "",
-      model: "openai/available-model",
-      agentRuntime: "openclaw",
-      worktree: true,
-      worktreeSource: "empty",
-    },
+    message: "",
+    model: "openai/available-model",
+    agentRuntime: "openclaw" as const,
+    worktree: true,
+    worktreeSource: "empty" as const,
   };
-  expect(writeSessionPlacementRecovery(recovery)).toBe(true);
   expect(
-    readSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey)
-      ?.createParams,
-  ).toEqual(recovery.createParams);
+    restore({
+      phase: "creating",
+      sessionId: undefined,
+      createParams,
+    }).createParams,
+  ).toEqual(createParams);
 });

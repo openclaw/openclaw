@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   createGatewayStoreTestStore,
@@ -71,6 +71,10 @@ function setup() {
   });
   client.testOptions.onHello?.(hello);
   const sessions = createTestSessionCapability(store.gateway);
+  onTestFinished(() => {
+    sessions.dispose();
+    store.gateway.stop();
+  });
   const errors: Array<string | null> = [];
   sessions.subscribe((state) => errors.push(state.error));
   const patches = () =>
@@ -117,52 +121,47 @@ function setup() {
 
 it.each([false, true])("retains offline metadata on replacement=%s", async (replace) => {
   const h = setup();
-  try {
-    await h.sessions.refresh({ agentId: "main" });
-    h.offline();
-    const first = h.patch({ label: "First" });
-    expect(h.row()?.label).toBe("First");
-    expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
-    await expect(first).resolves.toEqual({ queued: true });
-    await expect(h.patch({ label: "Final" })).resolves.toEqual({ queued: true });
-    await h.patch({ icon: "heart", color: "red", category: "Home" });
+  await h.sessions.refresh({ agentId: "main" });
+  h.offline();
+  const first = h.patch({ label: "First" });
+  expect(h.row()?.label).toBe("First");
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  await expect(first).resolves.toEqual({ queued: true });
+  await expect(h.patch({ label: "Final" })).resolves.toEqual({ queued: true });
+  await h.patch({ icon: "heart", color: "red", category: "Home" });
+  expect(h.row()).toMatchObject({
+    label: "Final",
+    icon: "heart",
+    color: "red",
+    category: "Home",
+  });
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  expect(h.patches()).toHaveLength(0);
+  // A consequential field cannot hitch a ride with an otherwise safe label.
+  await expect(h.patch({ label: "Unsafe", pinned: true })).resolves.toBeNull();
+  if (replace) {
+    h.replaceClient();
+    expect(h.row()?.label).toBe("Final");
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  }
+  h.reconnect();
+  await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
+  expect(h.patches()).toHaveLength(2);
+  await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
+  expect(h.patches()[0]?.[1]).toMatchObject({
+    key: "agent:main:offline",
+    agentId: "main",
+    expectedSessionId: "offline-incarnation",
+    label: "Final",
+  });
+  await vi.waitFor(() =>
     expect(h.row()).toMatchObject({
       label: "Final",
       icon: "heart",
       color: "red",
       category: "Home",
-    });
-    expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
-    expect(h.patches()).toHaveLength(0);
-    // A consequential field cannot hitch a ride with an otherwise safe label.
-    await expect(h.patch({ label: "Unsafe", pinned: true })).resolves.toBeNull();
-    if (replace) {
-      h.replaceClient();
-      expect(h.row()?.label).toBe("Final");
-      expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
-    }
-    h.reconnect();
-    await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
-    expect(h.patches()).toHaveLength(2);
-    await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
-    expect(h.patches()[0]?.[1]).toMatchObject({
-      key: "agent:main:offline",
-      agentId: "main",
-      expectedSessionId: "offline-incarnation",
-      label: "Final",
-    });
-    await vi.waitFor(() =>
-      expect(h.row()).toMatchObject({
-        label: "Final",
-        icon: "heart",
-        color: "red",
-        category: "Home",
-      }),
-    );
-  } finally {
-    h.sessions.dispose();
-    h.gateway.stop();
-  }
+    }),
+  );
 });
 
 it.each([false, true])("orders new edits while the last request is in flight=%s", async (last) => {
@@ -193,65 +192,53 @@ it.each([false, true])("orders new edits while the last request is in flight=%s"
     await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
   } finally {
     first.resolve();
-    h.sessions.dispose();
-    h.gateway.stop();
   }
 });
 
 it.each(["rejection", "discard"])("rolls back queued metadata on %s", async (outcome) => {
   const h = setup();
-  try {
-    await h.sessions.refresh({ agentId: "main" });
-    h.offline();
-    await h.patch({ label: "Taken" });
-    expect(h.row()?.label).toBe("Taken");
-    if (outcome === "rejection") {
-      h.reject();
-      h.reconnect();
-      await vi.waitFor(() =>
-        expect(h.errors.some((error) => error?.includes("label already in use"))).toBe(true),
-      );
-      await vi.waitFor(() => expect(h.row()?.label).toBe("Original"));
-      expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "label already in use: Taken" });
-    } else {
-      h.gateway.stop();
-    }
-    await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
-    expect(h.row()?.label).not.toBe("Taken");
-    expect(h.patches()).toHaveLength(outcome === "rejection" ? 1 : 0);
-  } finally {
-    h.sessions.dispose();
+  await h.sessions.refresh({ agentId: "main" });
+  h.offline();
+  await h.patch({ label: "Taken" });
+  expect(h.row()?.label).toBe("Taken");
+  if (outcome === "rejection") {
+    h.reject();
+    h.reconnect();
+    await vi.waitFor(() =>
+      expect(h.errors.some((error) => error?.includes("label already in use"))).toBe(true),
+    );
+    await vi.waitFor(() => expect(h.row()?.label).toBe("Original"));
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "label already in use: Taken" });
+  } else {
     h.gateway.stop();
   }
+  await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
+  expect(h.row()?.label).not.toBe("Taken");
+  expect(h.patches()).toHaveLength(outcome === "rejection" ? 1 : 0);
 });
 
 it("keeps the last icon choice when it overlaps an earlier appearance reset", async () => {
   const h = setup();
-  try {
-    await h.sessions.refresh({ agentId: "main" });
-    h.offline();
-    await h.patch({ icon: "heart" });
-    await h.patch({ icon: null, color: null });
-    await h.patch({ icon: "star" });
-    expect(h.row()?.icon).toBe("star");
-    expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
-    h.reconnect();
-    await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
-    expect(h.patches()).toHaveLength(2);
-    expect(h.patches().map(([, params]) => params)).toMatchObject([
-      { icon: null, color: null },
-      { icon: "star" },
-    ]);
-    await vi.waitFor(() => expect(h.row()?.icon).toBe("star"));
-    expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
-    // A leaked optimistic claim would mask this later authoritative value.
-    h.setServerRow({ icon: "moon", color: "red", updatedAt: 50 });
-    await h.sessions.refresh({ agentId: "main", force: true });
-    expect(h.row()).toMatchObject({ icon: "moon", color: "red" });
-  } finally {
-    h.sessions.dispose();
-    h.gateway.stop();
-  }
+  await h.sessions.refresh({ agentId: "main" });
+  h.offline();
+  await h.patch({ icon: "heart" });
+  await h.patch({ icon: null, color: null });
+  await h.patch({ icon: "star" });
+  expect(h.row()?.icon).toBe("star");
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  h.reconnect();
+  await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
+  expect(h.patches()).toHaveLength(2);
+  expect(h.patches().map(([, params]) => params)).toMatchObject([
+    { icon: null, color: null },
+    { icon: "star" },
+  ]);
+  await vi.waitFor(() => expect(h.row()?.icon).toBe("star"));
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
+  // A leaked optimistic claim would mask this later authoritative value.
+  h.setServerRow({ icon: "moon", color: "red", updatedAt: 50 });
+  await h.sessions.refresh({ agentId: "main", force: true });
+  expect(h.row()).toMatchObject({ icon: "moon", color: "red" });
 });
 
 it.each(["confirmed", "rejected"])(
@@ -281,8 +268,6 @@ it.each(["confirmed", "rejected"])(
       );
     } finally {
       unsubscribe();
-      h.sessions.dispose();
-      h.gateway.stop();
     }
   },
 );
