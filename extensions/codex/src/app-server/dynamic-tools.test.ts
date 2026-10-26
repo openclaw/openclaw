@@ -1572,45 +1572,4 @@ describe("Codex tool operator hints", () => {
     });
   });
 });
-describe("Codex dynamic tool visibility metadata", () => {
-  const call = (tool: string) => ({
-    threadId: "thread-visibility",
-    turnId: "turn-visibility",
-    callId: "call-visibility",
-    namespace: null,
-    tool,
-    arguments: {},
-  });
-
-  it.each([
-    { hideFromChannelProgress: true, expected: true },
-    { hideFromChannelProgress: false, expected: false },
-    { hideFromChannelProgress: undefined, expected: false },
-  ])(
-    "carries hideFromChannelProgress=$hideFromChannelProgress from the resolved tool to the result observer",
-    async ({ hideFromChannelProgress, expected }) => {
-      const onAgentToolResult = vi.fn();
-      // An arbitrary plugin tool name proves this is not the messaging-tool name rule.
-      const bridge = createCodexDynamicToolBridge({
-        tools: [
-          createTool({
-            name: "fixture_lookup_note",
-            execute: vi.fn(async () => textToolResult("ok")),
-            ...(hideFromChannelProgress === undefined ? {} : { hideFromChannelProgress }),
-          }),
-        ],
-        signal: new AbortController().signal,
-      });
-
-      const response = await bridge.handleToolCall(call("fixture_lookup_note"), {
-        onAgentToolResult,
-      });
-
-      expect(response.success).toBe(true);
-      expect(onAgentToolResult).toHaveBeenCalledOnce();
-      const [event] = onAgentToolResult.mock.calls[0] as [{ hideFromChannelProgress?: boolean }];
-      expect(event.hideFromChannelProgress === true).toBe(expected);
-    },
-  );
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

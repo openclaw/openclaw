@@ -238,27 +238,6 @@ describe("dynamic tool execution helpers", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([true, false, undefined])(
-    "carries hideFromChannelProgress=%s on the timeout terminal result",
-    async (hideFromChannelProgress) => {
-      const onAgentToolResult = vi.fn();
-      const response = expireTool({
-        call: toolCall("session_status"),
-        toolBridge: {
-          handleToolCall: vi.fn(() => new Promise<never>(() => {})),
-          hideFromChannelProgressForTool: vi.fn(() => hideFromChannelProgress),
-        },
-        onAgentToolResult,
-      });
-
-      await response;
-
-      expect(onAgentToolResult).toHaveBeenCalledOnce();
-      const [event] = onAgentToolResult.mock.calls[0] as [{ hideFromChannelProgress?: boolean }];
-      expect(event.hideFromChannelProgress === true).toBe(hideFromChannelProgress === true);
-    },
-  );
-
   it("delegates an unpublished abort boundary to the terminal observer", async () => {
     const observeToolTerminal = vi.fn(
       (

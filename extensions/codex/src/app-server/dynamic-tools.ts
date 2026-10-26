@@ -121,7 +121,6 @@ export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
-  /** Visibility provenance for terminal callbacks that race past the resolved tool. */
   hideFromChannelProgressForTool: (toolName: string) => boolean | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
@@ -303,7 +302,7 @@ export function createCodexDynamicToolBridge(params: {
       return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
     },
     hideFromChannelProgressForTool: (toolName) =>
-      executionToolMap.get(toolName)?.tool.hideFromChannelProgress,
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;
@@ -332,8 +331,7 @@ export function createCodexDynamicToolBridge(params: {
           : `Unknown OpenClaw tool: ${call.tool}`;
         const result = failedToolResult(message);
         presentTerminal(call.tool, result, true);
-        // An unresolved tool has no visibility metadata, so it stays visible.
-        notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true, undefined);
+        notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true);
         return createFailedDynamicToolResponse(message, {
           executedArguments,
           executionStarted: false,
@@ -538,13 +536,7 @@ export function createCodexDynamicToolBridge(params: {
             confirmedMessagingTarget,
             deliveredSourceReply,
           } = messagingFacts;
-          notifyAgentToolResult(
-            options?.onAgentToolResult,
-            toolName,
-            observerResult,
-            resultIsError,
-            tool.hideFromChannelProgress,
-          );
+          notifyAgentToolResult(options?.onAgentToolResult, toolName, observerResult, resultIsError);
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
@@ -663,13 +655,7 @@ export function createCodexDynamicToolBridge(params: {
           executionBoundary.consumeBlocked();
           const failedResult = failedToolResult(errorMessage, executionDisposition);
           presentTerminal(toolName, failedResult, true);
-          notifyAgentToolResult(
-            options?.onAgentToolResult,
-            toolName,
-            failedResult,
-            true,
-            tool.hideFromChannelProgress,
-          );
+          notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
@@ -721,14 +707,12 @@ function notifyAgentToolResult(
   toolName: string,
   result: unknown,
   isError: boolean,
-  hideFromChannelProgress: boolean | undefined,
 ) {
   try {
     observer?.({
       toolName,
       result: sanitizeToolResult(result),
       isError,
-      ...(hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     });
   } catch (error) {
     const message = formatToolExecutionErrorMessage(error, "Unknown error");

@@ -221,13 +221,7 @@ export type RunEmbeddedAgentParams = Pick<
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */
-  onAgentToolResult?: (event: {
-    toolName: string;
-    result: unknown;
-    isError: boolean;
-    /** Carried from the resolved tool definition so observers can suppress channel progress. */
-    hideFromChannelProgress?: boolean;
-  }) => void;
+  onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   /** Reports a committed generic recovery compaction before its retry starts. */
   onAutoCompactionSucceeded?: (count: number) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;

@@ -143,9 +143,7 @@ function formatDynamicToolTimeoutDetails(params: {
 type DynamicToolCallExecutionParams = {
   call: CodexDynamicToolCallParams;
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
-    Partial<
-      Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool" | "hideFromChannelProgressForTool">
-    >;
+    Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
   /** Null retains an admitted unlimited parent wait, still subject to cancellation. */
   timeoutMs: number | null;
@@ -238,14 +236,10 @@ export async function handleDynamicToolCallWithTimeout(
       message: string,
       terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
     ) => {
-      const hideFromChannelProgress = params.toolBridge.hideFromChannelProgressForTool?.(
-        params.call.tool,
-      );
       notifyAgentToolResult({
         toolName: params.call.tool,
         result: failedToolResult(message, terminalReason),
         isError: true,
-        ...(hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       });
     };
     if (params.signal.aborted) {

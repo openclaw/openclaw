@@ -49,10 +49,8 @@ import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexThreadItem,
   type JsonObject,
-  type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -159,14 +157,6 @@ export class CodexToolTranscriptProjection {
     }
     state.unresolvedReviewIds = new Set();
     return toolApprovalReviewOutcome(state);
-  }
-
-  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
-    this.recordToolCall({
-      id: params.callId,
-      name: params.tool,
-      arguments: asCodexToolArguments(params.arguments),
-    });
   }
 
   recordDynamicToolResult(

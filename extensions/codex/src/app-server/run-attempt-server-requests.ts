@@ -201,11 +201,13 @@ export function createCodexAttemptServerRequestController(
         name: call.tool,
         arguments: call.arguments,
       });
+      const hideFromChannelProgress = toolBridge.hideFromChannelProgressForTool(call.tool);
       projector?.recordDynamicToolCall({
         callId: call.callId,
         namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
+        hideFromChannelProgress,
       });
       emitExecutionPhaseOnce(`tool:${call.callId}`, {
         phase: "tool_execution_started",
@@ -217,12 +219,9 @@ export function createCodexAttemptServerRequestController(
       });
       const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
-      // Name-only suppression does not cover arbitrary hidden plugin tools, so also
-      // honor the resolved executable tool's authoritative visibility flag before
-      // emitting channel-progress/tool-activity events (issue #125623).
       const shouldEmitDynamicToolProgress =
         shouldEmitTranscriptToolProgress(call.tool) &&
-        toolBridge.hideFromChannelProgressForTool?.(call.tool) !== true;
+        hideFromChannelProgress !== true;
       if (shouldEmitDynamicToolProgress) {
         const activity = projectAgentToolActivity({
           toolCallId: call.callId,
