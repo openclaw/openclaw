@@ -100,7 +100,7 @@ it.each(
   const settled = expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
   await vi.advanceTimersByTimeAsync(10 + 3 * stageMs);
   await settled;
-  expect(compactEmbeddedAgentSessionOnDemandMock).toHaveBeenCalledOnce();
+  expect(compactRuntime).toHaveBeenCalledOnce();
 });
 
 it("keeps plugin-owned work after the delegate under one host window", async () => {
