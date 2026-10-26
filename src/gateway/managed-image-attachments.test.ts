@@ -225,6 +225,20 @@ function playbackFixture(stateDir: string) {
   });
 }
 
+function grantDownload(
+  source: Awaited<ReturnType<typeof resolveManagedOutgoingImageArtifactDownload>>,
+  client: GatewayClient,
+) {
+  expect(source).not.toBeNull();
+  const download = createManagedArtifactDownload({
+    client,
+    path: source!.url,
+    assertCurrent() {},
+    release() {},
+  });
+  return { download, clients: new Set([client]) };
+}
+
 async function expectRetained(
   stateDir: string,
   fixture: Awaited<ReturnType<typeof createFixture>>,
@@ -351,6 +365,18 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     stateDir = prepared;
   });
 
+  function requestImage(
+    pathName: string,
+    options: Partial<Parameters<typeof requestManagedImage>[0]> = {},
+  ) {
+    return requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      ...options,
+    });
+  }
+
   it("bounds future managed-media validators to the actual HTTP response date", async () => {
     const nowMs = Math.floor(Date.now() / 1000) * 1000;
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
@@ -361,37 +387,31 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       const futureLastModified = (await fs.stat(originalPath)).mtime.toUTCString();
       const expectedLastModified = new Date(nowMs).toUTCString();
       const pathName = mediaPath({ sessionKey, attachmentId });
-      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
-
-      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      const initial = await requestImage(pathName, { method: "HEAD" });
       expect(initial.result.statusCode).toBe(200);
       expect(initial.result.headers["last-modified"]).toBe(expectedLastModified);
       expect(Date.parse(initial.result.headers.date ?? "")).toBeGreaterThanOrEqual(
         Date.parse(expectedLastModified),
       );
 
-      const partial = await requestManagedImage({
-        ...request,
+      const partial = await requestImage(pathName, {
         headers: { range: "bytes=0-4", "if-range": expectedLastModified },
       });
       expect(partial.result.statusCode).toBe(206);
       expect(partial.result.headers["last-modified"]).toBe(expectedLastModified);
 
-      const stale = await requestManagedImage({
-        ...request,
+      const stale = await requestImage(pathName, {
         headers: { range: "bytes=0-4", "if-range": futureLastModified },
       });
       expect(stale.result.statusCode).toBe(200);
 
-      const unchanged = await requestManagedImage({
-        ...request,
+      const unchanged = await requestImage(pathName, {
         headers: { "if-none-match": String(initial.result.headers.etag) },
       });
       expect(unchanged.result.statusCode).toBe(304);
       expect(unchanged.result.headers["last-modified"]).toBe(expectedLastModified);
 
-      const unsatisfiable = await requestManagedImage({
-        ...request,
+      const unsatisfiable = await requestImage(pathName, {
         headers: { range: "bytes=999-" },
       });
       expect(unsatisfiable.result.statusCode).toBe(416);
@@ -410,18 +430,15 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
     const pathName = mediaPath({ sessionKey, attachmentId });
     const request = {
-      stateDir,
-      pathName,
-      authResponse: { authMethod: "token" },
       transcriptMessages: [
         assistantMessage([{ type: "attachment", attachment: { url: pathName } }]),
       ],
     };
-    const initial = await requestManagedImage(request);
+    const initial = await requestImage(pathName, request);
     const etag = String(initial.result.headers.etag);
     expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
 
-    const { result } = await requestManagedImage({
+    const { result } = await requestImage(pathName, {
       ...request,
       method: "HEAD",
       headers: {
@@ -435,21 +452,19 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers.etag).toBe(etag);
     expect(result.headers["content-type"]).toBe("text/plain");
     expect(result.headers["content-disposition"]).toContain('filename="report.txt"');
-    expect(result.headers["content-length"]).toBe(undefined);
-    expect(result.headers["content-range"]).toBe(undefined);
+    expect(result.headers["content-length"]).toBeUndefined();
+    expect(result.headers["content-range"]).toBeUndefined();
     expect(result.body.toString("utf8")).toBe("");
   });
 
   it("revalidates managed media with If-Modified-Since before HEAD ranges", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const pathName = mediaPath({ sessionKey, attachmentId });
-    const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
-    const initial = await requestManagedImage({ ...request, method: "HEAD" });
+    const initial = await requestImage(pathName, { method: "HEAD" });
     const lastModified = initial.result.headers["last-modified"];
     expect(lastModified).toEqual(expect.any(String));
 
-    const unchanged = await requestManagedImage({
-      ...request,
+    const unchanged = await requestImage(pathName, {
       method: "HEAD",
       headers: {
         "if-modified-since": String(lastModified),
@@ -481,18 +496,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
     });
     using connection = createSessionFileDownloadClient();
-    expect(preparedSource).not.toBeNull();
-    const download = createManagedArtifactDownload({
-      client: connection.client,
-      path: preparedSource!.url,
-      assertCurrent() {},
-      release() {},
-    });
-    const clients = new Set([connection.client]);
+    const { download, clients } = grantDownload(preparedSource, connection.client);
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: download?.url ?? "",
+    const { result } = await requestImage(download?.url ?? "", {
       denyAuth: true,
       clients,
       headers: { range: "bytes=9-13" },
@@ -509,12 +515,13 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
     expect(result.body.toString("utf8")).toBe("audio");
     const wrongAttachmentId = "22222222-2222-4222-8222-222222222222";
-    const wrong = await requestManagedImage({
-      stateDir,
-      pathName: (download?.url ?? "").replace(attachmentId, wrongAttachmentId),
-      denyAuth: true,
-      clients,
-    });
+    const wrong = await requestImage(
+      (download?.url ?? "").replace(attachmentId, wrongAttachmentId),
+      {
+        denyAuth: true,
+        clients,
+      },
+    );
     expect(wrong.result.statusCode).toBe(404);
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
@@ -523,10 +530,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
     const fixture = await playbackFixture(stateDir);
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `${mediaPath(fixture)}?playback=1`,
-      authResponse: { authMethod: "token" },
+    const { result } = await requestImage(`${mediaPath(fixture)}?playback=1`, {
       scopes: ["operator.admin"],
     });
 
@@ -589,12 +593,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
     const fixture = await playbackFixture(stateDir);
     const requestPlayback = (options: Partial<Parameters<typeof requestManagedImage>[0]> = {}) =>
-      requestManagedImage({
-        stateDir,
-        pathName: `${mediaPath(fixture)}?playback=1`,
-        authResponse: { authMethod: "token" },
-        ...options,
-      });
+      requestImage(`${mediaPath(fixture)}?playback=1`, options);
 
     const { result } = await requestPlayback({ headers: { range: "bytes=11-15" } });
 
@@ -636,14 +635,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
     });
     using connection = createSessionFileDownloadClient();
-    expect(preparedSource).not.toBeNull();
-    const download = createManagedArtifactDownload({
-      client: connection.client,
-      path: preparedSource!.url,
-      assertCurrent() {},
-      release() {},
-    });
-    const clients = new Set([connection.client]);
+    const { download, clients } = grantDownload(preparedSource, connection.client);
 
     const thumbnailUrl = `${download?.url.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`;
     const localRequest = {
@@ -667,9 +659,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     ).resolves.toBeNull();
 
     vi.clearAllMocks();
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: thumbnailUrl,
+    const { result } = await requestImage(thumbnailUrl, {
       denyAuth: true,
       clients,
       transcriptMessages,
@@ -684,9 +674,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       height: 480,
     });
     expect(result.body).toEqual(localThumbnail);
-    const small = await requestManagedImage({
-      stateDir,
-      pathName: `${thumbnailUrl}&width=480`,
+    const small = await requestImage(`${thumbnailUrl}&width=480`, {
       denyAuth: true,
       clients,
       transcriptMessages,
@@ -760,24 +748,17 @@ describe("createManagedOutgoingImageBlocks", () => {
   }
 
   it("prepares deduplicated media with metadata and per-item trust aligned by URL", () => {
+    const attachments = [false, true].map((trustedLocalMedia, index) => ({
+      path: `/tmp/${index === 0 ? "a" : "b"}.json`,
+      name: `${index === 0 ? "a" : "b"}.json`,
+      mimeType: "application/json",
+      trustedLocalMedia,
+    }));
     expect(
       prepareOutgoingMediaFromReplyPayload({
         mediaUrls: ["/tmp/a.json", "/tmp/a.json", "/tmp/b.json"],
         trustedLocalMedia: true,
-        attachments: [
-          {
-            path: "/tmp/a.json",
-            name: "a.json",
-            mimeType: "application/json",
-            trustedLocalMedia: false,
-          },
-          {
-            path: "/tmp/b.json",
-            name: "b.json",
-            mimeType: "application/json",
-            trustedLocalMedia: true,
-          },
-        ],
+        attachments,
       }),
     ).toEqual([
       {
@@ -1272,20 +1253,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       sizeBytes: 16,
     });
   });
-});
-
-describe("attachManagedOutgoingImagesToMessage", () => {
-  let stateDir: string;
-  useManagedImageState("managed-image-attach-", (prepared) => {
-    stateDir = prepared;
-  });
 
   it("upgrades transient image records to history when the message is committed", async () => {
-    const blocks = await createManagedOutgoingImageBlocks({
-      sessionKey: "agent:main:main",
-      mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
-      stateDir,
-    });
+    const blocks = await createImages([`data:image/png;base64,${TINY_PNG_BASE64}`]);
 
     await attachManagedOutgoingImagesToMessage({
       messageId: "msg-committed",
